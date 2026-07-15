@@ -8,7 +8,14 @@ Type=simple
 User=mcyniak
 WorkingDirectory=/home/mcyniak/scyzoryk-linux-pilot
 Environment=SCYZORYK_PROFILE=linux-pilot
-Environment=SCYZORYK_HOST=0.0.0.0
+# "::" (nie "0.0.0.0") - dual-stack: przyjmuje polaczenia i po IPv4, i po IPv6
+# na jednym sockecie (wymaga net.ipv6.bindv6only=0, domyslne na tym Pi).
+# "0.0.0.0" wiaze TYLKO IPv4 - klient, ktorego przegladarka rozwiaze "scyzoryk"
+# na adres IPv6 (router LAN potrafi zwracac oba rekordy, A i AAAA), dostawal
+# "polaczenie odrzucone" zamiast automatycznego przelaczenia na IPv4, bo po
+# stronie IPv6 nic nie nasluchiwalo. To ustawienie propaguje sie automatycznie
+# do wszystkich aplikacji-dzieci (kazda czyta SCYZORYK_HOST tak samo).
+Environment=SCYZORYK_HOST=::
 # Port 80, zeby panel byl dostepny pod adresem "http://scyzoryk" bez podawania
 # numeru portu. Uprawnienie do zbindowania portu <1024 nadane WYLACZNIE tej
 # usludze systemd (nie calemu /usr/bin/node globalnie - to byloby szersze niz
