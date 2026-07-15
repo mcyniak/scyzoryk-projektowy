@@ -3,6 +3,7 @@ const STATUS_LABELS = {
   'do-skopiowania': ['Do skopiowania', 'ok'],
   'pominieto-juz-sa': ['Już są', 'skip'],
   'pominieto-rezygnacja': ['Rezygnacja', 'skip'],
+  'pominieto-brak-uid': ['Brak UID', 'skip'],
   'czesciowo': ['Częściowo', 'warn'],
   'blad': ['Błąd', 'err']
 };
@@ -12,6 +13,28 @@ const statusEl = document.getElementById('kkStatus');
 const resultsPanel = document.getElementById('kkResultsPanel');
 const tableBody = document.getElementById('kkTableBody');
 const summaryEl = document.getElementById('kkSummary');
+const rootPathLabel = document.getElementById('rootPathLabel');
+const rootPathInput = document.getElementById('rootPath');
+
+// Etykieta pola sciezki zalezy od tego, czy serwer ma skonfigurowany
+// SCYZORYK_PROJECTS_ROOT (pilot) - wtedy uzytkownik podaje sciezke
+// WZGLEDEM Dysku Google, nie pelna sciezke systemowa.
+(async function initRootPathLabel() {
+  try {
+    const resp = await fetch('/api/health', { cache: 'no-store' });
+    const data = await resp.json();
+    if (data.googleDrive) {
+      rootPathLabel.textContent = 'Folder względem Dysku Projektów (zawiera podfoldery „karty” i „Projekty”)';
+      rootPathInput.placeholder = '6. Paradyż Żarnów/Kolektory';
+      if (!data.googleDrive.available) {
+        statusEl.className = 'err';
+        statusEl.textContent = 'Dysk Google jest obecnie niedostępny. Sprawdź połączenie internetowe lub usługę rclone.' + (data.googleDrive.reason ? ` (${data.googleDrive.reason})` : '');
+      }
+    }
+  } catch (_) {
+    // Brak polaczenia z wlasnym serwerem - zostaw domyslna etykiete.
+  }
+})();
 
 runBtn.addEventListener('click', async () => {
   const fileInput = document.getElementById('excelFile');
