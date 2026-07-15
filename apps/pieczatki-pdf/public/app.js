@@ -89,12 +89,12 @@ function renderPresetSelect(selectedId = '') {
   if (!presetSelect) return;
   const presets = readPresets().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'pl'));
   presetSelect.innerHTML = presets.length
-    ? '<option value="">Wybierz preset</option>'
-    : '<option value="">Brak zapisanych presetów</option>';
+    ? '<option value="">Wybierz zestaw</option>'
+    : '<option value="">Brak zapisanych zestawów</option>';
   for (const preset of presets) {
     const option = document.createElement('option');
     option.value = preset.id;
-    option.textContent = preset.name || 'Preset bez nazwy';
+    option.textContent = preset.name || 'Zestaw bez nazwy';
     presetSelect.appendChild(option);
   }
   presetSelect.value = selectedId || '';
@@ -160,7 +160,7 @@ function deserializePresetStamp(item, id) {
 async function saveCurrentPreset() {
   const name = (presetNameInput?.value || '').trim();
   if (!name) {
-    setStatus('Wpisz nazwę presetu.', true);
+    setStatus('Wpisz nazwę zestawu.', true);
     presetNameInput?.focus();
     return;
   }
@@ -174,9 +174,9 @@ async function saveCurrentPreset() {
   const selectedId = presetSelect?.value || '';
   const existingIndex = selectedId ? presets.findIndex(preset => preset.id === selectedId) : -1;
   if (existingIndex >= 0) {
-    const existingName = presets[existingIndex].name || 'Preset bez nazwy';
-    const confirmed = confirm(`Preset "${existingName}" już istnieje. Nadpisać go obecnymi ustawieniami pieczątek?`);
-    if (!confirmed) return setStatus('Anulowano zapis - preset nie został nadpisany.');
+    const existingName = presets[existingIndex].name || 'Zestaw bez nazwy';
+    const confirmed = confirm(`Zestaw "${existingName}" już istnieje. Nadpisać go obecnymi ustawieniami pieczątek?`);
+    if (!confirmed) return setStatus('Anulowano zapis - zestaw nie został nadpisany.');
   }
   const id = existingIndex >= 0 ? selectedId : `preset-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const preset = {
@@ -192,20 +192,20 @@ async function saveCurrentPreset() {
   try {
     writePresets(presets);
     renderPresetSelect(id);
-    setStatus('Zapisano preset pieczątek.');
+    setStatus('Zapisano zestaw pieczątek.');
   } catch (err) {
     console.error(err);
-    setStatus('Nie udało się zapisać presetu.', true);
+    setStatus('Nie udało się zapisać zestawu.', true);
   }
 }
 
 function loadSelectedPreset() {
   const id = presetSelect?.value || '';
-  if (!id) return setStatus('Wybierz preset do wczytania.', true);
+  if (!id) return setStatus('Wybierz zestaw do wczytania.', true);
   const preset = readPresets().find(item => item.id === id);
-  if (!preset) return setStatus('Nie znaleziono wybranego presetu.', true);
+  if (!preset) return setStatus('Nie znaleziono wybranego zestawu.', true);
   const items = Array.isArray(preset.stamps) ? preset.stamps : [];
-  if (!items.length) return setStatus('Ten preset nie ma zapisanych pieczątek.', true);
+  if (!items.length) return setStatus('Ten zestaw nie ma zapisanych pieczątek.', true);
   const hadFileStamps = items.some(item => item.stampType === 'file');
   stamps = items.map((item, index) => deserializePresetStamp(item, index + 1));
   stampCounter = stamps.length;
@@ -213,8 +213,8 @@ function loadSelectedPreset() {
   if (presetNameInput) presetNameInput.value = preset.name || '';
   renderAll();
   setStatus(hadFileStamps
-    ? 'Wczytano preset. Pieczątki z pliku (obraz/PDF) nie są już obsługiwane - wpisz dla nich tekst.'
-    : 'Wczytano preset.');
+    ? 'Wczytano zestaw. Pieczątki z pliku (obraz/PDF) nie są już obsługiwane - wpisz dla nich tekst.'
+    : 'Wczytano zestaw.');
 }
 
 function deleteSelectedPreset() {
@@ -222,12 +222,12 @@ function deleteSelectedPreset() {
   if (!id) return;
   const presets = readPresets();
   const target = presets.find(item => item.id === id);
-  const targetName = target?.name || 'ten preset';
-  if (!confirm(`Usunąć preset "${targetName}"? Tej operacji nie da się cofnąć.`)) return;
+  const targetName = target?.name || 'ten zestaw';
+  if (!confirm(`Usunąć zestaw "${targetName}"? Tej operacji nie da się cofnąć.`)) return;
   writePresets(presets.filter(item => item.id !== id));
   if (presetNameInput) presetNameInput.value = '';
   renderPresetSelect('');
-  setStatus('Usunięto preset.');
+  setStatus('Usunięto zestaw.');
 }
 
 function getActiveStamp() {
@@ -1103,12 +1103,12 @@ exportPresetsBtn?.addEventListener('click', () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'presety-pieczatek-scyzoryk.json';
+  a.download = 'zestawy-pieczatek-scyzoryk.json';
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-  setStatus('Wyeksportowano presety do pliku JSON.');
+  setStatus('Zapisano zestawy do pliku.');
 });
 
 importPresetsInput?.addEventListener('change', async () => {
@@ -1119,7 +1119,7 @@ importPresetsInput?.addEventListener('change', async () => {
     const text = await file.text();
     const parsed = JSON.parse(text);
     const imported = Array.isArray(parsed) ? parsed : parsed.presets;
-    if (!Array.isArray(imported)) throw new Error('Brak listy presetów.');
+    if (!Array.isArray(imported)) throw new Error('Brak listy zestawów w tym pliku.');
     const current = readPresets();
     const byId = new Map(current.map(item => [item.id, item]));
     for (const preset of imported) {
@@ -1129,8 +1129,8 @@ importPresetsInput?.addEventListener('change', async () => {
     }
     writePresets(Array.from(byId.values()));
     renderPresetSelect('');
-    setStatus('Zaimportowano presety.');
-  } catch (err) { setStatus('Nie udało się zaimportować presetów: ' + (err.message || err), true); }
+    setStatus('Wczytano zestawy z pliku.');
+  } catch (err) { setStatus('Nie udało się wczytać zestawów z pliku: ' + (err.message || err), true); }
 });
 
 resetPos.addEventListener('click', resetActivePosition);

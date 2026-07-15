@@ -12,7 +12,9 @@
   },
   "linux-pilot": {
     "enabledApps": [
-      "pieczatki"
+      "pieczatki",
+      "drukarka",
+      "formularze"
     ]
   }
 }

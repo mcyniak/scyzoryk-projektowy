@@ -13,23 +13,13 @@
         <span class="logo-mark" aria-hidden="true"></span>
         <span>Scyzoryk Projektowy</span>
       </a>
-      <button type="button" class="small-help-link" id="helpTopLink">Pomoc</button>
     </header>
 
     <section class="hero user-hero single-hero">
       <div class="glass hero-main">
-        <div class="kicker">Panel narzędzi</div>
+        <div class="kicker">Wersja próbna</div>
         <h1>Co chcesz teraz zrobić?</h1>
-        <p class="lead">Wybierz jedno narzędzie. Każde prowadzi krok po kroku: dodaj pliki, ustaw opcje, uruchom i pobierz gotowy wynik.</p>
-      </div>
-    </section>
-
-    <section class="panel value-panel" id="valuePanel">
-      <div class="panel-header simple-header">
-        <div>
-          <h2 class="panel-title">Co automatyzuje Scyzoryk?</h2>
-          <p class="panel-desc">Powtarzalne prace dokumentacyjne: pieczątki, drukowanie paczek, dokumenty seryjne, wnioski powykonawcze i raporty Ecodan.</p>
-        </div>
+        <p class="lead">Kliknij jedno z narzędzi poniżej. Każde działa krok po kroku: dodajesz plik, ustawiasz opcje i pobierasz gotowy wynik.</p>
       </div>
     </section>
 
@@ -37,7 +27,7 @@
       <div class="panel-header simple-header">
         <div>
           <h2 class="panel-title">Narzędzia</h2>
-          <p class="panel-desc">Kliknij kafelek i wykonaj zadanie. Wybierz narzędzie, dodaj pliki i pobierz gotowy wynik.</p>
+          <p class="panel-desc">Kliknij kafelek narzędzia, którego potrzebujesz.</p>
         </div>
       </div>
 
@@ -53,7 +43,7 @@
         <article class="tool-card" data-app="pieczatki">
           <div class="icon">🧾</div>
           <div class="card-topline"><h3>Pieczątki PDF</h3><span class="badge">sprawdzam</span></div>
-          <p>Dodaje pieczątki do PDF-ów. Możesz ustawić strony, pozycję, rozmiar i presety.</p>
+          <p>Dodaje pieczątkę (np. napis „ZATWIERDZONO") na Twoje pliki PDF. Sam ustawiasz, gdzie ma się znaleźć na stronie.</p>
           <a class="button-link" href="http://127.0.0.1:3002">Otwórz narzędzie</a>
           <div class="card-meta" aria-hidden="true"></div>
         </article>
@@ -61,7 +51,7 @@
         <article class="tool-card" data-app="drukarka">
           <div class="icon">🖨️</div>
           <div class="card-topline"><h3>Drukarka dokumentów</h3><span class="badge">sprawdzam</span></div>
-          <p>Ustawia kolejność plików, liczbę kopii i wysyła dokumenty do druku.</p>
+          <p>Wgraj kilka plików PDF, ustaw kolejność i liczbę kopii, a narzędzie wyśle je do drukarki za Ciebie.</p>
           <a class="button-link" href="http://127.0.0.1:3001">Otwórz narzędzie</a>
           <div class="card-meta" aria-hidden="true"></div>
         </article>
@@ -76,8 +66,8 @@
 
         <article class="tool-card" data-app="formularze">
           <div class="icon">📋</div>
-          <div class="card-topline"><h3>Generator formularzy</h3><span class="badge">sprawdzam</span></div>
-          <p>Tworzy raporty PDF na podstawie danych z Excela.</p>
+          <div class="card-topline"><h3>Generator raportów MyEcodan</h3><span class="badge">sprawdzam</span></div>
+          <p>Wgraj plik Excel z adresami, a narzędzie samo wypełni formularz doboru pompy ciepła i pobierze gotowe raporty PDF.</p>
           <a class="button-link" href="http://127.0.0.1:3003">Otwórz narzędzie</a>
           <div class="card-meta" aria-hidden="true"></div>
         </article>
@@ -99,22 +89,6 @@
         </article>
       </div>
     </section>
-
-    <div class="help-modal-overlay" id="helpModalOverlay">
-      <div class="help-modal-box" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
-        <div class="help-modal-head">
-          <strong id="helpModalTitle">Pomoc</strong>
-          <button type="button" class="help-modal-close" id="helpModalClose" aria-label="Zamknij">&times;</button>
-        </div>
-        <div class="support-body support-simple">
-          <p class="support-intro">Krótka pomoc do bezpiecznej pracy z plikami.</p>
-          <div class="notice-panel compact-notices">
-            <div class="notice warning"><strong>Word:</strong> Dokumenty seryjne i Wnioski powykonawcze wymagają Microsoft Word na tym komputerze.</div>
-            <div class="notice"><strong>Dysk Google:</strong> pliki powinny być dostępne offline, żeby Word mógł je otworzyć.</div>
-          </div>
-        </div>
-      </div>
-    </div>
 
   </main>
 

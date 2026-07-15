@@ -1,0 +1,24 @@
+[Unit]
+Description=Scyzoryk Projektowy - panel glowny (pilot linuksowy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcyniak
+WorkingDirectory=/home/mcyniak/scyzoryk-linux-pilot
+Environment=SCYZORYK_PROFILE=linux-pilot
+Environment=SCYZORYK_HOST=0.0.0.0
+Environment=PORT=3000
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+# Restart=always i tak NIE przeszkadza "systemctl stop" (systemd wie, ze to
+# swiadome zatrzymanie i nie odpala ponownie) - to jest wylacznie na
+# wypadek awarii/padu procesu, zgodnie z "ma sie resetowac sam".
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

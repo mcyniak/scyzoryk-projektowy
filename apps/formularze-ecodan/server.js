@@ -9,7 +9,7 @@ import multer from 'multer';
 import sanitize from 'sanitize-filename';
 import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX, MAX_ECODAN_JOBS } from './src/config.js';
 import { setProjectRoot, getProjectRoot, getOutputRoot } from './src/debug.js';
-import { scheduleCleanup } from '../../lib/hardening.js';
+import { scheduleCleanup, appendCriticalLog } from '../../lib/hardening.js';
 import { calculate } from './src/rules.js';
 import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob, getHeavyJobQueueState } from './src/jobs.js';
 import { readExcelRecords } from './src/excel.js';
@@ -49,6 +49,11 @@ const diagnosticsDir = path.join(__dirname, 'logs');
 try { fsSync.mkdirSync(diagnosticsDir, { recursive: true }); } catch {}
 function appendDiagnostic(level, event, data = {}) {
   try { fsSync.appendFileSync(path.join(diagnosticsDir, 'formularze-ecodan.jsonl'), JSON.stringify({ ts: new Date().toISOString(), level, app: 'formularze-ecodan', event, pid: process.pid, memory: process.memoryUsage(), ...data }) + '\n', 'utf8'); } catch {}
+  // Ta aplikacja (ESM) ma wlasny, osobny mechanizm diagnostyki zamiast
+  // lib/hardening.js#setupProcessDiagnostics - dopisujemy tu rownolegle do
+  // wspolnego pliku najpowazniejszych bledow, zeby fatal/error z tej
+  // aplikacji tez trafialy do jednego miejsca, tak jak z pozostalych.
+  if (level === 'fatal' || level === 'error') appendCriticalLog('formularze-ecodan', level, event, data);
 }
 process.on('uncaughtException', err => { appendDiagnostic('fatal', 'uncaughtException', { message: err?.message || String(err), stack: err?.stack || '' }); setTimeout(() => process.exit(1), 50).unref(); });
 process.on('unhandledRejection', err => appendDiagnostic('error', 'unhandledRejection', { message: err?.message || String(err), stack: err?.stack || '' }));
