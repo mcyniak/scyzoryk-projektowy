@@ -55,16 +55,13 @@ const upload = multer({
   storage,
   limits: {
     fileSize: MAX_FILE_MB * 1024 * 1024,
-    files: MAX_FILES + MAX_STAMPS,
+    files: MAX_FILES,
   },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname || '').toLowerCase();
     const isPdf = ext === '.pdf' || file.mimetype === 'application/pdf';
-    const isImg = ['.png', '.jpg', '.jpeg'].includes(ext) || /^image\//.test(file.mimetype || '');
     if (file.fieldname === 'pdfs' && isPdf) return cb(null, true);
-    if (/^stampFile_\d+$/.test(file.fieldname) && (isPdf || isImg)) return cb(null, true);
-    if (file.fieldname === 'stampFile' && (isPdf || isImg)) return cb(null, true);
-    cb(new Error('Dozwolone sa PDF-y oraz pieczatki PNG/JPG/PDF.'));
+    cb(new Error('Dozwolone sa tylko pliki PDF do ostemplowania.'));
   },
 });
 
@@ -116,14 +113,10 @@ function readHeader(filePath, length = 8) {
   }
 }
 
-function validateUploadedStampFile(file) {
-  const ext = path.extname(file.originalname || '').toLowerCase();
+function validateUploadedPdfFile(file) {
   const header = readHeader(file.path, 8);
   const ascii = header.toString('latin1');
-  const hex = header.toString('hex').toLowerCase();
-  if (ext === '.pdf' && !ascii.startsWith('%PDF-')) throw new Error(`Plik ${file.originalname || file.filename} nie wygląda jak poprawny PDF.`);
-  if (ext === '.png' && !hex.startsWith('89504e470d0a1a0a')) throw new Error(`Plik ${file.originalname || file.filename} nie wygląda jak poprawny PNG.`);
-  if ((ext === '.jpg' || ext === '.jpeg') && !hex.startsWith('ffd8ff')) throw new Error(`Plik ${file.originalname || file.filename} nie wygląda jak poprawny JPG.`);
+  if (!ascii.startsWith('%PDF-')) throw new Error(`Plik ${file.originalname || file.filename} nie wygląda jak poprawny PDF.`);
 }
 
 function parseNumber(value, fallback, min, max) {
@@ -202,27 +195,6 @@ function safeOutputName(originalName) {
   return `${base} - ostemplowany.pdf`;
 }
 
-async function embedImageStamp(targetPdfDoc, stampPath) {
-  const ext = path.extname(stampPath).toLowerCase();
-  const bytes = await fsp.readFile(stampPath);
-  if (ext === '.png') return targetPdfDoc.embedPng(bytes);
-  if (ext === '.jpg' || ext === '.jpeg') return targetPdfDoc.embedJpg(bytes);
-  return null;
-}
-
-async function embedStampPdf(targetPdfDoc, stampPath) {
-  const bytes = await fsp.readFile(stampPath);
-  const stampPdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  const [embeddedPage] = await targetPdfDoc.embedPdf(bytes, [0]);
-  const page = stampPdf.getPage(0);
-  return {
-    type: 'pdf',
-    embedded: embeddedPage,
-    naturalWidth: page.getWidth(),
-    naturalHeight: page.getHeight(),
-  };
-}
-
 function normalizeHexColor(hex, fallback = '#d40000') {
   return /^#[0-9a-f]{6}$/i.test(String(hex || '')) ? String(hex) : fallback;
 }
@@ -275,38 +247,20 @@ async function loadTextFont(doc) {
   return { font, isCustom };
 }
 
-async function prepareStamp(doc, file, opts) {
-  if (opts.stampType === 'file') {
-    if (!file) return null;
-    const ext = path.extname(file.path).toLowerCase();
-    if (ext === '.pdf') return embedStampPdf(doc, file.path);
-
-    const image = await embedImageStamp(doc, file.path);
-    if (!image) return null;
-    return {
-      type: 'image',
-      embedded: image,
-      naturalWidth: image.width,
-      naturalHeight: image.height,
-    };
-  }
-
-  if (opts.stampType === 'text' && opts.text) {
-    const { font, isCustom } = await loadTextFont(doc);
-    const text = isCustom ? opts.text : stripUnsupportedText(opts.text);
-    return {
-      type: 'text',
-      embedded: font,
-      naturalWidth: 1000,
-      naturalHeight: 360,
-      text,
-      color: hexToRgb(opts.textColor),
-      border: opts.textBorder,
-      fontSize: opts.fontSize,
-    };
-  }
-
-  return null;
+async function prepareStamp(doc, opts) {
+  if (!opts.text) return null;
+  const { font, isCustom } = await loadTextFont(doc);
+  const text = isCustom ? opts.text : stripUnsupportedText(opts.text);
+  return {
+    type: 'text',
+    embedded: font,
+    naturalWidth: 1000,
+    naturalHeight: 360,
+    text,
+    color: hexToRgb(opts.textColor),
+    border: opts.textBorder,
+    fontSize: opts.fontSize,
+  };
 }
 
 function visualPageSize(page) {
@@ -327,15 +281,10 @@ function mapVisualBottomLeftToPdf(page, visualX, visualY) {
   return { x: visualX, y: visualY, rotation };
 }
 
-function normalizeStampOptions(raw, index, stampFilesByField) {
-  const stampType = ['file', 'text'].includes(raw.stampType) ? raw.stampType : 'file';
+function normalizeStampOptions(raw, index) {
   const pageMode = ['all', 'first', 'last', 'custom'].includes(raw.pageMode) ? raw.pageMode : 'all';
-  const fileField = String(raw.fileField || `stampFile_${index}`);
   return {
     name: cleanText(raw.name || `Pieczatka ${index + 1}`).slice(0, 80) || `Pieczatka ${index + 1}`,
-    stampType,
-    fileField,
-    file: stampFilesByField.get(fileField) || null,
     xPct: parseNumber(raw.xPct, 70, 0, 100),
     yPct: parseNumber(raw.yPct, 75, 0, 100),
     widthPct: parseNumber(raw.widthPct, 20, 1, 100),
@@ -349,12 +298,11 @@ function normalizeStampOptions(raw, index, stampFilesByField) {
     text: cleanText(raw.stampText || raw.text),
     textColor: raw.textColor || '#d40000',
     textBorder: parseBoolean(raw.textBorder),
-    keepRatio: raw.keepRatio === undefined ? true : parseBoolean(raw.keepRatio),
     fontSize: parseNumber(raw.fontSize, 0, 0, 96),
   };
 }
 
-function parseStampsFromRequest(body, stampFilesByField) {
+function parseStampsFromRequest(body) {
   let rawStamps = [];
   if (body.stamps) {
     try {
@@ -367,8 +315,6 @@ function parseStampsFromRequest(body, stampFilesByField) {
 
   if (!rawStamps.length) {
     rawStamps = [{
-      stampType: ['file', 'text'].includes(body.stampType) ? body.stampType : 'file',
-      fileField: 'stampFile',
       xPct: body.xPct,
       yPct: body.yPct,
       widthPct: body.widthPct,
@@ -381,16 +327,12 @@ function parseStampsFromRequest(body, stampFilesByField) {
       stampText: body.stampText,
       textColor: body.textColor,
       textBorder: body.textBorder,
-      keepRatio: body.keepRatio,
       fontSize: body.fontSize,
     }];
   }
 
-  const stamps = rawStamps.slice(0, MAX_STAMPS).map((stamp, index) => normalizeStampOptions(stamp, index, stampFilesByField));
-  return stamps.filter(stamp => {
-    if (stamp.stampType === 'file') return Boolean(stamp.file);
-    return Boolean(stamp.text);
-  });
+  const stamps = rawStamps.slice(0, MAX_STAMPS).map((stamp, index) => normalizeStampOptions(stamp, index));
+  return stamps.filter(stamp => Boolean(stamp.text));
 }
 
 function drawPreparedStampOnPage(page, preparedStamp, opts) {
@@ -399,40 +341,13 @@ function drawPreparedStampOnPage(page, preparedStamp, opts) {
   const visualHeight = visual.height;
 
   const stampWidth = Math.max(8, visualWidth * opts.widthPct / 100);
-  const boxHeight = Math.max(8, visualHeight * opts.heightPct / 100);
-  const stampHeight = opts.keepRatio && preparedStamp.type !== 'text'
-    ? stampWidth * (preparedStamp.naturalHeight / preparedStamp.naturalWidth)
-    : boxHeight;
+  const stampHeight = Math.max(8, visualHeight * opts.heightPct / 100);
 
   const visualX = visualWidth * opts.xPct / 100;
   const visualTop = visualHeight * opts.yPct / 100;
   const visualY = visualHeight - visualTop - stampHeight;
   const mapped = mapVisualBottomLeftToPdf(page, visualX, visualY);
   const drawRotation = (((mapped.rotation + opts.rotation) % 360) + 360) % 360;
-
-  if (preparedStamp.type === 'image') {
-    page.drawImage(preparedStamp.embedded, {
-      x: mapped.x,
-      y: mapped.y,
-      width: stampWidth,
-      height: stampHeight,
-      opacity: opts.opacity,
-      rotate: degrees(drawRotation),
-    });
-    return;
-  }
-
-  if (preparedStamp.type === 'pdf') {
-    page.drawPage(preparedStamp.embedded, {
-      x: mapped.x,
-      y: mapped.y,
-      width: stampWidth,
-      height: stampHeight,
-      opacity: opts.opacity,
-      rotate: degrees(drawRotation),
-    });
-    return;
-  }
 
   if (preparedStamp.border) {
     page.drawRectangle({
@@ -476,7 +391,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
 
   const prepared = [];
   for (const stamp of stamps) {
-    const preparedStamp = await prepareStamp(doc, stamp.file, stamp);
+    const preparedStamp = await prepareStamp(doc, stamp);
     if (!preparedStamp) {
       throw new Error(`Brak poprawnej pieczatki: ${stamp.name}.`);
     }
@@ -527,15 +442,9 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, app: 'pdf-stamper-standalone' });
 });
 
-app.post('/api/stamp', heavyJobLimiter, upload.any(), async (req, res) => {
-  const allFiles = req.files || [];
-  const uploadedPdfs = allFiles.filter(file => file.fieldname === 'pdfs');
-  const stampFilesByField = new Map(
-    allFiles
-      .filter(file => /^stampFile_\d+$/.test(file.fieldname) || file.fieldname === 'stampFile')
-      .map(file => [file.fieldname, file]),
-  );
-  const cleanup = allFiles.map(f => f.path);
+app.post('/api/stamp', heavyJobLimiter, upload.array('pdfs', MAX_FILES), async (req, res) => {
+  const uploadedPdfs = req.files || [];
+  const cleanup = uploadedPdfs.map(f => f.path);
   const jobId = crypto.randomUUID();
   const jobDir = path.join(OUTPUT_DIR, jobId);
   const zipPath = path.join(OUTPUT_DIR, `${jobId}.zip`);
@@ -548,12 +457,12 @@ app.post('/api/stamp', heavyJobLimiter, upload.any(), async (req, res) => {
       await removeFiles(cleanup);
       return res.status(400).json({ error: 'Dodaj przynajmniej jeden plik PDF.' });
     }
-    for (const file of allFiles) validateUploadedStampFile(file);
+    for (const file of uploadedPdfs) validateUploadedPdfFile(file);
 
-    const stamps = parseStampsFromRequest(req.body, stampFilesByField);
+    const stamps = parseStampsFromRequest(req.body);
     if (!stamps.length) {
       await removeFiles(cleanup);
-      return res.status(400).json({ error: 'Dodaj przynajmniej jedna pieczatke z pliku albo tekstu.' });
+      return res.status(400).json({ error: 'Dodaj przynajmniej jedna pieczatke z tekstem.' });
     }
 
     await fsp.mkdir(jobDir, { recursive: true });

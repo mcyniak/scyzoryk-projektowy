@@ -44,3 +44,6 @@ apps/drukarka-projekty/test/fixtures/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# Artefakty narzedzia playwright-cli (snapshoty/logi z testowania UI)
+.playwright-cli/

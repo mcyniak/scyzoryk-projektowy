@@ -88,6 +88,19 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
   `public/folder.html` + `public/folder.js` (calling `/api/folder-upload`, `/api/folder-generate/:jobId`
   in `src/folderRoutes.js`) is **not linked from anywhere** — dead code. When debugging this app, check
   `inline-1.js` first; don't assume `folder.js` reflects current behavior.
+  - Real templates fill placeholders via **table-cell position**, not text search: `mailmerge-to-pdf.ps1`'s
+    `Fill-HighlightedTableCells` reads the yellow-highlighted table cell's value and looks at the
+    **previous cell in the same row** as the field label (e.g. `"Uczestnik projektu:"` → next cell is
+    the name). This label vocabulary is consistent across investments/document types (verified against
+    real data from 4 investments × 3 doc types) — see `$script:LabelFieldCandidates` in the script for
+    the label→Excel-column mapping. This runs automatically for every generated document; no user
+    configuration needed. Do NOT use `Table.Rows`/`.Cells` for this kind of table walk — if the table
+    has any vertically-merged cell anywhere, Word COM throws for *every* row, not just the merged one;
+    use `Table.Range.Cells` (flat, reading-order) instead. Also: apply detected fills in a separate pass
+    sorted by position descending, never mutate cell text while still iterating the table.
+  - Polish "ł" doesn't decompose under Unicode NFD the way ą/ę/ć/ń/ś/ź/ż do, so the shared `Normalize-Name`
+    PS helper turns "Działka" into `dzia_ka`, not `dzialka` — any new ASCII label/column candidate
+    containing "ł" needs both spellings considered.
 - `wnioski-powykonawcze` — converts DOCX "wniosek materiałowy" files into "dokumentacja powykonawcza" PDFs.
 - `karty-katalogowe` — matches a UID column in an Excel sheet to product spec-sheet files and copies them
   into per-client folders.

@@ -380,8 +380,18 @@ $script:LabelFieldCandidates = @{
   'id'                = @('ID projektu','LP gmina','LP','ID')
   'uczestnik_projektu' = @('Imie i Nazwisko','Inwestor','Beneficjent')
   'adres_inwestycji'  = @('Adres inwestycji','Adres')
-  'dzialka_ewid_nr'   = @('Numer dzialki','Dzialka','Nr dzialki')
-  'nr_dzialki'        = @('Numer dzialki','Dzialka','Nr dzialki')
+  # Normalize-Name (patrz definicja powyzej w tym pliku) usuwa diakrytyki,
+  # ktore w Unicode NFD rozkladaja sie na litere+znak (a,e,c,n,s,z,z), ale
+  # polskie "l" (U+0142) NIE rozklada sie w ten sposob - zostaje i trafia do
+  # tej samej reguly co inne nie-alfanumeryczne znaki (zamienia sie na "_").
+  # Wiec "Działka"/"Dzialka" normalizuje sie do "dzia_ka", nie "dzialka" -
+  # dotyczy to ZAROWNO kluczy etykiet (ponizej "dzia_ka_ewid_nr" obok
+  # bardziej oczywistego "dzialka_ewid_nr"), JAK I kandydatow nazw kolumn
+  # (ponizej "Dzia_ka" obok "Dzialka") - Get-RecordValue normalizuje obie
+  # strony porownania tym samym mechanizmem.
+  'dzialka_ewid_nr'   = @('Numer dzialki','Dzialka','Dzia_ka','Nr dzialki')
+  'nr_dzialki'        = @('Numer dzialki','Dzialka','Dzia_ka','Nr dzialki')
+  'dzia_ka_ewid_nr'   = @('Numer dzialki','Dzialka','Dzia_ka','Nr dzialki')
   'obreb_ewid_nr'     = @('Numer obrebu','Obreb','Nr obrebu')
   'nr_obrebu'         = @('Numer obrebu','Obreb','Nr obrebu')
   'gmina'             = @('Gmina')
@@ -418,68 +428,94 @@ function Get-HighlightedSubRange($cellRange) {
 
 function Fill-HighlightedTableCells($doc, $record, [System.Collections.Generic.List[object]]$fieldDebug) {
   $filledCount = 0
+  # DWA PRZEBIEGI, celowo. Pierwsza wersja tej funkcji czytala I OD RAZU
+  # modyfikowala komorki w JEDNYM przebiegu po $table.Rows - ale modyfikacja
+  # tekstu w jednej komorce (inna dlugosc wartosci niz placeholdera) potrafi
+  # uniewaznic dalsze wiersze tego samego obiektu Rows w Word COM, przez co
+  # tylko PIERWSZY trafiony wiersz w ogole sie wypelnial, a reszta byla po
+  # cichu pomijana. Dlatego: 1) najpierw TYLKO ZBIERAMY cele (bez zadnej
+  # modyfikacji dokumentu), 2) potem podmieniamy od KONCA dokumentu do
+  # poczatku (malejaco wg pozycji), zeby wczesniejsza podmiana nie przesuwala
+  # pozycji tych, ktore jeszcze czekaja na podmiane.
+  $targets = New-Object System.Collections.Generic.List[object]
   try {
     $tableCount = 0
     try { $tableCount = [int]$doc.Tables.Count } catch {}
     if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ type = "table-diag"; tableCount = $tableCount }) | Out-Null }
     foreach ($table in @($doc.Tables)) {
-      foreach ($row in @($table.Rows)) {
-        $cells = @($row.Cells)
-        for ($i = 0; $i -lt $cells.Count; $i++) {
-          $cell = $cells[$i]
-          $highlightIdx = 0
-          try { $highlightIdx = [int]$cell.Range.HighlightColorIndex } catch { continue }
-          if ($highlightIdx -eq $wdNoHighlight) { continue }
-          if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ type = "table-diag-cell"; i = $i; highlightIdx = $highlightIdx; text = ($cell.Range.Text -replace "[\r\a\t\f]", "") }) | Out-Null }
-          if ($i -eq 0) { continue }
+      # WAZNE: NIE uzywamy $table.Rows / $row.Cells. Gdy tabela ma
+      # GDZIEKOLWIEK pionowo scalone komorki (czeste w tych szablonach - np.
+      # wiersz z "ID:"), Word COM odmawia dostepu do WSZYSTKICH wierszy tej
+      # tabeli przez Rows.Item(), nie tylko do tego scalonego ("Nie ma
+      # dostepu do poszczegolnych wierszy z tej kolekcji, gdyz w tabeli sa
+      # komorki powstale ze scalania w pionie") - potwierdzone empirycznie,
+      # to nie da sie obejsc samym try/catch per-wiersz. $table.Range.Cells
+      # (plaska kolekcja wszystkich komorek w kolejnosci czytania, czyli
+      # wiersz po wierszu/lewo-prawo) dziala niezaleznie od scalania i
+      # zachowuje ta sama sasiedztwo "etykieta tuz przed wartoscia".
+      $cells = $null
+      try { $cells = @($table.Range.Cells) } catch { continue }
+      for ($i = 0; $i -lt $cells.Count; $i++) {
+        $cell = $cells[$i]
+        $highlightIdx = 0
+        try { $highlightIdx = [int]$cell.Range.HighlightColorIndex } catch { continue }
+        if ($highlightIdx -eq $wdNoHighlight) { continue }
+        if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ type = "table-diag-cell"; i = $i; highlightIdx = $highlightIdx; text = ($cell.Range.Text -replace "[\r\a\t\f]", "") }) | Out-Null }
+        if ($i -eq 0) { continue }
 
-          $labelCell = $cells[$i - 1]
-          $labelHighlight = 0
-          try { $labelHighlight = [int]$labelCell.Range.HighlightColorIndex } catch {}
-          if ($labelHighlight -ne $wdNoHighlight) { continue }
+        $labelCell = $cells[$i - 1]
+        $labelHighlight = 0
+        try { $labelHighlight = [int]$labelCell.Range.HighlightColorIndex } catch {}
+        if ($labelHighlight -ne $wdNoHighlight) { continue }
 
-          $labelText = ""
-          try { $labelText = ($labelCell.Range.Text -replace "[\r\a\t\f]", "").Trim().TrimEnd(":").Trim() } catch {}
-          if ([string]::IsNullOrWhiteSpace($labelText)) { continue }
-          $labelKey = Normalize-Name $labelText
-          if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ type = "table-diag-label"; labelText = $labelText; labelKey = $labelKey; known = $script:LabelFieldCandidates.ContainsKey($labelKey) }) | Out-Null }
-          if (-not $script:LabelFieldCandidates.ContainsKey($labelKey)) { continue }
+        $labelText = ""
+        try { $labelText = ($labelCell.Range.Text -replace "[\r\a\t\f]", "").Trim().TrimEnd(":").Trim() } catch {}
+        if ([string]::IsNullOrWhiteSpace($labelText)) { continue }
+        $labelKey = Normalize-Name $labelText
+        if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ type = "table-diag-label"; labelText = $labelText; labelKey = $labelKey; known = $script:LabelFieldCandidates.ContainsKey($labelKey) }) | Out-Null }
+        if (-not $script:LabelFieldCandidates.ContainsKey($labelKey)) { continue }
 
-          $value = ""
-          foreach ($candidate in $script:LabelFieldCandidates[$labelKey]) {
-            $value = Get-RecordValue $record $candidate
-            if (-not [string]::IsNullOrWhiteSpace($value)) { break }
-          }
-          if ([string]::IsNullOrWhiteSpace($value)) { continue }
-
-          try {
-            $cellRange = $cell.Range
-            $cellRange.End = $cellRange.End - 1
-            $sub = Get-HighlightedSubRange $cellRange
-            if ($null -eq $sub) { continue }
-            $valueRange = $doc.Range($sub.StartPos, $sub.EndPos)
-            # Czyscimy podswietlenie na CALYM oryginalnym bloku najpierw (nie
-            # zmienia to dlugosci tekstu, wiec pozycje sa jeszcze wazne).
-            $valueRange.HighlightColorIndex = $wdNoHighlight
-            # Czasem caly fragment "XYZ, 97-360 Kamiensk" jest podswietlony
-            # jednym blokiem, nie tylko sama nazwa placeholdera - a to co jest
-            # PO pierwszym przecinku bywa stalym tekstem (kod pocztowy/gmina),
-            # dla ktorego nie ma osobnej kolumny w Excelu. Podmieniamy wtedy
-            # TYLKO czesc przed pierwszym przecinkiem, reszte zostawiamy
-            # (juz odznaczona z podswietlenia powyzej).
-            $originalText = $valueRange.Text
-            $commaIdx = $originalText.IndexOf(",")
-            if ($commaIdx -gt 0) {
-              $valueRange.End = $valueRange.Start + $commaIdx
-            }
-            $valueRange.Text = [string]$value
-            $filledCount++
-            if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ type = "table-label"; label = $labelText; value = $value }) | Out-Null }
-          } catch {}
+        $value = ""
+        foreach ($candidate in $script:LabelFieldCandidates[$labelKey]) {
+          $value = Get-RecordValue $record $candidate
+          if (-not [string]::IsNullOrWhiteSpace($value)) { break }
         }
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+
+        try {
+          $cellRange = $cell.Range
+          $cellRange.End = $cellRange.End - 1
+          $sub = Get-HighlightedSubRange $cellRange
+          if ($null -eq $sub) { continue }
+          $targets.Add([pscustomobject]@{ StartPos = $sub.StartPos; EndPos = $sub.EndPos; Value = [string]$value; Label = $labelText }) | Out-Null
+        } catch {}
       }
     }
   } catch {}
+
+  $sortedTargets = $targets | Sort-Object -Property StartPos -Descending
+  foreach ($target in $sortedTargets) {
+    try {
+      $valueRange = $doc.Range($target.StartPos, $target.EndPos)
+      # Czyscimy podswietlenie na CALYM oryginalnym bloku najpierw (nie
+      # zmienia to dlugosci tekstu, wiec pozycje sa jeszcze wazne).
+      $valueRange.HighlightColorIndex = $wdNoHighlight
+      # Czasem caly fragment "XYZ, 97-360 Kamiensk" jest podswietlony jednym
+      # blokiem, nie tylko sama nazwa placeholdera - a to co jest PO
+      # pierwszym przecinku bywa stalym tekstem (kod pocztowy/gmina), dla
+      # ktorego nie ma osobnej kolumny w Excelu. Podmieniamy wtedy TYLKO
+      # czesc przed pierwszym przecinkiem, reszte zostawiamy (juz odznaczona
+      # z podswietlenia powyzej).
+      $originalText = $valueRange.Text
+      $commaIdx = $originalText.IndexOf(",")
+      if ($commaIdx -gt 0) {
+        $valueRange.End = $valueRange.Start + $commaIdx
+      }
+      $valueRange.Text = $target.Value
+      $filledCount++
+      if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ type = "table-label"; label = $target.Label; value = $target.Value }) | Out-Null }
+    } catch {}
+  }
   return $filledCount
 }
 

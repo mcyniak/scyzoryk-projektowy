@@ -28,7 +28,6 @@ const exportPresetsBtn = document.getElementById('exportPresetsBtn');
 const importPresetsInput = document.getElementById('importPresetsInput');
 
 const PRESETS_STORAGE_KEY = 'scyzoryk:pieczatki:presets:v1';
-const PRESET_FILE_MAX_BYTES = 1200 * 1024;
 
 let pdfCanvasRect = null;
 let drag = null;
@@ -54,17 +53,10 @@ function createStamp(id) {
   return {
     id,
     name: `Pieczątka ${id}`,
-    stampType: 'file',
-    file: null,
-    fileName: '',
-    fileMime: '',
-    fileDataUrl: '',
-    fileStoredInPreset: false,
     text: '',
     textColor: '#d40000',
     textBorder: true,
     fontSize: 0,
-    keepRatio: true,
     pageMode: 'all',
     customPages: '',
     excludedPages: [],
@@ -116,25 +108,6 @@ function updatePresetButtons() {
   if (deletePresetBtn) deletePresetBtn.disabled = !hasPreset;
 }
 
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('Nie udało się odczytać pliku pieczątki.'));
-    reader.readAsDataURL(file);
-  });
-}
-
-function dataUrlToFile(dataUrl, fileName, mimeType) {
-  const [meta, base64] = String(dataUrl || '').split(',');
-  if (!base64) return null;
-  const mime = mimeType || (meta.match(/data:([^;]+)/)?.[1]) || 'application/octet-stream';
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new File([bytes], fileName || 'pieczatka', { type: mime });
-}
-
 function copyPresetPositionFields(stamp) {
   return {
     xPct: Number(stamp.xPct) || 70,
@@ -146,18 +119,12 @@ function copyPresetPositionFields(stamp) {
 }
 
 async function serializeStampForPreset(stamp) {
-  const item = {
+  return {
     name: stamp.name,
-    stampType: stamp.stampType,
-    fileName: stamp.fileName || '',
-    fileMime: stamp.file?.type || stamp.fileMime || '',
-    fileDataUrl: stamp.fileDataUrl || '',
-    fileStoredInPreset: Boolean(stamp.fileDataUrl),
     text: stamp.text,
     textColor: stamp.textColor,
     textBorder: stamp.textBorder,
     fontSize: stamp.fontSize,
-    keepRatio: stamp.keepRatio,
     pageMode: stamp.pageMode,
     customPages: stamp.customPages,
     excludedPages: Array.isArray(stamp.excludedPages) ? [...stamp.excludedPages] : [],
@@ -165,34 +132,18 @@ async function serializeStampForPreset(stamp) {
     opacity: stamp.opacity,
     ...copyPresetPositionFields(stamp),
   };
-
-  if (stamp.stampType === 'file' && stamp.file) {
-    if (stamp.file.size <= PRESET_FILE_MAX_BYTES) {
-      item.fileDataUrl = await fileToDataUrl(stamp.file);
-      item.fileMime = stamp.file.type || item.fileMime;
-      item.fileStoredInPreset = true;
-    } else {
-      item.fileDataUrl = '';
-      item.fileStoredInPreset = false;
-    }
-  }
-  return item;
 }
 
 function deserializePresetStamp(item, id) {
   const stamp = createStamp(id);
   stamp.name = item.name || `Pieczątka ${id}`;
-  stamp.stampType = item.stampType === 'text' ? 'text' : 'file';
-  stamp.fileName = item.fileName || '';
-  stamp.fileMime = item.fileMime || '';
-  stamp.fileDataUrl = item.fileDataUrl || '';
-  stamp.fileStoredInPreset = Boolean(item.fileDataUrl);
-  stamp.file = stamp.fileDataUrl ? dataUrlToFile(stamp.fileDataUrl, stamp.fileName, stamp.fileMime) : null;
-  stamp.text = item.text || '';
+  // Starsze presety mogly zapisac pieczatke typu "plik" (obraz/PDF) - ta
+  // funkcja nie jest juz obslugiwana, wiec taki preset wczytuje sie jako
+  // pusta pieczatka tekstowa (uzytkownik dostaje komunikat w loadSelectedPreset).
+  stamp.text = item.stampType === 'file' ? '' : (item.text || '');
   stamp.textColor = item.textColor || '#d40000';
   stamp.textBorder = item.textBorder !== false;
   stamp.fontSize = Number(item.fontSize) || 0;
-  stamp.keepRatio = item.keepRatio !== false;
   stamp.pageMode = ['all', 'first', 'last', 'custom'].includes(item.pageMode) ? item.pageMode : 'all';
   stamp.customPages = item.customPages || '';
   stamp.excludedPages = Array.isArray(item.excludedPages) ? [...item.excludedPages] : [];
@@ -215,18 +166,18 @@ async function saveCurrentPreset() {
   }
 
   const serializedStamps = [];
-  let missingLargeFile = false;
   for (const stamp of stamps) {
-    const serialized = await serializeStampForPreset(stamp);
-    if (stamp.stampType === 'file' && stamp.fileName && !serialized.fileStoredInPreset) {
-      missingLargeFile = true;
-    }
-    serializedStamps.push(serialized);
+    serializedStamps.push(await serializeStampForPreset(stamp));
   }
 
   const presets = readPresets();
   const selectedId = presetSelect?.value || '';
   const existingIndex = selectedId ? presets.findIndex(preset => preset.id === selectedId) : -1;
+  if (existingIndex >= 0) {
+    const existingName = presets[existingIndex].name || 'Preset bez nazwy';
+    const confirmed = confirm(`Preset "${existingName}" już istnieje. Nadpisać go obecnymi ustawieniami pieczątek?`);
+    if (!confirmed) return setStatus('Anulowano zapis - preset nie został nadpisany.');
+  }
   const id = existingIndex >= 0 ? selectedId : `preset-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const preset = {
     id,
@@ -241,12 +192,10 @@ async function saveCurrentPreset() {
   try {
     writePresets(presets);
     renderPresetSelect(id);
-    setStatus(missingLargeFile
-      ? 'Zapisano preset. Jeden z dużych plików pieczątki trzeba będzie wybrać ponownie po wczytaniu.'
-      : 'Zapisano preset pieczątek.');
+    setStatus('Zapisano preset pieczątek.');
   } catch (err) {
     console.error(err);
-    setStatus('Nie udało się zapisać presetu. Pliki pieczątek mogą być za duże do zapamiętania w przeglądarce.', true);
+    setStatus('Nie udało się zapisać presetu.', true);
   }
 }
 
@@ -257,20 +206,25 @@ function loadSelectedPreset() {
   if (!preset) return setStatus('Nie znaleziono wybranego presetu.', true);
   const items = Array.isArray(preset.stamps) ? preset.stamps : [];
   if (!items.length) return setStatus('Ten preset nie ma zapisanych pieczątek.', true);
+  const hadFileStamps = items.some(item => item.stampType === 'file');
   stamps = items.map((item, index) => deserializePresetStamp(item, index + 1));
   stampCounter = stamps.length;
   activeStampId = stamps[0].id;
   if (presetNameInput) presetNameInput.value = preset.name || '';
   renderAll();
-  const needsFiles = stamps.some(stamp => stamp.stampType === 'file' && stamp.fileName && !stamp.file);
-  setStatus(needsFiles ? 'Wczytano preset. Wybierz ponownie brakujące pliki pieczątek.' : 'Wczytano preset.');
+  setStatus(hadFileStamps
+    ? 'Wczytano preset. Pieczątki z pliku (obraz/PDF) nie są już obsługiwane - wpisz dla nich tekst.'
+    : 'Wczytano preset.');
 }
 
 function deleteSelectedPreset() {
   const id = presetSelect?.value || '';
   if (!id) return;
-  const presets = readPresets().filter(item => item.id !== id);
-  writePresets(presets);
+  const presets = readPresets();
+  const target = presets.find(item => item.id === id);
+  const targetName = target?.name || 'ten preset';
+  if (!confirm(`Usunąć preset "${targetName}"? Tej operacji nie da się cofnąć.`)) return;
+  writePresets(presets.filter(item => item.id !== id));
   if (presetNameInput) presetNameInput.value = '';
   renderPresetSelect('');
   setStatus('Usunięto preset.');
@@ -467,10 +421,7 @@ function overridePagesLabel(stamp) {
 }
 
 function stampTitle(stamp) {
-  if (stamp.stampType === 'text') {
-    return stamp.text.trim().split('\n')[0] || 'Tekst pieczątki';
-  }
-  return stamp.fileName || 'Plik pieczątki';
+  return stamp.text.trim().split('\n')[0] || 'Tekst pieczątki';
 }
 
 function pagesLabel(stamp) {
@@ -523,24 +474,7 @@ function renderActiveEditor() {
         <button type="button" id="deleteStampBtn" class="ghost dangerBtn smallBtn" ${stamps.length === 1 ? 'disabled' : ''}>Usuń</button>
       </div>
 
-      <div class="stampTabs">
-        <button type="button" id="tabBtnFile" class="tabBtn ${stamp.stampType === 'file' ? 'active' : ''}">Plik</button>
-        <button type="button" id="tabBtnText" class="tabBtn ${stamp.stampType === 'text' ? 'active' : ''}">Tekst</button>
-      </div>
-
-      <div id="fileEditor" class="tabContent" style="display:${stamp.stampType === 'file' ? 'block' : 'none'}">
-        <label class="field">
-          <span>Obraz PNG/JPG lub PDF</span>
-          <input id="stampFileInput" type="file" accept="image/png,image/jpeg,application/pdf,.png,.jpg,.jpeg,.pdf" />
-          <small>${stamp.fileName ? `Wybrano: ${escapeHtml(stamp.fileName)}` : 'Nie wybrano pliku.'}</small>
-        </label>
-        <label class="check">
-          <input id="keepRatioInput" type="checkbox" ${stamp.keepRatio ? 'checked' : ''} />
-          Zachowaj proporcje pieczątki
-        </label>
-      </div>
-
-      <div id="textEditor" class="tabContent" style="display:${stamp.stampType === 'text' ? 'block' : 'none'}">
+      <div id="textEditor" class="tabContent">
         <label class="field">
           <span>Tekst pieczątki</span>
           <textarea id="stampTextInput" rows="2" placeholder="np. ZATWIERDZONO&#10;DATA: 2026-07-01">${escapeHtml(stamp.text)}</textarea>
@@ -608,24 +542,12 @@ function bindEditorEvents(stamp) {
     renderStampList();
   });
 
-  activeEditor.querySelector('#tabBtnFile').addEventListener('click', () => {
-    stamp.stampType = 'file';
-    renderAll();
-  });
-
-  activeEditor.querySelector('#tabBtnText').addEventListener('click', () => {
-    stamp.stampType = 'text';
-    renderAll();
-  });
-
   activeEditor.querySelector('#duplicateStampBtn').addEventListener('click', () => {
     const nextId = ++stampCounter;
     const copy = {
       ...stamp,
       id: nextId,
       name: `${stamp.name} kopia`,
-      file: stamp.file,
-      fileName: stamp.fileName,
       excludedPages: [...stamp.excludedPages],
       pageOverrides: JSON.parse(JSON.stringify(getPageOverrides(stamp))),
     };
@@ -641,27 +563,6 @@ function bindEditorEvents(stamp) {
     activeStampId = stamps[Math.max(0, index - 1)]?.id || stamps[0].id;
     renderAll();
   });
-
-  const fileInput = activeEditor.querySelector('#stampFileInput');
-  if (fileInput) {
-    fileInput.addEventListener('change', event => {
-      const file = event.target.files[0] || null;
-      stamp.file = file;
-      stamp.fileName = file?.name || '';
-      stamp.fileMime = file?.type || '';
-      stamp.fileDataUrl = '';
-      stamp.fileStoredInPreset = false;
-      renderAll();
-    });
-  }
-
-  const keepRatio = activeEditor.querySelector('#keepRatioInput');
-  if (keepRatio) {
-    keepRatio.addEventListener('change', event => {
-      stamp.keepRatio = event.target.checked;
-      updateBoxes();
-    });
-  }
 
   const textInput = activeEditor.querySelector('#stampTextInput');
   if (textInput) {
@@ -837,8 +738,8 @@ function updateBoxes(action = '', targetId = null) {
     box.style.display = appliesHere ? 'flex' : 'none';
     box.classList.toggle('active', stamp.id === activeStampId);
     box.classList.toggle('inactive', stamp.id !== activeStampId);
-    box.classList.toggle('printFrameOn', stamp.stampType === 'text' && stamp.textBorder);
-    box.classList.toggle('printFrameOff', stamp.stampType === 'text' && !stamp.textBorder);
+    box.classList.toggle('printFrameOn', stamp.textBorder);
+    box.classList.toggle('printFrameOff', !stamp.textBorder);
 
     const pagePosition = currentPositionSource(stamp);
     const hasOwnPositionHere = hasPageOverride(stamp, currentPage);
@@ -855,27 +756,21 @@ function updateBoxes(action = '', targetId = null) {
 
     const content = box.querySelector('.stampBoxContent') || box;
 
-    if (stamp.stampType === 'text') {
-      const textVal = stamp.text.trim() || 'TEKST PIECZĄTKI';
-      content.innerText = textVal;
-      box.style.color = stamp.textColor || '#d40000';
-      const lines = textVal.split('\n').filter(Boolean);
-      const fontSizeInput = Number(stamp.fontSize) || 0;
-      const sizeScale = pdfCanvasRect.width / 1000;
-      let previewFontSize = fontSizeInput * sizeScale;
-      if (!previewFontSize) {
-        previewFontSize = Math.max(5, Math.min(
-          h / Math.max(lines.length, 1) * 0.55,
-          w / 10,
-          28 * sizeScale,
-        ));
-      }
-      box.style.fontSize = `${previewFontSize}px`;
-    } else {
-      content.textContent = stamp.fileName ? `PLIK: ${stamp.fileName}` : 'WYBIERZ PLIK';
-      box.style.color = '';
-      box.style.fontSize = '';
+    const textVal = stamp.text.trim() || 'TEKST PIECZĄTKI';
+    content.innerText = textVal;
+    box.style.color = stamp.textColor || '#d40000';
+    const lines = textVal.split('\n').filter(Boolean);
+    const fontSizeInput = Number(stamp.fontSize) || 0;
+    const sizeScale = pdfCanvasRect.width / 1000;
+    let previewFontSize = fontSizeInput * sizeScale;
+    if (!previewFontSize) {
+      previewFontSize = Math.max(5, Math.min(
+        h / Math.max(lines.length, 1) * 0.55,
+        w / 10,
+        28 * sizeScale,
+      ));
     }
+    box.style.fontSize = `${previewFontSize}px`;
 
     if (action === 'move' && targetId === stamp.id) {
       box.dataset.frameLabel = `${stamp.name} - przesuwasz`;
@@ -935,7 +830,10 @@ function startBoxDrag(event, stampId) {
   const box = stampLayer.querySelector(`[data-stamp-id="${stamp.id}"]`);
   const rect = box.getBoundingClientRect();
   pdfCanvasRect = canvasPageRect();
-  const isResize = event.clientX >= rect.right - 24 && event.clientY >= rect.bottom - 24;
+  // Uchwyt do zmiany rozmiaru (::after) wystaje 9px poza ramke - obszar
+  // klikalny musi siegac dalej niz sama ramka, zeby pokrywal sie z tym,
+  // co widac na podgladzie.
+  const isResize = event.clientX >= rect.right - 20 && event.clientY >= rect.bottom - 20;
   const pagePosition = currentPositionSource(stamp);
   drag = {
     pointerId: event.pointerId,
@@ -1257,44 +1155,32 @@ form.addEventListener('submit', async event => {
   const pdfs = [...pdfInput.files];
   if (!pdfs.length) return setStatus('Dodaj przynajmniej jeden PDF.', true);
 
-  const validStamps = stamps.filter(stamp => {
-    if (stamp.stampType === 'file') return Boolean(stamp.file);
-    return Boolean(stamp.text.trim());
-  });
+  const validStamps = stamps.filter(stamp => Boolean(stamp.text.trim()));
 
   if (!validStamps.length) {
-    return setStatus('Dodaj przynajmniej jedną pieczątkę z pliku albo tekstu.', true);
+    return setStatus('Dodaj przynajmniej jedną pieczątkę z tekstem.', true);
   }
 
   const data = new FormData();
   pdfs.forEach(file => data.append('pdfs', file, file.name));
 
-  const payload = validStamps.map((stamp, index) => {
-    const fileField = `stampFile_${index}`;
-    if (stamp.stampType === 'file' && stamp.file) {
-      data.append(fileField, stamp.file, stamp.file.name);
-    }
-    return {
-      name: stamp.name,
-      stampType: stamp.stampType,
-      fileField,
-      xPct: stamp.xPct,
-      yPct: stamp.yPct,
-      widthPct: stamp.widthPct,
-      heightPct: stamp.heightPct,
-      rotation: stamp.rotation,
-      opacity: stamp.opacity,
-      pageMode: stamp.pageMode,
-      customPages: stamp.customPages,
-      excludedPages: stamp.excludedPages,
-      pageOverrides: getPageOverrides(stamp),
-      stampText: stamp.text,
-      textColor: stamp.textColor,
-      textBorder: stamp.textBorder,
-      keepRatio: stamp.keepRatio,
-      fontSize: stamp.fontSize,
-    };
-  });
+  const payload = validStamps.map(stamp => ({
+    name: stamp.name,
+    xPct: stamp.xPct,
+    yPct: stamp.yPct,
+    widthPct: stamp.widthPct,
+    heightPct: stamp.heightPct,
+    rotation: stamp.rotation,
+    opacity: stamp.opacity,
+    pageMode: stamp.pageMode,
+    customPages: stamp.customPages,
+    excludedPages: stamp.excludedPages,
+    pageOverrides: getPageOverrides(stamp),
+    stampText: stamp.text,
+    textColor: stamp.textColor,
+    textBorder: stamp.textBorder,
+    fontSize: stamp.fontSize,
+  }));
   data.append('stamps', JSON.stringify(payload));
 
   submitBtn.disabled = true;

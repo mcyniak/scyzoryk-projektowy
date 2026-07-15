@@ -5,8 +5,7 @@ Niezalezne narzedzie do stemplowania PDF-ow.
 ## Funkcje
 
 - upload wielu PDF-ow,
-- pieczatka jako PNG, JPG albo pierwsza strona innego PDF-a,
-- opcjonalna pieczatka tekstowa,
+- pieczatka tekstowa (kolor, rozmiar, ramka),
 - ustawianie pozycji i rozmiaru na podgladzie przez przeciaganie ramki,
 - brak recznego wpisywania X/Y w panelu - wartosci sa liczone w tle,
 - kompaktowy widok startowy, zeby na ekranie 1080p bylo widac opcje bez przewijania,
@@ -49,4 +48,7 @@ npm.cmd start
 
 ## Uwaga o pieczatce tekstowej
 
-Pieczatka z pliku PNG/JPG/PDF zachowuje normalnie polskie znaki, grafike i logo. Pieczatka tekstowa jest uproszczona, bo nie uzywa zewnetrznych fontow.
+Pieczatki sa tylko tekstowe (bez wgrywania obrazu/PDF jako pieczatki). Jesli na komputerze jest
+zainstalowany font Arial (`C:\Windows\Fonts\Arial.ttf` / `arialbd.ttf`), polskie znaki drukuja sie
+normalnie. Jesli fontu nie znaleziono, tekst jest uproszczony (znaki diakrytyczne zamieniane na
+odpowiedniki bez ogonkow).

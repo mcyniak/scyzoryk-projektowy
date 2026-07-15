@@ -5,6 +5,16 @@ const pdfParse = require("pdf-parse");
 
 const PRINTABLE_EXT = new Set([".pdf", ".docx", ".doc"]);
 const OT_PATTERN = /^(ot[_\- ]|opis[_\- ]?techniczn)/i;
+const TITLE_PATTERN = /^(st[_\- ]|strona[_\- ]?tytu[łl]owa)/i;
+
+// Kolektory czesto nazywaja pliki "ST_..."/"OT_..." (skrot na poczatku), ale
+// niektore foldery (np. Łowicz) numeruja pliki w kolejnosci "1. Strona
+// tytulowa.pdf", "2. Opis techniczny ...pdf" - numer i kropka na poczatku
+// nazwy przeszkadzaja dopasowaniu do wzorcow powyzej, wiec usuwamy taki
+// prefiks przed testowaniem.
+function stripNumericPrefix(name) {
+  return name.replace(/^\d+[.\-_ ]+\s*/, "");
+}
 
 function normalize(text) {
   return String(text || "")
@@ -93,7 +103,7 @@ function classifyFiles(folderPath) {
   const printableRaw = entries.filter(name => PRINTABLE_EXT.has(path.extname(name).toLowerCase()));
   const skipped = entries.filter(name => !PRINTABLE_EXT.has(path.extname(name).toLowerCase()));
 
-  const techDescDocxForExtraction = printableRaw.find(n => OT_PATTERN.test(path.basename(n)) && n.toLowerCase().endsWith(".docx"));
+  const techDescDocxForExtraction = printableRaw.find(n => OT_PATTERN.test(stripNumericPrefix(path.basename(n))) && n.toLowerCase().endsWith(".docx"));
 
   const byBaseName = new Map();
   for (const name of printableRaw) {
@@ -112,16 +122,16 @@ function classifyFiles(folderPath) {
     for (const n of names) { if (n !== keep) droppedDuplicates.push(n); }
   }
 
-  let titlePage = printable.find(n => /^st[_\- ]/i.test(path.basename(n)) && n.toLowerCase().endsWith(".pdf"))
-    || printable.find(n => /^st[_\- ]/i.test(path.basename(n)));
+  let titlePage = printable.find(n => TITLE_PATTERN.test(stripNumericPrefix(path.basename(n))) && n.toLowerCase().endsWith(".pdf"))
+    || printable.find(n => TITLE_PATTERN.test(stripNumericPrefix(path.basename(n))));
 
-  let techDescPdf = printable.find(n => OT_PATTERN.test(path.basename(n)) && n.toLowerCase().endsWith(".pdf"));
+  let techDescPdf = printable.find(n => OT_PATTERN.test(stripNumericPrefix(path.basename(n))) && n.toLowerCase().endsWith(".pdf"));
   let techDescDocx = techDescDocxForExtraction;
 
   const drawingLike = printable.filter(n => /^\d+_[a-ząćęłńóśźż]_/i.test(path.basename(n)) && n.toLowerCase().endsWith(".pdf"));
 
   const otStVariants = printable.filter(n =>
-    (OT_PATTERN.test(path.basename(n)) || /^st[_\- ]/i.test(path.basename(n))) &&
+    (OT_PATTERN.test(stripNumericPrefix(path.basename(n))) || TITLE_PATTERN.test(stripNumericPrefix(path.basename(n)))) &&
     n !== titlePage && n !== techDescPdf && n !== techDescDocx
   );
 
@@ -168,7 +178,14 @@ async function detectByContent(folderPath, classified) {
 }
 
 function extractAttachmentsList(text) {
-  const re = /Za[łl][ąa]cznik\s*nr\s*(\d+)(?:\.\d+)?[.:]?\s+([^\n\r]+)/gi;
+  // Kolektory pisza pelne "Załącznik nr 1: Nazwa" w jednej linii. Pompy
+  // ciepla / kotly czesto pisza skrocone "Zał. nr 1" w tabeli (Nr zalacznika
+  // | Nazwa rysunku), gdzie numer i nazwa sa w OSOBNYCH akapitach ekstrakcji
+  // (mammoth/pdf-parse rozbijaja komorki tabeli na osobne linie) - stąd
+  // "(?:[ąa]cznik|\\.)" (pelne slowo ALBO sama kropka po skrocie) i "\\s+"
+  // (ktore juz samo w sobie obejmuje znaki nowej linii) laczace numer z
+  // nazwa nawet gdy dzieli je pusta linia.
+  const re = /Za[łl](?:[ąa]cznik|\.)\s*nr\.?\s*(\d+)(?:\.\d+)?[.:]?\s+([^\n\r]+)/gi;
   const items = [];
   let m;
   while ((m = re.exec(text)) !== null) {
@@ -184,11 +201,28 @@ function extractAttachmentsList(text) {
     return true;
   }).sort((a, b) => a.num - b.num);
   const seenNum = new Set();
-  return deduped.filter(it => {
+  const numbered = deduped.filter(it => {
     if (seenNum.has(it.num)) return false;
     seenNum.add(it.num);
     return true;
   });
+  if (numbered.length) return numbered;
+
+  // Niektore szablony (np. kotly na biomase) nie numeruja zalacznikow wcale -
+  // maja tylko naglowek "SPIS ZALACZNIKOW:" a pod nim po prostu nazwy, po
+  // jednej w linii, az do kolejnego naglowka (linia WIELKIMI LITERAMI). W
+  // takim przypadku numerujemy je sami wg kolejnosci wystapienia.
+  const headerMatch = /SPIS\s+ZA[ŁL][ĄA]CZNIK[ÓO]W\s*:?/i.exec(text);
+  if (!headerMatch) return [];
+  const afterHeader = text.slice(headerMatch.index + headerMatch[0].length);
+  const lines = afterHeader.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const fallback = [];
+  for (const line of lines) {
+    const isHeading = /^[A-ZĄĆĘŁŃÓŚŹŻ0-9][A-ZĄĆĘŁŃÓŚŹŻ0-9 .:/-]{3,}$/.test(line) && line === line.toUpperCase();
+    if (isHeading) break;
+    if (line.length > 0 && line.length < 200) fallback.push({ num: fallback.length + 1, name: line.replace(/\.$/, "") });
+  }
+  return fallback;
 }
 
 const KEYWORD_MAP = [
@@ -199,7 +233,10 @@ const KEYWORD_MAP = [
   [["zasobnik", "solarnego"], ["zasobnik"]],
   [["grupa", "pompow"], ["grupa", "pomp"]],
   [["sterownik"], ["sterownik", "regulator"]],
-  [["pompa", "ciepla"], ["pompa ciepla", "pompy ciepla"]],
+  [["bilans"], ["ozc", "bilans", "zapotrzebowani"]],
+  [["dobor"], ["dobor", "doboru"]],
+  [["bufor"], ["bufor"]],
+  [["pomp", "ciepla"], ["pomp"]],
   [["kocio"], ["kociol", "kociol"]],
   [["kotl", "biomas"], ["katalogowa"]]
 ];

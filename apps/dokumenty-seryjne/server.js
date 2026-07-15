@@ -592,7 +592,11 @@ function startGeneration(job, options) {
   writeJsonFileNoBom(dataJsonPath, { sheetName, addressColumn, records: rowsForMerge });
   writeJsonFileNoBom(replacementJsonPath, { rules: textReplacements });
   if (!options._keepLog) fs.writeFileSync(job.logPath, '', 'utf8');
-  fs.writeFileSync(debugJsonPath, '', 'utf8');
+  // BUG: brakowalo tu tego samego warunku co przy logPath - debugJsonPath byl
+  // czyszczony przy KAZDYM wywolaniu startGeneration, wiec w zadaniu z wieloma
+  // szablonami (np. Strona tytulowa + BIOZ) diagnostyka pierwszego szablonu
+  // znikala, gdy zaczynal sie drugi (nadpisywala ja pusta zawartosc).
+  if (!options._keepLog) fs.writeFileSync(debugJsonPath, '', 'utf8');
 
   job.status = 'running';
   job.startedAt = job.startedAt || Date.now();

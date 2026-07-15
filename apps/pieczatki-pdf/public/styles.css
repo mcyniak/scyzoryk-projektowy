@@ -87,10 +87,6 @@ small, .hint { color: var(--muted); font-size: 12px; line-height: 1.35; }
 .checkCard small { display: block; margin: 0; }
 .hiddenPositionFields { display: none; }
 
-.stampTabs { display: flex; background: #f1f5f9; border: 1px solid var(--line); border-radius: 15px; padding: 4px; margin-bottom: 12px; }
-.tabBtn { flex: 1; border: 0; background: transparent; color: var(--muted); padding: 9px 10px; font-size: 13px; font-weight: 850; border-radius: 12px; cursor: pointer; box-shadow: none; }
-.tabBtn:hover { color: var(--text); transform: none; filter: none; }
-.tabBtn.active { background: #fff; color: var(--red-dark); box-shadow: 0 8px 20px rgba(15,23,42,.08); }
 .tabContent { animation: fadeIn .15s ease-out; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(1px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -112,7 +108,7 @@ button:disabled, .primary:disabled { opacity: .55; cursor: not-allowed; transfor
 .preview.loaded #pdfCanvas { display: block; }
 .preview.loaded .emptyText { display: none; }
 .emptyText { color: var(--muted); font-weight: 850; }
-.stampBox { position: absolute; display: none; border: 2px dashed rgba(207,23,31,.95); outline: 1px solid rgba(255,255,255,.6); color: rgba(0,0,0,.95); background: rgba(207,23,31,.10); box-shadow: 0 0 0 9999px rgba(207,23,31,.015), 0 0 20px rgba(207,23,31,.18); font-weight: 900; letter-spacing: .06em; flex-direction: column; align-items: center; justify-content: center; text-align: center; cursor: grab; user-select: none; min-width: 32px; min-height: 20px; white-space: pre-wrap; padding: 4px; overflow: hidden; line-height: 1.15; }
+.stampBox { position: absolute; display: none; border: 2px dashed rgba(207,23,31,.95); outline: 1px solid rgba(255,255,255,.6); color: rgba(0,0,0,.95); background: rgba(207,23,31,.10); box-shadow: 0 0 0 9999px rgba(207,23,31,.015), 0 0 20px rgba(207,23,31,.18); font-weight: 900; letter-spacing: .06em; flex-direction: column; align-items: center; justify-content: center; text-align: center; cursor: grab; user-select: none; min-width: 32px; min-height: 20px; white-space: pre-wrap; padding: 4px; line-height: 1.15; }
 .preview.loaded .stampBox { display: flex; }
 .stampBox::before { content: attr(data-frame-label); position: absolute; left: 0; top: -28px; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--red-dark); background: #fff; border: 1px solid rgba(207,23,31,.35); border-radius: 999px; padding: 4px 8px; font-size: 11px; font-weight: 900; letter-spacing: 0; pointer-events: none; box-shadow: 0 8px 18px rgba(15,23,42,.08); }
 .stampBox::after { content: ""; position: absolute; right: -9px; bottom: -9px; width: 17px; height: 17px; background: var(--red); border: 2px solid #fff; border-radius: 5px; cursor: nwse-resize; box-shadow: 0 2px 10px rgba(0,0,0,.20); }
@@ -203,7 +199,7 @@ button:disabled, .primary:disabled { opacity: .55; cursor: not-allowed; transfor
 /* Usuwanie pieczątki tylko z aktualnej strony podglądu */
 .pageActionRow { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 2px; }
 .pageActionRow [hidden] { display: none !important; }
-.stampBoxContent { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+.stampBoxContent { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; overflow: hidden; }
 .stampTrash { position: absolute; top: 5px; right: 5px; z-index: 8; min-width: 30px; width: 30px; height: 30px; padding: 0; border-radius: 999px; border: 1px solid rgba(207,23,31,.34); background: rgba(255,255,255,.96); color: var(--red-dark); box-shadow: 0 8px 18px rgba(15,23,42,.16); display: none; align-items: center; justify-content: center; font-size: 0; cursor: pointer; }
 .stampTrash::before { content: "🗑"; font-size: 15px; line-height: 1; }
 .stampTrash:hover { transform: scale(1.04); filter: none; background: #fff1f2; }
