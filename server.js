@@ -4,8 +4,8 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { createRequire } = require('module');
 const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog, readJsonFileNoBom } = require('./lib/hardening');
-const authUsers = require('./lib/auth/users');
-const authSessions = require('./lib/auth/sessionStore');
+const anonSession = require('./lib/auth/anonymousSession');
+const adminAuth = require('./lib/auth/adminAuth');
 const authCookies = require('./lib/auth/cookies');
 const authMiddleware = require('./lib/auth/middleware');
 const authRateLimit = require('./lib/auth/rateLimiter');
@@ -148,10 +148,10 @@ function startChild(app, attempt = 0) {
   const meta = getChildMeta(app.slug);
   meta.startedAt = Date.now();
   meta.nextRestartAt = null;
-  // AUTH_REQUIRED jest zdefiniowane nizej w pliku, ale ta funkcja jest
+  // PILOT_MODE jest zdefiniowane nizej w pliku, ale ta funkcja jest
   // faktycznie wywolywana dopiero na samym koncu (po zaladowaniu profilu),
   // wiec w momencie wywolania zmienna jest juz zainicjowana.
-  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_AUTH_REQUIRED: AUTH_REQUIRED ? '1' : '0', SCYZORYK_PANEL_PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_PILOT_MODE: PILOT_MODE ? '1' : '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', err => {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
     appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
@@ -303,13 +303,19 @@ function clientIp(req) {
   return req.socket?.remoteAddress || 'unknown';
 }
 
-// Logowanie ma sens tylko dla profili innych niz "windows" (pilot linuksowy
-// i ewentualne przyszle profile) - profil "windows" ma pozostac dokladnie
-// takim samym doswiadczeniem jak dzisiaj (bez ekranu logowania), zeby ta
-// sama galaz kodu dala sie bezpiecznie uruchomic tez z profilem windows.
-const AUTH_REQUIRED = ACTIVE_PROFILE !== 'windows';
-const PUBLIC_PATHS = new Set(['/login', '/login.html']);
-if (AUTH_REQUIRED) authSessions.startCleanupTimer();
+// Pracownicy NIE maja kont ani ekranu logowania - kazda przegladarka w
+// firmowej sieci LAN od razu korzysta z narzedzi (patrz lib/auth/
+// anonymousSession.js - izolacja danych roboczych bez podawania
+// jakichkolwiek danych). Jedyne miejsce z prawdziwym haslem to panel
+// administratora (lib/auth/adminAuth.js). Oba mechanizmy sa aktywne tylko
+// dla profili innych niz "windows" - profil "windows" ma pozostac dokladnie
+// takim samym doswiadczeniem jak dzisiaj (bez panelu admina za haslem), zeby
+// ta sama galaz kodu dala sie bezpiecznie uruchomic tez z tym profilem.
+const PILOT_MODE = ACTIVE_PROFILE !== 'windows';
+if (PILOT_MODE) {
+  anonSession.startCleanupTimer();
+  adminAuth.startCleanupTimer();
+}
 
 // Ten sam wzorzec co w kazdej aplikacji-dziecku: zadania modyfikujace stan
 // musza niesc naglowek X-Scyzoryk-Request, ktorego zwykly <form> (bez JS) nie
@@ -319,45 +325,46 @@ function isSameOriginRequest(req) {
   return req.headers['x-scyzoryk-request'] === '1';
 }
 
-async function handleAuthLogin(req, res) {
+async function handleAdminLogin(req, res) {
   if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
   if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
   const ip = clientIp(req);
   let body;
   try { body = await readJsonBody(req); }
   catch (err) { return send(res, 400, JSON.stringify({ ok: false, error: err.message }), 'application/json; charset=utf-8'); }
-  const username = String(body.username || '').trim();
   const password = String(body.password || '');
-  if (authRateLimit.isRateLimited(ip, username)) {
-    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'login-rate-limited', ip, username: sanitizeForLog(username, 60) });
+  if (authRateLimit.isRateLimited(ip, 'admin')) {
+    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'admin-login-rate-limited', ip });
     return send(res, 429, JSON.stringify({ ok: false, error: 'Za duzo nieudanych prob logowania. Sprobuj ponownie za kilkanascie minut.' }), 'application/json; charset=utf-8');
   }
-  const user = await authUsers.verifyLogin(username, password);
-  if (!user) {
-    authRateLimit.recordFailedAttempt(ip, username);
-    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'login-failed', ip, username: sanitizeForLog(username, 60) });
-    return send(res, 401, JSON.stringify({ ok: false, error: 'Nieprawidlowa nazwa uzytkownika lub haslo.' }), 'application/json; charset=utf-8');
+  if (!adminAuth.hasAdminPassword()) {
+    return send(res, 503, JSON.stringify({ ok: false, error: 'Haslo administratora nie zostalo jeszcze ustawione. Na serwerze uruchom: node scripts/set-admin-password.js' }), 'application/json; charset=utf-8');
   }
-  authRateLimit.recordSuccess(ip, username);
-  const sid = authSessions.createSession(user);
-  appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'info', event: 'login-success', ip, username: user.username });
-  res.setHeader('Set-Cookie', authCookies.buildSessionCookieHeader(sid));
-  send(res, 200, JSON.stringify({ ok: true, user: { username: user.username, role: user.role } }), 'application/json; charset=utf-8');
-}
-
-function handleAuthLogout(req, res) {
-  if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
-  if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
-  const sid = authCookies.getSidFromRequest(req);
-  if (sid) authSessions.destroySession(sid);
-  res.setHeader('Set-Cookie', authCookies.buildClearCookieHeader());
+  const ok = await adminAuth.verifyAdminPassword(password);
+  if (!ok) {
+    authRateLimit.recordFailedAttempt(ip, 'admin');
+    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'admin-login-failed', ip });
+    return send(res, 401, JSON.stringify({ ok: false, error: 'Nieprawidlowe haslo.' }), 'application/json; charset=utf-8');
+  }
+  authRateLimit.recordSuccess(ip, 'admin');
+  const sid = adminAuth.createAdminSession();
+  appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'info', event: 'admin-login-success', ip });
+  res.setHeader('Set-Cookie', authCookies.buildCookieHeader(authCookies.ADMIN_SESSION_COOKIE, sid));
   send(res, 200, JSON.stringify({ ok: true }), 'application/json; charset=utf-8');
 }
 
-function handleAuthWhoami(req, res) {
-  const session = authMiddleware.getSessionFromRequest(req);
-  if (!session) return send(res, 200, JSON.stringify({ ok: false }), 'application/json; charset=utf-8');
-  send(res, 200, JSON.stringify({ ok: true, user: { username: session.username, role: session.role } }), 'application/json; charset=utf-8');
+function handleAdminLogout(req, res) {
+  if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
+  if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
+  const sid = authCookies.getCookieFromRequest(req, authCookies.ADMIN_SESSION_COOKIE);
+  if (sid) adminAuth.destroyAdminSession(sid);
+  res.setHeader('Set-Cookie', authCookies.buildClearCookieHeader(authCookies.ADMIN_SESSION_COOKIE));
+  send(res, 200, JSON.stringify({ ok: true }), 'application/json; charset=utf-8');
+}
+
+function handleAdminWhoami(req, res) {
+  const session = authMiddleware.getAdminSessionFromRequest(req);
+  send(res, 200, JSON.stringify({ ok: Boolean(session) }), 'application/json; charset=utf-8');
 }
 
 const server = http.createServer(async (req, res) => {
@@ -367,24 +374,32 @@ const server = http.createServer(async (req, res) => {
   const decodedPath = safeDecodePathname(url.pathname);
   if (decodedPath === null) return send(res, 400, 'Bad Request');
 
-  if (decodedPath === '/auth/login') return handleAuthLogin(req, res);
-  if (decodedPath === '/auth/logout') return handleAuthLogout(req, res);
-  if (decodedPath === '/auth/whoami') return handleAuthWhoami(req, res);
-
-  let session = null;
-  if (AUTH_REQUIRED && !PUBLIC_PATHS.has(decodedPath)) {
-    session = authMiddleware.requireAuthHttp(req, res, send);
-    if (!session) return; // requireAuthHttp juz wyslal odpowiedz (redirect/401)
+  if (decodedPath === '/admin/login') {
+    if (req.method === 'GET') return readStaticFile(path.join(PUBLIC_DIR, 'admin-login.html'), res);
+    return handleAdminLogin(req, res);
   }
+  if (decodedPath === '/admin/logout') return handleAdminLogout(req, res);
+  if (decodedPath === '/admin/whoami') return handleAdminWhoami(req, res);
 
+  if (decodedPath === '/admin' || decodedPath === '/admin.html') {
+    if (PILOT_MODE) {
+      const session = authMiddleware.requireAdminAuthHttp(req, res, send);
+      if (!session) return; // requireAdminAuthHttp juz wyslal odpowiedz (redirect/401)
+    }
+    return readStaticFile(path.join(PUBLIC_DIR, 'admin.html'), res);
+  }
   if (decodedPath === '/api/admin/logs') {
-    if (AUTH_REQUIRED && session?.role !== 'admin') return send(res, 403, JSON.stringify({ ok: false, error: 'Wymagana rola administratora.' }), 'application/json; charset=utf-8');
+    if (PILOT_MODE) {
+      const session = authMiddleware.requireAdminAuthHttp(req, res, send);
+      if (!session) return;
+    }
     return send(res, 200, JSON.stringify({ ok: true, lines: readLastLines(path.join(ROOT, 'logs', 'children.jsonl'), 100) }, null, 2), 'application/json; charset=utf-8');
   }
+
+  // Zwykle narzedzia i panel glowny NIGDY nie wymagaja logowania - to
+  // swiadoma decyzja (pracownicy w LAN maja od razu korzystac z narzedzi).
   if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(req), null, 2), 'application/json; charset=utf-8');
-  if (decodedPath === '/login' || decodedPath === '/login.html') return readStaticFile(path.join(PUBLIC_DIR, 'login.html'), res);
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
-  if (decodedPath === '/admin' || decodedPath === '/admin.html') return readStaticFile(path.join(PUBLIC_DIR, 'admin.html'), res);
   readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res);
 });
 
@@ -392,12 +407,12 @@ applyHttpTimeouts(server, 'SCYZORYK');
 ensureDependenciesBeforeStart();
 for (const app of apps) startChild(app);
 server.listen(PORT, HOST, () => {
-  console.log(`Scyzoryk Projektowy - profil: ${ACTIVE_PROFILE}${AUTH_REQUIRED ? ' (wymaga logowania)' : ''}`);
+  console.log(`Scyzoryk Projektowy - profil: ${ACTIVE_PROFILE}${PILOT_MODE ? ' (panel administratora chroniony haslem)' : ''}`);
   console.log(`http://${HOST}:${PORT}`);
   for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`);
-  if (AUTH_REQUIRED && !authUsers.hasAnyUser()) {
+  if (PILOT_MODE && !adminAuth.hasAdminPassword()) {
     console.log('');
-    console.log('UWAGA: nie ma jeszcze zadnego konta. Utworz pierwszego administratora:');
-    console.log('  node scripts/create-admin.js --username=... --password=...');
+    console.log('UWAGA: haslo administratora nie zostalo jeszcze ustawione. Panel /admin bedzie niedostepny do czasu:');
+    console.log('  node scripts/set-admin-password.js --password=...');
   }
 });

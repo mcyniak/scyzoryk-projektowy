@@ -3,34 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Logowanie - Scyzoryk Projektowy</title>
+  <title>Logowanie administratora - Scyzoryk Projektowy</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <main class="shell">
     <header class="topbar clean-topbar">
-      <span class="logo" aria-label="Scyzoryk Projektowy">
+      <a class="logo" href="/" aria-label="Scyzoryk Projektowy">
         <span class="logo-mark" aria-hidden="true"></span>
         <span>Scyzoryk Projektowy - pilot</span>
-      </span>
+      </a>
     </header>
 
     <section class="panel" style="max-width:420px;margin:60px auto;">
       <div class="panel-header simple-header">
         <div>
-          <h2 class="panel-title">Logowanie</h2>
-          <p class="panel-desc">Wpisz dane konta, ktore otrzymales od administratora.</p>
+          <h2 class="panel-title">Panel administratora</h2>
+          <p class="panel-desc">Zwykle narzedzia nie wymagaja logowania - to haslo chroni tylko diagnostyke i logi.</p>
         </div>
       </div>
 
       <form id="loginForm">
         <label class="field">
-          <span>Nazwa uzytkownika</span>
-          <input id="username" name="username" type="text" autocomplete="username" required autofocus>
-        </label>
-        <label class="field" style="margin-top:12px;">
-          <span>Haslo</span>
-          <input id="password" name="password" type="password" autocomplete="current-password" required>
+          <span>Haslo administratora</span>
+          <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
         </label>
         <button type="submit" class="primary" style="margin-top:18px;width:100%;">Zaloguj</button>
         <p id="status" class="status" role="status" aria-live="polite"></p>
@@ -49,19 +45,18 @@
       const params = new URLSearchParams(window.location.search);
       const next = params.get('next');
       if (next && next.startsWith('/')) return next;
-      return '/';
+      return '/admin';
     }
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value;
-      if (!username || !password) return setStatus('Podaj nazwe uzytkownika i haslo.', true);
+      if (!password) return setStatus('Podaj haslo.', true);
       setStatus('Loguje...');
       try {
-        const response = await fetch('/auth/login', {
+        const response = await fetch('/admin/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
-          body: JSON.stringify({ username, password }),
+          body: JSON.stringify({ password }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || !data.ok) {

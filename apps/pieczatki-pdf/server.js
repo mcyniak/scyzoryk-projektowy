@@ -11,7 +11,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
-const { requireAuthExpress } = require('../../lib/auth/middleware');
+const { ensureAnonymousSessionExpress } = require('../../lib/auth/middleware');
 
 
 function assertArchiverAvailable() {
@@ -76,14 +76,16 @@ const SECURITY_HEADERS = {
 };
 app.disable('x-powered-by');
 app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
-// SCYZORYK_AUTH_REQUIRED jest ustawiane przez korzenny server.js na
+// Pracownicy NIE musza sie logowac - to tylko anonimowa izolacja danych
+// roboczych miedzy przegladarkami (req.sessionId), NIGDY nie blokuje
+// zadania. SCYZORYK_PILOT_MODE jest ustawiane przez korzenny server.js na
 // podstawie aktywnego profilu (SCYZORYK_PROFILE) - profil "windows" nigdy
-// go nie ustawia, wiec ten sam kod dziala bez zmian rowniez poza pilotem
-// (np. gdy ktos uruchomi te galaz z profilem windows do testow).
-// /api/health jest wylaczone z logowania celowo - korzenny supervisor pyta
-// o nie bez ciasteczka sesji, zeby sprawdzic czy proces w ogole zyje.
-if (process.env.SCYZORYK_AUTH_REQUIRED === '1') {
-  app.use((req, res, next) => (req.path === '/api/health' ? next() : requireAuthExpress(req, res, next)));
+// go nie ustawia, wiec ten sam kod dziala bez zmian rowniez poza pilotem.
+// /api/health jest pominiete celowo - korzenny supervisor pyta o nie co
+// kilka-kilkanascie sekund tylko po to, zeby sprawdzic czy proces zyje, i
+// nie powinno to tworzyc/odswiezac prawdziwej sesji roboczej.
+if (process.env.SCYZORYK_PILOT_MODE === '1') {
+  app.use((req, res, next) => (req.path === '/api/health' ? next() : ensureAnonymousSessionExpress(req, res, next)));
 }
 app.use((req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();

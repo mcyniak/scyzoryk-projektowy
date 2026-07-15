@@ -48,8 +48,11 @@ desktop.ini
 # Artefakty narzedzia playwright-cli (snapshoty/logi z testowania UI)
 .playwright-cli/
 
-# Dane logowania pilota linuksowego (prawdziwe hashe hasel i sesje
-# pracownikow) - nigdy nie commitowac. Kotwiczone od korzenia repo (/), zeby
-# nie kolidowac z niepowiazanymi wpisami apps/*/data/* powyzej.
-/data/auth/users.json
+# Dane logowania pilota linuksowego - haslo administratora (hash) i pliki
+# sesji (anonimowych roboczych oraz admina) - nigdy nie commitowac.
+# Pracownicy nie maja kont, wiec nie ma tu bazy uzytkownikow. Kotwiczone od
+# korzenia repo (/), zeby nie kolidowac z niepowiazanymi wpisami
+# apps/*/data/* powyzej.
+/data/auth/admin.json
 /data/auth/sessions/
+/data/auth/admin-sessions/
