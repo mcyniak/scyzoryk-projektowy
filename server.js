@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { createRequire } = require('module');
-const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog, readJsonFileNoBom } = require('./lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog, readJsonFileNoBom, appendCriticalLog } = require('./lib/hardening');
 const anonSession = require('./lib/auth/anonymousSession');
 const adminAuth = require('./lib/auth/adminAuth');
 const authCookies = require('./lib/auth/cookies');
@@ -155,6 +155,7 @@ function startChild(app, attempt = 0) {
   child.on('error', err => {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
     appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
+    appendCriticalLog(app.slug, 'error', 'child-error', { message: err.message });
     console.error(`[${app.slug}] Nie udalo sie uruchomic procesu: ${err.message}`);
   });
   children.set(app.slug, child);
@@ -170,6 +171,11 @@ function startChild(app, attempt = 0) {
     meta.restarts += 1;
     meta.nextRestartAt = Date.now() + delay;
     appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'warn', app: app.slug, event: 'child-restart-scheduled', code, signal, delay });
+    // Padniecie/zabicie dziecka to realna awaria warta jednego wspolnego
+    // miejsca do przejrzenia - nie tylko wpisu w logs/children.jsonl, ktory
+    // ma osobny plik per aplikacja (a wlasciwie wspolny, ale nie jest tym
+    // "tylko najwazniejsze rzeczy" logiem, ktory sprawdza sie w jednym miejscu).
+    appendCriticalLog(app.slug, 'error', 'child-restart-scheduled', { message: `Proces zakonczony (code=${code ?? 'null'}, signal=${signal ?? 'null'}), restart za ${delay}ms.` });
     setTimeout(() => startChild(app, attempt + 1), delay).unref();
   });
 }
