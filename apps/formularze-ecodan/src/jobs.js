@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import sanitize from 'sanitize-filename';
+import { createSemaphore } from '../../../lib/hardening.js';
 import {
   DEBUG_MODE,
   TRACE_MODE,
@@ -10,7 +11,8 @@ import {
   BATCH_CONCURRENCY_MAX,
   MAX_CLOSED_SESSION_STREAK,
   MAX_JOB_CLOSED_SESSION_STREAK,
-  RECORD_TIMEOUT_MS
+  RECORD_TIMEOUT_MS,
+  MAX_ECODAN_JOBS
 } from './config.js';
 import { calculate } from './rules.js';
 import { saveDebug, cleanupDebugArtifact, getProjectRoot, getOutputRoot } from './debug.js';
@@ -32,6 +34,17 @@ import { appendJobEvent, ensureJobWorkspace, writeResultsCsv, writeSummary } fro
 
 export const jobs = new Map();
 const jobSessions = new Map();
+
+// Ogranicza, ile CALYCH zadan (pojedynczy rekord ALBO caly batch, kazde
+// odpala wlasny Chromium) moze isc rownoczesnie w skali calego procesu -
+// patrz config.js#MAX_ECODAN_JOBS. Zadanie czekajace w kolejce nie ma
+// jeszcze utworzonej sesji przegladarki w ogole (Promise.resolve().then(task)
+// wewnatrz createSemaphore nie wywoluje task() dopoki nie ma wolnego
+// miejsca), wiec oczekiwanie samo w sobie nie zuzywa RAM/CPU.
+const heavyJobQueue = createSemaphore(MAX_ECODAN_JOBS);
+export function getHeavyJobQueueState() {
+  return heavyJobQueue.getState();
+}
 
 function terminalStatus(status) {
   return ['finished', 'finished-with-errors', 'fatal-error', 'cancelled'].includes(status);
@@ -465,7 +478,7 @@ async function processRecordWithWorker(record, recordIndex, worker, job, pdfDir,
   updateCurrentFromWorkers(job);
 }
 
-export async function runBatchJob(job, filePath, options = {}) {
+async function runBatchJobInner(job, filePath, options = {}) {
   job.status = 'reading-excel';
   job.startedAt = new Date().toISOString();
   const outputBase = getOutputRoot();
@@ -592,7 +605,7 @@ export async function runBatchJob(job, filePath, options = {}) {
   }
 }
 
-export async function runAutomation(input) {
+async function runAutomationInner(input) {
   const result = calculate(input);
   const outputRoot = getOutputRoot();
   const tmpDir = path.join(outputRoot, 'tmp', 'single');
@@ -661,4 +674,19 @@ export async function runAutomation(input) {
       note: 'Automat zatrzymał się. Sprawdź output/debug: screenshot, HTML, TXT, JSON i trace.zip.'
     };
   }
+}
+
+// Publiczne wejscia do uruchamiania automatyzacji - kazde przechodzi przez
+// wspolna kolejke (heavyJobQueue), zeby calkowita liczba rownoczesnych
+// zadan (pojedynczy rekord + batch, razem) nigdy nie przekroczyla
+// MAX_ECODAN_JOBS. Dopoki zadanie czeka w kolejce, job.status pozostaje
+// "queued" (domyslny stan z createJob) - runBatchJobInner dopiero PO
+// wejsciu do srodka ustawia "reading-excel"/"running", wiec oczekiwanie
+// jest naturalnie widoczne dla uzytkownika bez dodatkowego sledzenia stanu.
+export function runBatchJob(job, filePath, options = {}) {
+  return heavyJobQueue.run(() => runBatchJobInner(job, filePath, options));
+}
+
+export function runAutomation(input) {
+  return heavyJobQueue.run(() => runAutomationInner(input));
 }

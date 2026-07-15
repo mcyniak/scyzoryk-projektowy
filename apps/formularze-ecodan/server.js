@@ -7,10 +7,11 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import multer from 'multer';
 import sanitize from 'sanitize-filename';
-import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX } from './src/config.js';
-import { setProjectRoot, getProjectRoot } from './src/debug.js';
+import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX, MAX_ECODAN_JOBS } from './src/config.js';
+import { setProjectRoot, getProjectRoot, getOutputRoot } from './src/debug.js';
+import { scheduleCleanup } from '../../lib/hardening.js';
 import { calculate } from './src/rules.js';
-import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob } from './src/jobs.js';
+import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob, getHeavyJobQueueState } from './src/jobs.js';
 import { readExcelRecords } from './src/excel.js';
 
 const require = createRequire(import.meta.url);
@@ -25,6 +26,23 @@ function assertArchiverAvailable() {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 setProjectRoot(__dirname);
+
+// Wygenerowane PDF-y, pliki tymczasowe i artefakty debugowania nie byly
+// dotad w ogole sprzatane - rosly bez ograniczen. Sweep dziala tak samo jak
+// w pozostalych aplikacjach Scyzoryka: kazdy PLIK/PODFOLDER wewnatrz tych
+// katalogow jest usuwany niezaleznie, na podstawie WLASNEGO czasu ostatniej
+// modyfikacji (nie czasu utworzenia) - aktywne zadanie samo w sobie
+// odswieza ten czas przy kazdym zapisie, wiec nigdy nie zostanie usuniete
+// w trakcie dzialania.
+const JOB_TTL_MS = Math.max(1, Number(process.env.SCYZORYK_JOB_TTL_HOURS || 24)) * 60 * 60 * 1000;
+{
+  const outputRoot = getOutputRoot();
+  scheduleCleanup(
+    [path.join(outputRoot, 'jobs'), path.join(outputRoot, 'pdf'), path.join(outputRoot, 'tmp'), path.join(outputRoot, 'debug')],
+    JOB_TTL_MS,
+    60 * 60 * 1000
+  );
+}
 
 const app = express();
 const diagnosticsDir = path.join(__dirname, 'logs');
@@ -164,7 +182,17 @@ function findPdfForJobRow(job, rowNumber) {
 }
 
 app.get('/api/version', (req, res) => {
-  res.json({ ok: true, version: APP_VERSION, defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX }, safeOutputBase: process.env.SCYZORYK_OUTPUT_BASE || path.join(__dirname, 'output') });
+  const heavyQueue = getHeavyJobQueueState();
+  res.json({
+    ok: true,
+    version: APP_VERSION,
+    defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX, maxEcodanJobs: MAX_ECODAN_JOBS },
+    safeOutputBase: process.env.SCYZORYK_OUTPUT_BASE || path.join(__dirname, 'output'),
+    // Ksztalt {queued, active} jest juz rozpoznawany przez panel glowny
+    // (public/inline-1.js -> appMeta()) i pokazywany na kafelku bez
+    // dodatkowych zmian w panelu.
+    queue: { queued: heavyQueue.queued, active: heavyQueue.active },
+  });
 });
 
 app.post('/api/calculate', (req, res) => {

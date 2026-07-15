@@ -2,6 +2,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { chromium } from 'playwright';
 import { BROWSER_VIEWPORT, BLOCK_HEAVY_ASSETS, SLOW_MODE, HEADLESS_DEFAULT } from '../config.js';
+import { getProjectRoot } from '../debug.js';
+import { appendJsonLine } from '../../../../lib/hardening.js';
 
 export async function createAutomationSession(outputDir) {
   const debugDir = path.join(outputDir, 'debug');
@@ -71,8 +73,42 @@ export async function createAutomationSession(outputDir) {
   return { browser, context, page, debugDir, runtimeEvents };
 }
 
+// Playwright nie udostepnia publicznego dostepu do PID lokalnie uruchomionej
+// przegladarki (moze tez byc podlaczona zdalnie przez CDP), wiec nie da sie
+// stad zrobic celowanego SIGKILL na zawieszonym procesie Chromium. To, co
+// faktycznie DA sie zrobic bezpiecznie: nigdy nie czekac na close() w
+// nieskonczonosc - jesli przegladarka nie zamyka sie w rozsadnym czasie
+// (np. renderer padl w polowie), i tak zwalniamy miejsce w kolejce
+// (heavyJobQueue) zamiast blokowac WSZYSTKIE kolejne zadania na zawsze, i
+// jawnie logujemy to zdarzenie, zeby bylo widoczne w diagnostyce/panelu
+// admina zamiast cicho zniknac. Supervisor w korzennym server.js i tak
+// restartuje caly proces formularze-ecodan po awarii, co ostatecznie
+// sprzata kazdy zombie-proces potomny.
+async function closeWithTimeout(closeable, timeoutMs = 8000) {
+  if (!closeable) return false;
+  let timedOut = false;
+  const timeout = new Promise(resolve => {
+    setTimeout(() => { timedOut = true; resolve(); }, timeoutMs);
+  });
+  try {
+    await Promise.race([closeable.close(), timeout]);
+  } catch (_) {
+    // Samo zamkniecie rzucilo blad - i tak idziemy dalej, nic wiecej nie da
+    // sie tu zrobic bez dostepu do PID.
+  }
+  return timedOut;
+}
+
 export async function closeAutomationSession(session) {
   if (!session) return;
-  await session.context?.close().catch(() => {});
-  await session.browser?.close().catch(() => {});
+  const contextTimedOut = await closeWithTimeout(session.context);
+  const browserTimedOut = await closeWithTimeout(session.browser);
+  if (contextTimedOut || browserTimedOut) {
+    appendJsonLine(path.join(getProjectRoot(), 'logs', 'formularze-ecodan.jsonl'), {
+      level: 'warn',
+      event: 'browser-close-timeout',
+      contextTimedOut,
+      browserTimedOut,
+    });
+  }
 }
