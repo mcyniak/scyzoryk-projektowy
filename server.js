@@ -3,13 +3,24 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { createRequire } = require('module');
-const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog } = require('./lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog, readJsonFileNoBom } = require('./lib/hardening');
+const authUsers = require('./lib/auth/users');
+const authSessions = require('./lib/auth/sessionStore');
+const authCookies = require('./lib/auth/cookies');
+const authMiddleware = require('./lib/auth/middleware');
+const authRateLimit = require('./lib/auth/rateLimiter');
 
 const ROOT = __dirname;
 const diagnostics = setupProcessDiagnostics('panel-glowny', ROOT);
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
+// HOST ma dwie ROZNE role, ktore na pilotowej instalacji linuksowej sie
+// rozjezdzaja: adres, na ktorym nasluchujemy (moze byc 0.0.0.0, zeby byc
+// widocznym w calej sieci LAN) i adres, pod ktorym odpytujemy WLASNE dzieci
+// (zawsze wystarczy loopback - proces-rodzic i tak zawsze gada sam ze soba
+// na tej samej maszynie, nie potrzebuje wychodzic przez interfejs LAN).
+const CHILD_HEALTHCHECK_HOST = '127.0.0.1';
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -20,7 +31,7 @@ const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 };
 
-const apps = [
+const ALL_APPS = [
   { slug: 'drukarka', name: 'Drukarka', description: 'Kolejkowanie i drukowanie dokumentow z lokalnego panelu.', dir: path.join(ROOT, 'apps', 'drukarka'), port: Number(process.env.DRUKARKA_PORT || 3001), healthPath: '/api/status' },
   { slug: 'pieczatki', name: 'Pieczatki PDF', description: 'Dodawanie pieczatki do plikow PDF i pobieranie wynikow.', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), port: Number(process.env.PIECZATKI_PORT || 3002), healthPath: '/api/health' },
   { slug: 'formularze', name: 'Formularze Ecodan', description: 'Generator raportow/formularzy na podstawie danych z Excela.', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), port: Number(process.env.FORMULARZE_PORT || 3003), healthPath: '/api/version', extraEnv: { HEADLESS: process.env.HEADLESS || 'true', BATCH_CONCURRENCY: process.env.BATCH_CONCURRENCY || '1', BATCH_RESTART_EVERY: process.env.BATCH_RESTART_EVERY || '5', PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || '0' } },
@@ -30,8 +41,7 @@ const apps = [
   { slug: 'drukarka-projekty', name: 'Drukarka projekty', description: 'Automatyczne przygotowanie i druk dokumentacji projektowej na podstawie arkusza inwestycji.', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), port: Number(process.env.DRUKARKA_PROJEKTY_PORT || 3010), healthPath: '/api/status' }
 ];
 
-
-const dependencyChecks = [
+const ALL_DEPENDENCY_CHECKS = [
   { slug: 'drukarka', dir: path.join(ROOT, 'apps', 'drukarka'), deps: ['express', 'multer', 'express-rate-limit'] },
   { slug: 'pieczatki', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), deps: ['express', 'multer', 'pdf-lib', 'archiver', '@pdf-lib/fontkit', 'pdfjs-dist', 'express-rate-limit'] },
   { slug: 'formularze', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), deps: ['express', 'playwright', 'read-excel-file', 'pdf-parse', 'pdf-lib', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
@@ -40,6 +50,30 @@ const dependencyChecks = [
   { slug: 'karty-katalogowe', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'express-rate-limit'] },
   { slug: 'drukarka-projekty', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), deps: ['express', 'multer', 'express-rate-limit', 'xlsx', 'mammoth', 'pdf-parse', 'pdf-lib', 'sanitize-filename'] }
 ];
+
+// SCYZORYK_PROFILE steruje tym, ktore aplikacje w ogole istnieja z punktu
+// widzenia tego procesu - wylaczona aplikacja nie jest spawnowana, nie jest
+// health-checkowana, nie pojawia sie w /api/apps ani nie jest restartowana.
+// Brak zmiennej = profil "windows" = dokladnie dzisiejsze zachowanie (wszystkie
+// 7 aplikacji), zeby instalacja Windows nigdy nie zmienila zachowania przez
+// przypadek.
+function loadActiveProfile() {
+  const profileName = process.env.SCYZORYK_PROFILE || 'windows';
+  let profiles = {};
+  try {
+    profiles = readJsonFileNoBom(path.join(ROOT, 'config', 'profiles.json'));
+  } catch (err) {
+    console.error(`Nie udalo sie wczytac config/profiles.json (${err.message}) - uzywam profilu "windows" ze wszystkimi aplikacjami.`);
+    profiles = { windows: { enabledApps: ALL_APPS.map(a => a.slug) } };
+  }
+  const profile = profiles[profileName] || profiles.windows;
+  if (!profile) throw new Error(`Nieznany profil "${profileName}" i brak profilu domyslnego "windows" w config/profiles.json.`);
+  return { profileName, enabledSlugs: new Set(profile.enabledApps || []) };
+}
+
+const { profileName: ACTIVE_PROFILE, enabledSlugs: ENABLED_APP_SLUGS } = loadActiveProfile();
+const apps = ALL_APPS.filter(a => ENABLED_APP_SLUGS.has(a.slug));
+const dependencyChecks = ALL_DEPENDENCY_CHECKS.filter(a => ENABLED_APP_SLUGS.has(a.slug));
 
 function appHasDependencies(app) {
   // Sprawdzamy istnienie folderu pakietu w node_modules, NIE probujemy go
@@ -114,7 +148,10 @@ function startChild(app, attempt = 0) {
   const meta = getChildMeta(app.slug);
   meta.startedAt = Date.now();
   meta.nextRestartAt = null;
-  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // AUTH_REQUIRED jest zdefiniowane nizej w pliku, ale ta funkcja jest
+  // faktycznie wywolywana dopiero na samym koncu (po zaladowaniu profilu),
+  // wiec w momencie wywolania zmienna jest juz zainicjowana.
+  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_AUTH_REQUIRED: AUTH_REQUIRED ? '1' : '0', SCYZORYK_PANEL_PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', err => {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
     appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
@@ -162,7 +199,7 @@ function readStaticFile(filePath, res) {
 function checkHealth(app) {
   return new Promise(resolve => {
     const started = Date.now();
-    const req = http.get({ hostname: HOST, port: app.port, path: app.healthPath || '/', timeout: 1600 }, res => {
+    const req = http.get({ hostname: CHILD_HEALTHCHECK_HOST, port: app.port, path: app.healthPath || '/', timeout: 1600 }, res => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { body += chunk; if (body.length > 20000) req.destroy(); });
@@ -245,14 +282,107 @@ function safeDecodePathname(rawPathname) {
   try { return decodeURIComponent(rawPathname); } catch { return null; }
 }
 
+function readJsonBody(req, maxBytes = 8192) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > maxBytes) { reject(new Error('Zadanie zbyt duze.')); req.destroy(); return; }
+      data += chunk;
+    });
+    req.on('end', () => {
+      if (!data) return resolve({});
+      try { resolve(JSON.parse(data)); } catch { reject(new Error('Niepoprawny JSON.')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function clientIp(req) {
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+// Logowanie ma sens tylko dla profili innych niz "windows" (pilot linuksowy
+// i ewentualne przyszle profile) - profil "windows" ma pozostac dokladnie
+// takim samym doswiadczeniem jak dzisiaj (bez ekranu logowania), zeby ta
+// sama galaz kodu dala sie bezpiecznie uruchomic tez z profilem windows.
+const AUTH_REQUIRED = ACTIVE_PROFILE !== 'windows';
+const PUBLIC_PATHS = new Set(['/login', '/login.html']);
+if (AUTH_REQUIRED) authSessions.startCleanupTimer();
+
+// Ten sam wzorzec co w kazdej aplikacji-dziecku: zadania modyfikujace stan
+// musza niesc naglowek X-Scyzoryk-Request, ktorego zwykly <form> (bez JS) nie
+// potrafi ustawic, a przegladarka nie pozwoli ustawic go w zadaniu
+// miedzydomenowym bez zgody CORS, ktorej ten serwer nigdy nie daje.
+function isSameOriginRequest(req) {
+  return req.headers['x-scyzoryk-request'] === '1';
+}
+
+async function handleAuthLogin(req, res) {
+  if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
+  if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
+  const ip = clientIp(req);
+  let body;
+  try { body = await readJsonBody(req); }
+  catch (err) { return send(res, 400, JSON.stringify({ ok: false, error: err.message }), 'application/json; charset=utf-8'); }
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
+  if (authRateLimit.isRateLimited(ip, username)) {
+    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'login-rate-limited', ip, username: sanitizeForLog(username, 60) });
+    return send(res, 429, JSON.stringify({ ok: false, error: 'Za duzo nieudanych prob logowania. Sprobuj ponownie za kilkanascie minut.' }), 'application/json; charset=utf-8');
+  }
+  const user = await authUsers.verifyLogin(username, password);
+  if (!user) {
+    authRateLimit.recordFailedAttempt(ip, username);
+    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'login-failed', ip, username: sanitizeForLog(username, 60) });
+    return send(res, 401, JSON.stringify({ ok: false, error: 'Nieprawidlowa nazwa uzytkownika lub haslo.' }), 'application/json; charset=utf-8');
+  }
+  authRateLimit.recordSuccess(ip, username);
+  const sid = authSessions.createSession(user);
+  appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'info', event: 'login-success', ip, username: user.username });
+  res.setHeader('Set-Cookie', authCookies.buildSessionCookieHeader(sid));
+  send(res, 200, JSON.stringify({ ok: true, user: { username: user.username, role: user.role } }), 'application/json; charset=utf-8');
+}
+
+function handleAuthLogout(req, res) {
+  if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
+  if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
+  const sid = authCookies.getSidFromRequest(req);
+  if (sid) authSessions.destroySession(sid);
+  res.setHeader('Set-Cookie', authCookies.buildClearCookieHeader());
+  send(res, 200, JSON.stringify({ ok: true }), 'application/json; charset=utf-8');
+}
+
+function handleAuthWhoami(req, res) {
+  const session = authMiddleware.getSessionFromRequest(req);
+  if (!session) return send(res, 200, JSON.stringify({ ok: false }), 'application/json; charset=utf-8');
+  send(res, 200, JSON.stringify({ ok: true, user: { username: session.username, role: session.role } }), 'application/json; charset=utf-8');
+}
+
 const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
   catch { return send(res, 400, 'Bad Request'); }
   const decodedPath = safeDecodePathname(url.pathname);
   if (decodedPath === null) return send(res, 400, 'Bad Request');
+
+  if (decodedPath === '/auth/login') return handleAuthLogin(req, res);
+  if (decodedPath === '/auth/logout') return handleAuthLogout(req, res);
+  if (decodedPath === '/auth/whoami') return handleAuthWhoami(req, res);
+
+  let session = null;
+  if (AUTH_REQUIRED && !PUBLIC_PATHS.has(decodedPath)) {
+    session = authMiddleware.requireAuthHttp(req, res, send);
+    if (!session) return; // requireAuthHttp juz wyslal odpowiedz (redirect/401)
+  }
+
+  if (decodedPath === '/api/admin/logs') {
+    if (AUTH_REQUIRED && session?.role !== 'admin') return send(res, 403, JSON.stringify({ ok: false, error: 'Wymagana rola administratora.' }), 'application/json; charset=utf-8');
+    return send(res, 200, JSON.stringify({ ok: true, lines: readLastLines(path.join(ROOT, 'logs', 'children.jsonl'), 100) }, null, 2), 'application/json; charset=utf-8');
+  }
   if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(req), null, 2), 'application/json; charset=utf-8');
-  if (decodedPath === '/api/admin/logs') return send(res, 200, JSON.stringify({ ok: true, lines: readLastLines(path.join(ROOT, 'logs', 'children.jsonl'), 100) }, null, 2), 'application/json; charset=utf-8');
+  if (decodedPath === '/login' || decodedPath === '/login.html') return readStaticFile(path.join(PUBLIC_DIR, 'login.html'), res);
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
   if (decodedPath === '/admin' || decodedPath === '/admin.html') return readStaticFile(path.join(PUBLIC_DIR, 'admin.html'), res);
   readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res);
@@ -261,4 +391,13 @@ const server = http.createServer(async (req, res) => {
 applyHttpTimeouts(server, 'SCYZORYK');
 ensureDependenciesBeforeStart();
 for (const app of apps) startChild(app);
-server.listen(PORT, HOST, () => { console.log('Scyzoryk Projektowy dziala tylko lokalnie:'); console.log(`http://${HOST}:${PORT}`); for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`); });
+server.listen(PORT, HOST, () => {
+  console.log(`Scyzoryk Projektowy - profil: ${ACTIVE_PROFILE}${AUTH_REQUIRED ? ' (wymaga logowania)' : ''}`);
+  console.log(`http://${HOST}:${PORT}`);
+  for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`);
+  if (AUTH_REQUIRED && !authUsers.hasAnyUser()) {
+    console.log('');
+    console.log('UWAGA: nie ma jeszcze zadnego konta. Utworz pierwszego administratora:');
+    console.log('  node scripts/create-admin.js --username=... --password=...');
+  }
+});

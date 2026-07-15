@@ -29,6 +29,14 @@ async function refreshStatus() {
     setText('#metricStorage', fmtMb(data.storage?.bytes || 0));
     setText('#metricMode', data.host === '127.0.0.1' ? 'Lokalny' : data.host);
     setText('#lastRefresh', `Ostatnie sprawdzenie: ${new Date().toLocaleTimeString('pl-PL')}`);
+    // /api/apps jest juz filtrowane po stronie serwera wg aktywnego profilu
+    // (SCYZORYK_PROFILE) - kafelek aplikacji spoza tej listy nie powinien
+    // w ogole byc widoczny na pilocie, zamiast wisiec ze stara/martwa
+    // tresc statycznego HTML-a na zawsze.
+    const enabledSlugs = new Set(apps.map(a => a.slug));
+    for (const [slug, card] of cards.entries()) {
+      card.hidden = !enabledSlugs.has(slug);
+    }
     for (const app of apps) {
       const card = cards.get(app.slug);
       if (!card) continue;

@@ -11,6 +11,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
+const { requireAuthExpress } = require('../../lib/auth/middleware');
 
 
 function assertArchiverAvailable() {
@@ -75,6 +76,15 @@ const SECURITY_HEADERS = {
 };
 app.disable('x-powered-by');
 app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
+// SCYZORYK_AUTH_REQUIRED jest ustawiane przez korzenny server.js na
+// podstawie aktywnego profilu (SCYZORYK_PROFILE) - profil "windows" nigdy
+// go nie ustawia, wiec ten sam kod dziala bez zmian rowniez poza pilotem
+// (np. gdy ktos uruchomi te galaz z profilem windows do testow).
+// /api/health jest wylaczone z logowania celowo - korzenny supervisor pyta
+// o nie bez ciasteczka sesji, zeby sprawdzic czy proces w ogole zyje.
+if (process.env.SCYZORYK_AUTH_REQUIRED === '1') {
+  app.use((req, res, next) => (req.path === '/api/health' ? next() : requireAuthExpress(req, res, next)));
+}
 app.use((req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   if (req.get('X-Scyzoryk-Request') === '1') return next();
