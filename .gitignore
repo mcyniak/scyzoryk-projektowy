@@ -1,0 +1,46 @@
+﻿# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Hasla, tokeny i konfiguracja lokalna
+.env
+.env.*
+!.env.example
+
+# Lokalne ustawienia Claude i Serena
+.claude/settings.local.json
+.serena/cache/
+.serena/project.local.yml
+
+# Logi i raporty diagnostyczne
+*.log
+*.jsonl
+**/logs/
+__suite*
+__test_ds*
+node-report-*.json
+
+# Pliki wygenerowane i przeslane przez uzytkownikow
+**/output/
+**/uploads/
+**/downloads/
+
+# Historia wykonanych zadan
+**/data/jobs.json
+**/data/print-log.txt
+**/data/ostatnie-foldery.json
+
+# Testy zawierajace prawdziwe dokumenty
+apps/drukarka-projekty/test/fixtures/
+
+# Pliki tymczasowe
+~$*
+*.bak
+*.tmp
+
+# System
+Thumbs.db
+desktop.ini
+.DS_Store

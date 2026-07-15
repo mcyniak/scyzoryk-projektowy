@@ -1,0 +1,17 @@
+{
+  "name": "scyzoryk-dokumenty-seryjne",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "archiver": "^8.0.0",
+    "express": "^4.19.2",
+    "multer": "^2.0.2",
+    "sanitize-filename": "^1.6.3",
+    "express-rate-limit": "^7.5.0",
+    "read-excel-file": "^9.2.0"
+  }
+}

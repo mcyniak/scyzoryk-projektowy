@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Drukarka projektów</title>
+  <link rel="stylesheet" href="base.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <main class="app shell">
+    <div class="topbar">
+      <a class="logo" href="http://127.0.0.1:3000/">
+        <span class="logo-mark" aria-hidden="true"></span>
+        <span><span class="logo-small">Scyzoryk</span>Drukarka projektów</span>
+      </a>
+      <a class="button-link ghost top-link" href="http://127.0.0.1:3000">← Panel główny</a>
+    </div>
+
+    <nav class="stepper" id="stepper" aria-label="Postęp">
+      <div class="step-dot" data-step="1"><span class="dot">1</span><span class="step-label">Arkusz</span></div>
+      <div class="step-line"></div>
+      <div class="step-dot" data-step="2"><span class="dot">2</span><span class="step-label">Adresy</span></div>
+      <div class="step-line"></div>
+      <div class="step-dot" data-step="3"><span class="dot">3</span><span class="step-label">Folder</span></div>
+      <div class="step-line"></div>
+      <div class="step-dot" data-step="4"><span class="dot">4</span><span class="step-label">Kolejność</span></div>
+      <div class="step-line"></div>
+      <div class="step-dot" data-step="5"><span class="dot">5</span><span class="step-label">Druk</span></div>
+    </nav>
+
+    <section class="hero">
+      <div class="glass hero-main">
+        <div class="kicker">Automatyczne przygotowanie dokumentacji</div>
+        <h1>Drukarka projektów</h1>
+        <p class="lead">Wgraj arkusz inwestycji, wybierz adres bez odbioru i rezygnacji, a narzędzie samo znajdzie folder projektu, odczyta kolejność z Opisu technicznego i przygotuje pliki do druku.</p>
+      </div>
+      <aside class="glass info-card">
+        <h2>5 kroków</h2>
+        <div class="pill-list">
+          <div class="pill">Wgraj arkusz i wybierz zakładkę</div>
+          <div class="pill">Wybierz jeden lub kilka adresów naraz</div>
+          <div class="pill">Wskaż folder z projektami</div>
+          <div class="pill">Sprawdź proponowaną kolejność</div>
+          <div class="pill">Wyślij do druku</div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- KROK 1: Arkusz -->
+    <section class="panel" id="panelExcel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">1</span>Arkusz inwestycji</h2>
+          <p class="panel-desc">Wgraj plik Excel z tabelą adresów (np. Paradyż_Żarnów.xlsx), a potem wybierz właściwą zakładkę.</p>
+        </div>
+      </div>
+      <div class="field-row">
+        <label class="option-field">
+          <span>Plik Excel</span>
+          <input id="excelInput" type="file" accept=".xlsx,.xls" />
+        </label>
+        <label class="option-field">
+          <span>Zakładka</span>
+          <select id="sheetSelect" disabled>
+            <option value="">— najpierw wgraj plik —</option>
+          </select>
+        </label>
+      </div>
+      <div id="excelError"></div>
+    </section>
+
+    <!-- KROK 2: Adresy -->
+    <section class="panel disabled" id="panelCandidates">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">2</span>Wybierz adresy</h2>
+          <p class="panel-desc">Lista pokazuje tylko adresy bez zaznaczonego odbioru i bez rezygnacji, posortowane po LP gminy. Zaznacz jeden albo kilka - można drukować całą paczkę naraz.</p>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
+        <label style="display:flex; align-items:center; gap:8px; font-weight:800; color:#334155; cursor:pointer;">
+          <input type="checkbox" id="selectAllCandidates" /> Zaznacz wszystkie
+        </label>
+        <span id="selectedCountLabel" class="help-note" style="margin:0;">0 zaznaczonych</span>
+      </div>
+      <ul id="candidateList" class="candidate-list"></ul>
+      <div style="margin-top:16px;">
+        <button id="candidatesNextBtn" type="button" disabled>Dalej →</button>
+      </div>
+    </section>
+
+    <!-- KROK 3: Folder -->
+    <section class="panel disabled" id="panelFolder">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">3</span>Folder z projektami</h2>
+          <p class="panel-desc">Wklej ścieżkę do folderu, w którym są podfoldery adresów (np. ...\Kolektory\Projekty\Żarnów). Ten sam folder zostanie użyty dla wszystkich zaznaczonych adresów. Zapamiętam ją dla tej zakładki.</p>
+        </div>
+      </div>
+      <div class="field-row">
+        <label class="option-field" style="grid-column: 1 / -1;">
+          <span>Ścieżka folderu bazowego</span>
+          <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." />
+        </label>
+      </div>
+      <button id="matchBtn" type="button">Znajdź projekty</button>
+      <div id="matchError"></div>
+    </section>
+
+    <!-- KROK 4: Kolejność -->
+    <section class="panel disabled" id="panelOrder">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">4</span>Proponowana kolejność</h2>
+          <p class="panel-desc">Dla każdego adresu: strona tytułowa → Opis techniczny → rysunki → załączniki wg listy z Opisu technicznego. Przeciągnij plik w obrębie adresu, żeby poprawić kolejność. Ikona oka = podgląd.</p>
+        </div>
+      </div>
+      <div id="batchSummary"></div>
+      <div id="missingFoldersBox"></div>
+      <div id="orderError"></div>
+      <div id="addressGroups"></div>
+      <div style="margin-top:16px; display:flex; gap:12px;">
+        <button id="confirmOrderBtn" type="button">Zatwierdź i dodaj wszystko do kolejki →</button>
+      </div>
+    </section>
+
+    <!-- KROK 5: Druk -->
+    <section class="panel disabled" id="panelPrint">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">5</span>Drukuj</h2>
+          <p class="panel-desc">Wybierz drukarkę i liczbę kopii, potem naciśnij DRUKUJ.</p>
+        </div>
+      </div>
+      <div class="field-row">
+        <label class="option-field" style="grid-column: 1 / -1;">
+          <span>Drukarka</span>
+          <select id="printerSelect">
+            <option value="">Ładowanie listy drukarek...</option>
+          </select>
+        </label>
+      </div>
+      <div id="queueStatusText" class="help-note" style="margin-bottom:10px;">Kolejka jest pusta.</div>
+      <div class="field-row">
+        <label class="option-field">
+          <span>Kopie</span>
+          <input id="copiesInput" type="number" min="1" max="20" value="1" />
+        </label>
+        <label class="option-field">
+          <span>Strony</span>
+          <select id="sideModeInput">
+            <option value="two-sided" selected>Dwustronnie</option>
+            <option value="one-sided">Jednostronnie</option>
+          </select>
+        </label>
+      </div>
+      <div style="display:flex; gap:12px; align-items:center;">
+        <button id="clearBtn" class="ghost" type="button">Zacznij od nowa</button>
+        <button id="printBtn" type="button" style="margin-left:auto;">DRUKUJ</button>
+      </div>
+      <div class="status-box">
+        <div id="statusText">Gotowy</div>
+        <div class="progress"><div id="progressBar"></div></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-overlay" id="previewModal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <strong id="previewModalTitle">Podgląd</strong>
+        <button id="previewModalClose" class="ghost" type="button">Zamknij</button>
+      </div>
+      <iframe id="previewModalFrame" title="Podgląd PDF"></iframe>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

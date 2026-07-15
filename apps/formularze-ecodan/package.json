@@ -1,0 +1,24 @@
+{
+  "name": "ecodan-generator-final",
+  "version": "1.0.0-rc5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check src/config.js && node --check src/debug.js && node --check src/excel.js && node --check src/rules.js && node --check src/pdfValidation.js && node --check src/telemetry.js && node --check src/jobs.js && node --check src/automation/session.js && node --check src/automation/steps.js && node --check src/automation/product.js",
+    "install-browsers": "playwright install chromium",
+    "doctor": "node src/doctor.js",
+    "verify-deps": "node src/doctor.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "^1.45.0",
+    "sanitize-filename": "^1.6.3",
+    "multer": "^2.0.2",
+    "pdf-parse": "^1.1.1",
+    "archiver": "^8.0.0",
+    "pdf-lib": "^1.17.1",
+    "express-rate-limit": "^7.5.0",
+    "read-excel-file": "^9.2.0"
+  }
+}

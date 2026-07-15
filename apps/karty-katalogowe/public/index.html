@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Karty katalogowe</title>
+<link rel="stylesheet" href="base.css" />
+  <link rel="stylesheet" href="style.css" />
+<style>
+  .kk-field { margin-bottom: 18px; }
+  .kk-field label { display: block; font-weight: 850; margin-bottom: 8px; color: #334155; }
+  .kk-field input[type=text] { width: 100%; box-sizing: border-box; padding: 12px 14px; border: 1px solid var(--scz-line, #e2e8f0); border-radius: 14px; font-size: 15px; font-family: inherit; }
+  .kk-field input[type=file] { padding: 10px 0; }
+  .kk-hint { font-size: 13px; color: var(--scz-muted, #64748b); margin-top: 8px; }
+  .kk-check { display: flex; align-items: center; gap: 10px; font-weight: 800; color: #334155; margin-bottom: 20px; }
+  .kk-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .kk-chip { padding: 7px 13px; border-radius: 999px; font-weight: 900; font-size: 13px; border: 1px solid var(--scz-line, #e2e8f0); background: #f8fafc; color: #334155; }
+  .kk-chip.ok { background: #dcfce7; color: #065f46; border-color: #a7f3d0; }
+  .kk-chip.skip { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+  .kk-chip.warn { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+  .kk-chip.err { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+  .kk-table-wrap { overflow-x: auto; border: 1px solid var(--scz-line, #e2e8f0); border-radius: 18px; background: #fff; }
+  .kk-table { width: 100%; border-collapse: collapse; min-width: 820px; }
+  .kk-table th, .kk-table td { padding: 12px 14px; border-bottom: 1px solid var(--scz-line, #e2e8f0); text-align: left; vertical-align: top; font-size: 13.5px; }
+  .kk-table th { background: #f8fafc; color: #334155; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
+  .kk-table tr:last-child td { border-bottom: 0; }
+  .kk-table tr:hover td { background: #f8fafc; }
+  .kk-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 86px; border-radius: 999px; padding: 5px 10px; font-weight: 900; font-size: 11.5px; text-transform: uppercase; letter-spacing: .03em; }
+  .kk-badge.ok { color: #065f46; background: #dcfce7; border: 1px solid #a7f3d0; }
+  .kk-badge.skip { color: #475569; background: #f1f5f9; border: 1px solid #e2e8f0; }
+  .kk-badge.warn { color: #92400e; background: #fef3c7; border: 1px solid #fde68a; }
+  .kk-badge.err { color: #991b1b; background: #fee2e2; border: 1px solid #fecaca; }
+  #kkStatus { font-weight: 800; color: #334155; min-height: 20px; margin-top: 4px; }
+  #kkStatus.err { color: #991b1b; }
+  #kkResultsPanel { display: none; }
+</style>
+</head>
+<body>
+  <main class="app shell">
+    <div class="topbar top">
+      <a class="logo back" href="#" data-main-link aria-label="Wróć do panelu">
+        <span class="logo-mark" aria-hidden="true"></span>
+        <span><span class="logo-small">Scyzoryk</span>Karty katalogowe</span>
+      </a>
+      <a class="button-link ghost top-link" href="#" data-main-link>← Panel główny</a>
+    </div>
+
+    <section class="hero">
+      <div class="glass hero-main">
+        <div class="kicker">Dobór kart katalogowych</div>
+        <h1>Karty katalogowe</h1>
+        <p class="lead">Wskaż Excel z arkuszami „Solary {gmina}” i folder z projektami — program sam dobierze i skopiuje karty katalogowe (grupa pompowa, kolektor, zasobnik) do folderów klientów na podstawie kolumny UID.</p>
+      </div>
+      <aside class="glass info-card">
+        <h2>Jak działa?</h2>
+        <div class="pill-list">
+          <div class="pill">Wybierz plik Excel.</div>
+          <div class="pill">Podaj ścieżkę do folderu Kolektory.</div>
+          <div class="pill">Uruchom najpierw podgląd, potem kopiowanie.</div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Ustawienia</h2>
+          <p class="panel-desc">Program sam znajdzie w środku folder „karty” (źródłowe PDF-y) oraz „Projekty\{gmina}\{id} - adres”.</p>
+        </div>
+      </div>
+
+      <div class="kk-field">
+        <label for="excelFile">Plik Excel (.xlsx) z arkuszami „Solary {gmina}”</label>
+        <input type="file" id="excelFile" accept=".xlsx">
+      </div>
+
+      <div class="kk-field">
+        <label for="rootPath">Ścieżka do głównego folderu (zawiera podfoldery „karty” i „Projekty”)</label>
+        <input type="text" id="rootPath" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\6. Paradyż Żarnów\Kolektory">
+      </div>
+
+      <label class="kk-check">
+        <input type="checkbox" id="dryRun" checked>
+        Najpierw tylko podgląd (nic nie kopiuje)
+      </label>
+
+      <div class="controls">
+        <button id="runBtn" class="print" type="button">Uruchom dobór kart</button>
+      </div>
+      <div id="kkStatus"></div>
+    </section>
+
+    <section class="panel" id="kkResultsPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Wyniki</h2>
+          <p class="panel-desc">Lista przetworzonych wierszy z arkuszy Solary.</p>
+        </div>
+      </div>
+      <div class="kk-summary" id="kkSummary"></div>
+      <div class="kk-table-wrap">
+        <table class="kk-table" id="kkTable">
+          <thead>
+            <tr><th>Gmina</th><th>ID</th><th>Adres</th><th>UID</th><th>Folder</th><th>Status</th><th>Szczegóły</th></tr>
+          </thead>
+          <tbody id="kkTableBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+
+  <script src="app.js"></script>
+  <script src="inline-1.js"></script>
+</body>
+</html>

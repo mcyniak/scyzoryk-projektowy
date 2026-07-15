@@ -1,0 +1,324 @@
+const fs = require("fs");
+const path = require("path");
+const mammoth = require("mammoth");
+const pdfParse = require("pdf-parse");
+
+const PRINTABLE_EXT = new Set([".pdf", ".docx", ".doc"]);
+const OT_PATTERN = /^(ot[_\- ]|opis[_\- ]?techniczn)/i;
+
+function normalize(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/ł/g, "l")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+const ANNOTATION_WORDS = new Set(["zmiana", "adresu", "adrsu", "adres", "stary", "nowy", "poprzedni", "obecnie", "wczesniej"]);
+
+function addressTokens(adres) {
+  return normalize(adres)
+    .split(" ")
+    .filter(t => (t.length > 1 || /^\d$/.test(t)) && t !== "ul" && t !== "nr" && !ANNOTATION_WORDS.has(t));
+}
+
+function filenameMatchesAddress(filename, tokens) {
+  if (!tokens.length) return false;
+  const fNorm = normalize(filename);
+  return tokens.every(t => {
+    const re = new RegExp(`(^|[^a-z0-9])${t}([^a-z0-9]|$)`);
+    return re.test(fNorm);
+  });
+}
+
+function filenameMatchesOwnAddress(filename, tokens) {
+  if (!tokens.length) return false;
+  const fNorm = normalize(filename);
+  function tokenMatches(t) {
+    const isNumberLike = /^\d/.test(t);
+    let re;
+    if (isNumberLike) re = new RegExp(`(^|[^a-z0-9])${t.replace(/[a-z]+$/, "")}[a-z]?([^a-z0-9]|$)`);
+    else if (t === "kol" || t === "kolonia") re = /(^|[^a-z0-9])kol(onia)?([^a-z0-9]|$)/;
+    else re = new RegExp(`(^|[^a-z0-9])${t}([^a-z0-9]|$)`);
+    return re.test(fNorm);
+  }
+  const numberTokens = tokens.filter(t => /^\d/.test(t));
+  const nameTokens = tokens.filter(t => !/^\d/.test(t));
+  if (numberTokens.length && !numberTokens.some(tokenMatches)) return false;
+  if (nameTokens.length) {
+    const matchedNameCount = nameTokens.filter(tokenMatches).length;
+    const required = nameTokens.length <= 1 ? nameTokens.length : (nameTokens.length === 2 ? 1 : Math.max(2, Math.ceil(nameTokens.length * 0.6)));
+    if (matchedNameCount < required) return false;
+  }
+  return true;
+}
+
+function findAddressFolder(baseFolder, lpGmina) {
+  if (!fs.existsSync(baseFolder) || !fs.statSync(baseFolder).isDirectory()) {
+    throw new Error(`Folder bazowy nie istnieje: ${baseFolder}`);
+  }
+  const entries = fs.readdirSync(baseFolder, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name);
+  const lpStr = String(lpGmina).trim();
+  const re = new RegExp(`^${lpStr}(?!\\d)`);
+  const matches = entries.filter(name => re.test(name.trim()));
+  return { matches, allFolders: entries };
+}
+
+// Skanuje pliki BEZPOSREDNIO w folderze adresu ORAZ jeden poziom w glab
+// podfolderow (czesto dokumenty siedza w podfolderze np. "PDF" zamiast
+// bezposrednio w folderze adresu). Zwraca sciezki wzgledne wobec folderPath
+// (moga zawierac segment podfolderu, np. "PDF\Opis_techniczny.pdf").
+function scanFilesRecursive(folderPath) {
+  const results = [];
+  const topEntries = fs.readdirSync(folderPath, { withFileTypes: true });
+  for (const e of topEntries) {
+    if (e.isFile()) {
+      results.push(e.name);
+    } else if (e.isDirectory()) {
+      let subEntries = [];
+      try { subEntries = fs.readdirSync(path.join(folderPath, e.name), { withFileTypes: true }); } catch (_) { continue; }
+      for (const se of subEntries) {
+        if (se.isFile()) results.push(path.join(e.name, se.name));
+      }
+    }
+  }
+  return results;
+}
+
+function classifyFiles(folderPath) {
+  const entries = scanFilesRecursive(folderPath);
+
+  const printableRaw = entries.filter(name => PRINTABLE_EXT.has(path.extname(name).toLowerCase()));
+  const skipped = entries.filter(name => !PRINTABLE_EXT.has(path.extname(name).toLowerCase()));
+
+  const techDescDocxForExtraction = printableRaw.find(n => OT_PATTERN.test(path.basename(n)) && n.toLowerCase().endsWith(".docx"));
+
+  const byBaseName = new Map();
+  for (const name of printableRaw) {
+    const ext = path.extname(name).toLowerCase();
+    const base = path.basename(name, ext).toLowerCase();
+    if (!byBaseName.has(base)) byBaseName.set(base, []);
+    byBaseName.get(base).push(name);
+  }
+  const printable = [];
+  const droppedDuplicates = [];
+  for (const names of byBaseName.values()) {
+    if (names.length === 1) { printable.push(names[0]); continue; }
+    const pdfVersion = names.find(n => n.toLowerCase().endsWith(".pdf"));
+    const keep = pdfVersion || names[0];
+    printable.push(keep);
+    for (const n of names) { if (n !== keep) droppedDuplicates.push(n); }
+  }
+
+  let titlePage = printable.find(n => /^st[_\- ]/i.test(path.basename(n)) && n.toLowerCase().endsWith(".pdf"))
+    || printable.find(n => /^st[_\- ]/i.test(path.basename(n)));
+
+  let techDescPdf = printable.find(n => OT_PATTERN.test(path.basename(n)) && n.toLowerCase().endsWith(".pdf"));
+  let techDescDocx = techDescDocxForExtraction;
+
+  const drawingLike = printable.filter(n => /^\d+_[a-ząćęłńóśźż]_/i.test(path.basename(n)) && n.toLowerCase().endsWith(".pdf"));
+
+  const otStVariants = printable.filter(n =>
+    (OT_PATTERN.test(path.basename(n)) || /^st[_\- ]/i.test(path.basename(n))) &&
+    n !== titlePage && n !== techDescPdf && n !== techDescDocx
+  );
+
+  const usedSoFar = new Set([titlePage, techDescPdf, ...drawingLike, ...otStVariants].filter(Boolean));
+  if (printable.includes(techDescDocx)) usedSoFar.add(techDescDocx);
+  const pool = printable.filter(n => !usedSoFar.has(n));
+
+  return { printable, skipped, droppedDuplicates, titlePage, techDescPdf, techDescDocx, drawingLike, otStVariants, pool };
+}
+
+async function extractText(folderPath, techDescDocx, techDescPdf) {
+  if (techDescDocx) {
+    const buffer = fs.readFileSync(path.join(folderPath, techDescDocx));
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value || "";
+  }
+  if (techDescPdf) {
+    const buffer = fs.readFileSync(path.join(folderPath, techDescPdf));
+    const result = await pdfParse(buffer);
+    return result.text || "";
+  }
+  return "";
+}
+
+async function detectByContent(folderPath, classified) {
+  const pool = [...classified.pool];
+  const stillPool = [];
+  const extraDrawings = [];
+  let protokolFile = null;
+  for (const fileName of pool) {
+    if (!fileName.toLowerCase().endsWith(".pdf")) { stillPool.push(fileName); continue; }
+    let text = "";
+    try {
+      const buffer = fs.readFileSync(path.join(folderPath, fileName));
+      const result = await pdfParse(buffer, { max: 2 });
+      text = normalize((result.text || "").slice(0, 3000));
+    } catch (_) { stillPool.push(fileName); continue; }
+    if (text.length < 20) { stillPool.push(fileName); continue; }
+    if (!protokolFile && text.includes("protokol uzgodnien projektowych")) { protokolFile = fileName; continue; }
+    if (text.includes("tytul rysunku") || text.includes("nr rysunku")) { extraDrawings.push(fileName); continue; }
+    stillPool.push(fileName);
+  }
+  return { ...classified, pool: stillPool, drawingLike: [...classified.drawingLike, ...extraDrawings], protokolFileByContent: protokolFile };
+}
+
+function extractAttachmentsList(text) {
+  const re = /Za[łl][ąa]cznik\s*nr\s*(\d+)(?:\.\d+)?[.:]?\s+([^\n\r]+)/gi;
+  const items = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const num = Number(m[1]);
+    const name = m[2].trim().replace(/\s{2,}/g, " ");
+    if (name.length > 0 && name.length < 200) items.push({ num, name });
+  }
+  const seen = new Set();
+  const deduped = items.filter(it => {
+    const key = it.num + "|" + normalize(it.name);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => a.num - b.num);
+  const seenNum = new Set();
+  return deduped.filter(it => {
+    if (seenNum.has(it.num)) return false;
+    seenNum.add(it.num);
+    return true;
+  });
+}
+
+const KEYWORD_MAP = [
+  [["bioz"], ["bioz"]],
+  [["symulacj"], ["symulacj"]],
+  [["protok", "uzgodni"], ["protok"]],
+  [["kolektor", "slonecznego"], ["kolektor"]],
+  [["zasobnik", "solarnego"], ["zasobnik"]],
+  [["grupa", "pompow"], ["grupa", "pomp"]],
+  [["sterownik"], ["sterownik", "regulator"]],
+  [["pompa", "ciepla"], ["pompa ciepla", "pompy ciepla"]],
+  [["kocio"], ["kociol", "kociol"]],
+  [["kotl", "biomas"], ["katalogowa"]]
+];
+
+function guessKeywordsForAttachment(name) {
+  const norm = normalize(name);
+  for (const [triggers, keywords] of KEYWORD_MAP) {
+    if (triggers.every(t => norm.includes(t)) || triggers.some(t => norm.includes(t))) return keywords;
+  }
+  const words = norm.split(" ").filter(w => w.length > 3);
+  words.sort((a, b) => b.length - a.length);
+  return words.slice(0, 1);
+}
+
+function buildOrder(classified, attachmentsList, addressHint) {
+  const order = [];
+  const pool = [...classified.pool];
+  const myTokens = addressTokens(addressHint && addressHint.adres);
+  const otherAddressList = ((addressHint && addressHint.otherAddresses) || []).filter(Boolean);
+
+  const excludedForeign = [];
+  for (let i = pool.length - 1; i >= 0; i -= 1) {
+    const matchedOther = otherAddressList.find(other => {
+      const otherTokens = addressTokens(other);
+      const isSubsetOfOwn = otherTokens.length && otherTokens.every(t => myTokens.includes(t));
+      if (isSubsetOfOwn) return false;
+      return filenameMatchesAddress(pool[i], otherTokens);
+    });
+    if (matchedOther) { excludedForeign.push({ file: pool[i], matchedOtherAddress: matchedOther }); pool.splice(i, 1); }
+  }
+
+  function takeAllFromPool(matchFn) {
+    const found = [];
+    for (let i = pool.length - 1; i >= 0; i -= 1) { if (matchFn(pool[i])) { found.unshift(pool[i]); pool.splice(i, 1); } }
+    return found;
+  }
+  function takeFromPool(keywords) { return takeAllFromPool(f => keywords.some(kw => normalize(f).includes(kw))); }
+  function takeAllAddressNamedFiles() { if (!myTokens.length) return []; return takeAllFromPool(f => filenameMatchesOwnAddress(f, myTokens)); }
+
+  let protokolByContent = classified.protokolFileByContent || null;
+
+  // Kazdy z ponizszych 3 elementow jest WYMAGANY - jesli go brakuje,
+  // dodajemy jawny wpis "BRAK PLIKU" zamiast po prostu go pomijac. Bez
+  // tego brakujacy plik byl NIEWIDOCZNY w wyniku (nic sie nie dodawalo),
+  // co przy braku innych niepewnych pozycji dawalo falszywe "komplet".
+  if (classified.titlePage) {
+    order.push({ file: classified.titlePage, label: "Strona tytułowa", confidence: "pewne" });
+  } else {
+    order.push({ file: null, label: "Strona tytułowa (BRAK PLIKU - dodaj ręcznie)", confidence: "brak" });
+  }
+
+  const otFile = classified.techDescPdf || classified.techDescDocx;
+  if (otFile) {
+    order.push({ file: otFile, label: "Opis techniczny", confidence: "pewne" });
+  } else {
+    order.push({ file: null, label: "Opis techniczny (BRAK PLIKU - dodaj ręcznie)", confidence: "brak" });
+  }
+  if (otFile && (!attachmentsList || attachmentsList.length === 0)) {
+    order.push({ file: null, label: "Nie znaleziono listy załączników w Opisie technicznym - sprawdź ręcznie (może mieć inny format)", confidence: "brak" });
+  }
+
+  for (const variant of classified.otStVariants || []) {
+    order.push({ file: variant, label: "Dodatkowy wariant Opisu/Strony tytułowej - NIE trafia do druku, sprawdź który jest właściwy", confidence: "wariant - sprawdź ręcznie" });
+  }
+
+  if (classified.drawingLike.length) {
+    for (const d of classified.drawingLike) order.push({ file: d, label: "Rysunek / dokumentacja rysunkowa", confidence: "pewne" });
+  } else {
+    order.push({ file: null, label: "Rysunek / dokumentacja rysunkowa (BRAK PLIKU - dodaj ręcznie)", confidence: "brak" });
+  }
+
+  const unmatchedAttachments = [];
+  const satisfiedKeywordSets = [];
+  for (const att of attachmentsList) {
+    const isProtokolLike = /protok|uzgodni/i.test(att.name);
+    const keywords = guessKeywordsForAttachment(att.name);
+    let foundFiles = [];
+    let confidence = "słowo kluczowe";
+    if (isProtokolLike && protokolByContent) { foundFiles = [protokolByContent]; confidence = "pewne"; protokolByContent = null; }
+    if (!foundFiles.length && isProtokolLike) { foundFiles = takeAllAddressNamedFiles(); confidence = "pewne"; }
+    if (!foundFiles.length) { foundFiles = takeFromPool(keywords); }
+    if (foundFiles.length) {
+      satisfiedKeywordSets.push(isProtokolLike ? ["protok"] : keywords);
+      foundFiles.forEach((file, idx) => {
+        const suffix = foundFiles.length > 1 ? ` (${idx + 1}/${foundFiles.length})` : "";
+        order.push({ file, label: `Załącznik nr ${att.num}: ${att.name}${suffix}`, confidence });
+      });
+    } else {
+      unmatchedAttachments.push(att);
+    }
+  }
+
+  const duplicateFiles = [];
+  for (let i = pool.length - 1; i >= 0; i -= 1) {
+    const leftoverNorm = normalize(pool[i]);
+    const isDuplicateOfSatisfied = satisfiedKeywordSets.some(kws => kws.some(kw => leftoverNorm.includes(kw)));
+    if (isDuplicateOfSatisfied) { duplicateFiles.push(pool[i]); pool.splice(i, 1); }
+  }
+
+  for (const att of unmatchedAttachments) {
+    if (!pool.length) {
+      order.push({ file: null, label: `Załącznik nr ${att.num}: ${att.name} (BRAK PLIKU - dodaj ręcznie)`, confidence: "brak" });
+      continue;
+    }
+    const found = pool.shift();
+    order.push({ file: found, label: `Załącznik nr ${att.num}: ${att.name}`, confidence: "dopasowanie po kolejności - sprawdź" });
+  }
+
+  for (const dup of duplicateFiles) {
+    order.push({ file: dup, label: "Dodatkowy plik pasujący do już wypełnionego załącznika - NIE trafia do druku, sprawdź który jest właściwy", confidence: "wariant - sprawdź ręcznie" });
+  }
+  for (const leftover of pool) {
+    order.push({ file: leftover, label: "Niedopasowany plik - sprawdź ręcznie", confidence: "niedopasowane" });
+  }
+  for (const ex of excludedForeign) {
+    order.push({ file: ex.file, label: `Plik wygląda na dokument innego adresu (${ex.matchedOtherAddress}) - pominięty, nie trafi do druku`, confidence: "obcy adres - pominięte" });
+  }
+
+  return order;
+}
+
+module.exports = { findAddressFolder, classifyFiles, detectByContent, extractText, extractAttachmentsList, buildOrder, normalize, addressTokens, filenameMatchesOwnAddress };

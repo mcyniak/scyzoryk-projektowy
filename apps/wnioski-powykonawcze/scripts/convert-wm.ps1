@@ -1,0 +1,464 @@
+param(
+  [Parameter(Mandatory=$true)][string]$InputJson,
+  [Parameter(Mandatory=$true)][string]$OutputJson
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}
+
+function Decode-Utf8Base64 {
+  param([Parameter(Mandatory=$true)][string]$Value)
+  return [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($Value))
+}
+
+function Write-Result {
+  param($obj)
+  $json = $obj | ConvertTo-Json -Depth 20
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($OutputJson, $json, $utf8NoBom)
+}
+
+function Get-ErrorMessage {
+  param($err)
+  $msg = "Blad PowerShell."
+  try {
+    if ($err -and $err.Exception -and $err.Exception.Message) { $msg = [string]$err.Exception.Message }
+  } catch {}
+  try {
+    if ($err -and $err.InvocationInfo -and $err.InvocationInfo.ScriptLineNumber) {
+      $msg = $msg + " Linia: " + [string]$err.InvocationInfo.ScriptLineNumber
+    }
+  } catch {}
+  return $msg
+}
+
+function Invoke-ReplaceInRange {
+  param(
+    $Range,
+    [Parameter(Mandatory=$true)][string]$FindText,
+    [Parameter(Mandatory=$true)][AllowEmptyString()][string]$ReplaceText,
+    [bool]$Wildcards = $false
+  )
+
+  if ($null -eq $Range) { return $false }
+
+  $find = $null
+  try { $find = $Range.Find } catch { return $false }
+  if ($null -eq $find) { return $false }
+
+  try { [void]$find.ClearFormatting() } catch {}
+  try {
+    $replacement = $find.Replacement
+    if ($null -ne $replacement) { [void]$replacement.ClearFormatting() }
+  } catch {}
+
+  try {
+    $find.Text = $FindText
+    try {
+      $replacement = $find.Replacement
+      if ($null -ne $replacement) { $replacement.Text = $ReplaceText }
+    } catch {}
+    $find.MatchCase = $false
+    $find.MatchWholeWord = $false
+    $find.MatchWildcards = $Wildcards
+    $find.Forward = $true
+    $find.Wrap = 1
+    $find.Format = $false
+    [void]$find.Execute($FindText, $false, $false, $Wildcards, $false, $false, $true, 1, $false, $ReplaceText, 2)
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Replace-InContent {
+  param(
+    [Parameter(Mandatory=$true)]$Doc,
+    [Parameter(Mandatory=$true)][string]$FindText,
+    [Parameter(Mandatory=$true)][AllowEmptyString()][string]$ReplaceText,
+    [bool]$Wildcards = $false
+  )
+  if ($null -eq $Doc) { return $false }
+  $range = $null
+  try {
+    if ($null -ne $Doc.Content) { $range = $Doc.Content.Duplicate }
+  } catch { $range = $null }
+  return Invoke-ReplaceInRange -Range $range -FindText $FindText -ReplaceText $ReplaceText -Wildcards $Wildcards
+}
+
+function Replace-InAllStories {
+  param(
+    [Parameter(Mandatory=$true)]$Doc,
+    [Parameter(Mandatory=$true)][string]$FindText,
+    [Parameter(Mandatory=$true)][AllowEmptyString()][string]$ReplaceText,
+    [bool]$Wildcards = $false
+  )
+  if ($null -eq $Doc) { return }
+
+  $didAnything = $false
+  $stories = $null
+  try { $stories = $Doc.StoryRanges } catch { $stories = $null }
+
+  if ($null -ne $stories) {
+    $count = 0
+    try { $count = [int]$stories.Count } catch { $count = 0 }
+    if ($count -gt 0) {
+      for ($i = 1; $i -le $count; $i++) {
+        $story = $null
+        try { $story = $stories.Item($i) } catch { $story = $null }
+        $guard = 0
+        while ($null -ne $story -and $guard -lt 80) {
+          $range = $null
+          try { $range = $story.Duplicate } catch { $range = $story }
+          [void](Invoke-ReplaceInRange -Range $range -FindText $FindText -ReplaceText $ReplaceText -Wildcards $Wildcards)
+          $didAnything = $true
+          $next = $null
+          try { $next = $story.NextStoryRange } catch { $next = $null }
+          $story = $next
+          $guard = $guard + 1
+        }
+      }
+    }
+  }
+
+  # Fallback na glowna tresc dokumentu. To lapie zwykle tabele WM,
+  # gdy Word/COM nie odda kolekcji StoryRanges tak jak oczekujemy.
+  [void](Replace-InContent -Doc $Doc -FindText $FindText -ReplaceText $ReplaceText -Wildcards $Wildcards)
+
+  # Dodatkowo przejdz po ksztaltach/polach tekstowych, bo czesc wzorow Worda
+  # trzyma daty poza glowna trescia dokumentu.
+  try {
+    $sections = $Doc.Sections
+    if ($null -ne $sections) {
+      for ($s = 1; $s -le [int]$sections.Count; $s++) {
+        $section = $sections.Item($s)
+        foreach ($hfCollectionName in @('Headers', 'Footers')) {
+          $hfCollection = $null
+          try {
+            if ($hfCollectionName -eq 'Headers') { $hfCollection = $section.Headers }
+            elseif ($hfCollectionName -eq 'Footers') { $hfCollection = $section.Footers }
+          } catch { $hfCollection = $null }
+          if ($null -ne $hfCollection) {
+            for ($h = 1; $h -le [int]$hfCollection.Count; $h++) {
+              $hf = $hfCollection.Item($h)
+              if ($null -ne $hf -and $null -ne $hf.Range) {
+                [void](Invoke-ReplaceInRange -Range $hf.Range -FindText $FindText -ReplaceText $ReplaceText -Wildcards $Wildcards)
+              }
+              $shapes = $null
+              try { $shapes = $hf.Shapes } catch { $shapes = $null }
+              if ($null -ne $shapes) {
+                for ($k = 1; $k -le [int]$shapes.Count; $k++) {
+                  $shape = $shapes.Item($k)
+                  $textRange = $null
+                  try {
+                    if ($shape.TextFrame.HasText -ne 0) { $textRange = $shape.TextFrame.TextRange }
+                  } catch { $textRange = $null }
+                  if ($null -ne $textRange) {
+                    [void](Invoke-ReplaceInRange -Range $textRange -FindText $FindText -ReplaceText $ReplaceText -Wildcards $Wildcards)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  try {
+    $shapes = $Doc.Shapes
+    if ($null -ne $shapes) {
+      for ($k = 1; $k -le [int]$shapes.Count; $k++) {
+        $shape = $shapes.Item($k)
+        $textRange = $null
+        try {
+          if ($shape.TextFrame.HasText -ne 0) { $textRange = $shape.TextFrame.TextRange }
+        } catch { $textRange = $null }
+        if ($null -ne $textRange) {
+          [void](Invoke-ReplaceInRange -Range $textRange -FindText $FindText -ReplaceText $ReplaceText -Wildcards $Wildcards)
+        }
+      }
+    }
+  } catch {}
+}
+
+
+function Add-DateTextsFromRange {
+  param(
+    [Parameter(Mandatory=$true)]$Set,
+    $Range
+  )
+  if ($null -eq $Range) { return }
+  $text = $null
+  try { $text = [string]$Range.Text } catch { $text = $null }
+  if ([string]::IsNullOrWhiteSpace($text)) { return }
+  try {
+    $matches = [System.Text.RegularExpressions.Regex]::Matches($text, '(?<!\d)([0-3]?\d[\.\-/][01]?\d[\.\-/](?:19|20)\d{2})(?!\d)')
+    foreach ($m in $matches) {
+      if ($null -ne $m -and -not [string]::IsNullOrWhiteSpace($m.Value)) { [void]$Set.Add([string]$m.Value) }
+    }
+  } catch {}
+}
+
+function Collect-DateTexts {
+  param([Parameter(Mandatory=$true)]$Doc)
+  $set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  if ($null -eq $Doc) { return @() }
+
+  try { Add-DateTextsFromRange -Set $set -Range $Doc.Content } catch {}
+
+  # StoryRanges obejmuja glowny tekst, naglowki, stopki, komentarze itp.
+  try {
+    $stories = $Doc.StoryRanges
+    if ($null -ne $stories) {
+      for ($i = 1; $i -le [int]$stories.Count; $i++) {
+        $story = $null
+        try { $story = $stories.Item($i) } catch { $story = $null }
+        $guard = 0
+        while ($null -ne $story -and $guard -lt 100) {
+          Add-DateTextsFromRange -Set $set -Range $story
+          $next = $null
+          try { $next = $story.NextStoryRange } catch { $next = $null }
+          $story = $next
+          $guard = $guard + 1
+        }
+      }
+    }
+  } catch {}
+
+  # Jawnie przejdz po tabelach, bo WM-y sa praktycznie calymi tabelami.
+  try {
+    $tables = $Doc.Tables
+    if ($null -ne $tables) {
+      for ($t = 1; $t -le [int]$tables.Count; $t++) {
+        $table = $tables.Item($t)
+        if ($null -ne $table) { Add-DateTextsFromRange -Set $set -Range $table.Range }
+      }
+    }
+  } catch {}
+
+  # Pola tekstowe i ksztalty w glownym dokumencie.
+  try {
+    $shapes = $Doc.Shapes
+    if ($null -ne $shapes) {
+      for ($k = 1; $k -le [int]$shapes.Count; $k++) {
+        $shape = $shapes.Item($k)
+        $textRange = $null
+        try { if ($shape.TextFrame.HasText -ne 0) { $textRange = $shape.TextFrame.TextRange } } catch { $textRange = $null }
+        Add-DateTextsFromRange -Set $set -Range $textRange
+      }
+    }
+  } catch {}
+
+  # Pola tekstowe w naglowkach i stopkach.
+  try {
+    $sections = $Doc.Sections
+    if ($null -ne $sections) {
+      for ($s = 1; $s -le [int]$sections.Count; $s++) {
+        $section = $sections.Item($s)
+        foreach ($hfCollectionName in @('Headers', 'Footers')) {
+          $hfCollection = $null
+          try {
+            if ($hfCollectionName -eq 'Headers') { $hfCollection = $section.Headers }
+            elseif ($hfCollectionName -eq 'Footers') { $hfCollection = $section.Footers }
+          } catch { $hfCollection = $null }
+          if ($null -ne $hfCollection) {
+            for ($h = 1; $h -le [int]$hfCollection.Count; $h++) {
+              $hf = $hfCollection.Item($h)
+              if ($null -ne $hf) { Add-DateTextsFromRange -Set $set -Range $hf.Range }
+              $shapes = $null
+              try { $shapes = $hf.Shapes } catch { $shapes = $null }
+              if ($null -ne $shapes) {
+                for ($k = 1; $k -le [int]$shapes.Count; $k++) {
+                  $shape = $shapes.Item($k)
+                  $textRange = $null
+                  try { if ($shape.TextFrame.HasText -ne 0) { $textRange = $shape.TextFrame.TextRange } } catch { $textRange = $null }
+                  Add-DateTextsFromRange -Set $set -Range $textRange
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($d in $set) { [void]$out.Add([string]$d) }
+  return $out.ToArray()
+}
+
+function Replace-AllDates {
+  param(
+    [Parameter(Mandatory=$true)]$Doc,
+    [Parameter(Mandatory=$true)][string]$DateText
+  )
+  if ($null -eq $Doc) { return }
+  $newDate = [string]$DateText
+  if ([string]::IsNullOrWhiteSpace($newDate)) { return }
+
+  # Najpierw zbierz widoczne daty z dokumentu i zamieniaj je literalnie.
+  # To jest pewniejsze niz sam Word wildcard, bo daty w WM-ach siedza w tabelach.
+  $dates = Collect-DateTexts -Doc $Doc
+  foreach ($oldDate in $dates) {
+    if ([string]::IsNullOrWhiteSpace($oldDate)) { continue }
+    if ($oldDate -eq $newDate) { continue }
+    [void](Replace-InAllStories -Doc $Doc -FindText $oldDate -ReplaceText $newDate -Wildcards $false)
+  }
+
+  # Fallback: kilka wzorow wildcard dla dokumentow z nietypowa data.
+  foreach ($pattern in @(
+    '[0-9][0-9].[0-9][0-9].[0-9][0-9][0-9][0-9]',
+    '[0-9]{2}.[0-9]{2}.[0-9]{4}',
+    '[0-9]{1,2}.[0-9]{1,2}.[0-9]{4}',
+    '[0-9]{2}/[0-9]{2}/[0-9]{4}',
+    '[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}'
+  )) {
+    [void](Replace-InAllStories -Doc $Doc -FindText $pattern -ReplaceText $newDate -Wildcards $true)
+  }
+}
+
+function Delete-FromMarkerToEnd {
+  param(
+    [Parameter(Mandatory=$true)]$Doc,
+    [Parameter(Mandatory=$true)][string]$Marker
+  )
+  if ($null -eq $Doc) { return $false }
+
+  $content = $null
+  try { $content = $Doc.Content } catch { $content = $null }
+  if ($null -eq $content) { return $false }
+
+  $range = $null
+  try { $range = $content.Duplicate } catch { $range = $content }
+  if ($null -eq $range) { return $false }
+
+  $find = $null
+  try { $find = $range.Find } catch { $find = $null }
+  if ($null -eq $find) { return $false }
+
+  try { [void]$find.ClearFormatting() } catch {}
+  try {
+    $find.Text = $Marker
+    $find.MatchCase = $false
+    $find.MatchWholeWord = $false
+    $find.MatchWildcards = $false
+    $find.Forward = $true
+    $find.Wrap = 0
+    $found = $find.Execute()
+    if ($found) {
+      $start = $range.Start
+      $end = $content.End
+      if ($null -ne $start -and $null -ne $end -and $end -gt $start) {
+        $deleteRange = $Doc.Range($start, $end)
+        if ($null -ne $deleteRange) { [void]$deleteRange.Delete() }
+      }
+      return $true
+    }
+  } catch {
+    return $false
+  }
+  return $false
+}
+
+function Convert-ToPowykonawczy {
+  param(
+    [Parameter(Mandatory=$true)]$Doc,
+    [Parameter(Mandatory=$true)][string]$DateText
+  )
+
+  if ($null -eq $Doc) { throw "Word nie otworzyl dokumentu DOCX." }
+
+  $TITLE1 = Decode-Utf8Base64 "V25pb3NlayBvIHphdHdpZXJkemVuaWUgTWF0ZXJpYcWCw7N3IC8gVXJ6xIVkemXFhA=="
+  $TITLE2 = Decode-Utf8Base64 "V25pb3NlayBvIHphdHdpZXJkemVuaWUgTWF0ZXJpYcWCw7N3L1VyesSFZHplxYQ="
+  $TITLE3 = Decode-Utf8Base64 "V25pb3NlayBvIHphdHdpZXJkemVuaWUgTWF0ZXJpYcWCw7N3IGkgVXJ6xIVkemXFhA=="
+  $POW = Decode-Utf8Base64 "RG9rdW1lbnRhY2phIFBvd3lrb25hd2N6YQ=="
+  $UWAGI_ND = Decode-Utf8Base64 "VXdhZ2k6IE5pZSBkb3R5Y3p5"
+  $WBUD = Decode-Utf8Base64 "V2J1ZG93YW5vIHBvbmnFvHN6ZSBtYXRlcmlhxYJ5L3VyesSFZHplbmlh"
+  $UWAGI = Decode-Utf8Base64 "VXdhZ2k6"
+  $ND = Decode-Utf8Base64 "TmllIGRvdHljenk="
+  $WN1 = Decode-Utf8Base64 "d25pb3NrdWrEmSBvIHpnb2TEmSBuYSB6YW3Ds3dpZW5pZSB3L3cgTWF0ZXJpYcWCw7N3"
+  $WN2 = Decode-Utf8Base64 "d25pb3NrdWplIG8gemdvZMSZIG5hIHphbcOzd2llbmllIHcvdyBNYXRlcmlhxYLDs3c="
+  $WN3 = Decode-Utf8Base64 "d25pb3NrdWrEmSBvIHpnb2TEmSBuYSB6YW3Ds3dpZW5pZSB3L3cgTWF0ZXJpYcWCw7N3ICA="
+  $MARK1 = Decode-Utf8Base64 "WkFUV0lFUkRaQU0gLyBaQVRXSUVSRFpBTSB6IFVXQUdBTUkgLyBPRFJaVUNBTSo="
+  $MARK2 = Decode-Utf8Base64 "WkFUV0lFUkRaQU0gLyBaQVRXSUVSRFpBTSB6IFVXQUdBTUkgLyBPRFJaVUNBTQ=="
+  $MARK3 = Decode-Utf8Base64 "U3R3aWVyZHphbSwgacW8IHcvdw=="
+
+  Replace-InContent -Doc $Doc -FindText $TITLE1 -ReplaceText $POW | Out-Null
+  Replace-InContent -Doc $Doc -FindText $TITLE2 -ReplaceText $POW | Out-Null
+  Replace-InContent -Doc $Doc -FindText $TITLE3 -ReplaceText $POW | Out-Null
+
+  Replace-InContent -Doc $Doc -FindText $UWAGI_ND -ReplaceText $WBUD | Out-Null
+  Replace-InContent -Doc $Doc -FindText $UWAGI -ReplaceText $WBUD | Out-Null
+  Replace-InContent -Doc $Doc -FindText $ND -ReplaceText "" | Out-Null
+  Replace-InContent -Doc $Doc -FindText $WN1 -ReplaceText "" | Out-Null
+  Replace-InContent -Doc $Doc -FindText $WN2 -ReplaceText "" | Out-Null
+  Replace-InContent -Doc $Doc -FindText $WN3 -ReplaceText "" | Out-Null
+
+  $deleted = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK1
+  if (-not $deleted) { $deleted = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK2 }
+  if (-not $deleted) { $deleted = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK3 }
+
+  Replace-AllDates -Doc $Doc -DateText $DateText
+}
+
+try {
+  $rawConfig = Get-Content -LiteralPath $InputJson -Raw -Encoding UTF8
+  if ($null -eq $rawConfig) { throw "Nie udalo sie odczytac konfiguracji wejscia." }
+  $config = $rawConfig.TrimStart([char]0xFEFF) | ConvertFrom-Json
+  $results = New-Object System.Collections.Generic.List[object]
+  $word = $null
+  $oldSecurity = $null
+  try {
+    $word = New-Object -ComObject Word.Application
+    if ($null -eq $word) { throw "Nie udalo sie uruchomic Microsoft Word." }
+    $word.Visible = [bool]$config.visibleWord
+    $word.DisplayAlerts = 0
+    try { $oldSecurity = $word.AutomationSecurity; $word.AutomationSecurity = 3 } catch {}
+    try { $word.Options.UpdateLinksAtOpen = $false } catch {}
+    try { $word.Options.ConfirmConversions = $false } catch {}
+
+    foreach ($item in $config.files) {
+      $doc = $null
+      try {
+        $inputPath = [string]$item.inputPath
+        $pdfPath = [string]$item.pdfPath
+        $debugDocxPath = [string]$item.debugDocxPath
+        if (-not (Test-Path -LiteralPath $inputPath)) { throw "Nie znaleziono pliku DOCX: $inputPath" }
+
+        $doc = $word.Documents.Open($inputPath, $false, $true, $false, "", "", $false, "", "", 0, 65001, [bool]$config.visibleWord, $true)
+        if ($null -eq $doc) { throw "Word nie otworzyl pliku: $inputPath" }
+
+        Convert-ToPowykonawczy -Doc $doc -DateText ([string]$config.dateText)
+
+        if ([bool]$config.saveDocx) {
+          $formatDocx = 16
+          $doc.SaveAs2($debugDocxPath, $formatDocx)
+        }
+        $formatPdf = 17
+        $doc.SaveAs2($pdfPath, $formatPdf)
+        $doc.Close($false)
+        $doc = $null
+        $results.Add([pscustomobject]@{ ok=$true; input=$inputPath; pdf=$pdfPath; file=[System.IO.Path]::GetFileName($pdfPath) }) | Out-Null
+      } catch {
+        if ($null -ne $doc) {
+          try { $doc.Close($false) } catch {}
+        }
+        $results.Add([pscustomobject]@{ ok=$false; input=[string]$item.inputPath; error=(Get-ErrorMessage $_) }) | Out-Null
+      }
+    }
+  } finally {
+    if ($null -ne $word) {
+      if ($null -ne $oldSecurity) { try { $word.AutomationSecurity = $oldSecurity } catch {} }
+      try { $word.Quit() } catch {}
+      try { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) } catch {}
+    }
+    try { [GC]::Collect(); [GC]::WaitForPendingFinalizers() } catch {}
+  }
+  Write-Result ([pscustomobject]@{ ok=$true; results=$results })
+} catch {
+  Write-Result ([pscustomobject]@{ ok=$false; error=(Get-ErrorMessage $_) })
+  exit 1
+}

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Drukarka dokumentów</title>
+  <link rel="stylesheet" href="base.css" />
+  <link rel="stylesheet" href="style.css" />
+<style>/* final-user-polish */ input[type=checkbox]{accent-color:#d71924!important;width:18px!important;height:18px!important;}</style></head>
+<body>
+  <main class="app shell">
+    <div class="topbar">
+      <a class="logo" href="#" data-main-link aria-label="Wróć do panelu">
+        <span class="logo-mark" aria-hidden="true"></span>
+        <span><span class="logo-small">Scyzoryk</span>Drukarka dokumentów</span>
+      </a>
+      <a class="button-link ghost top-link" href="#" data-main-link>← Panel główny</a>
+    </div>
+
+    <section class="hero">
+      <div class="glass hero-main">
+        <div class="kicker">Drukowanie dokumentów</div>
+        <h1>Drukarka dokumentów</h1>
+        <p class="lead">Dodaj pliki PDF/DOC/DOCX, ustaw kolejność, wybierz kopie oraz druk jednostronny albo dwustronny i uruchom drukowanie z jednego miejsca.</p>
+        <div class="hero-actions">
+          <button id="addBtn" type="button">Dodaj pliki</button>
+        </div>
+      </div>
+      <aside class="glass info-card">
+        <h2>Jak działa?</h2>
+        <div class="pill-list">
+          <div class="pill">Dodaj dokumenty.</div>
+          <div class="pill">Ustaw kolejność i kopie.</div>
+          <div class="pill">Wyślij całość do drukarki.</div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Kolejka i podgląd</h2>
+          <p class="panel-desc">Przeciągnij pliki na pole po lewej albo użyj przycisku „Dodaj pliki”.</p>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <div class="left">
+          <div id="dropZone" class="drop-zone">
+            <strong>Przeciągnij tutaj pliki</strong>
+            <span>albo kliknij „Dodaj pliki” u góry</span>
+          </div>
+          <ul id="fileList" class="file-list"></ul>
+        </div>
+
+        <aside class="preview">
+          <div class="preview-head">
+            <div class="preview-title">Podgląd PDF</div>
+            <div class="zoom-controls" aria-label="Przybliżenie podglądu PDF">
+              <button id="zoomOutBtn" class="zoom-btn" type="button" title="Pomniejsz">−</button>
+              <button id="zoomFitBtn" class="zoom-btn wide" type="button" title="Dopasuj do szerokości">Dopasuj</button>
+              <button id="zoomInBtn" class="zoom-btn" type="button" title="Powiększ">+</button>
+              <span id="zoomLabel" class="zoom-label">Dopasuj</span>
+            </div>
+          </div>
+          <iframe id="pdfPreview" title="Podgląd PDF"></iframe>
+          <div id="previewFallback" class="preview-fallback">Wybierz PDF z listy</div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="panel controls-panel">
+      <input id="fileInput" type="file" multiple accept=".pdf,.doc,.docx" hidden />
+      <div class="print-options" aria-label="Ustawienia druku">
+        <label class="option-field wide">
+          <span>Drukarka</span>
+          <select id="printerSelectInput"><option value="">Domyslna systemu</option></select>
+        </label>
+
+        <label class="option-field compact">
+          <span>Kopie</span>
+          <input id="copiesInput" type="number" min="1" max="20" value="1" />
+        </label>
+
+        <label class="option-field">
+          <span>Strony</span>
+          <select id="sideModeInput">
+            <option value="two-sided" selected>Dwustronnie</option>
+            <option value="one-sided">Jednostronnie</option>
+          </select>
+        </label>
+
+        <label class="option-field wide">
+          <span>Układ kopii</span>
+          <select id="copyModeInput">
+            <option value="file">Kopia przy każdym pliku: A, A, B, B</option>
+            <option value="set">Najpierw komplet, potem kopia: A, B, A, B</option>
+          </select>
+        </label>
+        <input id="delayInput" type="hidden" value="1" />
+      </div>
+
+      <div id="jobSummary" class="job-summary">1 kopia · dwustronnie · kolejność plików z listy</div>
+
+      <div class="controls">
+        <button id="clearBtn" class="ghost" type="button">Wyczyść</button>
+        <button id="printBtn" class="print" type="button">DRUKUJ</button>
+      </div>
+
+      <div class="status-box">
+        <div id="statusText">Gotowy</div>
+        <div class="progress">
+          <div id="progressBar"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+  <script src="inline-1.js"></script>
+</body>
+</html>
