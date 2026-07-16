@@ -8,7 +8,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup, createSemaphore } = require('../../lib/hardening');
 const { createStorageClient } = require('../../lib/storage/googleDriveStorage');
 
 const app = express();
@@ -110,6 +110,14 @@ const ZAWSZE_KARTY = ['Grupa pompowa.pdf', 'Kolektor KSG 21GT.pdf'];
 // Zasobnik dobierany wg ostatniej liczby w UID (np. "2/250" -> 250, "2x4/400" -> 400)
 const ROZMIARY_ZASOBNIKA = ['250', '300', '400'];
 function nazwaZasobnika(rozmiar) { return `Zasobnik SGW(S)B ${rozmiar}.pdf`; }
+
+// Sprawdzanie kazdego adresu (listowanie folderu klienta na Dysku, potem
+// ewentualne kopiowanie) bylo do tej pory SEKWENCYJNE - jeden adres na raz,
+// czeka na odpowiedz sieci, dopiero potem nastepny. Przy 100+ wierszach to
+// realnie kilka minut. Adresy sa od siebie niezalezne, wiec przetwarzamy je
+// rownolegle z ograniczeniem (nie bez ograniczenia - zbyt duzo naraz
+// zadan do Google/rclone mogloby zaczac dostawac bledy limitu zapytan).
+const KK_CONCURRENCY = Math.max(1, Number(process.env.KK_CONCURRENCY || 8));
 
 function normalizujTekst(value) {
   return String(value ?? '').trim();
@@ -260,6 +268,13 @@ async function przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun }
   // colRezygnacja moze byc -1 (nie kazdy arkusz ma taka kolumne) - wtedy po
   // prostu nikt nigdy nie ma rezygnacji, co jest bezpiecznym zachowaniem.
 
+  // FAZA 1 (szybka, synchroniczna): walidacja kazdego wiersza bez zadnych
+  // zapytan do sieci. Wiersze, ktore odpadaja tutaj, trafiaja do wynikiByIdx
+  // od razu; wiersze, ktore przeszly walidacje, licza sie do dalszej,
+  // rownoleglej fazy (potrzebuja listowania/kopiowania na Dysku).
+  const wynikiByIdx = new Array(rows.length).fill(null);
+  const zadania = [];
+
   for (let i = 1; i < rows.length; i += 1) {
     const wiersz = i + 1; // numer wiersza w Excelu (1 = naglowek)
     const row = rows[i];
@@ -279,7 +294,7 @@ async function przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun }
     // produkcji: kilka z 17 wierszy "brak UID" w jednym uruchomieniu to
     // faktycznie byly rezygnacje z pustym UID.
     if (rezygnacja) {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid: uid || null, status: 'pominieto-rezygnacja', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: rezygnacja dla adresu "${opisAdresu}" - pominieto.` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid: uid || null, status: 'pominieto-rezygnacja', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: rezygnacja dla adresu "${opisAdresu}" - pominieto.` };
       continue;
     }
 
@@ -287,33 +302,42 @@ async function przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun }
       // NIE pomijamy cicho - moze to byc adres ktory faktycznie nie dotyczy
       // solarow (normalne), ale rownie dobrze ktos mogl zapomniec wpisac UID -
       // uzytkownik ma to zobaczyc w raporcie, nie musiec zgadywac.
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid: null, status: 'pominieto-brak-uid', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak wartosci UID dla adresu "${opisAdresu}" - pominieto.` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid: null, status: 'pominieto-brak-uid', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak wartosci UID dla adresu "${opisAdresu}" - pominieto.` };
       continue;
     }
 
     if (!id) {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id: row[colLpGmina], adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak poprawnego "LP gminy" dla adresu "${opisAdresu}" - nie mozna dopasowac folderu.` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id: row[colLpGmina], adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak poprawnego "LP gminy" dla adresu "${opisAdresu}" - nie mozna dopasowac folderu.` };
       continue;
     }
 
     if (duplikaty.has(id)) {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` };
       continue;
     }
 
     const folderNazwa = mapaFolderow.get(id);
     if (!folderNazwa) {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` };
       continue;
     }
 
     const rozmiar = parseRozmiarZUid(uid);
     if (!rozmiar || typeof rozmiar === 'object') {
       const nieznany = rozmiar && rozmiar.nieznany ? rozmiar.nieznany : uid;
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nierozpoznany rozmiar zasobnika w UID ("${nieznany}") dla adresu "${opisAdresu}". Oczekiwano 250/300/400.` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nierozpoznany rozmiar zasobnika w UID ("${nieznany}") dla adresu "${opisAdresu}". Oczekiwano 250/300/400.` };
       continue;
     }
 
+    zadania.push({ idx: i, wiersz, id, adres, uid, opisAdresu, folderNazwa, rozmiar });
+  }
+
+  // FAZA 2 (rownolegla, z ograniczeniem KK_CONCURRENCY): listowanie folderu
+  // klienta i ewentualne kopiowanie - to jest czesc, ktora realnie czeka na
+  // siec, wiec robimy wiele adresow naraz zamiast jednego po drugim.
+  const semafor = createSemaphore(KK_CONCURRENCY);
+  await Promise.all(zadania.map(zadanie => semafor.run(async () => {
+    const { idx, wiersz, id, adres, uid, opisAdresu, folderNazwa, rozmiar } = zadanie;
     const wymaganePliki = [...ZAWSZE_KARTY, nazwaZasobnika(rozmiar)];
     const folderKlientaRel = path.join(projektyRel, folderNazwa);
     const istniejaceEntries = await client.listDirectory(folderKlientaRel);
@@ -322,8 +346,8 @@ async function przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun }
     const doSkopiowania = wymaganePliki.filter(nazwa => !istniejace.has(nazwa.toLowerCase()));
 
     if (doSkopiowania.length === 0) {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'pominieto-juz-sa', komunikat: 'Karty katalogowe juz sa w folderze klienta.' });
-      continue;
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'pominieto-juz-sa', komunikat: 'Karty katalogowe juz sa w folderze klienta.' };
+      return;
     }
 
     const skopiowane = [];
@@ -353,12 +377,19 @@ async function przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun }
     }
 
     if (bledy.length && skopiowane.length === 0) {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: ${bledy.join('; ')}` });
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: ${bledy.join('; ')}` };
     } else if (bledy.length) {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'czesciowo', komunikat: `Skopiowano: ${skopiowane.join(', ')}. Bledy: ${bledy.join('; ')}` });
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'czesciowo', komunikat: `Skopiowano: ${skopiowane.join(', ')}. Bledy: ${bledy.join('; ')}` };
     } else {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: dryRun ? 'do-skopiowania' : 'skopiowano', komunikat: `Pliki: ${skopiowane.join(', ')}` });
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: dryRun ? 'do-skopiowania' : 'skopiowano', komunikat: `Pliki: ${skopiowane.join(', ')}` };
     }
+  })));
+
+  // Kolejnosc wierszy z arkusza zachowana (wynikiByIdx jest indeksowane
+  // pozycja w arkuszu), mimo ze FAZA 2 konczyla zadania w nieprzewidywalnej
+  // kolejnosci.
+  for (const wynik of wynikiByIdx) {
+    if (wynik) wyniki.push(wynik);
   }
 
   return wyniki;
