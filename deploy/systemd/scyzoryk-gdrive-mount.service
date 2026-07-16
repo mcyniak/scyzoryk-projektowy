@@ -21,7 +21,14 @@ ExecStartPre=/bin/mkdir -p /mnt/scyzoryk-google-drive
 # odczyt idzie na zywo przez siec do Google - stad "bardzo dlugo szuka" przy
 # pierwszym realnym tescie. Limit rozmiaru/wieku cache wazny na tej karcie
 # microSD (29GB, malo miejsca) - stare/duze pliki same wypadaja z cache.
-ExecStart=/usr/bin/rclone mount scyzoryk-drive: /mnt/scyzoryk-google-drive --vfs-cache-mode full --vfs-cache-max-size 2G --vfs-cache-max-age 24h --dir-cache-time 30s
+# --drive-export-formats xlsx - prawdziwe Arkusze Google (nie zwykle .xlsx
+# wgrane na Dysk) nie sa "plikiem" w zwyklym sensie - bez tej opcji rclone
+# w ogole by ich nie pokazal jako czegos do odczytania. Z ta opcja kazdy
+# Arkusz Google widoczny jest w montowaniu jako wirtualny "Nazwa.xlsx",
+# ktory przy odczycie rclone sam eksportuje z Google na biezaco - reszta
+# kodu (read-excel-file/xlsx) czyta go dokladnie tak samo jak zwykly plik
+# .xlsx, bez zadnych zmian.
+ExecStart=/usr/bin/rclone mount scyzoryk-drive: /mnt/scyzoryk-google-drive --vfs-cache-mode full --vfs-cache-max-size 2G --vfs-cache-max-age 24h --dir-cache-time 30s --drive-export-formats xlsx
 ExecStop=/bin/fusermount -u /mnt/scyzoryk-google-drive
 Restart=always
 RestartSec=5
