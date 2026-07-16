@@ -112,7 +112,24 @@ app.get("/api/panel-info", (req, res) => {
   res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
 });
 
-const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+// ".gsheet" to maly plik-skrot, ktory tworzy synchronizacja Dysku Google na
+// komputerze dla plikow "tylko w chmurze" (Arkusz Google, nie prawdziwy
+// .xlsx) - jego zawartosc to zwykly tekst/JSON, nie plik Excel, wiec proba
+// wczytania go jako .xlsx konczyla sie niejasnym bledem zamiast jasnej
+// wskazowki. Ten sam problem i ten sam komunikat co juz dziala w
+// Formularzach Ecodan. Odrzucone na tym etapie (fileFilter), zanim w ogole
+// trafi do parsera Excela.
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const originalName = String(file.originalname || "");
+    if (/\.gsheet$/i.test(originalName)) {
+      return cb(new Error('Wybrano plik .gsheet, czyli skrot do Arkusza Google, a nie prawdziwy plik Excel. Uzyj przycisku "Wybierz z Dysku..." zamiast wgrywania z komputera - wtedy Arkusz Google zostanie pobrany automatycznie.'));
+    }
+    cb(null, true);
+  }
+});
 
 function readLastFolders() {
   try {
