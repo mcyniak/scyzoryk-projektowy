@@ -44,8 +44,12 @@ let stamps = [createStamp(1)];
 
 async function getPdfJs() {
   if (pdfjsLibRef) return pdfjsLibRef;
-  pdfjsLibRef = await import('/pdfjs/pdf.min.mjs');
-  pdfjsLibRef.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.mjs';
+  // Uwaga: dynamiczny import() (w odroznieniu od fetch()/.src) wymaga
+  // jawnego "./" na poczatku - "pdfjs/..." bez tego byloby traktowane jako
+  // "bare specifier" (nazwa pakietu), ktorego przegladarka bez import map
+  // nie potrafi rozwiazac, i rzucaloby blad resolution.
+  pdfjsLibRef = await import('./pdfjs/pdf.min.mjs');
+  pdfjsLibRef.GlobalWorkerOptions.workerSrc = 'pdfjs/pdf.worker.min.mjs';
   return pdfjsLibRef;
 }
 
