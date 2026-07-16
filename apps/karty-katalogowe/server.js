@@ -382,49 +382,90 @@ app.get('/api/drive-status', async (req, res) => {
   res.json({ ok: true, configured: true, ...status });
 });
 
-app.post('/api/run', upload.single('excel'), async (req, res) => {
+// Wspolna logika dla /api/run (plik wgrany recznie) i /api/run-from-drive
+// (plik wybrany bezposrednio z przegladarki Dysku, w tym prawdziwe Arkusze
+// Google) - obie sciezki koncza sie tym samym plikiem .xlsx na lokalnym
+// dysku, wiec dalsza logika jest identyczna.
+async function runExcelJob(filePath, { dryRun, rootPathRaw }) {
   const jobId = crypto.randomUUID();
+  if (projectsStorage) {
+    const availability = await projectsStorage.checkAvailability();
+    if (!availability.available) {
+      throw new Error(`Dysk Google jest obecnie niedostepny. Sprawdz polaczenie internetowe lub usluge rclone. (${availability.reason || 'brak szczegolow'})`);
+    }
+  }
+
+  const { client, baseRelative } = resolveRequestRoot(rootPathRaw);
+
+  // Uwaga: w tej wersji read-excel-file { getSheets: true } zwraca od razu
+  // wszystkie arkusze z danymi (pole 'sheet' = nazwa, 'data' = wiersze),
+  // wiec nie trzeba osobno doczytywac kazdego arkusza.
+  const wszystkieArkusze = await readXlsxFile(filePath, { getSheets: true });
+
+  const wynikiWszystkie = [];
+  for (const arkusz of wszystkieArkusze) {
+    const sheetName = arkusz.sheet;
+    const rows = arkusz.data;
+    const gmina = gminaZNazwyArkusza(sheetName);
+    if (!gmina) continue; // pomijamy arkusze Pompy / Kotly / adresy itp.
+    const wynikiArkusza = await przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun });
+    wynikiWszystkie.push(...wynikiArkusza);
+  }
+
+  const podsumowanie = wynikiWszystkie.reduce((acc, w) => {
+    acc[w.status] = (acc[w.status] || 0) + 1;
+    return acc;
+  }, {});
+
+  const logPath = path.join(LOGS_DIR, `dobor-kart-${jobId}.json`);
+  writeJsonFileNoBom(logPath, { jobId, createdAt: new Date().toISOString(), rootPath: normalizujTekst(rootPathRaw), dryRun, podsumowanie, wyniki: wynikiWszystkie });
+
+  return { jobId, dryRun, podsumowanie, wyniki: wynikiWszystkie };
+}
+
+app.post('/api/run', upload.single('excel'), async (req, res) => {
   try {
     if (!req.file) throw new Error('Dodaj plik Excel (.xlsx).');
     const dryRun = String(req.body.dryRun || '').toLowerCase() === 'true';
-
-    if (projectsStorage) {
-      const availability = await projectsStorage.checkAvailability();
-      if (!availability.available) {
-        throw new Error(`Dysk Google jest obecnie niedostepny. Sprawdz polaczenie internetowe lub usluge rclone. (${availability.reason || 'brak szczegolow'})`);
-      }
-    }
-
-    const { client, baseRelative } = resolveRequestRoot(req.body.rootPath);
-
-    // Uwaga: w tej wersji read-excel-file { getSheets: true } zwraca od razu
-    // wszystkie arkusze z danymi (pole 'sheet' = nazwa, 'data' = wiersze),
-    // wiec nie trzeba osobno doczytywac kazdego arkusza.
-    const wszystkieArkusze = await readXlsxFile(req.file.path, { getSheets: true });
-
-    const wynikiWszystkie = [];
-    for (const arkusz of wszystkieArkusze) {
-      const sheetName = arkusz.sheet;
-      const rows = arkusz.data;
-      const gmina = gminaZNazwyArkusza(sheetName);
-      if (!gmina) continue; // pomijamy arkusze Pompy / Kotly / adresy itp.
-      const wynikiArkusza = await przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun });
-      wynikiWszystkie.push(...wynikiArkusza);
-    }
-
-    const podsumowanie = wynikiWszystkie.reduce((acc, w) => {
-      acc[w.status] = (acc[w.status] || 0) + 1;
-      return acc;
-    }, {});
-
-    const logPath = path.join(LOGS_DIR, `dobor-kart-${jobId}.json`);
-    writeJsonFileNoBom(logPath, { jobId, createdAt: new Date().toISOString(), rootPath: normalizujTekst(req.body.rootPath), dryRun, podsumowanie, wyniki: wynikiWszystkie });
-
-    res.json({ ok: true, jobId, dryRun, podsumowanie, wyniki: wynikiWszystkie });
+    const result = await runExcelJob(req.file.path, { dryRun, rootPathRaw: req.body.rootPath });
+    res.json({ ok: true, ...result });
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
   } finally {
     if (req.file?.path) fsp.unlink(req.file.path).catch(() => {});
+  }
+});
+
+// Przegladanie Dysku Google - do nowej przegladarki folderow/plikow w UI
+// (wybor folderu bazowego ORAZ wybor pliku Excel/Arkusza Google zamiast
+// wgrywania go recznie).
+app.get('/api/drive-browse', async (req, res) => {
+  if (!projectsStorage) return res.status(400).json({ ok: false, message: 'Dysk Google nie jest skonfigurowany.' });
+  try {
+    const entries = await projectsStorage.browseViaRclone(req.query.path || '.');
+    res.json({ ok: true, entries });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message });
+  }
+});
+
+// Jak /api/run, tylko plik Excel pochodzi bezposrednio z Dysku Google
+// (wybrany w przegladarce), nie z lokalnego dysku uzytkownika - dziala tez
+// dla prawdziwych Arkuszy Google (eksportowanych "w locie" przez rclone).
+app.post('/api/run-from-drive', async (req, res) => {
+  if (!projectsStorage) return res.status(400).json({ ok: false, message: 'Dysk Google nie jest skonfigurowany.' });
+  const dryRun = String(req.body.dryRun || '').toLowerCase() === 'true';
+  const driveFilePath = normalizujTekst(req.body.driveFilePath);
+  if (!driveFilePath) return res.status(400).json({ ok: false, message: 'Wybierz plik Excel z Dysku.' });
+  const tempPath = path.join(UPLOAD_DIR, `drive-${crypto.randomUUID()}.xlsx`);
+  try {
+    await projectsStorage.exportFileViaRclone(driveFilePath, tempPath);
+    const result = await runExcelJob(tempPath, { dryRun, rootPathRaw: req.body.rootPath });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message });
+  } finally {
+    fsp.unlink(tempPath).catch(() => {});
   }
 });
 

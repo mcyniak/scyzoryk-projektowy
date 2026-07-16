@@ -16,6 +16,12 @@ Environment=SCYZORYK_PROFILE=linux-pilot
 # Dysku Google, na ktorym leza foldery inwestycji - czytaja go Karty
 # katalogowe i Drukarka projektow.
 Environment=SCYZORYK_PROJECTS_ROOT=/mnt/scyzoryk-google-drive
+# Nazwa remote'a rclone (bez montowania) - potrzebna Kartom katalogowym/
+# Drukarce projektow/Formularzom Ecodan do przegladania Dysku i eksportu
+# prawdziwych Arkuszy Google przez "rclone lsjson"/"copyto" bezposrednio
+# (montowanie FUSE nie potrafi poprawnie odczytac ich zawartosci - patrz
+# komentarz w lib/storage/googleDriveStorage.js).
+Environment=SCYZORYK_GOOGLE_DRIVE_REMOTE=scyzoryk-drive:
 # "::" (nie "0.0.0.0") - dual-stack: przyjmuje polaczenia i po IPv4, i po IPv6
 # na jednym sockecie (wymaga net.ipv6.bindv6only=0, domyslne na tym Pi).
 # "0.0.0.0" wiaze TYLKO IPv4 - klient, ktorego przegladarka rozwiaze "scyzoryk"
