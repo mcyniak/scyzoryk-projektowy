@@ -20,6 +20,19 @@ function assertArchiverAvailable() {
   }
 }
 
+// multer/busboy dekoduja naglowek Content-Disposition multipart uploadu jako
+// Latin-1, nawet gdy przegladarka faktycznie wyslala nazwe pliku w UTF-8 -
+// polskie znaki w oryginalnej nazwie wychodza jako "mojibake" (np. w nazwie
+// wynikowego PDF-a po ostemplowaniu). Ten sam fix co juz dziala w
+// apps/drukarka/server.js: reinterpretuj bajty jako UTF-8.
+function decodeOriginalName(name) {
+  try {
+    return Buffer.from(name, 'latin1').toString('utf8');
+  } catch {
+    return name;
+  }
+}
+
 const app = express();
 setupProcessDiagnostics('pieczatki-pdf', __dirname);
 const PORT = process.env.PORT || 3000;
@@ -96,6 +109,14 @@ app.use('/pdfjs', express.static(path.join(ROOT, 'node_modules', 'pdfjs-dist', '
 app.use(express.static(path.join(ROOT, 'public')));
 app.use(express.json({ limit: '4mb' }));
 
+// Przycisk "Panel glowny" w gornym pasku potrzebuje znac PRAWDZIWY port
+// panelu (root server.js przekazuje go jako SCYZORYK_MAIN_PORT przy
+// spawnowaniu) - bez tego link byl na stale wpisany jako :3000 w JS, co
+// psulo sie, gdy panel biegal na innym porcie (np. 80 w tym pilocie).
+app.get('/api/panel-info', (req, res) => {
+  res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
+});
+
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: Number(process.env.PIECZATKI_API_RATE_LIMIT || 60),
@@ -128,7 +149,7 @@ function readHeader(filePath, length = 8) {
 function validateUploadedPdfFile(file) {
   const header = readHeader(file.path, 8);
   const ascii = header.toString('latin1');
-  if (!ascii.startsWith('%PDF-')) throw new Error(`Plik ${file.originalname || file.filename} nie wygląda jak poprawny PDF.`);
+  if (!ascii.startsWith('%PDF-')) throw new Error(`Plik ${decodeOriginalName(file.originalname) || file.filename} nie wygląda jak poprawny PDF.`);
 }
 
 function parseNumber(value, fallback, min, max) {
@@ -398,7 +419,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
   const pages = doc.getPages();
   if (pages.length > MAX_PAGES_PER_PDF) {
-    throw new Error(`PDF ${inputFile.originalname} ma za duzo stron (${pages.length}). Limit: ${MAX_PAGES_PER_PDF}.`);
+    throw new Error(`PDF ${decodeOriginalName(inputFile.originalname)} ma za duzo stron (${pages.length}). Limit: ${MAX_PAGES_PER_PDF}.`);
   }
 
   const prepared = [];
@@ -424,7 +445,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
   }
 
   const outputBytes = await doc.save({ useObjectStreams: true });
-  const outPath = path.join(jobDir, safeOutputName(inputFile.originalname));
+  const outPath = path.join(jobDir, safeOutputName(decodeOriginalName(inputFile.originalname)));
   await fsp.writeFile(outPath, outputBytes);
   return outPath;
 }

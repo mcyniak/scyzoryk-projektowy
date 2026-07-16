@@ -151,7 +151,7 @@ function startChild(app, attempt = 0) {
   // PILOT_MODE jest zdefiniowane nizej w pliku, ale ta funkcja jest
   // faktycznie wywolywana dopiero na samym koncu (po zaladowaniu profilu),
   // wiec w momencie wywolania zmienna jest juz zainicjowana.
-  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_PILOT_MODE: PILOT_MODE ? '1' : '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_PILOT_MODE: PILOT_MODE ? '1' : '0', SCYZORYK_MAIN_PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', err => {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
     appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });

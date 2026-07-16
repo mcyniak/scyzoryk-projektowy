@@ -98,6 +98,14 @@ app.use('/api', apiLimiter);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Przycisk "Panel glowny" w gornym pasku potrzebuje znac PRAWDZIWY port
+// panelu (root server.js przekazuje go jako SCYZORYK_MAIN_PORT przy
+// spawnowaniu) - bez tego link byl na stale wpisany jako :3000 w JS, co
+// psulo sie, gdy panel biegal na innym porcie (np. 80 w tym pilocie).
+app.get('/api/panel-info', (req, res) => {
+  res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
+});
+
 const uploadDir = path.join(__dirname, 'uploads');
 fs.mkdir(uploadDir, { recursive: true }).catch(() => {});
 const upload = multer({

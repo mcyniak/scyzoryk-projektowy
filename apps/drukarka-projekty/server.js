@@ -96,6 +96,16 @@ const apiLimiter = rateLimit({
 app.use("/api", apiLimiter);
 app.use(express.static(path.join(__dirname, "public")));
 
+// Przycisk "Panel glowny" w gornym pasku potrzebuje znac PRAWDZIWY port
+// panelu (root server.js przekazuje go jako SCYZORYK_MAIN_PORT przy
+// spawnowaniu) - bez tego link byl na stale wpisany jako :3000 wprost w
+// HTML-u (i do tego na 127.0.0.1, nie na host, ktorego faktycznie uzyl
+// klient), co psulo sie dla kazdego poza localhost i dla kazdego portu
+// innego niz 3000 (np. 80 w tym pilocie).
+app.get("/api/panel-info", (req, res) => {
+  res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
+});
+
 const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 function readLastFolders() {
