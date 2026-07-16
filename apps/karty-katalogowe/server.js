@@ -157,7 +157,23 @@ function parseRozmiarZUid(uidRaw) {
   const match = last.match(/(\d+)/);
   if (!match) return null;
   const rozmiar = match[1];
-  return ROZMIARY_ZASOBNIKA.includes(rozmiar) ? rozmiar : { nieznany: rozmiar };
+  if (ROZMIARY_ZASOBNIKA.includes(rozmiar)) return rozmiar;
+  // Fizyczne zasobniki wystepuja tylko w tych konkretnych rozmiarach (karty
+  // katalogowe sa tylko dla 250/300/400) - liczba w UID to WYMAGANA
+  // pojemnosc (np. z obliczen doboru), ktora trzeba zaokraglic W GORE do
+  // najblizszego dostepnego rozmiaru (np. "200"/"220" -> 250), nigdy w dol -
+  // za maly zasobnik nie spelnilby wymogu. Realny przyklad z produkcji:
+  // 92 ze 147 wierszy mialo UID konczace sie na "200" i bylo odrzucane jako
+  // "nierozpoznany rozmiar", mimo ze 250 jest oczywistym, jedynym sensownym
+  // dopasowaniem. Liczby WIEKSZE niz najwiekszy dostepny rozmiar (>400) nadal
+  // sa bledem - nie ma czym ich zaspokoic, wiec nie zgadujemy w gore w
+  // nieskonczonosc.
+  const liczba = Number(rozmiar);
+  const najblizszyWiekszy = ROZMIARY_ZASOBNIKA
+    .map(Number)
+    .sort((a, b) => a - b)
+    .find(dostepny => dostepny >= liczba);
+  return najblizszyWiekszy ? String(najblizszyWiekszy) : { nieznany: rozmiar };
 }
 
 // Rozpoznaje nazwe gminy z nazwy arkusza, np. "Solary Paradyż" -> "Paradyż"
@@ -255,16 +271,23 @@ async function przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun }
     const uid = normalizujTekst(row[colUid]);
     const opisAdresu = adres || '(brak adresu)';
 
+    // Rezygnacja PRZED brakiem UID - ktos kto zrezygnowal bardzo czesto ma
+    // tez puste pole UID (nikt nie wypelnia doboru dla anulowanego zlecenia),
+    // wiec sprawdzenie w odwrotnej kolejnosci klasyfikowaloby te wiersze jako
+    // "brak UID" zamiast "rezygnacja" - myllace, bo to nie jest zapomniany
+    // UID tylko naturalna konsekwencja rezygnacji. Realny przyklad z
+    // produkcji: kilka z 17 wierszy "brak UID" w jednym uruchomieniu to
+    // faktycznie byly rezygnacje z pustym UID.
+    if (rezygnacja) {
+      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid: uid || null, status: 'pominieto-rezygnacja', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: rezygnacja dla adresu "${opisAdresu}" - pominieto.` });
+      continue;
+    }
+
     if (!uid) {
       // NIE pomijamy cicho - moze to byc adres ktory faktycznie nie dotyczy
       // solarow (normalne), ale rownie dobrze ktos mogl zapomniec wpisac UID -
       // uzytkownik ma to zobaczyc w raporcie, nie musiec zgadywac.
       wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid: null, status: 'pominieto-brak-uid', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak wartosci UID dla adresu "${opisAdresu}" - pominieto.` });
-      continue;
-    }
-
-    if (rezygnacja) {
-      wyniki.push({ gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'pominieto-rezygnacja', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: rezygnacja dla adresu "${opisAdresu}" - pominieto.` });
       continue;
     }
 
