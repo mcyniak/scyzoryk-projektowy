@@ -63,7 +63,7 @@
         return;
       }
       select.innerHTML = printers.map(p =>
-        `<option value="${escapeHtml(p.name)}"${p.isDefault ? " selected" : ""}>${escapeHtml(p.name)}${p.isDefault ? " (domyślna)" : ""}</option>`
+        `<option value="${escapeHtml(p.name)}"${p.isDefault ? " selected" : ""}>${escapeHtml(p.displayName || p.name)}${p.isDefault ? " (domyślna)" : ""}</option>`
       ).join("");
     } catch (err) {
       select.innerHTML = `<option value="">Drukarka domyślna systemu</option>`;

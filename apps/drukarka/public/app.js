@@ -552,7 +552,7 @@ async function loadPrinters() {
     const data = await res.json();
     const printers = data.printers || [];
     if (printerSelectInput && printers.length) {
-      printerSelectInput.innerHTML = printers.map(p => `<option value="${p.name}"${p.isDefault ? " selected" : ""}>${p.name}${p.isDefault ? " (domyslna)" : ""}</option>`).join("");
+      printerSelectInput.innerHTML = printers.map(p => `<option value="${p.name}"${p.isDefault ? " selected" : ""}>${p.displayName || p.name}${p.isDefault ? " (domyslna)" : ""}</option>`).join("");
     }
   } catch (e) {}
 }
