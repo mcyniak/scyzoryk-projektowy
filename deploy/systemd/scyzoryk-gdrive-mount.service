@@ -7,6 +7,14 @@ Before=scyzoryk-panel.service
 [Service]
 Type=simple
 User=mcyniak
+# "-uz" (nie samo "-u") sprzata tez POPRZEDNIE, nie do konca odmontowane
+# punkty montowania (widziane raz przy recznym restarcie: mkdir -p walil sie
+# na katalogu, ktory formalnie wciaz byl FUSE-mountpointem starego, juz
+# martwego procesu rclone) - wazne, zeby AUTOMATYCZNY restart (Restart=always)
+# nie utknal w tej samej pulapce bez interwencji. Wiodacy "-" ignoruje kod
+# bledu - przy zwyklym starcie (nic jeszcze nie zamontowane) ta komenda ma
+# PRAWO sie nie udac, to nie powod, zeby caly start uslugi mial nie ruszyc.
+ExecStartPre=-/bin/fusermount -uz /mnt/scyzoryk-google-drive
 ExecStartPre=/bin/mkdir -p /mnt/scyzoryk-google-drive
 # vfs-cache-mode=full (nie tylko "writes") - klasyfikacja zalacznikow czyta
 # zawartosc kazdego pliku (mammoth/pdf-parse), a bez cache odczytu KAZDY
