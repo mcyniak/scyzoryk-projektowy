@@ -65,17 +65,43 @@ function findColumn(headerRow, mustIncludeAll, mustNotInclude = []) {
 
 // Probuje po kolei kilka wariantow naglowka dla TEGO SAMEGO pojecia (numer
 // identyfikujacy wiersz/projekt, uzywany dalej do dopasowania folderu klienta).
-// Zakladki "Solary"/"Kotly" nazywaja te kolumne "LP gmina", ale zakladka
-// "Pompy" (pompy ciepla) w tym samym arkuszu inwestycji nazywa ja "ID
-// projektu" - to ten sam numer porzadkowy, tylko inna nazwa naglowka w innej
-// zakladce tego samego pliku. Bez tej listy wariantow "Pompy" konczylo sie
-// bledem "nie znaleziono kolumn LP gmina/Adres", mimo ze dane byly poprawne.
+// Sprawdzone na WSZYSTKICH prawdziwych tabelach adresowych w uzyciu (Kamiensk,
+// Maslowice, Paradyz Zarnow, Rychwal, Strzalkowo, Tuliszkow, Lowicz, Slesin) -
+// zakladki "Solary"/"Kotly" najczesciej nazywaja te kolumne "LP gmina", ale
+// zakladka "Pompy"/"Pompy ciepla" w TYM SAMYM pliku bardzo czesto uzywa po
+// prostu samego "LP" (bez "gmina"), a Paradyz Zarnow akurat "ID projektu" -
+// to zawsze ten sam numer porzadkowy, tylko inna nazwa naglowka w innej
+// zakladce tego samego pliku. Kolejnosc ma znaczenie - probujemy NAJPIERW
+// bardziej precyzyjny wariant "lp gmina", zeby na zakladkach majacych OBIE
+// kolumny ("LP" i osobno "LP gmina" obok siebie) nie zlapac tej niewlasciwej.
 function findColumnAny(headerRow, variantsList, mustNotInclude = []) {
   for (const mustIncludeAll of variantsList) {
     const col = findColumn(headerRow, mustIncludeAll, mustNotInclude);
     if (col !== -1) return col;
   }
   return -1;
+}
+
+// Skrajny przypadek zaobserwowany w jednej z prawdziwych tabel (Kamiensk,
+// zakladka "Pompy ciepla"): kolumna z numerem porzadkowym w ogole nie ma
+// nazwy w naglowku (pusty/spacja tekst) - wtedy dopasowanie po slowach
+// kluczowych nigdy nie zadziala, bo nie ma czego dopasowac. Jedyny sygnal to
+// SAME DANE: pierwsza kolumna, ktora w wierszach z danymi konsekwentnie
+// zawiera liczby calkowite (1, 2, 3, ...). Uzywamy tego wylacznie jako
+// ostatecznosci, gdy zaden nazwany wariant nic nie znalazl.
+function looksLikeUnlabeledIdColumn(rows, colIdx, sampleSize = 15) {
+  let checked = 0;
+  let numericCount = 0;
+  for (let r = 1; r < rows.length && checked < sampleSize; r += 1) {
+    const value = rows[r]?.[colIdx];
+    if (value === null || value === undefined || value === "") continue;
+    checked += 1;
+    const isInteger = typeof value === "number"
+      ? Number.isInteger(value)
+      : /^\d+$/.test(String(value).trim());
+    if (isInteger) numericCount += 1;
+  }
+  return checked > 0 && numericCount === checked;
 }
 
 function isTruthyMark(value) {
@@ -103,7 +129,13 @@ function listCandidates(token, sheetName) {
   if (!rows.length) return { candidates: [], columnsFound: {} };
 
   const header = rows[0];
-  const colLpGmina = findColumnAny(header, [["lp", "gmina"], ["id", "projekt"]]);
+  let colLpGmina = findColumnAny(header, [["lp", "gmina"], ["id", "projekt"], ["lp"]]);
+  if (colLpGmina === -1 && looksLikeUnlabeledIdColumn(rows, 0)) {
+    // Naglowek pierwszej kolumny jest pusty (patrz looksLikeUnlabeledIdColumn),
+    // ale dane w niej wygladaja jak numer porzadkowy - uzywamy jej zamiast
+    // konczyc bledem "nie znaleziono kolumn".
+    colLpGmina = 0;
+  }
   const colOdbior = findColumn(header, ["odbior"]);
   const colRezygnacja = findColumn(header, ["rezygnacj"]);
   const colGmina = findColumn(header, ["gmina"], ["lp"]);
