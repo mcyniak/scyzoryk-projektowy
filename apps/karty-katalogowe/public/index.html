@@ -8,6 +8,9 @@
   <link rel="stylesheet" href="style.css" />
 <style>
   .kk-field { margin-bottom: 18px; }
+  .kk-field-row { display: flex; align-items: center; gap: 10px; }
+  .kk-field-row input { flex: 1; }
+  .kk-field-row button { flex-shrink: 0; }
   .kk-field label { display: block; font-weight: 850; margin-bottom: 8px; color: #334155; }
   .kk-field input[type=text] { width: 100%; box-sizing: border-box; padding: 12px 14px; border: 1px solid var(--scz-line, #e2e8f0); border-radius: 14px; font-size: 15px; font-family: inherit; }
   .kk-field input[type=file] { padding: 10px 0; }
@@ -71,12 +74,19 @@
 
       <div class="kk-field">
         <label for="excelFile">Plik Excel (.xlsx) z arkuszami „Solary {gmina}”</label>
-        <input type="file" id="excelFile" accept=".xlsx">
+        <div class="kk-field-row">
+          <input type="file" id="excelFile" accept=".xlsx">
+          <button type="button" id="excelBrowseBtn" class="ghost smallBtn" hidden>Wybierz z Dysku…</button>
+        </div>
+        <div class="kk-hint" id="excelDriveHint" hidden></div>
       </div>
 
       <div class="kk-field">
         <label for="rootPath" id="rootPathLabel">Ścieżka do głównego folderu (zawiera podfoldery „karty” i „Projekty”)</label>
-        <input type="text" id="rootPath" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\6. Paradyż Żarnów\Kolektory">
+        <div class="kk-field-row">
+          <input type="text" id="rootPath" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\6. Paradyż Żarnów\Kolektory">
+          <button type="button" id="folderBrowseBtn" class="ghost smallBtn" hidden>Przeglądaj…</button>
+        </div>
       </div>
 
       <label class="kk-check">
@@ -110,6 +120,7 @@
   </main>
 
 
+  <script src="drive-picker.js"></script>
   <script src="app.js"></script>
   <script src="inline-1.js"></script>
 </body>
