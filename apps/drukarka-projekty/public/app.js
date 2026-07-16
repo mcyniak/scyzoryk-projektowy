@@ -71,6 +71,27 @@
   }
   loadPrinters();
 
+  // Etykieta pola sciezki zalezy od tego, czy serwer ma skonfigurowany
+  // SCYZORYK_PROJECTS_ROOT (pilot) - wtedy uzytkownik podaje sciezke
+  // WZGLEDEM Dysku Google, nie pelna sciezke systemowa jak na Windows.
+  (async function initBaseFolderLabel() {
+    const label = $("baseFolderLabel");
+    const input = $("baseFolderInput");
+    if (!label || !input) return;
+    try {
+      const data = await api("/api/drive-status");
+      if (data.configured) {
+        label.textContent = "Ścieżka folderu bazowego (względem Dysku Projektów)";
+        input.placeholder = "6. Paradyż Żarnów/Kolektory/Projekty/Żarnów";
+        if (!data.available) {
+          showError("matchError", "Dysk Google jest obecnie niedostępny. Sprawdź połączenie internetowe lub usługę rclone." + (data.reason ? ` (${data.reason})` : ""));
+        }
+      }
+    } catch (_) {
+      // Brak polaczenia z wlasnym serwerem - zostaw domyslna etykiete.
+    }
+  })();
+
   $("excelInput").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
