@@ -75,7 +75,7 @@
       currentPath = path;
       pathEl.textContent = path === "." ? "/ (górny poziom Dysku Projektów)" : "/" + path;
       listEl.innerHTML = "";
-      statusEl.textContent = "Wczytuję...";
+      statusEl.textContent = "Wczytuję... (pierwsze otwarcie dużego folderu może potrwać kilkanaście sekund)";
       try {
         const res = await fetch("/api/drive-browse?path=" + encodeURIComponent(path), { cache: "no-store" });
         const data = await res.json();
