@@ -63,6 +63,21 @@ function findColumn(headerRow, mustIncludeAll, mustNotInclude = []) {
   return -1;
 }
 
+// Probuje po kolei kilka wariantow naglowka dla TEGO SAMEGO pojecia (numer
+// identyfikujacy wiersz/projekt, uzywany dalej do dopasowania folderu klienta).
+// Zakladki "Solary"/"Kotly" nazywaja te kolumne "LP gmina", ale zakladka
+// "Pompy" (pompy ciepla) w tym samym arkuszu inwestycji nazywa ja "ID
+// projektu" - to ten sam numer porzadkowy, tylko inna nazwa naglowka w innej
+// zakladce tego samego pliku. Bez tej listy wariantow "Pompy" konczylo sie
+// bledem "nie znaleziono kolumn LP gmina/Adres", mimo ze dane byly poprawne.
+function findColumnAny(headerRow, variantsList, mustNotInclude = []) {
+  for (const mustIncludeAll of variantsList) {
+    const col = findColumn(headerRow, mustIncludeAll, mustNotInclude);
+    if (col !== -1) return col;
+  }
+  return -1;
+}
+
 function isTruthyMark(value) {
   if (value === null || value === undefined || value === "") return false;
   const s = String(value).trim().toLowerCase();
@@ -88,7 +103,7 @@ function listCandidates(token, sheetName) {
   if (!rows.length) return { candidates: [], columnsFound: {} };
 
   const header = rows[0];
-  const colLpGmina = findColumn(header, ["lp", "gmina"]);
+  const colLpGmina = findColumnAny(header, [["lp", "gmina"], ["id", "projekt"]]);
   const colOdbior = findColumn(header, ["odbior"]);
   const colRezygnacja = findColumn(header, ["rezygnacj"]);
   const colGmina = findColumn(header, ["gmina"], ["lp"]);
