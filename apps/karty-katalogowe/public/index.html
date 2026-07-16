@@ -37,6 +37,7 @@
   #kkStatus.err { color: #991b1b; }
   #kkResultsPanel { display: none; }
   #runBtn[hidden] { display: none !important; }
+  .kk-run-controls { margin-top: 18px; }
 </style>
 </head>
 <body>
@@ -92,7 +93,6 @@
 
       <div class="controls">
         <button id="checkBtn" class="print" type="button">Sprawdź tabelę</button>
-        <button id="runBtn" class="print" type="button" hidden>Uruchom dobór kart</button>
       </div>
       <div id="kkStatus"></div>
     </section>
@@ -112,6 +112,9 @@
           </thead>
           <tbody id="kkTableBody"></tbody>
         </table>
+      </div>
+      <div class="controls kk-run-controls">
+        <button id="runBtn" class="print" type="button" hidden>Uruchom dobór kart</button>
       </div>
     </section>
   </main>
