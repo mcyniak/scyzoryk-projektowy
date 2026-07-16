@@ -14,7 +14,9 @@
     "enabledApps": [
       "pieczatki",
       "drukarka",
-      "formularze"
+      "formularze",
+      "karty-katalogowe",
+      "drukarka-projekty"
     ]
   }
 }
