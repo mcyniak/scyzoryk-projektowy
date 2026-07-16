@@ -221,9 +221,17 @@ function checkHealth(app) {
 }
 
 function safePanelHostname(req) {
-  const raw = String(req?.headers?.host || '').split(':')[0].toLowerCase();
-  if (raw === 'localhost' || raw === '127.0.0.1' || raw === '[::1]' || raw === '::1') return raw.replace(/[\[\]]/g, '');
-  return HOST;
+  // Zawsze odbijamy nazwe hosta, ktorej faktycznie uzyla przegladarka (naglowek
+  // Host), zeby linki do aplikacji-dzieci dzialaly z KAZDEGO adresu, pod jakim
+  // ktos trafil na panel (scyzoryk, scyzoryk.local, adres IP...) - te same
+  // porty dzieci sa dostepne pod tym samym hostem, wiec nie trzeba zgadywac.
+  // Nigdy nie zwracamy HOST wprost, gdy jest to adres "wildcard" (0.0.0.0/::)
+  // - to adres do BINDOWANIA serwera, nie adres, pod ktorym klient moze sie
+  // polaczyc; zwracanie go tworzylo zepsute linki (np. "http://::3001") dla
+  // kazdego, kto nie wszedl na panel akurat przez localhost/127.0.0.1.
+  const raw = String(req?.headers?.host || '').split(':')[0].toLowerCase().replace(/[\[\]]/g, '');
+  if (raw) return raw;
+  return (HOST === '0.0.0.0' || HOST === '::') ? '127.0.0.1' : HOST;
 }
 
 function dirSizeSafe(dir, limitFiles = 2000) {
