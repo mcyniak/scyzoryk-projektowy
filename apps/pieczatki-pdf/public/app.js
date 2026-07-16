@@ -1186,7 +1186,7 @@ form.addEventListener('submit', async event => {
   submitBtn.disabled = true;
   setStatus('Stempluję PDF-y...');
   try {
-    const response = await fetch('/api/stamp', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
+    const response = await fetch('api/stamp', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
     if (!response.ok) {
       let msg = 'Nie udało się ostemplować PDF.';
       try { msg = (await response.json()).error || msg; } catch {}

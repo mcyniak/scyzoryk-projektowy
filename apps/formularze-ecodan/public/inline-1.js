@@ -13,7 +13,7 @@ let activeJob = null;
 
     (async function initDrivePicker() {
       try {
-        const res = await fetch('/api/drive-status', { cache: 'no-store' });
+        const res = await fetch('api/drive-status', { cache: 'no-store' });
         const data = await res.json();
         if (data.configured) {
           const btn = document.querySelector('#excelBrowseBtn');
@@ -117,7 +117,7 @@ let activeJob = null;
       document.querySelector('#previewRows').innerHTML = '';
       document.querySelector('#statusBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-      const res = await fetch('/api/batch/start', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
+      const res = await fetch('api/batch/start', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
       const json = await res.json();
       if (!json.ok) {
         alert(json.error || 'Nie udało się uruchomić zadania.');
@@ -200,7 +200,7 @@ let activeJob = null;
       data.append('location', document.querySelector('#location').value || '');
 
       try {
-        const res = await fetch('/api/batch/preview', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
+        const res = await fetch('api/batch/preview', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
         const json = await res.json();
         if (!json.ok) throw new Error(json.error || 'Nie udało się odczytać Excela.');
         previewRecords = json.records || [];
@@ -269,7 +269,7 @@ let activeJob = null;
       document.querySelector('#finishInfo').textContent = 'Przerywanie generowania...';
 
       try {
-        await fetch(`/api/batch/cancel/${activeJob}`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+        await fetch(`api/batch/cancel/${activeJob}`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
       } catch (error) {
         console.error(error);
       }
@@ -278,7 +278,7 @@ let activeJob = null;
 
     async function pollStatus() {
       if (!activeJob) return;
-      const res = await fetch(`/api/batch/status/${activeJob}`);
+      const res = await fetch(`api/batch/status/${activeJob}`);
       const json = await res.json();
       if (!json.ok) return;
       const job = json.job;

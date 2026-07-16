@@ -202,6 +202,70 @@ function readStaticFile(filePath, res) {
   });
 }
 
+// Przekazuje zadanie 1:1 do wlasciwego procesu-dziecka (na 127.0.0.1, ten sam
+// host co checkHealth - rodzic i dziecko zawsze gadaja po loopback, LAN nie
+// jest tu potrzebny). Naglowki (w tym Cookie, X-Scyzoryk-Request) i body sa
+// przekazywane bez zmian - kazde dziecko samo pilnuje swojego zabezpieczenia
+// przed mutacjami spoza tej samej domeny, wiec proxy nie musi tego duplikowac.
+// Strumieniujemy w obie strony (req.pipe/proxyRes.pipe), zeby wgrywanie
+// duzych plikow Excel i pobieranie gotowych PDF/ZIP dzialalo bez buforowania
+// calosci w pamieci.
+function proxyToChild(app, req, res, targetPath) {
+  const proxyReq = http.request({
+    hostname: CHILD_HEALTHCHECK_HOST,
+    port: app.port,
+    path: targetPath,
+    method: req.method,
+    headers: req.headers
+  }, proxyRes => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('error', () => {
+    if (res.headersSent) return res.end();
+    send(res, 502, JSON.stringify({ ok: false, message: `Narzedzie "${app.name}" jest chwilowo niedostepne. Sprobuj odswiezyc za chwile.` }), 'application/json; charset=utf-8');
+  });
+  req.on('aborted', () => proxyReq.destroy());
+  req.pipe(proxyReq);
+}
+
+// Sciezki narzedzi maja teraz postac "/apps/<slug>/..." pod TYM SAMYM
+// portem co panel (zamiast osobnego portu na kazda aplikacje) - dzieki temu
+// przegladarka musi umiec dotrzec tylko do jednego portu (80), zeby
+// korzystac z calego zestawu narzedzi. Wczesniej linki panelu wskazywaly
+// wprost na "http://<host>:<port-dziecka>" - dzialalo to na niektorych
+// komputerach w biurze, ale nie na innych (najpewniej blokada/zawodnosc
+// nietypowych portow na czesci maszyn w sieci), mimo ze sama strona glowna
+// panelu (port 80) zawsze ladowala sie poprawnie. Front-end kazdej aplikacji
+// uzywa juz wzglednych sciezek do wlasnego API (np. "api/run" zamiast
+// "/api/run"), wiec dziala to identycznie w obu trybach: pod prefiksem
+// "/apps/<slug>/" ORAZ nadal bezposrednio pod wlasnym portem (bez zmian).
+function tryHandleAppsProxy(decodedPath, req, res) {
+  const PREFIX = '/apps/';
+  if (!decodedPath.startsWith(PREFIX)) return false;
+  const rest = decodedPath.slice(PREFIX.length);
+  const slashIdx = rest.indexOf('/');
+  const slug = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
+  const app = apps.find(a => a.slug === slug);
+  if (!app) { send(res, 404, 'Not found'); return true; }
+  if (slashIdx === -1) {
+    // Brak koncowego "/" - przekierowanie, zeby wzgledne sciezki w HTML
+    // dziecka (np. "app.js", "api/run") mialy poprawny punkt odniesienia.
+    res.writeHead(302, { ...SECURITY_HEADERS, Location: `${PREFIX}${slug}/` });
+    res.end();
+    return true;
+  }
+  // Slug to czyste ASCII (patrz ALL_APPS), wiec dlugosc prefiksu w
+  // ZAKODOWANYM req.url jest identyczna jak w zdekodowanej wersji - dzieki
+  // temu reszta sciezki (moze zawierac np. polskie znaki w query stringu
+  // przegladarki Dysku) trafia do dziecka bez podwojnego (de)kodowania.
+  const prefixLen = (PREFIX + slug).length;
+  let targetPath = req.url.slice(prefixLen) || '/';
+  if (!targetPath.startsWith('/')) targetPath = '/' + targetPath;
+  proxyToChild(app, req, res, targetPath);
+  return true;
+}
+
 function checkHealth(app) {
   return new Promise(resolve => {
     const started = Date.now();
@@ -218,20 +282,6 @@ function checkHealth(app) {
     req.on('timeout', () => { req.destroy(); resolve({ ok: false, timeout: true, ms: Date.now() - started }); });
     req.on('error', err => resolve({ ok: false, error: err.message, ms: Date.now() - started }));
   });
-}
-
-function safePanelHostname(req) {
-  // Zawsze odbijamy nazwe hosta, ktorej faktycznie uzyla przegladarka (naglowek
-  // Host), zeby linki do aplikacji-dzieci dzialaly z KAZDEGO adresu, pod jakim
-  // ktos trafil na panel (scyzoryk, scyzoryk.local, adres IP...) - te same
-  // porty dzieci sa dostepne pod tym samym hostem, wiec nie trzeba zgadywac.
-  // Nigdy nie zwracamy HOST wprost, gdy jest to adres "wildcard" (0.0.0.0/::)
-  // - to adres do BINDOWANIA serwera, nie adres, pod ktorym klient moze sie
-  // polaczyc; zwracanie go tworzylo zepsute linki (np. "http://::3001") dla
-  // kazdego, kto nie wszedl na panel akurat przez localhost/127.0.0.1.
-  const raw = String(req?.headers?.host || '').split(':')[0].toLowerCase().replace(/[\[\]]/g, '');
-  if (raw) return raw;
-  return (HOST === '0.0.0.0' || HOST === '::') ? '127.0.0.1' : HOST;
 }
 
 function dirSizeSafe(dir, limitFiles = 2000) {
@@ -254,8 +304,7 @@ function dirSizeSafe(dir, limitFiles = 2000) {
   return { bytes: total, files, truncated: files >= limitFiles };
 }
 
-async function getAppsStatus(req) {
-  const hostname = safePanelHostname(req);
+async function getAppsStatus() {
   const statuses = await Promise.all(apps.map(async app => {
     const health = await checkHealth(app);
     const meta = getChildMeta(app.slug);
@@ -264,7 +313,10 @@ async function getAppsStatus(req) {
       name: app.name,
       description: app.description,
       port: app.port,
-      url: `http://${hostname}:${app.port}`,
+      // Wzgledna sciezka pod TYM SAMYM originem co panel (patrz
+      // tryHandleAppsProxy) - dziala z kazdego adresu/portu, pod jakim ktos
+      // trafil na panel, bez zgadywania hosta z naglowka zadania.
+      url: `/apps/${app.slug}/`,
       running: Boolean(health.ok),
       processAlive: children.has(app.slug),
       health,
@@ -388,6 +440,8 @@ const server = http.createServer(async (req, res) => {
   const decodedPath = safeDecodePathname(url.pathname);
   if (decodedPath === null) return send(res, 400, 'Bad Request');
 
+  if (tryHandleAppsProxy(decodedPath, req, res)) return;
+
   if (decodedPath === '/admin/login') {
     if (req.method === 'GET') return readStaticFile(path.join(PUBLIC_DIR, 'admin-login.html'), res);
     return handleAdminLogin(req, res);
@@ -412,7 +466,7 @@ const server = http.createServer(async (req, res) => {
 
   // Zwykle narzedzia i panel glowny NIGDY nie wymagaja logowania - to
   // swiadoma decyzja (pracownicy w LAN maja od razu korzystac z narzedzi).
-  if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(req), null, 2), 'application/json; charset=utf-8');
+  if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(), null, 2), 'application/json; charset=utf-8');
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
   readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res);
 });

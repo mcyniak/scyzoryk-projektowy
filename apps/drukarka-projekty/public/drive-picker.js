@@ -77,7 +77,7 @@
       listEl.innerHTML = "";
       statusEl.textContent = "Wczytuję... (pierwsze otwarcie dużego folderu może potrwać kilkanaście sekund)";
       try {
-        const res = await fetch("/api/drive-browse?path=" + encodeURIComponent(path), { cache: "no-store" });
+        const res = await fetch("api/drive-browse?path=" + encodeURIComponent(path), { cache: "no-store" });
         const data = await res.json();
         if (!data.ok) throw new Error(data.message || "Nie udało się wczytać zawartości folderu.");
         statusEl.textContent = `${data.entries.length} pozycji`;

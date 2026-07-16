@@ -244,7 +244,7 @@ app.post("/api/upload", heavyJobLimiter, (req, res, next) => {
     for (const file of req.files || []) validateUploadedDocument(file);
     const added = (req.files || []).map(file => {
       const originalName = decodeOriginalName(file.originalname);
-      const item = { id: file.filename, originalName, filename: file.filename, path: file.path, url: `/api/file/${encodeURIComponent(file.filename)}/preview`, ext: path.extname(originalName).toLowerCase() };
+      const item = { id: file.filename, originalName, filename: file.filename, path: file.path, url: `api/file/${encodeURIComponent(file.filename)}/preview`, ext: path.extname(originalName).toLowerCase() };
       state.queue.push(item);
       return item;
     });

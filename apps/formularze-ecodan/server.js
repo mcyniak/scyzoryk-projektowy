@@ -206,7 +206,7 @@ function publicJob(job) {
     summaryFileDisplay: displayPath(job.summaryFile) || job.summaryFile,
     telemetryFileDisplay: displayPath(job.telemetryFile) || job.telemetryFile,
     outputRootDisplay: displayPath(job.outputRoot) || job.outputRoot,
-    downloadZipUrl: `/api/batch/download/${encodeURIComponent(job.id)}`,
+    downloadZipUrl: `api/batch/download/${encodeURIComponent(job.id)}`,
     resultsPreview
   };
 }
@@ -406,7 +406,7 @@ app.get('/api/batch/jobs', (req, res) => {
     cancelRequested: job.cancelRequested,
     pdfDirDisplay: displayPath(job.pdfDir) || job.pdfDir,
     outputRootDisplay: displayPath(job.outputRoot) || job.outputRoot,
-    downloadZipUrl: `/api/batch/download/${encodeURIComponent(job.id)}`
+    downloadZipUrl: `api/batch/download/${encodeURIComponent(job.id)}`
   })) });
 });
 

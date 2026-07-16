@@ -1,7 +1,7 @@
 (async function setMainPanelLink() {
   let mainPort = 3000;
   try {
-    const res = await fetch('/api/panel-info', { cache: 'no-store' });
+    const res = await fetch('api/panel-info', { cache: 'no-store' });
     const data = await res.json();
     if (data.mainPort) mainPort = data.mainPort;
   } catch (_) {

@@ -56,7 +56,7 @@
   async function loadPrinters() {
     const select = $("printerSelect");
     try {
-      const data = await api("/api/printers");
+      const data = await api("api/printers");
       const printers = data.printers || [];
       if (!printers.length) {
         select.innerHTML = `<option value="">Drukarka domyślna systemu</option>`;
@@ -79,7 +79,7 @@
     const input = $("baseFolderInput");
     if (!label || !input) return;
     try {
-      const data = await api("/api/drive-status");
+      const data = await api("api/drive-status");
       if (data.configured) {
         label.textContent = "Ścieżka folderu bazowego (względem Dysku Projektów)";
         input.placeholder = "6. Paradyż Żarnów/Kolektory/Projekty/Żarnów";
@@ -111,7 +111,7 @@
     const fd = new FormData();
     fd.append("file", file);
     try {
-      const data = await api("/api/excel/upload", { method: "POST", body: fd });
+      const data = await api("api/excel/upload", { method: "POST", body: fd });
       applyExcelResult(data);
     } catch (err) {
       showError("excelError", err.message);
@@ -133,7 +133,7 @@
       onSelect: async (path) => {
         showError("excelError", "");
         try {
-          const data = await api("/api/excel/upload-from-drive", {
+          const data = await api("api/excel/upload-from-drive", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ driveFilePath: path })
@@ -153,7 +153,7 @@
     state.sheetName = sheetName;
     showError("excelError", "");
     try {
-      const data = await api(`/api/excel/${encodeURIComponent(state.token)}/sheets/${encodeURIComponent(sheetName)}/candidates`);
+      const data = await api(`api/excel/${encodeURIComponent(state.token)}/sheets/${encodeURIComponent(sheetName)}/candidates`);
       state.allCandidates = data.candidates;
       state.selectedLp = new Set();
       state.batchResults = [];
@@ -266,7 +266,7 @@
     try {
       const selectedCandidates = state.allCandidates.filter(c => state.selectedLp.has(c.lpGmina));
       const allAddresses = state.allCandidates.map(c => c.adres).filter(Boolean);
-      const data = await api("/api/match-batch", {
+      const data = await api("api/match-batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sheetName: state.sheetName, baseFolder, candidates: selectedCandidates, allAddresses })
@@ -455,7 +455,7 @@
       return;
     }
     $("previewModalTitle").textContent = item.fileName;
-    $("previewModalFrame").src = "/api/preview-by-path?path=" + encodeURIComponent(item.fullPath);
+    $("previewModalFrame").src = "api/preview-by-path?path=" + encodeURIComponent(item.fullPath);
     $("previewModal").classList.add("open");
   }
   $("previewModalClose").addEventListener("click", () => {
@@ -479,7 +479,7 @@
     btn.textContent = "Przetwarzam...";
 
     try {
-      const data = await api("/api/queue/set-merged", {
+      const data = await api("api/queue/set-merged", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ groups })
@@ -507,7 +507,7 @@
     $("printBtn").disabled = true;
     try {
       const groups = buildPendingGroups();
-      await api("/api/print", {
+      await api("api/print", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -529,7 +529,7 @@
   function pollStatus() {
     const timer = setInterval(async () => {
       try {
-        const s = await api("/api/status");
+        const s = await api("api/status");
         $("statusText").textContent = s.message || "";
         $("progressBar").style.width = (s.percent || 0) + "%";
         if (!s.printing) {

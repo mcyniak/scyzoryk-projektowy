@@ -42,7 +42,7 @@ excelFileInput.addEventListener('change', () => {
 // systemowa, i moze przegladac Dysk zamiast pobierac/wgrywac pliki recznie.
 (async function initRootPathLabel() {
   try {
-    const resp = await fetch('/api/health', { cache: 'no-store' });
+    const resp = await fetch('api/health', { cache: 'no-store' });
     const data = await resp.json();
     if (data.googleDrive) {
       rootPathLabel.textContent = 'Folder względem Dysku Projektów (zawiera podfoldery „karty” i „Projekty”)';
@@ -100,7 +100,7 @@ async function runJob(dryRun, triggerBtn) {
   try {
     let resp;
     if (selectedDriveFile) {
-      resp = await fetch('/api/run-from-drive', {
+      resp = await fetch('api/run-from-drive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
         body: JSON.stringify({ driveFilePath: selectedDriveFile, rootPath, dryRun: String(dryRun) })
@@ -110,7 +110,7 @@ async function runJob(dryRun, triggerBtn) {
       formData.append('excel', excelFileInput.files[0]);
       formData.append('rootPath', rootPath);
       formData.append('dryRun', String(dryRun));
-      resp = await fetch('/api/run', { method: 'POST', body: formData, headers: { 'X-Scyzoryk-Request': '1' } });
+      resp = await fetch('api/run', { method: 'POST', body: formData, headers: { 'X-Scyzoryk-Request': '1' } });
     }
     const data = await resp.json();
     if (!data.ok) throw new Error(data.message || 'Nieznany błąd.');
