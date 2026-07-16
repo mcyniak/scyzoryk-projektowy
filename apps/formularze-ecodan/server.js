@@ -13,6 +13,7 @@ import { scheduleCleanup, appendCriticalLog } from '../../lib/hardening.js';
 import { calculate } from './src/rules.js';
 import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob, getHeavyJobQueueState } from './src/jobs.js';
 import { readExcelRecords } from './src/excel.js';
+import { createStorageClient } from '../../lib/storage/googleDriveStorage.js';
 
 const require = createRequire(import.meta.url);
 const archiverModule = require('archiver');
@@ -104,6 +105,29 @@ app.use(express.static(path.join(__dirname, 'public')));
 // psulo sie, gdy panel biegal na innym porcie (np. 80 w tym pilocie).
 app.get('/api/panel-info', (req, res) => {
   res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
+});
+
+// Przegladanie Dysku Google i wybor Excela/Arkusza Google bezposrednio z
+// Dysku zamiast pobierania go recznie (ten sam .gsheet-do-.xlsx problem
+// widoczny wprost w komunikacie bledu fileFilter ponizej) - ten sam wzorzec
+// co w Kartach katalogowych/Drukarce projektow.
+const PROJECTS_ROOT = process.env.SCYZORYK_PROJECTS_ROOT || null;
+const projectsStorage = PROJECTS_ROOT ? createStorageClient(PROJECTS_ROOT) : null;
+
+app.get('/api/drive-status', async (req, res) => {
+  if (!projectsStorage) return res.json({ ok: true, configured: false });
+  const status = await projectsStorage.checkAvailability({ useCache: false, testWrite: false });
+  res.json({ ok: true, configured: true, ...status });
+});
+
+app.get('/api/drive-browse', async (req, res) => {
+  if (!projectsStorage) return res.status(400).json({ ok: false, error: 'Dysk Google nie jest skonfigurowany.' });
+  try {
+    const entries = await projectsStorage.browseViaRclone(req.query.path || '.');
+    res.json({ ok: true, entries });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
 });
 
 const uploadDir = path.join(__dirname, 'uploads');
@@ -218,12 +242,30 @@ app.post('/api/run', heavyJobLimiter, async (req, res) => {
 });
 
 
+// Gdy formularz zawiera driveFilePath zamiast prawdziwego wgranego pliku
+// (uzytkownik wybral Excel/Arkusz Google z przegladarki Dysku), eksportuje
+// go swiezo przez rclone do tymczasowej sciezki i podstawia jako req.file,
+// zeby reszta handlera (nizej) nie musiala nic wiedziec o Dysku Google.
+async function resolveDriveFileIfNeeded(req) {
+  if (req.file || !req.body?.driveFilePath) return;
+  if (!projectsStorage) throw new Error('Dysk Google nie jest skonfigurowany.');
+  const driveFilePath = String(req.body.driveFilePath).trim();
+  const tempPath = path.join(uploadDir, `drive-${Date.now()}-${Math.round(Math.random() * 1e9)}.xlsx`);
+  await projectsStorage.exportFileViaRclone(driveFilePath, tempPath);
+  req.file = { path: tempPath, originalname: path.basename(driveFilePath) };
+}
+
 app.post('/api/batch/preview', heavyJobLimiter, (req, res, next) => {
   upload.single('excel')(req, res, error => {
     if (error) return res.status(400).json({ ok: false, error: String(error?.message || error) });
     next();
   });
 }, async (req, res) => {
+  try {
+    await resolveDriveFileIfNeeded(req);
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
   if (!req.file) return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
   try {
     await validateXlsxFile(req.file);
@@ -260,6 +302,11 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     next();
   });
 }, async (req, res) => {
+  try {
+    await resolveDriveFileIfNeeded(req);
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
   if (!req.file) {
     return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
   }

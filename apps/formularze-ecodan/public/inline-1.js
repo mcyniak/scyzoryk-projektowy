@@ -4,12 +4,50 @@ let activeJob = null;
     let lastPdfDir = '';
     let previewRecords = [];
     let selectedRows = new Set();
+    // Sciezka do pliku Excel/Arkusza Google wybranego przez przegladarke
+    // Dysku (zamiast wgrania recznie) - gdy ustawiona, formularz wysyla
+    // driveFilePath zamiast prawdziwego pliku.
+    let selectedDriveFile = null;
 
     loadSettings();
 
+    (async function initDrivePicker() {
+      try {
+        const res = await fetch('/api/drive-status', { cache: 'no-store' });
+        const data = await res.json();
+        if (data.configured) {
+          const btn = document.querySelector('#excelBrowseBtn');
+          if (btn) btn.hidden = false;
+        }
+      } catch (_) {
+        // Brak polaczenia z wlasnym serwerem - zostaw jak jest.
+      }
+    })();
+
+    document.querySelector('#excelBrowseBtn')?.addEventListener('click', () => {
+      window.openDrivePicker({
+        mode: 'file',
+        startPath: '.',
+        onSelect: (path) => {
+          selectedDriveFile = path;
+          document.querySelector('#excelFile').value = '';
+          document.querySelector('#driveFilePathField').value = path;
+          document.querySelector('#excelFieldHelp').textContent = 'Wybrano z Dysku: ' + path;
+          loadAddressPreview();
+        }
+      });
+    });
+
     document.querySelector('#scrollHelp')?.addEventListener('click', () => document.querySelector('#saveHelp')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
 
-    document.querySelector('#excelFile').addEventListener('change', () => loadAddressPreview());
+    document.querySelector('#excelFile').addEventListener('change', () => {
+      if (document.querySelector('#excelFile').files.length) {
+        selectedDriveFile = null;
+        document.querySelector('#driveFilePathField').value = '';
+        document.querySelector('#excelFieldHelp').textContent = 'Wybierz plik .xlsx z inwestycją.';
+      }
+      loadAddressPreview();
+    });
     document.querySelector('#location').addEventListener('change', () => { if (document.querySelector('#excelFile').files[0]) loadAddressPreview(); });
     document.querySelector('#reloadPreview').addEventListener('click', () => loadAddressPreview());
     document.querySelector('#addressSearch').addEventListener('input', () => renderAddressRows());
@@ -44,11 +82,13 @@ let activeJob = null;
       saveSettings();
 
       const file = document.querySelector('#excelFile').files && document.querySelector('#excelFile').files[0];
-      const fileCheck = validateExcelChoice(file);
-      if (!fileCheck.ok) {
-        showAddressLoadProblem(fileCheck.message);
-        alert(fileCheck.message);
-        return;
+      if (!selectedDriveFile) {
+        const fileCheck = validateExcelChoice(file);
+        if (!fileCheck.ok) {
+          showAddressLoadProblem(fileCheck.message);
+          alert(fileCheck.message);
+          return;
+        }
       }
 
       const data = new FormData(form);
@@ -131,7 +171,7 @@ let activeJob = null;
       const fileInput = document.querySelector('#excelFile');
       const file = fileInput.files && fileInput.files[0];
       const selector = document.querySelector('#recordSelector');
-      if (!file) {
+      if (!file && !selectedDriveFile) {
         previewRecords = [];
         selectedRows = new Set();
         selector.classList.add('hidden');
@@ -139,10 +179,12 @@ let activeJob = null;
         return;
       }
 
-      const fileCheck = validateExcelChoice(file);
-      if (!fileCheck.ok) {
-        showAddressLoadProblem(fileCheck.message);
-        return;
+      if (file) {
+        const fileCheck = validateExcelChoice(file);
+        if (!fileCheck.ok) {
+          showAddressLoadProblem(fileCheck.message);
+          return;
+        }
       }
 
       selector.classList.remove('hidden');
@@ -150,7 +192,11 @@ let activeJob = null;
       document.querySelector('#addressRows').innerHTML = '<tr><td colspan="5">Wczytuję...</td></tr>';
 
       const data = new FormData();
-      data.append('excel', file);
+      if (selectedDriveFile) {
+        data.append('driveFilePath', selectedDriveFile);
+      } else {
+        data.append('excel', file);
+      }
       data.append('location', document.querySelector('#location').value || '');
 
       try {
