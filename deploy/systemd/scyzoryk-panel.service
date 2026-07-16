@@ -1,13 +1,21 @@
 [Unit]
 Description=Scyzoryk Projektowy - panel glowny (pilot linuksowy)
-After=network-online.target
+After=network-online.target scyzoryk-gdrive-mount.service
 Wants=network-online.target
+# Nie "Requires=" - jesli montowanie Dysku Google akurat nie wstanie (np. brak
+# internetu przy starcie), panel i tak ma ruszyc - Karty katalogowe/Drukarka
+# projektow same zglosza "Dysk niedostepny" zamiast blokowac cala reszte
+# (Pieczatki/Drukarke/Formularze), ktore w ogole nie potrzebuja tej sciezki.
 
 [Service]
 Type=simple
 User=mcyniak
 WorkingDirectory=/home/mcyniak/scyzoryk-linux-pilot
 Environment=SCYZORYK_PROFILE=linux-pilot
+# Podkatalog zamontowanego (przez rclone, patrz scyzoryk-gdrive-mount.service)
+# Dysku Google, na ktorym leza foldery inwestycji - czytaja go Karty
+# katalogowe i Drukarka projektow.
+Environment=SCYZORYK_PROJECTS_ROOT=/mnt/scyzoryk-google-drive
 # "::" (nie "0.0.0.0") - dual-stack: przyjmuje polaczenia i po IPv4, i po IPv6
 # na jednym sockecie (wymaga net.ipv6.bindv6only=0, domyslne na tym Pi).
 # "0.0.0.0" wiaze TYLKO IPv4 - klient, ktorego przegladarka rozwiaze "scyzoryk"
