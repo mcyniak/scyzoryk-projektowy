@@ -43,7 +43,11 @@ function resolveBaseFolder(userInput) {
   } catch (err) {
     throw new Error("Dysk Google jest obecnie niedostepny. Sprawdz polaczenie internetowe lub usluge rclone.");
   }
-  const candidate = path.resolve(rootReal, raw);
+  // Ludzie z przyzwyczajenia wpisuja sciezke tak jak na Windows (ukosnik
+  // wsteczny "\") - na Linuksie to zwykly znak w nazwie, nie separator, wiec
+  // bez tej zamiany cala wpisana sciezka trafialaby do path.resolve() jako
+  // jeden segment i nigdy by nie istniala.
+  const candidate = path.resolve(rootReal, raw.replace(/\\/g, "/"));
   let candidateReal;
   try {
     candidateReal = fs.realpathSync(candidate);
