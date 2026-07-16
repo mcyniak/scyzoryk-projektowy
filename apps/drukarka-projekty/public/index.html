@@ -58,7 +58,10 @@
       <div class="field-row">
         <label class="option-field">
           <span>Plik Excel</span>
-          <input id="excelInput" type="file" accept=".xlsx,.xls" />
+          <div style="display:flex; gap:10px; align-items:center;">
+            <input id="excelInput" type="file" accept=".xlsx,.xls" />
+            <button type="button" id="excelBrowseBtn" class="ghost smallBtn" hidden>Wybierz z Dysku…</button>
+          </div>
         </label>
         <label class="option-field">
           <span>Zakładka</span>
@@ -101,7 +104,10 @@
       <div class="field-row">
         <label class="option-field" style="grid-column: 1 / -1;">
           <span id="baseFolderLabel">Ścieżka folderu bazowego</span>
-          <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." />
+          <div style="display:flex; gap:10px; align-items:center;">
+            <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." style="flex:1;" />
+            <button type="button" id="folderBrowseBtn" class="ghost smallBtn" hidden>Przeglądaj…</button>
+          </div>
         </label>
       </div>
       <button id="matchBtn" type="button">Znajdź projekty</button>
@@ -177,6 +183,7 @@
   </div>
 
   <script src="inline-1.js"></script>
+  <script src="drive-picker.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

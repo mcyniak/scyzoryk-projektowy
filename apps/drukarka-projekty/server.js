@@ -10,6 +10,7 @@ const excelInvestment = require("./src/excelInvestment");
 const folderMatch = require("./src/folderMatch");
 const printService = require("../../lib/printing");
 const pdfMerge = require("./src/pdfMerge");
+const { createStorageClient } = require("../../lib/storage/googleDriveStorage");
 
 const app = express();
 setupProcessDiagnostics("drukarka-projekty", __dirname);
@@ -27,6 +28,11 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 // realnym tescie na Pi). Bez tej zmiennej (Windows, bez pilota) dzialamy jak
 // dawniej - uzytkownik podaje pelna sciezke wprost, bez zmian.
 const PROJECTS_ROOT = process.env.SCYZORYK_PROJECTS_ROOT || null;
+// Klient do przegladania Dysku i eksportu Arkuszy Google w nowej
+// przegladarce Dysku w UI (folder + wybor pliku Excel bez wgrywania) -
+// resolveBaseFolder() powyzej i tak dziala na zwyklym fs, to jest
+// dodatkowa, wspolna funkcjonalnosc.
+const projectsStorage = PROJECTS_ROOT ? createStorageClient(PROJECTS_ROOT) : null;
 
 // Ta sama logika containment (realpath, odporny na ".." i symlinki) co w
 // Kartach katalogowych (apps/karty-katalogowe/server.js resolveRequestRoot) -
@@ -157,6 +163,34 @@ app.post("/api/excel/upload", excelUpload.single("file"), (req, res) => {
     res.json({ ok: true, token, sheets, fileName: decodeOriginalName(req.file.originalname) });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac pliku Excel." });
+  }
+});
+
+// Przegladanie Dysku Google - do przegladarki folderow/plikow w UI (wybor
+// folderu bazowego ORAZ wybor pliku Excel/Arkusza Google zamiast wgrywania).
+app.get("/api/drive-browse", async (req, res) => {
+  if (!projectsStorage) return res.status(400).json({ ok: false, message: "Dysk Google nie jest skonfigurowany." });
+  try {
+    const entries = await projectsStorage.browseViaRclone(req.query.path || ".");
+    res.json({ ok: true, entries });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message });
+  }
+});
+
+// Jak /api/excel/upload, tylko plik pochodzi z Dysku Google (wybrany w
+// przegladarce), nie z lokalnego dysku uzytkownika - dziala tez dla
+// prawdziwych Arkuszy Google.
+app.post("/api/excel/upload-from-drive", async (req, res) => {
+  if (!projectsStorage) return res.status(400).json({ ok: false, message: "Dysk Google nie jest skonfigurowany." });
+  const driveFilePath = String(req.body?.driveFilePath || "").trim();
+  if (!driveFilePath) return res.status(400).json({ ok: false, message: "Wybierz plik Excel z Dysku." });
+  try {
+    const buffer = await projectsStorage.catFileViaRclone(driveFilePath);
+    const { token, sheets } = excelInvestment.loadWorkbookFromBuffer(buffer);
+    res.json({ ok: true, token, sheets, fileName: path.basename(driveFilePath) });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac pliku z Dysku." });
   }
 });
 

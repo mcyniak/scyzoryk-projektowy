@@ -83,6 +83,10 @@
       if (data.configured) {
         label.textContent = "Ścieżka folderu bazowego (względem Dysku Projektów)";
         input.placeholder = "6. Paradyż Żarnów/Kolektory/Projekty/Żarnów";
+        const folderBtn = $("folderBrowseBtn");
+        const excelBtn = $("excelBrowseBtn");
+        if (folderBtn) folderBtn.hidden = false;
+        if (excelBtn) excelBtn.hidden = false;
         if (!data.available) {
           showError("matchError", "Dysk Google jest obecnie niedostępny. Sprawdź połączenie internetowe lub usługę rclone." + (data.reason ? ` (${data.reason})` : ""));
         }
@@ -92,6 +96,14 @@
     }
   })();
 
+  function applyExcelResult(data) {
+    state.token = data.token;
+    const select = $("sheetSelect");
+    select.innerHTML = `<option value="">— wybierz zakładkę —</option>` +
+      data.sheets.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+    select.disabled = false;
+  }
+
   $("excelInput").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -100,14 +112,39 @@
     fd.append("file", file);
     try {
       const data = await api("/api/excel/upload", { method: "POST", body: fd });
-      state.token = data.token;
-      const select = $("sheetSelect");
-      select.innerHTML = `<option value="">— wybierz zakładkę —</option>` +
-        data.sheets.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
-      select.disabled = false;
+      applyExcelResult(data);
     } catch (err) {
       showError("excelError", err.message);
     }
+  });
+
+  $("folderBrowseBtn")?.addEventListener("click", () => {
+    window.openDrivePicker({
+      mode: "folder",
+      startPath: $("baseFolderInput").value.trim() || ".",
+      onSelect: (path) => { $("baseFolderInput").value = path; }
+    });
+  });
+
+  $("excelBrowseBtn")?.addEventListener("click", () => {
+    window.openDrivePicker({
+      mode: "file",
+      startPath: $("baseFolderInput").value.trim() || ".",
+      onSelect: async (path) => {
+        showError("excelError", "");
+        try {
+          const data = await api("/api/excel/upload-from-drive", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ driveFilePath: path })
+          });
+          $("excelInput").value = "";
+          applyExcelResult(data);
+        } catch (err) {
+          showError("excelError", err.message);
+        }
+      }
+    });
   });
 
   $("sheetSelect").addEventListener("change", async (e) => {
