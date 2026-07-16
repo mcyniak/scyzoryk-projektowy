@@ -4,21 +4,20 @@ const express = require('express');
 const multer = require('multer');
 const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
-const archiverModule = require('archiver');
-const archiver = typeof archiverModule === 'function' ? archiverModule : (archiverModule.default || archiverModule.create || archiverModule.archiver);
+// archiver 8.x jest czystym ESM i eksportuje klasy (ZipArchive) zamiast
+// starej funkcji-fabryki archiver('zip', opts) - node'owy require() potrafi
+// zaladowac to synchronicznie i zwraca obiekt z named exports jako
+// wlasciwosci, wiec destrukturyzacja dziala mimo ze to CJS plik. Bez tej
+// zmiany kazde pobranie ZIP-a (wiecej niz 1 ostemplowany plik naraz)
+// konczylo sie realnym bledem 500 "Nie udalo sie przygotowac paczki ZIP"
+// (zweryfikowane bezposrednio na formularze-ecodan, ten sam pakiet).
+const { ZipArchive } = require('archiver');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
 const { ensureAnonymousSessionExpress } = require('../../lib/auth/middleware');
-
-
-function assertArchiverAvailable() {
-  if (typeof archiver !== 'function') {
-    throw new Error('Nie udało się przygotować paczki ZIP. Uruchom ponownie instalację zależności.');
-  }
-}
 
 // multer/busboy dekoduja naglowek Content-Disposition multipart uploadu jako
 // Latin-1, nawet gdy przegladarka faktycznie wyslala nazwe pliku w UTF-8 -
@@ -453,8 +452,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
 async function zipFiles(files, zipPath) {
   await new Promise((resolve, reject) => {
     const out = fs.createWriteStream(zipPath);
-    assertArchiverAvailable();
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
     out.on('close', resolve);
     archive.on('error', reject);
     archive.pipe(out);
