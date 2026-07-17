@@ -22,12 +22,23 @@ function exists(p) {
 }
 
 function canResolvePackage(pkg) {
+  // Dwie strategie, bo rozne pakiety maja rozne "exports" w swoim
+  // package.json: niektore (np. archiver: "exports": "./index.js") NIE
+  // wystawiaja "./package.json" jako importowalnej sciezki (require.resolve
+  // samego "pkg" dziala, ale "pkg/package.json" - falszywy alarm "missing").
+  // Inne (np. read-excel-file) w ogole nie maja glownego eksportu "." i
+  // trzeba uzyc konkretnej podsciezki jak "read-excel-file/node" w kodzie
+  // aplikacji - tam "pkg/package.json" akurat nadal dziala. Probujemy obu,
+  // wystarczy ze jedna sie uda.
+  try {
+    require.resolve(pkg);
+    return true;
+  } catch {}
   try {
     require.resolve(`${pkg}/package.json`);
     return true;
-  } catch {
-    return false;
-  }
+  } catch {}
+  return false;
 }
 
 console.log('Ecodan Generator doctor');

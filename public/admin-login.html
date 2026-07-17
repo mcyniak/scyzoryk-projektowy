@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logowanie administratora - Scyzoryk Projektowy</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar clean-topbar">
+      <a class="logo" href="/" aria-label="Scyzoryk Projektowy">
+        <span class="logo-mark" aria-hidden="true"></span>
+        <span>Scyzoryk Projektowy - pilot</span>
+      </a>
+    </header>
+
+    <section class="panel" style="max-width:420px;margin:60px auto;">
+      <div class="panel-header simple-header">
+        <div>
+          <h2 class="panel-title">Panel administratora</h2>
+          <p class="panel-desc">Zwykle narzedzia nie wymagaja logowania - to haslo chroni tylko diagnostyke i logi.</p>
+        </div>
+      </div>
+
+      <form id="loginForm">
+        <label class="field">
+          <span>Haslo administratora</span>
+          <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+        </label>
+        <button type="submit" class="primary" style="margin-top:18px;width:100%;">Zaloguj</button>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const statusEl = document.getElementById('status');
+    function setStatus(msg, isError) {
+      statusEl.textContent = msg || '';
+      statusEl.classList.toggle('error', Boolean(isError));
+    }
+    function nextUrlFromQuery() {
+      const params = new URLSearchParams(window.location.search);
+      const next = params.get('next');
+      if (next && next.startsWith('/')) return next;
+      return '/admin';
+    }
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const password = document.getElementById('password').value;
+      if (!password) return setStatus('Podaj haslo.', true);
+      setStatus('Loguje...');
+      try {
+        const response = await fetch('/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+          body: JSON.stringify({ password }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          setStatus(data.error || 'Nie udalo sie zalogowac.', true);
+          return;
+        }
+        window.location.href = nextUrlFromQuery();
+      } catch (err) {
+        setStatus('Blad polaczenia z serwerem. Sprobuj ponownie.', true);
+      }
+    });
+  </script>
+</body>
+</html>

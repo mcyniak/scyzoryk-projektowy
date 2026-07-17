@@ -25,6 +25,16 @@ export const BATCH_RETRY_CLOSED_SESSION = String(process.env.BATCH_RETRY_CLOSED_
 export const BATCH_CONCURRENCY_DEFAULT = Math.max(1, Math.min(4, Number(process.env.BATCH_CONCURRENCY || 1)));
 export const BATCH_CONCURRENCY_MAX = Math.max(1, Math.min(4, Number(process.env.BATCH_CONCURRENCY_MAX || 4)));
 
+// Ile CALYCH zadan (pojedynczy rekord ALBO caly batch) moze isc rownoczesnie
+// w skali calego procesu - to NIE to samo co BATCH_CONCURRENCY (ktore liczy
+// tylko workerow WEWNATRZ jednego batcha). Bez tego limitu nic nie
+// przeszkadzalo, zeby kilku uzytkownikow jednoczesnie odpalilo batch,
+// mnozac liczbe rownoczesnych procesow Chromium bez ograniczenia - na
+// Raspberry Pi (ograniczony RAM) to prosta droga do zawieszenia urzadzenia.
+// Domyslnie 1 (patrz brief: "na poczatku uruchamiaj maksymalnie jedno
+// ciezkie zadanie MyEcodan naraz").
+export const MAX_ECODAN_JOBS = Math.max(1, Number(process.env.SCYZORYK_MAX_ECODAN_JOBS || process.env.MAX_ECODAN_JOBS || 1));
+
 // Bezpieczniki stabilności.
 export const MAX_CLOSED_SESSION_STREAK = Math.max(1, Number(process.env.MAX_CLOSED_SESSION_STREAK || 3));
 export const MAX_JOB_CLOSED_SESSION_STREAK = Math.max(1, Number(process.env.MAX_JOB_CLOSED_SESSION_STREAK || 8));

@@ -4,18 +4,31 @@ const express = require('express');
 const multer = require('multer');
 const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
-const archiverModule = require('archiver');
-const archiver = typeof archiverModule === 'function' ? archiverModule : (archiverModule.default || archiverModule.create || archiverModule.archiver);
+// archiver 8.x jest czystym ESM i eksportuje klasy (ZipArchive) zamiast
+// starej funkcji-fabryki archiver('zip', opts) - node'owy require() potrafi
+// zaladowac to synchronicznie i zwraca obiekt z named exports jako
+// wlasciwosci, wiec destrukturyzacja dziala mimo ze to CJS plik. Bez tej
+// zmiany kazde pobranie ZIP-a (wiecej niz 1 ostemplowany plik naraz)
+// konczylo sie realnym bledem 500 "Nie udalo sie przygotowac paczki ZIP"
+// (zweryfikowane bezposrednio na formularze-ecodan, ten sam pakiet).
+const { ZipArchive } = require('archiver');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
+const { ensureAnonymousSessionExpress } = require('../../lib/auth/middleware');
 
-
-function assertArchiverAvailable() {
-  if (typeof archiver !== 'function') {
-    throw new Error('Nie udało się przygotować paczki ZIP. Uruchom ponownie instalację zależności.');
+// multer/busboy dekoduja naglowek Content-Disposition multipart uploadu jako
+// Latin-1, nawet gdy przegladarka faktycznie wyslala nazwe pliku w UTF-8 -
+// polskie znaki w oryginalnej nazwie wychodza jako "mojibake" (np. w nazwie
+// wynikowego PDF-a po ostemplowaniu). Ten sam fix co juz dziala w
+// apps/drukarka/server.js: reinterpretuj bajty jako UTF-8.
+function decodeOriginalName(name) {
+  try {
+    return Buffer.from(name, 'latin1').toString('utf8');
+  } catch {
+    return name;
   }
 }
 
@@ -75,6 +88,17 @@ const SECURITY_HEADERS = {
 };
 app.disable('x-powered-by');
 app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
+// Pracownicy NIE musza sie logowac - to tylko anonimowa izolacja danych
+// roboczych miedzy przegladarkami (req.sessionId), NIGDY nie blokuje
+// zadania. SCYZORYK_PILOT_MODE jest ustawiane przez korzenny server.js na
+// podstawie aktywnego profilu (SCYZORYK_PROFILE) - profil "windows" nigdy
+// go nie ustawia, wiec ten sam kod dziala bez zmian rowniez poza pilotem.
+// /api/health jest pominiete celowo - korzenny supervisor pyta o nie co
+// kilka-kilkanascie sekund tylko po to, zeby sprawdzic czy proces zyje, i
+// nie powinno to tworzyc/odswiezac prawdziwej sesji roboczej.
+if (process.env.SCYZORYK_PILOT_MODE === '1') {
+  app.use((req, res, next) => (req.path === '/api/health' ? next() : ensureAnonymousSessionExpress(req, res, next)));
+}
 app.use((req, res, next) => {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   if (req.get('X-Scyzoryk-Request') === '1') return next();
@@ -83,6 +107,14 @@ app.use((req, res, next) => {
 app.use('/pdfjs', express.static(path.join(ROOT, 'node_modules', 'pdfjs-dist', 'build')));
 app.use(express.static(path.join(ROOT, 'public')));
 app.use(express.json({ limit: '4mb' }));
+
+// Przycisk "Panel glowny" w gornym pasku potrzebuje znac PRAWDZIWY port
+// panelu (root server.js przekazuje go jako SCYZORYK_MAIN_PORT przy
+// spawnowaniu) - bez tego link byl na stale wpisany jako :3000 w JS, co
+// psulo sie, gdy panel biegal na innym porcie (np. 80 w tym pilocie).
+app.get('/api/panel-info', (req, res) => {
+  res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
+});
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -116,7 +148,7 @@ function readHeader(filePath, length = 8) {
 function validateUploadedPdfFile(file) {
   const header = readHeader(file.path, 8);
   const ascii = header.toString('latin1');
-  if (!ascii.startsWith('%PDF-')) throw new Error(`Plik ${file.originalname || file.filename} nie wygląda jak poprawny PDF.`);
+  if (!ascii.startsWith('%PDF-')) throw new Error(`Plik ${decodeOriginalName(file.originalname) || file.filename} nie wygląda jak poprawny PDF.`);
 }
 
 function parseNumber(value, fallback, min, max) {
@@ -386,7 +418,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
   const pages = doc.getPages();
   if (pages.length > MAX_PAGES_PER_PDF) {
-    throw new Error(`PDF ${inputFile.originalname} ma za duzo stron (${pages.length}). Limit: ${MAX_PAGES_PER_PDF}.`);
+    throw new Error(`PDF ${decodeOriginalName(inputFile.originalname)} ma za duzo stron (${pages.length}). Limit: ${MAX_PAGES_PER_PDF}.`);
   }
 
   const prepared = [];
@@ -412,7 +444,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
   }
 
   const outputBytes = await doc.save({ useObjectStreams: true });
-  const outPath = path.join(jobDir, safeOutputName(inputFile.originalname));
+  const outPath = path.join(jobDir, safeOutputName(decodeOriginalName(inputFile.originalname)));
   await fsp.writeFile(outPath, outputBytes);
   return outPath;
 }
@@ -420,8 +452,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
 async function zipFiles(files, zipPath) {
   await new Promise((resolve, reject) => {
     const out = fs.createWriteStream(zipPath);
-    assertArchiverAvailable();
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
     out.on('close', resolve);
     archive.on('error', reject);
     archive.pipe(out);

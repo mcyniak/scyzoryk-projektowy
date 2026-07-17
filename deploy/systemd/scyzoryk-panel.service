@@ -1,0 +1,52 @@
+[Unit]
+Description=Scyzoryk Projektowy - panel glowny (pilot linuksowy)
+After=network-online.target scyzoryk-gdrive-mount.service
+Wants=network-online.target
+# Nie "Requires=" - jesli montowanie Dysku Google akurat nie wstanie (np. brak
+# internetu przy starcie), panel i tak ma ruszyc - Karty katalogowe/Drukarka
+# projektow same zglosza "Dysk niedostepny" zamiast blokowac cala reszte
+# (Pieczatki/Drukarke/Formularze), ktore w ogole nie potrzebuja tej sciezki.
+
+[Service]
+Type=simple
+User=mcyniak
+WorkingDirectory=/home/mcyniak/scyzoryk-linux-pilot
+Environment=SCYZORYK_PROFILE=linux-pilot
+# Podkatalog zamontowanego (przez rclone, patrz scyzoryk-gdrive-mount.service)
+# Dysku Google, na ktorym leza foldery inwestycji - czytaja go Karty
+# katalogowe i Drukarka projektow.
+Environment=SCYZORYK_PROJECTS_ROOT=/mnt/scyzoryk-google-drive
+# Nazwa remote'a rclone (bez montowania) - potrzebna Kartom katalogowym/
+# Drukarce projektow/Formularzom Ecodan do przegladania Dysku i eksportu
+# prawdziwych Arkuszy Google przez "rclone lsjson"/"copyto" bezposrednio
+# (montowanie FUSE nie potrafi poprawnie odczytac ich zawartosci - patrz
+# komentarz w lib/storage/googleDriveStorage.js).
+Environment=SCYZORYK_GOOGLE_DRIVE_REMOTE=scyzoryk-drive:
+# "::" (nie "0.0.0.0") - dual-stack: przyjmuje polaczenia i po IPv4, i po IPv6
+# na jednym sockecie (wymaga net.ipv6.bindv6only=0, domyslne na tym Pi).
+# "0.0.0.0" wiaze TYLKO IPv4 - klient, ktorego przegladarka rozwiaze "scyzoryk"
+# na adres IPv6 (router LAN potrafi zwracac oba rekordy, A i AAAA), dostawal
+# "polaczenie odrzucone" zamiast automatycznego przelaczenia na IPv4, bo po
+# stronie IPv6 nic nie nasluchiwalo. To ustawienie propaguje sie automatycznie
+# do wszystkich aplikacji-dzieci (kazda czyta SCYZORYK_HOST tak samo).
+Environment=SCYZORYK_HOST=::
+# Port 80, zeby panel byl dostepny pod adresem "http://scyzoryk" bez podawania
+# numeru portu. Uprawnienie do zbindowania portu <1024 nadane WYLACZNIE tej
+# usludze systemd (nie calemu /usr/bin/node globalnie - to byloby szersze niz
+# potrzeba na wspoldzielonym urzadzeniu) - User ponizej zostaje zwyklym
+# uzytkownikiem, bez roota.
+Environment=PORT=80
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=300
+StartLimitBurst=10
+# Restart=always i tak NIE przeszkadza "systemctl stop" (systemd wie, ze to
+# swiadome zatrzymanie i nie odpala ponownie) - to jest wylacznie na
+# wypadek awarii/padu procesu, zgodnie z "ma sie resetowac sam".
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -10,6 +10,7 @@ const excelInvestment = require("./src/excelInvestment");
 const folderMatch = require("./src/folderMatch");
 const printService = require("../../lib/printing");
 const pdfMerge = require("./src/pdfMerge");
+const { createStorageClient } = require("../../lib/storage/googleDriveStorage");
 
 const app = express();
 setupProcessDiagnostics("drukarka-projekty", __dirname);
@@ -18,6 +19,53 @@ const HOST = process.env.SCYZORYK_HOST || "127.0.0.1";
 const DATA_DIR = path.join(__dirname, "data");
 const LAST_FOLDERS_FILE = path.join(DATA_DIR, "ostatnie-foldery.json");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+// W pilocie (SCYZORYK_PROJECTS_ROOT ustawione - Dysk Google zamontowany przez
+// rclone jako zwykly katalog systemowy) uzytkownik podaje "folder bazowy"
+// WZGLEDEM tego katalogu, nie pelna sciezke w stylu Windows
+// "G:\Dyski wspoldzielone\..." (ktora na Linuksie po prostu nie istnieje -
+// to byla przyczyna bledu "Folder bazowy nie istnieje" przy pierwszym
+// realnym tescie na Pi). Bez tej zmiennej (Windows, bez pilota) dzialamy jak
+// dawniej - uzytkownik podaje pelna sciezke wprost, bez zmian.
+const PROJECTS_ROOT = process.env.SCYZORYK_PROJECTS_ROOT || null;
+// Klient do przegladania Dysku i eksportu Arkuszy Google w nowej
+// przegladarce Dysku w UI (folder + wybor pliku Excel bez wgrywania) -
+// resolveBaseFolder() powyzej i tak dziala na zwyklym fs, to jest
+// dodatkowa, wspolna funkcjonalnosc.
+const projectsStorage = PROJECTS_ROOT ? createStorageClient(PROJECTS_ROOT) : null;
+
+// Ta sama logika containment (realpath, odporny na ".." i symlinki) co w
+// Kartach katalogowych (apps/karty-katalogowe/server.js resolveRequestRoot) -
+// tutaj uproszczona, bo folderMatch.js dziala wprost na fs, wiec wystarczy
+// zwrocic bezpieczna sciezke absolutna zamiast pelnej abstrakcji klienta.
+function resolveBaseFolder(userInput) {
+  const raw = String(userInput || "").trim();
+  if (!raw) throw new Error("Podaj folder bazowy.");
+  if (!PROJECTS_ROOT) return raw;
+
+  let rootReal;
+  try {
+    rootReal = fs.realpathSync(PROJECTS_ROOT);
+  } catch (err) {
+    throw new Error("Dysk Google jest obecnie niedostepny. Sprawdz polaczenie internetowe lub usluge rclone.");
+  }
+  // Ludzie z przyzwyczajenia wpisuja sciezke tak jak na Windows (ukosnik
+  // wsteczny "\") - na Linuksie to zwykly znak w nazwie, nie separator, wiec
+  // bez tej zamiany cala wpisana sciezka trafialaby do path.resolve() jako
+  // jeden segment i nigdy by nie istniala.
+  const candidate = path.resolve(rootReal, raw.replace(/\\/g, "/"));
+  let candidateReal;
+  try {
+    candidateReal = fs.realpathSync(candidate);
+  } catch {
+    throw new Error(`Folder bazowy nie istnieje: ${raw}`);
+  }
+  const rel = path.relative(rootReal, candidateReal);
+  if (rel !== "" && (rel.startsWith("..") || path.isAbsolute(rel))) {
+    throw new Error("Folder bazowy musi byc wewnatrz katalogu projektow.");
+  }
+  return candidateReal;
+}
 
 const SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
@@ -54,7 +102,34 @@ const apiLimiter = rateLimit({
 app.use("/api", apiLimiter);
 app.use(express.static(path.join(__dirname, "public")));
 
-const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+// Przycisk "Panel glowny" w gornym pasku potrzebuje znac PRAWDZIWY port
+// panelu (root server.js przekazuje go jako SCYZORYK_MAIN_PORT przy
+// spawnowaniu) - bez tego link byl na stale wpisany jako :3000 wprost w
+// HTML-u (i do tego na 127.0.0.1, nie na host, ktorego faktycznie uzyl
+// klient), co psulo sie dla kazdego poza localhost i dla kazdego portu
+// innego niz 3000 (np. 80 w tym pilocie).
+app.get("/api/panel-info", (req, res) => {
+  res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
+});
+
+// ".gsheet" to maly plik-skrot, ktory tworzy synchronizacja Dysku Google na
+// komputerze dla plikow "tylko w chmurze" (Arkusz Google, nie prawdziwy
+// .xlsx) - jego zawartosc to zwykly tekst/JSON, nie plik Excel, wiec proba
+// wczytania go jako .xlsx konczyla sie niejasnym bledem zamiast jasnej
+// wskazowki. Ten sam problem i ten sam komunikat co juz dziala w
+// Formularzach Ecodan. Odrzucone na tym etapie (fileFilter), zanim w ogole
+// trafi do parsera Excela.
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const originalName = String(file.originalname || "");
+    if (/\.gsheet$/i.test(originalName)) {
+      return cb(new Error('Wybrano plik .gsheet, czyli skrot do Arkusza Google, a nie prawdziwy plik Excel. Uzyj przycisku "Wybierz z Dysku..." zamiast wgrywania z komputera - wtedy Arkusz Google zostanie pobrany automatycznie.'));
+    }
+    cb(null, true);
+  }
+});
 
 function readLastFolders() {
   try {
@@ -69,6 +144,21 @@ function saveLastFolder(sheetName, folderPath) {
     writeJsonFileNoBom(LAST_FOLDERS_FILE, data);
   } catch (_) {}
 }
+
+// Front-end pyta o to, zeby wiedziec, czy pokazac uzytkownikowi podpowiedz
+// "sciezka wzgledem Dysku Google" zamiast starego "G:\Dyski wspoldzielone\...".
+app.get("/api/drive-status", (req, res) => {
+  if (!PROJECTS_ROOT) return res.json({ ok: true, configured: false });
+  let available = false;
+  let reason = null;
+  try {
+    fs.accessSync(PROJECTS_ROOT, fs.constants.R_OK);
+    available = true;
+  } catch (err) {
+    reason = err.message;
+  }
+  res.json({ ok: true, configured: true, available, reason });
+});
 
 function decodeOriginalName(name) {
   try { return Buffer.from(name, "latin1").toString("utf8"); } catch { return name; }
@@ -90,6 +180,34 @@ app.post("/api/excel/upload", excelUpload.single("file"), (req, res) => {
     res.json({ ok: true, token, sheets, fileName: decodeOriginalName(req.file.originalname) });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac pliku Excel." });
+  }
+});
+
+// Przegladanie Dysku Google - do przegladarki folderow/plikow w UI (wybor
+// folderu bazowego ORAZ wybor pliku Excel/Arkusza Google zamiast wgrywania).
+app.get("/api/drive-browse", async (req, res) => {
+  if (!projectsStorage) return res.status(400).json({ ok: false, message: "Dysk Google nie jest skonfigurowany." });
+  try {
+    const entries = await projectsStorage.browseViaRclone(req.query.path || ".");
+    res.json({ ok: true, entries });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message });
+  }
+});
+
+// Jak /api/excel/upload, tylko plik pochodzi z Dysku Google (wybrany w
+// przegladarce), nie z lokalnego dysku uzytkownika - dziala tez dla
+// prawdziwych Arkuszy Google.
+app.post("/api/excel/upload-from-drive", async (req, res) => {
+  if (!projectsStorage) return res.status(400).json({ ok: false, message: "Dysk Google nie jest skonfigurowany." });
+  const driveFilePath = String(req.body?.driveFilePath || "").trim();
+  if (!driveFilePath) return res.status(400).json({ ok: false, message: "Wybierz plik Excel z Dysku." });
+  try {
+    const buffer = await projectsStorage.catFileViaRclone(driveFilePath);
+    const { token, sheets } = excelInvestment.loadWorkbookFromBuffer(buffer);
+    res.json({ ok: true, token, sheets, fileName: path.basename(driveFilePath) });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac pliku z Dysku." });
   }
 });
 
@@ -137,12 +255,13 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
 }
 
 app.post("/api/match", async (req, res) => {
-  const { sheetName, lpGmina, baseFolder, adres, gmina } = req.body || {};
-  if (!lpGmina || !baseFolder) {
+  const { sheetName, lpGmina, baseFolder: baseFolderInput, adres, gmina } = req.body || {};
+  if (!lpGmina || !baseFolderInput) {
     return res.status(400).json({ ok: false, message: "Brak numeru LP gmina albo folderu bazowego." });
   }
   try {
-    if (sheetName) saveLastFolder(sheetName, baseFolder);
+    const baseFolder = resolveBaseFolder(baseFolderInput);
+    if (sheetName) saveLastFolder(sheetName, baseFolderInput);
     req.session.lastBaseFolder = baseFolder;
     const result = await matchOneAddress(baseFolder, lpGmina, { adres, gmina });
     if (!result.ok) return res.status(404).json(result);
@@ -153,11 +272,17 @@ app.post("/api/match", async (req, res) => {
 });
 
 app.post("/api/match-batch", async (req, res) => {
-  const { sheetName, baseFolder, candidates, allAddresses } = req.body || {};
-  if (!baseFolder || !Array.isArray(candidates) || !candidates.length) {
+  const { sheetName, baseFolder: baseFolderInput, candidates, allAddresses } = req.body || {};
+  if (!baseFolderInput || !Array.isArray(candidates) || !candidates.length) {
     return res.status(400).json({ ok: false, message: "Brak folderu bazowego albo listy adresow." });
   }
-  if (sheetName) saveLastFolder(sheetName, baseFolder);
+  let baseFolder;
+  try {
+    baseFolder = resolveBaseFolder(baseFolderInput);
+  } catch (err) {
+    return res.status(400).json({ ok: false, message: err.message || "Nie udalo sie ustalic folderu bazowego." });
+  }
+  if (sheetName) saveLastFolder(sheetName, baseFolderInput);
   req.session.lastBaseFolder = baseFolder;
 
   const results = new Array(candidates.length);

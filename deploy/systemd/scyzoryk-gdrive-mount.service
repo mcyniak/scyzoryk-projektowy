@@ -1,0 +1,38 @@
+[Unit]
+Description=Montowanie Dysku Google (Scyzoryk) przez rclone
+After=network-online.target
+Wants=network-online.target
+Before=scyzoryk-panel.service
+
+[Service]
+Type=simple
+User=mcyniak
+# "-uz" (nie samo "-u") sprzata tez POPRZEDNIE, nie do konca odmontowane
+# punkty montowania (widziane raz przy recznym restarcie: mkdir -p walil sie
+# na katalogu, ktory formalnie wciaz byl FUSE-mountpointem starego, juz
+# martwego procesu rclone) - wazne, zeby AUTOMATYCZNY restart (Restart=always)
+# nie utknal w tej samej pulapce bez interwencji. Wiodacy "-" ignoruje kod
+# bledu - przy zwyklym starcie (nic jeszcze nie zamontowane) ta komenda ma
+# PRAWO sie nie udac, to nie powod, zeby caly start uslugi mial nie ruszyc.
+ExecStartPre=-/bin/fusermount -uz /mnt/scyzoryk-google-drive
+ExecStartPre=/bin/mkdir -p /mnt/scyzoryk-google-drive
+# vfs-cache-mode=full (nie tylko "writes") - klasyfikacja zalacznikow czyta
+# zawartosc kazdego pliku (mammoth/pdf-parse), a bez cache odczytu KAZDY
+# odczyt idzie na zywo przez siec do Google - stad "bardzo dlugo szuka" przy
+# pierwszym realnym tescie. Limit rozmiaru/wieku cache wazny na tej karcie
+# microSD (29GB, malo miejsca) - stare/duze pliki same wypadaja z cache.
+# --drive-export-formats xlsx - prawdziwe Arkusze Google (nie zwykle .xlsx
+# wgrane na Dysk) nie sa "plikiem" w zwyklym sensie - bez tej opcji rclone
+# w ogole by ich nie pokazal jako czegos do odczytania. Z ta opcja kazdy
+# Arkusz Google widoczny jest w montowaniu jako wirtualny "Nazwa.xlsx",
+# ktory przy odczycie rclone sam eksportuje z Google na biezaco - reszta
+# kodu (read-excel-file/xlsx) czyta go dokladnie tak samo jak zwykly plik
+# .xlsx, bez zadnych zmian.
+ExecStart=/usr/bin/rclone mount scyzoryk-drive: /mnt/scyzoryk-google-drive --vfs-cache-mode full --vfs-cache-max-size 2G --vfs-cache-max-age 24h --dir-cache-time 30s --drive-export-formats xlsx
+ExecStop=/bin/fusermount -u /mnt/scyzoryk-google-drive
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

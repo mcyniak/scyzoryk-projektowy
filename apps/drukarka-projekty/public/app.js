@@ -56,20 +56,53 @@
   async function loadPrinters() {
     const select = $("printerSelect");
     try {
-      const data = await api("/api/printers");
+      const data = await api("api/printers");
       const printers = data.printers || [];
       if (!printers.length) {
         select.innerHTML = `<option value="">Drukarka domyślna systemu</option>`;
         return;
       }
       select.innerHTML = printers.map(p =>
-        `<option value="${escapeHtml(p.name)}"${p.isDefault ? " selected" : ""}>${escapeHtml(p.name)}${p.isDefault ? " (domyślna)" : ""}</option>`
+        `<option value="${escapeHtml(p.name)}"${p.isDefault ? " selected" : ""}>${escapeHtml(p.displayName || p.name)}${p.isDefault ? " (domyślna)" : ""}</option>`
       ).join("");
     } catch (err) {
       select.innerHTML = `<option value="">Drukarka domyślna systemu</option>`;
     }
   }
   loadPrinters();
+
+  // Etykieta pola sciezki zalezy od tego, czy serwer ma skonfigurowany
+  // SCYZORYK_PROJECTS_ROOT (pilot) - wtedy uzytkownik podaje sciezke
+  // WZGLEDEM Dysku Google, nie pelna sciezke systemowa jak na Windows.
+  (async function initBaseFolderLabel() {
+    const label = $("baseFolderLabel");
+    const input = $("baseFolderInput");
+    if (!label || !input) return;
+    try {
+      const data = await api("api/drive-status");
+      if (data.configured) {
+        label.textContent = "Ścieżka folderu bazowego (względem Dysku Projektów)";
+        input.placeholder = "6. Paradyż Żarnów/Kolektory/Projekty/Żarnów";
+        const folderBtn = $("folderBrowseBtn");
+        const excelBtn = $("excelBrowseBtn");
+        if (folderBtn) folderBtn.hidden = false;
+        if (excelBtn) excelBtn.hidden = false;
+        if (!data.available) {
+          showError("matchError", "Dysk Google jest obecnie niedostępny. Sprawdź połączenie internetowe lub usługę rclone." + (data.reason ? ` (${data.reason})` : ""));
+        }
+      }
+    } catch (_) {
+      // Brak polaczenia z wlasnym serwerem - zostaw domyslna etykiete.
+    }
+  })();
+
+  function applyExcelResult(data) {
+    state.token = data.token;
+    const select = $("sheetSelect");
+    select.innerHTML = `<option value="">— wybierz zakładkę —</option>` +
+      data.sheets.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+    select.disabled = false;
+  }
 
   $("excelInput").addEventListener("change", async (e) => {
     const file = e.target.files[0];
@@ -78,15 +111,40 @@
     const fd = new FormData();
     fd.append("file", file);
     try {
-      const data = await api("/api/excel/upload", { method: "POST", body: fd });
-      state.token = data.token;
-      const select = $("sheetSelect");
-      select.innerHTML = `<option value="">— wybierz zakładkę —</option>` +
-        data.sheets.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
-      select.disabled = false;
+      const data = await api("api/excel/upload", { method: "POST", body: fd });
+      applyExcelResult(data);
     } catch (err) {
       showError("excelError", err.message);
     }
+  });
+
+  $("folderBrowseBtn")?.addEventListener("click", () => {
+    window.openDrivePicker({
+      mode: "folder",
+      startPath: $("baseFolderInput").value.trim() || ".",
+      onSelect: (path) => { $("baseFolderInput").value = path; }
+    });
+  });
+
+  $("excelBrowseBtn")?.addEventListener("click", () => {
+    window.openDrivePicker({
+      mode: "file",
+      startPath: $("baseFolderInput").value.trim() || ".",
+      onSelect: async (path) => {
+        showError("excelError", "");
+        try {
+          const data = await api("api/excel/upload-from-drive", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ driveFilePath: path })
+          });
+          $("excelInput").value = "";
+          applyExcelResult(data);
+        } catch (err) {
+          showError("excelError", err.message);
+        }
+      }
+    });
   });
 
   $("sheetSelect").addEventListener("change", async (e) => {
@@ -95,7 +153,7 @@
     state.sheetName = sheetName;
     showError("excelError", "");
     try {
-      const data = await api(`/api/excel/${encodeURIComponent(state.token)}/sheets/${encodeURIComponent(sheetName)}/candidates`);
+      const data = await api(`api/excel/${encodeURIComponent(state.token)}/sheets/${encodeURIComponent(sheetName)}/candidates`);
       state.allCandidates = data.candidates;
       state.selectedLp = new Set();
       state.batchResults = [];
@@ -208,7 +266,7 @@
     try {
       const selectedCandidates = state.allCandidates.filter(c => state.selectedLp.has(c.lpGmina));
       const allAddresses = state.allCandidates.map(c => c.adres).filter(Boolean);
-      const data = await api("/api/match-batch", {
+      const data = await api("api/match-batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sheetName: state.sheetName, baseFolder, candidates: selectedCandidates, allAddresses })
@@ -397,7 +455,7 @@
       return;
     }
     $("previewModalTitle").textContent = item.fileName;
-    $("previewModalFrame").src = "/api/preview-by-path?path=" + encodeURIComponent(item.fullPath);
+    $("previewModalFrame").src = "api/preview-by-path?path=" + encodeURIComponent(item.fullPath);
     $("previewModal").classList.add("open");
   }
   $("previewModalClose").addEventListener("click", () => {
@@ -421,7 +479,7 @@
     btn.textContent = "Przetwarzam...";
 
     try {
-      const data = await api("/api/queue/set-merged", {
+      const data = await api("api/queue/set-merged", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ groups })
@@ -449,7 +507,7 @@
     $("printBtn").disabled = true;
     try {
       const groups = buildPendingGroups();
-      await api("/api/print", {
+      await api("api/print", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -471,7 +529,7 @@
   function pollStatus() {
     const timer = setInterval(async () => {
       try {
-        const s = await api("/api/status");
+        const s = await api("api/status");
         $("statusText").textContent = s.message || "";
         $("progressBar").style.width = (s.percent || 0) + "%";
         if (!s.printing) {

@@ -10,11 +10,11 @@
 <body>
   <main class="app shell">
     <div class="topbar">
-      <a class="logo" href="http://127.0.0.1:3000/">
+      <a class="logo" href="#" data-main-link aria-label="Wróć do panelu">
         <span class="logo-mark" aria-hidden="true"></span>
         <span><span class="logo-small">Scyzoryk</span>Drukarka projektów</span>
       </a>
-      <a class="button-link ghost top-link" href="http://127.0.0.1:3000">← Panel główny</a>
+      <a class="button-link ghost top-link" href="#" data-main-link>← Panel główny</a>
     </div>
 
     <nav class="stepper" id="stepper" aria-label="Postęp">
@@ -58,7 +58,10 @@
       <div class="field-row">
         <label class="option-field">
           <span>Plik Excel</span>
-          <input id="excelInput" type="file" accept=".xlsx,.xls" />
+          <div style="display:flex; gap:10px; align-items:center;">
+            <input id="excelInput" type="file" accept=".xlsx,.xls" />
+            <button type="button" id="excelBrowseBtn" class="ghost smallBtn" hidden>Wybierz z Dysku…</button>
+          </div>
         </label>
         <label class="option-field">
           <span>Zakładka</span>
@@ -100,8 +103,11 @@
       </div>
       <div class="field-row">
         <label class="option-field" style="grid-column: 1 / -1;">
-          <span>Ścieżka folderu bazowego</span>
-          <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." />
+          <span id="baseFolderLabel">Ścieżka folderu bazowego</span>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." style="flex:1;" />
+            <button type="button" id="folderBrowseBtn" class="ghost smallBtn" hidden>Przeglądaj…</button>
+          </div>
         </label>
       </div>
       <button id="matchBtn" type="button">Znajdź projekty</button>
@@ -176,6 +182,8 @@
     </div>
   </div>
 
+  <script src="inline-1.js"></script>
+  <script src="drive-picker.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

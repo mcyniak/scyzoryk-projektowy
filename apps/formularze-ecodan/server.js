@@ -4,33 +4,56 @@ import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
 import multer from 'multer';
 import sanitize from 'sanitize-filename';
-import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX } from './src/config.js';
-import { setProjectRoot, getProjectRoot } from './src/debug.js';
+import { ZipArchive } from 'archiver';
+import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX, MAX_ECODAN_JOBS } from './src/config.js';
+import { setProjectRoot, getProjectRoot, getOutputRoot } from './src/debug.js';
+import { scheduleCleanup, appendCriticalLog } from '../../lib/hardening.js';
 import { calculate } from './src/rules.js';
-import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob } from './src/jobs.js';
+import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob, getHeavyJobQueueState } from './src/jobs.js';
 import { readExcelRecords } from './src/excel.js';
+import { createStorageClient } from '../../lib/storage/googleDriveStorage.js';
 
-const require = createRequire(import.meta.url);
-const archiverModule = require('archiver');
-const archiver = typeof archiverModule === 'function' ? archiverModule : (archiverModule.default || archiverModule.create || archiverModule.archiver);
-function assertArchiverAvailable() {
-  if (typeof archiver !== 'function') {
-    throw new Error('Nie udało się przygotować paczki ZIP. Uruchom ponownie instalację zależności.');
-  }
-}
+// archiver 8.x jest teraz czystym ESM i eksportuje klasy (ZipArchive) zamiast
+// starej funkcji-fabryki archiver('zip', opts) - stad "new ZipArchive(opts)"
+// ponizej, nie "archiver('zip', opts)". Bez tej zmiany kazde pobranie ZIP-a
+// konczylo sie realnym bledem 500 "Nie udalo sie przygotowac paczki ZIP"
+// (zweryfikowane bezposrednio - stary kod nigdy nie dzialal z ta wersja
+// pakietu, po prostu nikt wczesniej nie doprowadzil realnego zadania do
+// konca i nie probowal pobrac ZIP-a).
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 setProjectRoot(__dirname);
+
+// Wygenerowane PDF-y, pliki tymczasowe i artefakty debugowania nie byly
+// dotad w ogole sprzatane - rosly bez ograniczen. Sweep dziala tak samo jak
+// w pozostalych aplikacjach Scyzoryka: kazdy PLIK/PODFOLDER wewnatrz tych
+// katalogow jest usuwany niezaleznie, na podstawie WLASNEGO czasu ostatniej
+// modyfikacji (nie czasu utworzenia) - aktywne zadanie samo w sobie
+// odswieza ten czas przy kazdym zapisie, wiec nigdy nie zostanie usuniete
+// w trakcie dzialania.
+const JOB_TTL_MS = Math.max(1, Number(process.env.SCYZORYK_JOB_TTL_HOURS || 24)) * 60 * 60 * 1000;
+{
+  const outputRoot = getOutputRoot();
+  scheduleCleanup(
+    [path.join(outputRoot, 'jobs'), path.join(outputRoot, 'pdf'), path.join(outputRoot, 'tmp'), path.join(outputRoot, 'debug')],
+    JOB_TTL_MS,
+    60 * 60 * 1000
+  );
+}
 
 const app = express();
 const diagnosticsDir = path.join(__dirname, 'logs');
 try { fsSync.mkdirSync(diagnosticsDir, { recursive: true }); } catch {}
 function appendDiagnostic(level, event, data = {}) {
   try { fsSync.appendFileSync(path.join(diagnosticsDir, 'formularze-ecodan.jsonl'), JSON.stringify({ ts: new Date().toISOString(), level, app: 'formularze-ecodan', event, pid: process.pid, memory: process.memoryUsage(), ...data }) + '\n', 'utf8'); } catch {}
+  // Ta aplikacja (ESM) ma wlasny, osobny mechanizm diagnostyki zamiast
+  // lib/hardening.js#setupProcessDiagnostics - dopisujemy tu rownolegle do
+  // wspolnego pliku najpowazniejszych bledow, zeby fatal/error z tej
+  // aplikacji tez trafialy do jednego miejsca, tak jak z pozostalych.
+  if (level === 'fatal' || level === 'error') appendCriticalLog('formularze-ecodan', level, event, data);
 }
 process.on('uncaughtException', err => { appendDiagnostic('fatal', 'uncaughtException', { message: err?.message || String(err), stack: err?.stack || '' }); setTimeout(() => process.exit(1), 50).unref(); });
 process.on('unhandledRejection', err => appendDiagnostic('error', 'unhandledRejection', { message: err?.message || String(err), stack: err?.stack || '' }));
@@ -74,6 +97,37 @@ const heavyJobLimiter = rateLimit({
 app.use('/api', apiLimiter);
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Przycisk "Panel glowny" w gornym pasku potrzebuje znac PRAWDZIWY port
+// panelu (root server.js przekazuje go jako SCYZORYK_MAIN_PORT przy
+// spawnowaniu) - bez tego link byl na stale wpisany jako :3000 w JS, co
+// psulo sie, gdy panel biegal na innym porcie (np. 80 w tym pilocie).
+app.get('/api/panel-info', (req, res) => {
+  res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
+});
+
+// Przegladanie Dysku Google i wybor Excela/Arkusza Google bezposrednio z
+// Dysku zamiast pobierania go recznie (ten sam .gsheet-do-.xlsx problem
+// widoczny wprost w komunikacie bledu fileFilter ponizej) - ten sam wzorzec
+// co w Kartach katalogowych/Drukarce projektow.
+const PROJECTS_ROOT = process.env.SCYZORYK_PROJECTS_ROOT || null;
+const projectsStorage = PROJECTS_ROOT ? createStorageClient(PROJECTS_ROOT) : null;
+
+app.get('/api/drive-status', async (req, res) => {
+  if (!projectsStorage) return res.json({ ok: true, configured: false });
+  const status = await projectsStorage.checkAvailability({ useCache: false, testWrite: false });
+  res.json({ ok: true, configured: true, ...status });
+});
+
+app.get('/api/drive-browse', async (req, res) => {
+  if (!projectsStorage) return res.status(400).json({ ok: false, error: 'Dysk Google nie jest skonfigurowany.' });
+  try {
+    const entries = await projectsStorage.browseViaRclone(req.query.path || '.');
+    res.json({ ok: true, entries });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
 
 const uploadDir = path.join(__dirname, 'uploads');
 fs.mkdir(uploadDir, { recursive: true }).catch(() => {});
@@ -152,7 +206,7 @@ function publicJob(job) {
     summaryFileDisplay: displayPath(job.summaryFile) || job.summaryFile,
     telemetryFileDisplay: displayPath(job.telemetryFile) || job.telemetryFile,
     outputRootDisplay: displayPath(job.outputRoot) || job.outputRoot,
-    downloadZipUrl: `/api/batch/download/${encodeURIComponent(job.id)}`,
+    downloadZipUrl: `api/batch/download/${encodeURIComponent(job.id)}`,
     resultsPreview
   };
 }
@@ -164,7 +218,17 @@ function findPdfForJobRow(job, rowNumber) {
 }
 
 app.get('/api/version', (req, res) => {
-  res.json({ ok: true, version: APP_VERSION, defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX }, safeOutputBase: process.env.SCYZORYK_OUTPUT_BASE || path.join(__dirname, 'output') });
+  const heavyQueue = getHeavyJobQueueState();
+  res.json({
+    ok: true,
+    version: APP_VERSION,
+    defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX, maxEcodanJobs: MAX_ECODAN_JOBS },
+    safeOutputBase: process.env.SCYZORYK_OUTPUT_BASE || path.join(__dirname, 'output'),
+    // Ksztalt {queued, active} jest juz rozpoznawany przez panel glowny
+    // (public/inline-1.js -> appMeta()) i pokazywany na kafelku bez
+    // dodatkowych zmian w panelu.
+    queue: { queued: heavyQueue.queued, active: heavyQueue.active },
+  });
 });
 
 app.post('/api/calculate', (req, res) => {
@@ -177,12 +241,30 @@ app.post('/api/run', heavyJobLimiter, async (req, res) => {
 });
 
 
+// Gdy formularz zawiera driveFilePath zamiast prawdziwego wgranego pliku
+// (uzytkownik wybral Excel/Arkusz Google z przegladarki Dysku), eksportuje
+// go swiezo przez rclone do tymczasowej sciezki i podstawia jako req.file,
+// zeby reszta handlera (nizej) nie musiala nic wiedziec o Dysku Google.
+async function resolveDriveFileIfNeeded(req) {
+  if (req.file || !req.body?.driveFilePath) return;
+  if (!projectsStorage) throw new Error('Dysk Google nie jest skonfigurowany.');
+  const driveFilePath = String(req.body.driveFilePath).trim();
+  const tempPath = path.join(uploadDir, `drive-${Date.now()}-${Math.round(Math.random() * 1e9)}.xlsx`);
+  await projectsStorage.exportFileViaRclone(driveFilePath, tempPath);
+  req.file = { path: tempPath, originalname: path.basename(driveFilePath) };
+}
+
 app.post('/api/batch/preview', heavyJobLimiter, (req, res, next) => {
   upload.single('excel')(req, res, error => {
     if (error) return res.status(400).json({ ok: false, error: String(error?.message || error) });
     next();
   });
 }, async (req, res) => {
+  try {
+    await resolveDriveFileIfNeeded(req);
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
   if (!req.file) return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
   try {
     await validateXlsxFile(req.file);
@@ -219,6 +301,11 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     next();
   });
 }, async (req, res) => {
+  try {
+    await resolveDriveFileIfNeeded(req);
+  } catch (error) {
+    return res.status(400).json({ ok: false, error: error.message });
+  }
   if (!req.file) {
     return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
   }
@@ -282,8 +369,7 @@ app.get('/api/batch/download/:jobId', (req, res) => {
   const safeName = sanitize(job.options?.investmentName || job.investmentFolder || job.sourceFile || 'raporty-ecodan') || 'raporty-ecodan';
   res.attachment(`${safeName}.zip`);
 
-  assertArchiverAvailable();
-  const archive = archiver('zip', { zlib: { level: 9 } });
+  const archive = new ZipArchive({ zlib: { level: 9 } });
   archive.on('error', error => {
     if (!res.headersSent) res.status(500);
     res.end(String(error?.message || error));
@@ -320,7 +406,7 @@ app.get('/api/batch/jobs', (req, res) => {
     cancelRequested: job.cancelRequested,
     pdfDirDisplay: displayPath(job.pdfDir) || job.pdfDir,
     outputRootDisplay: displayPath(job.outputRoot) || job.outputRoot,
-    downloadZipUrl: `/api/batch/download/${encodeURIComponent(job.id)}`
+    downloadZipUrl: `api/batch/download/${encodeURIComponent(job.id)}`
   })) });
 });
 

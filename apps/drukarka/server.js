@@ -6,6 +6,7 @@ const path = require("path");
 const fs = require("fs");
 const { setupProcessDiagnostics, applyHttpTimeouts, runPowerShell, scheduleCleanup } = require("../../lib/hardening");
 const printService = require("../../lib/printing");
+const { ensureAnonymousSessionExpress } = require("../../lib/auth/middleware");
 
 const app = express();
 setupProcessDiagnostics("drukarka", __dirname);
@@ -57,20 +58,45 @@ const heavyJobLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
+// Pracownicy NIE musza sie logowac - to tylko anonimowa izolacja danych
+// roboczych miedzy przegladarkami, NIGDY nie blokuje zadania. Bez tego
+// (SCYZORYK_PILOT_MODE nieustawione, tak jak dzis na Windows) kolejka
+// zostaje globalna jak zawsze - jedno stanowisko, jeden uzytkownik na raz,
+// zgodnie z dzisiejszym zachowaniem.
+const PILOT_MODE = process.env.SCYZORYK_PILOT_MODE === '1';
+if (PILOT_MODE) app.use(ensureAnonymousSessionExpress);
+
 app.use(express.static(path.join(__dirname, "public")));
 
-let queue = [];
-let printing = false;
+// Przycisk "Panel glowny" w gornym pasku potrzebuje znac PRAWDZIWY port
+// panelu (root server.js przekazuje go jako SCYZORYK_MAIN_PORT przy
+// spawnowaniu) - bez tego link byl na stale wpisany jako :3000 w JS, co
+// psulo sie, gdy panel biegal na innym porcie (np. 80 w tym pilocie).
+app.get("/api/panel-info", (req, res) => {
+  res.json({ mainPort: Number(process.env.SCYZORYK_MAIN_PORT || 3000) });
+});
 
-let status = {
-  printing: false,
-  message: "Gotowy",
-  current: 0,
-  total: 0,
-  percent: 0,
-  done: false,
-  error: null
-};
+// W profilu linux-pilot kazda przegladarka (sesja) ma WLASNA kolejke plikow,
+// wlasny stan drukowania i wlasny status - inaczej pliki jednej osoby
+// mieszalyby sie w kolejce widocznej u drugiej. Na Windows (PILOT_MODE=false,
+// jak dzisiaj) zostaje jeden wspolny stan - to narzedzie bylo projektowane
+// dla jednego stanowiska/jednej osoby na raz, wiec zachowanie tam sie nie
+// zmienia.
+const sessionStates = new Map(); // sessionId -> stan kolejki tej sesji
+function freshState() {
+  return {
+    queue: [],
+    printing: false,
+    status: { printing: false, message: "Gotowy", current: 0, total: 0, percent: 0, done: false, error: null }
+  };
+}
+const globalState = freshState();
+function getState(req) {
+  if (!PILOT_MODE) return globalState;
+  const sid = req.sessionId || 'anonim';
+  if (!sessionStates.has(sid)) sessionStates.set(sid, freshState());
+  return sessionStates.get(sid);
+}
 
 
 
@@ -200,7 +226,8 @@ function cleanupFiles(items) {
 }
 
 app.post("/api/upload", heavyJobLimiter, (req, res, next) => {
-  if (printing) {
+  const state = getState(req);
+  if (state.printing) {
     return res.status(409).json({
       ok: false,
       message: "Trwa drukowanie. Poczekaj, az aktualne pliki zostana wyslane do kolejki drukowania."
@@ -208,19 +235,20 @@ app.post("/api/upload", heavyJobLimiter, (req, res, next) => {
   }
   next();
 }, upload.array("files", MAX_FILES), (req, res) => {
+  const state = getState(req);
   try {
-    if (queue.length + (req.files || []).length > MAX_QUEUE) {
+    if (state.queue.length + (req.files || []).length > MAX_QUEUE) {
       cleanupFiles((req.files || []).map(file => ({ path: file.path })));
       return res.status(400).json({ ok: false, message: `Za duzo plikow w kolejce. Limit: ${MAX_QUEUE}.` });
     }
     for (const file of req.files || []) validateUploadedDocument(file);
     const added = (req.files || []).map(file => {
       const originalName = decodeOriginalName(file.originalname);
-      const item = { id: file.filename, originalName, filename: file.filename, path: file.path, url: `/api/file/${encodeURIComponent(file.filename)}/preview`, ext: path.extname(originalName).toLowerCase() };
-      queue.push(item);
+      const item = { id: file.filename, originalName, filename: file.filename, path: file.path, url: `api/file/${encodeURIComponent(file.filename)}/preview`, ext: path.extname(originalName).toLowerCase() };
+      state.queue.push(item);
       return item;
     });
-    res.json({ ok: true, added, queue });
+    res.json({ ok: true, added, queue: state.queue });
   } catch (err) {
     cleanupFiles((req.files || []).map(file => ({ path: file.path })));
     res.status(400).json({ ok: false, message: err.message || "Niepoprawny plik." });
@@ -228,7 +256,8 @@ app.post("/api/upload", heavyJobLimiter, (req, res, next) => {
 });
 
 app.get("/api/file/:id/preview", (req, res) => {
-  const item = queue.find(file => file.id === req.params.id);
+  const state = getState(req);
+  const item = state.queue.find(file => file.id === req.params.id);
   if (!item || item.ext !== ".pdf" || !fs.existsSync(item.path)) return res.status(404).send("Nie znaleziono podgladu PDF.");
 
   // Podglad PDF jest wyswietlany w ramce wewnatrz tej samej aplikacji.
@@ -247,16 +276,17 @@ app.get("/api/file/:id/preview", (req, res) => {
 });
 
 app.get("/api/queue", (req, res) => {
-  res.json({ queue });
+  res.json({ queue: getState(req).queue });
 });
 
 app.post("/api/reorder", (req, res) => {
-  if (printing) {
+  const state = getState(req);
+  if (state.printing) {
     return res.status(409).json({ ok: false, message: "Nie mozna zmieniac kolejnosci podczas drukowania" });
   }
 
   const order = req.body.order || [];
-  const byId = new Map(queue.map(item => [item.id, item]));
+  const byId = new Map(state.queue.map(item => [item.id, item]));
   const next = [];
 
   for (const id of order) {
@@ -270,12 +300,13 @@ app.post("/api/reorder", (req, res) => {
     next.push(item);
   }
 
-  queue = next;
-  res.json({ ok: true, queue });
+  state.queue = next;
+  res.json({ ok: true, queue: state.queue });
 });
 
 app.delete("/api/file/:id", (req, res) => {
-  if (printing) {
+  const state = getState(req);
+  if (state.printing) {
     return res.status(409).json({
       ok: false,
       message: "Nie mozna usuwac podczas drukowania"
@@ -283,26 +314,27 @@ app.delete("/api/file/:id", (req, res) => {
   }
 
   const id = req.params.id;
-  const found = queue.find(item => item.id === id);
-  queue = queue.filter(item => item.id !== id);
+  const found = state.queue.find(item => item.id === id);
+  state.queue = state.queue.filter(item => item.id !== id);
 
   if (found) cleanupFiles([found]);
 
-  res.json({ ok: true, queue });
+  res.json({ ok: true, queue: state.queue });
 });
 
 app.post("/api/clear", (req, res) => {
-  if (printing) {
+  const state = getState(req);
+  if (state.printing) {
     return res.status(409).json({
       ok: false,
       message: "Nie mozna czyscic podczas drukowania"
     });
   }
 
-  cleanupFiles(queue);
-  queue = [];
+  cleanupFiles(state.queue);
+  state.queue = [];
 
-  status = {
+  state.status = {
     printing: false,
     message: "Wyczyszczono",
     current: 0,
@@ -312,7 +344,7 @@ app.post("/api/clear", (req, res) => {
     error: null
   };
 
-  res.json({ ok: true, queue });
+  res.json({ ok: true, queue: state.queue });
 });
 
 app.get("/api/printers", async (req, res) => {
@@ -325,11 +357,12 @@ app.get("/api/printers", async (req, res) => {
 });
 
 app.get("/api/status", (req, res) => {
-  res.json(status);
+  res.json(getState(req).status);
 });
 
 app.post("/api/print", heavyJobLimiter, async (req, res) => {
-  if (printing) {
+  const state = getState(req);
+  if (state.printing) {
     return res.status(409).json({
       ok: false,
       message: "Drukowanie juz trwa"
@@ -352,7 +385,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
   const order = Array.isArray(req.body.order) ? req.body.order : [];
 
   if (order.length) {
-    const byId = new Map(queue.map(item => [item.id, item]));
+    const byId = new Map(state.queue.map(item => [item.id, item]));
     const ordered = [];
 
     for (const id of order) {
@@ -366,26 +399,26 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
       ordered.push(item);
     }
 
-    queue = ordered;
+    state.queue = ordered;
   }
 
-  if (!queue.length) {
+  if (!state.queue.length) {
     return res.status(400).json({
       ok: false,
       message: "Brak plikow"
     });
   }
 
-  printing = true;
+  state.printing = true;
 
-  const itemsToPrint = [...queue];
+  const itemsToPrint = [...state.queue];
   const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
   const sidesLabel = sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
   const copyLabel = copyMode === "set"
     ? "najpierw komplet, potem kolejna kopia kompletu"
     : "kopia przy kazdym pliku";
 
-  status = {
+  state.status = {
     printing: true,
     message: `Start drukowania: ${copies} kop. / ${sidesLabel} / ${copyLabel}`,
     current: 0,
@@ -399,14 +432,25 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
   res.json({ ok: true });
 
   try {
-    const printerName = String(req.body.printerName || "").trim(); const printerSetup = await applyPrinterSides(sideMode, printerName);
-    status.warning = printerSetup.ok ? null : printerSetup.message;
-    status.message = printerSetup.ok
-      ? printerSetup.message
-      : printerSetup.message;
+    const printerName = String(req.body.printerName || "").trim();
 
-    if (printerSetup.ok) {
-      await printService.wait(800);
+    if (process.platform === "win32") {
+      const printerSetup = await applyPrinterSides(sideMode, printerName);
+      state.status.warning = printerSetup.ok ? null : printerSetup.message;
+      state.status.message = printerSetup.message;
+      if (printerSetup.ok) await printService.wait(800);
+    } else if (sideMode === "two-sided" && printerName) {
+      // Nie zakladamy, ze kazda drukarka obsluguje dwustronny wydruk -
+      // sprawdzamy ZANIM cokolwiek wyslemy, zamiast udawac ze ustawienie
+      // zostalo zastosowane.
+      try {
+        const printerOptions = await printService.getPrinterOptions(printerName);
+        if (!printerOptions.duplexSupported) {
+          state.status.warning = "Ta drukarka nie obsluguje druku dwustronnego - wydruk bedzie jednostronny.";
+        }
+      } catch (err) {
+        state.status.warning = `Nie udalo sie sprawdzic mozliwosci drukarki: ${err.message}`;
+      }
     }
 
     for (let i = 0; i < printJobs.length; i++) {
@@ -414,28 +458,30 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
       const item = job.item;
       const copyInfo = copies > 1 ? `, kopia ${job.copy}/${copies}` : "";
 
-      status.current = i + 1;
-      status.total = printJobs.length;
-      status.percent = Math.round((i / printJobs.length) * 100);
-      status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
+      state.status.current = i + 1;
+      state.status.total = printJobs.length;
+      state.status.percent = Math.round((i / printJobs.length) * 100);
+      state.status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
 
       await printService.printFileWindows(item.path, printerName, {
         cwd: __dirname,
         logDir: DATA_DIR,
-        timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000)
+        timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000),
+        copies: 1,
+        duplex: sideMode === "two-sided"
       });
 
-      status.percent = Math.round(((i + 1) / printJobs.length) * 100);
-      status.message = `Dodano do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
+      state.status.percent = Math.round(((i + 1) / printJobs.length) * 100);
+      state.status.message = `Dodano do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
 
       // Nie czeka na fizyczne wydrukowanie.
-      // Daje Windowsowi / Acrobatowi / Wordowi czas na przyjecie zadania.
+      // Daje systemowi/drukarce czas na przyjecie zadania.
       await printService.wait(delaySeconds * 1000);
     }
 
-    status.message = `✅ Wszystkie zadania wyslane do kolejki drukowania (${printJobs.length})`;
-    status.percent = 100;
-    status.done = true;
+    state.status.message = `✅ Wszystkie zadania wyslane do kolejki drukowania (${printJobs.length})`;
+    state.status.percent = 100;
+    state.status.done = true;
 
     // Nie usuwamy plikow natychmiast po wyslaniu do druku.
     // Acrobat/Windows potrafi jeszcze doczytywac duze PDF-y po dodaniu zadania do kolejki.
@@ -447,13 +493,13 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
     // Zamykamy go dopiero po calej serii i z opoznieniem, bez Stop-Process -Force.
     printService.closePdfAppsAfterBatch(__dirname, Number(process.env.DRUKARKA_CLOSE_ACROBAT_AFTER_SECONDS || 30));
 
-    queue = [];
+    state.queue = [];
   } catch (err) {
-    status.error = String(err.message || err);
-    status.message = "❌ Blad drukowania: " + status.error;
+    state.status.error = String(err.message || err);
+    state.status.message = "❌ Blad drukowania: " + state.status.error;
   } finally {
-    printing = false;
-    status.printing = false;
+    state.printing = false;
+    state.status.printing = false;
   }
 });
 

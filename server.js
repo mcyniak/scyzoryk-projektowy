@@ -3,13 +3,24 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { createRequire } = require('module');
-const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog } = require('./lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog, readJsonFileNoBom, appendCriticalLog } = require('./lib/hardening');
+const anonSession = require('./lib/auth/anonymousSession');
+const adminAuth = require('./lib/auth/adminAuth');
+const authCookies = require('./lib/auth/cookies');
+const authMiddleware = require('./lib/auth/middleware');
+const authRateLimit = require('./lib/auth/rateLimiter');
 
 const ROOT = __dirname;
 const diagnostics = setupProcessDiagnostics('panel-glowny', ROOT);
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
+// HOST ma dwie ROZNE role, ktore na pilotowej instalacji linuksowej sie
+// rozjezdzaja: adres, na ktorym nasluchujemy (moze byc 0.0.0.0, zeby byc
+// widocznym w calej sieci LAN) i adres, pod ktorym odpytujemy WLASNE dzieci
+// (zawsze wystarczy loopback - proces-rodzic i tak zawsze gada sam ze soba
+// na tej samej maszynie, nie potrzebuje wychodzic przez interfejs LAN).
+const CHILD_HEALTHCHECK_HOST = '127.0.0.1';
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -20,7 +31,7 @@ const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 };
 
-const apps = [
+const ALL_APPS = [
   { slug: 'drukarka', name: 'Drukarka', description: 'Kolejkowanie i drukowanie dokumentow z lokalnego panelu.', dir: path.join(ROOT, 'apps', 'drukarka'), port: Number(process.env.DRUKARKA_PORT || 3001), healthPath: '/api/status' },
   { slug: 'pieczatki', name: 'Pieczatki PDF', description: 'Dodawanie pieczatki do plikow PDF i pobieranie wynikow.', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), port: Number(process.env.PIECZATKI_PORT || 3002), healthPath: '/api/health' },
   { slug: 'formularze', name: 'Formularze Ecodan', description: 'Generator raportow/formularzy na podstawie danych z Excela.', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), port: Number(process.env.FORMULARZE_PORT || 3003), healthPath: '/api/version', extraEnv: { HEADLESS: process.env.HEADLESS || 'true', BATCH_CONCURRENCY: process.env.BATCH_CONCURRENCY || '1', BATCH_RESTART_EVERY: process.env.BATCH_RESTART_EVERY || '5', PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || '0' } },
@@ -30,8 +41,7 @@ const apps = [
   { slug: 'drukarka-projekty', name: 'Drukarka projekty', description: 'Automatyczne przygotowanie i druk dokumentacji projektowej na podstawie arkusza inwestycji.', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), port: Number(process.env.DRUKARKA_PROJEKTY_PORT || 3010), healthPath: '/api/status' }
 ];
 
-
-const dependencyChecks = [
+const ALL_DEPENDENCY_CHECKS = [
   { slug: 'drukarka', dir: path.join(ROOT, 'apps', 'drukarka'), deps: ['express', 'multer', 'express-rate-limit'] },
   { slug: 'pieczatki', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), deps: ['express', 'multer', 'pdf-lib', 'archiver', '@pdf-lib/fontkit', 'pdfjs-dist', 'express-rate-limit'] },
   { slug: 'formularze', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), deps: ['express', 'playwright', 'read-excel-file', 'pdf-parse', 'pdf-lib', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
@@ -40,6 +50,30 @@ const dependencyChecks = [
   { slug: 'karty-katalogowe', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'express-rate-limit'] },
   { slug: 'drukarka-projekty', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), deps: ['express', 'multer', 'express-rate-limit', 'xlsx', 'mammoth', 'pdf-parse', 'pdf-lib', 'sanitize-filename'] }
 ];
+
+// SCYZORYK_PROFILE steruje tym, ktore aplikacje w ogole istnieja z punktu
+// widzenia tego procesu - wylaczona aplikacja nie jest spawnowana, nie jest
+// health-checkowana, nie pojawia sie w /api/apps ani nie jest restartowana.
+// Brak zmiennej = profil "windows" = dokladnie dzisiejsze zachowanie (wszystkie
+// 7 aplikacji), zeby instalacja Windows nigdy nie zmienila zachowania przez
+// przypadek.
+function loadActiveProfile() {
+  const profileName = process.env.SCYZORYK_PROFILE || 'windows';
+  let profiles = {};
+  try {
+    profiles = readJsonFileNoBom(path.join(ROOT, 'config', 'profiles.json'));
+  } catch (err) {
+    console.error(`Nie udalo sie wczytac config/profiles.json (${err.message}) - uzywam profilu "windows" ze wszystkimi aplikacjami.`);
+    profiles = { windows: { enabledApps: ALL_APPS.map(a => a.slug) } };
+  }
+  const profile = profiles[profileName] || profiles.windows;
+  if (!profile) throw new Error(`Nieznany profil "${profileName}" i brak profilu domyslnego "windows" w config/profiles.json.`);
+  return { profileName, enabledSlugs: new Set(profile.enabledApps || []) };
+}
+
+const { profileName: ACTIVE_PROFILE, enabledSlugs: ENABLED_APP_SLUGS } = loadActiveProfile();
+const apps = ALL_APPS.filter(a => ENABLED_APP_SLUGS.has(a.slug));
+const dependencyChecks = ALL_DEPENDENCY_CHECKS.filter(a => ENABLED_APP_SLUGS.has(a.slug));
 
 function appHasDependencies(app) {
   // Sprawdzamy istnienie folderu pakietu w node_modules, NIE probujemy go
@@ -114,10 +148,14 @@ function startChild(app, attempt = 0) {
   const meta = getChildMeta(app.slug);
   meta.startedAt = Date.now();
   meta.nextRestartAt = null;
-  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST }, stdio: ['ignore', 'pipe', 'pipe'] });
+  // PILOT_MODE jest zdefiniowane nizej w pliku, ale ta funkcja jest
+  // faktycznie wywolywana dopiero na samym koncu (po zaladowaniu profilu),
+  // wiec w momencie wywolania zmienna jest juz zainicjowana.
+  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_PILOT_MODE: PILOT_MODE ? '1' : '0', SCYZORYK_MAIN_PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', err => {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
     appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
+    appendCriticalLog(app.slug, 'error', 'child-error', { message: err.message });
     console.error(`[${app.slug}] Nie udalo sie uruchomic procesu: ${err.message}`);
   });
   children.set(app.slug, child);
@@ -133,6 +171,11 @@ function startChild(app, attempt = 0) {
     meta.restarts += 1;
     meta.nextRestartAt = Date.now() + delay;
     appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'warn', app: app.slug, event: 'child-restart-scheduled', code, signal, delay });
+    // Padniecie/zabicie dziecka to realna awaria warta jednego wspolnego
+    // miejsca do przejrzenia - nie tylko wpisu w logs/children.jsonl, ktory
+    // ma osobny plik per aplikacja (a wlasciwie wspolny, ale nie jest tym
+    // "tylko najwazniejsze rzeczy" logiem, ktory sprawdza sie w jednym miejscu).
+    appendCriticalLog(app.slug, 'error', 'child-restart-scheduled', { message: `Proces zakonczony (code=${code ?? 'null'}, signal=${signal ?? 'null'}), restart za ${delay}ms.` });
     setTimeout(() => startChild(app, attempt + 1), delay).unref();
   });
 }
@@ -159,10 +202,74 @@ function readStaticFile(filePath, res) {
   });
 }
 
+// Przekazuje zadanie 1:1 do wlasciwego procesu-dziecka (na 127.0.0.1, ten sam
+// host co checkHealth - rodzic i dziecko zawsze gadaja po loopback, LAN nie
+// jest tu potrzebny). Naglowki (w tym Cookie, X-Scyzoryk-Request) i body sa
+// przekazywane bez zmian - kazde dziecko samo pilnuje swojego zabezpieczenia
+// przed mutacjami spoza tej samej domeny, wiec proxy nie musi tego duplikowac.
+// Strumieniujemy w obie strony (req.pipe/proxyRes.pipe), zeby wgrywanie
+// duzych plikow Excel i pobieranie gotowych PDF/ZIP dzialalo bez buforowania
+// calosci w pamieci.
+function proxyToChild(app, req, res, targetPath) {
+  const proxyReq = http.request({
+    hostname: CHILD_HEALTHCHECK_HOST,
+    port: app.port,
+    path: targetPath,
+    method: req.method,
+    headers: req.headers
+  }, proxyRes => {
+    res.writeHead(proxyRes.statusCode, proxyRes.headers);
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('error', () => {
+    if (res.headersSent) return res.end();
+    send(res, 502, JSON.stringify({ ok: false, message: `Narzedzie "${app.name}" jest chwilowo niedostepne. Sprobuj odswiezyc za chwile.` }), 'application/json; charset=utf-8');
+  });
+  req.on('aborted', () => proxyReq.destroy());
+  req.pipe(proxyReq);
+}
+
+// Sciezki narzedzi maja teraz postac "/apps/<slug>/..." pod TYM SAMYM
+// portem co panel (zamiast osobnego portu na kazda aplikacje) - dzieki temu
+// przegladarka musi umiec dotrzec tylko do jednego portu (80), zeby
+// korzystac z calego zestawu narzedzi. Wczesniej linki panelu wskazywaly
+// wprost na "http://<host>:<port-dziecka>" - dzialalo to na niektorych
+// komputerach w biurze, ale nie na innych (najpewniej blokada/zawodnosc
+// nietypowych portow na czesci maszyn w sieci), mimo ze sama strona glowna
+// panelu (port 80) zawsze ladowala sie poprawnie. Front-end kazdej aplikacji
+// uzywa juz wzglednych sciezek do wlasnego API (np. "api/run" zamiast
+// "/api/run"), wiec dziala to identycznie w obu trybach: pod prefiksem
+// "/apps/<slug>/" ORAZ nadal bezposrednio pod wlasnym portem (bez zmian).
+function tryHandleAppsProxy(decodedPath, req, res) {
+  const PREFIX = '/apps/';
+  if (!decodedPath.startsWith(PREFIX)) return false;
+  const rest = decodedPath.slice(PREFIX.length);
+  const slashIdx = rest.indexOf('/');
+  const slug = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
+  const app = apps.find(a => a.slug === slug);
+  if (!app) { send(res, 404, 'Not found'); return true; }
+  if (slashIdx === -1) {
+    // Brak koncowego "/" - przekierowanie, zeby wzgledne sciezki w HTML
+    // dziecka (np. "app.js", "api/run") mialy poprawny punkt odniesienia.
+    res.writeHead(302, { ...SECURITY_HEADERS, Location: `${PREFIX}${slug}/` });
+    res.end();
+    return true;
+  }
+  // Slug to czyste ASCII (patrz ALL_APPS), wiec dlugosc prefiksu w
+  // ZAKODOWANYM req.url jest identyczna jak w zdekodowanej wersji - dzieki
+  // temu reszta sciezki (moze zawierac np. polskie znaki w query stringu
+  // przegladarki Dysku) trafia do dziecka bez podwojnego (de)kodowania.
+  const prefixLen = (PREFIX + slug).length;
+  let targetPath = req.url.slice(prefixLen) || '/';
+  if (!targetPath.startsWith('/')) targetPath = '/' + targetPath;
+  proxyToChild(app, req, res, targetPath);
+  return true;
+}
+
 function checkHealth(app) {
   return new Promise(resolve => {
     const started = Date.now();
-    const req = http.get({ hostname: HOST, port: app.port, path: app.healthPath || '/', timeout: 1600 }, res => {
+    const req = http.get({ hostname: CHILD_HEALTHCHECK_HOST, port: app.port, path: app.healthPath || '/', timeout: 1600 }, res => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { body += chunk; if (body.length > 20000) req.destroy(); });
@@ -175,12 +282,6 @@ function checkHealth(app) {
     req.on('timeout', () => { req.destroy(); resolve({ ok: false, timeout: true, ms: Date.now() - started }); });
     req.on('error', err => resolve({ ok: false, error: err.message, ms: Date.now() - started }));
   });
-}
-
-function safePanelHostname(req) {
-  const raw = String(req?.headers?.host || '').split(':')[0].toLowerCase();
-  if (raw === 'localhost' || raw === '127.0.0.1' || raw === '[::1]' || raw === '::1') return raw.replace(/[\[\]]/g, '');
-  return HOST;
 }
 
 function dirSizeSafe(dir, limitFiles = 2000) {
@@ -203,8 +304,7 @@ function dirSizeSafe(dir, limitFiles = 2000) {
   return { bytes: total, files, truncated: files >= limitFiles };
 }
 
-async function getAppsStatus(req) {
-  const hostname = safePanelHostname(req);
+async function getAppsStatus() {
   const statuses = await Promise.all(apps.map(async app => {
     const health = await checkHealth(app);
     const meta = getChildMeta(app.slug);
@@ -213,7 +313,10 @@ async function getAppsStatus(req) {
       name: app.name,
       description: app.description,
       port: app.port,
-      url: `http://${hostname}:${app.port}`,
+      // Wzgledna sciezka pod TYM SAMYM originem co panel (patrz
+      // tryHandleAppsProxy) - dziala z kazdego adresu/portu, pod jakim ktos
+      // trafil na panel, bez zgadywania hosta z naglowka zadania.
+      url: `/apps/${app.slug}/`,
       running: Boolean(health.ok),
       processAlive: children.has(app.slug),
       health,
@@ -245,20 +348,139 @@ function safeDecodePathname(rawPathname) {
   try { return decodeURIComponent(rawPathname); } catch { return null; }
 }
 
+function readJsonBody(req, maxBytes = 8192) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > maxBytes) { reject(new Error('Zadanie zbyt duze.')); req.destroy(); return; }
+      data += chunk;
+    });
+    req.on('end', () => {
+      if (!data) return resolve({});
+      try { resolve(JSON.parse(data)); } catch { reject(new Error('Niepoprawny JSON.')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function clientIp(req) {
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+// Pracownicy NIE maja kont ani ekranu logowania - kazda przegladarka w
+// firmowej sieci LAN od razu korzysta z narzedzi (patrz lib/auth/
+// anonymousSession.js - izolacja danych roboczych bez podawania
+// jakichkolwiek danych). Jedyne miejsce z prawdziwym haslem to panel
+// administratora (lib/auth/adminAuth.js). Oba mechanizmy sa aktywne tylko
+// dla profili innych niz "windows" - profil "windows" ma pozostac dokladnie
+// takim samym doswiadczeniem jak dzisiaj (bez panelu admina za haslem), zeby
+// ta sama galaz kodu dala sie bezpiecznie uruchomic tez z tym profilem.
+const PILOT_MODE = ACTIVE_PROFILE !== 'windows';
+if (PILOT_MODE) {
+  anonSession.startCleanupTimer();
+  adminAuth.startCleanupTimer();
+}
+
+// Ten sam wzorzec co w kazdej aplikacji-dziecku: zadania modyfikujace stan
+// musza niesc naglowek X-Scyzoryk-Request, ktorego zwykly <form> (bez JS) nie
+// potrafi ustawic, a przegladarka nie pozwoli ustawic go w zadaniu
+// miedzydomenowym bez zgody CORS, ktorej ten serwer nigdy nie daje.
+function isSameOriginRequest(req) {
+  return req.headers['x-scyzoryk-request'] === '1';
+}
+
+async function handleAdminLogin(req, res) {
+  if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
+  if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
+  const ip = clientIp(req);
+  let body;
+  try { body = await readJsonBody(req); }
+  catch (err) { return send(res, 400, JSON.stringify({ ok: false, error: err.message }), 'application/json; charset=utf-8'); }
+  const password = String(body.password || '');
+  if (authRateLimit.isRateLimited(ip, 'admin')) {
+    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'admin-login-rate-limited', ip });
+    return send(res, 429, JSON.stringify({ ok: false, error: 'Za duzo nieudanych prob logowania. Sprobuj ponownie za kilkanascie minut.' }), 'application/json; charset=utf-8');
+  }
+  if (!adminAuth.hasAdminPassword()) {
+    return send(res, 503, JSON.stringify({ ok: false, error: 'Haslo administratora nie zostalo jeszcze ustawione. Na serwerze uruchom: node scripts/set-admin-password.js' }), 'application/json; charset=utf-8');
+  }
+  const ok = await adminAuth.verifyAdminPassword(password);
+  if (!ok) {
+    authRateLimit.recordFailedAttempt(ip, 'admin');
+    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'admin-login-failed', ip });
+    return send(res, 401, JSON.stringify({ ok: false, error: 'Nieprawidlowe haslo.' }), 'application/json; charset=utf-8');
+  }
+  authRateLimit.recordSuccess(ip, 'admin');
+  const sid = adminAuth.createAdminSession();
+  appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'info', event: 'admin-login-success', ip });
+  res.setHeader('Set-Cookie', authCookies.buildCookieHeader(authCookies.ADMIN_SESSION_COOKIE, sid));
+  send(res, 200, JSON.stringify({ ok: true }), 'application/json; charset=utf-8');
+}
+
+function handleAdminLogout(req, res) {
+  if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
+  if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
+  const sid = authCookies.getCookieFromRequest(req, authCookies.ADMIN_SESSION_COOKIE);
+  if (sid) adminAuth.destroyAdminSession(sid);
+  res.setHeader('Set-Cookie', authCookies.buildClearCookieHeader(authCookies.ADMIN_SESSION_COOKIE));
+  send(res, 200, JSON.stringify({ ok: true }), 'application/json; charset=utf-8');
+}
+
+function handleAdminWhoami(req, res) {
+  const session = authMiddleware.getAdminSessionFromRequest(req);
+  send(res, 200, JSON.stringify({ ok: Boolean(session) }), 'application/json; charset=utf-8');
+}
+
 const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
   catch { return send(res, 400, 'Bad Request'); }
   const decodedPath = safeDecodePathname(url.pathname);
   if (decodedPath === null) return send(res, 400, 'Bad Request');
-  if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(req), null, 2), 'application/json; charset=utf-8');
-  if (decodedPath === '/api/admin/logs') return send(res, 200, JSON.stringify({ ok: true, lines: readLastLines(path.join(ROOT, 'logs', 'children.jsonl'), 100) }, null, 2), 'application/json; charset=utf-8');
+
+  if (tryHandleAppsProxy(decodedPath, req, res)) return;
+
+  if (decodedPath === '/admin/login') {
+    if (req.method === 'GET') return readStaticFile(path.join(PUBLIC_DIR, 'admin-login.html'), res);
+    return handleAdminLogin(req, res);
+  }
+  if (decodedPath === '/admin/logout') return handleAdminLogout(req, res);
+  if (decodedPath === '/admin/whoami') return handleAdminWhoami(req, res);
+
+  if (decodedPath === '/admin' || decodedPath === '/admin.html') {
+    if (PILOT_MODE) {
+      const session = authMiddleware.requireAdminAuthHttp(req, res, send);
+      if (!session) return; // requireAdminAuthHttp juz wyslal odpowiedz (redirect/401)
+    }
+    return readStaticFile(path.join(PUBLIC_DIR, 'admin.html'), res);
+  }
+  if (decodedPath === '/api/admin/logs') {
+    if (PILOT_MODE) {
+      const session = authMiddleware.requireAdminAuthHttp(req, res, send);
+      if (!session) return;
+    }
+    return send(res, 200, JSON.stringify({ ok: true, lines: readLastLines(path.join(ROOT, 'logs', 'children.jsonl'), 100) }, null, 2), 'application/json; charset=utf-8');
+  }
+
+  // Zwykle narzedzia i panel glowny NIGDY nie wymagaja logowania - to
+  // swiadoma decyzja (pracownicy w LAN maja od razu korzystac z narzedzi).
+  if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(), null, 2), 'application/json; charset=utf-8');
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
-  if (decodedPath === '/admin' || decodedPath === '/admin.html') return readStaticFile(path.join(PUBLIC_DIR, 'admin.html'), res);
   readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res);
 });
 
 applyHttpTimeouts(server, 'SCYZORYK');
 ensureDependenciesBeforeStart();
 for (const app of apps) startChild(app);
-server.listen(PORT, HOST, () => { console.log('Scyzoryk Projektowy dziala tylko lokalnie:'); console.log(`http://${HOST}:${PORT}`); for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`); });
+server.listen(PORT, HOST, () => {
+  console.log(`Scyzoryk Projektowy - profil: ${ACTIVE_PROFILE}${PILOT_MODE ? ' (panel administratora chroniony haslem)' : ''}`);
+  console.log(`http://${HOST}:${PORT}`);
+  for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`);
+  if (PILOT_MODE && !adminAuth.hasAdminPassword()) {
+    console.log('');
+    console.log('UWAGA: haslo administratora nie zostalo jeszcze ustawione. Panel /admin bedzie niedostepny do czasu:');
+    console.log('  node scripts/set-admin-password.js --password=...');
+  }
+});

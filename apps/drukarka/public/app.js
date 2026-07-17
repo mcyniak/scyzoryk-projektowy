@@ -223,7 +223,7 @@ function render() {
     remove.addEventListener("click", async (e) => {
       e.stopPropagation();
 
-      const res = await fetch(`/api/file/${encodeURIComponent(file.id)}`, {
+      const res = await fetch(`api/file/${encodeURIComponent(file.id)}`, {
         method: "DELETE",
         headers: { "X-Scyzoryk-Request": "1" }
       });
@@ -317,7 +317,7 @@ function render() {
 async function uploadFiles(files) {
   if (!files || !files.length) return;
 
-  const currentStatus = await fetch("/api/status").then(r => r.json()).catch(() => ({}));
+  const currentStatus = await fetch("api/status").then(r => r.json()).catch(() => ({}));
   if (currentStatus.printing) {
     statusText.textContent = "Trwa drukowanie. Poczekaj aż zakończy się wysyłanie plików do kolejki.";
     return;
@@ -337,7 +337,7 @@ async function uploadFiles(files) {
 
   statusText.textContent = "Wgrywanie plików...";
 
-  const res = await fetch("/api/upload", {
+  const res = await fetch("api/upload", {
     method: "POST",
     headers: { "X-Scyzoryk-Request": "1" },
     body: form
@@ -357,7 +357,7 @@ async function uploadFiles(files) {
 }
 
 async function loadQueue() {
-  const res = await fetch("/api/queue");
+  const res = await fetch("api/queue");
   const data = await res.json();
 
   queue = data.queue || [];
@@ -365,7 +365,7 @@ async function loadQueue() {
 }
 
 async function saveOrder() {
-  await fetch("/api/reorder", {
+  await fetch("api/reorder", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -378,7 +378,7 @@ async function saveOrder() {
 }
 
 async function pollStatus() {
-  const res = await fetch("/api/status");
+  const res = await fetch("api/status");
   const s = await res.json();
 
   statusText.textContent = s.warning ? `${s.message || "Gotowy"} (${s.warning})` : (s.message || "Gotowy");
@@ -413,7 +413,7 @@ fileInput.addEventListener("change", async () => {
 
 clearBtn.addEventListener("click", async () => {
   if (queue.length && !confirm(`Wyczyścić kolejkę (${queue.length} plików)?`)) return;
-  const res = await fetch("/api/clear", {
+  const res = await fetch("api/clear", {
     method: "POST",
     headers: { "X-Scyzoryk-Request": "1" }
   });
@@ -443,7 +443,7 @@ printBtn.addEventListener("click", async () => {
   const confirmText = `Wysłać do druku ${queue.length} plików, ${options.copies} kopii?`;
   if (!confirm(confirmText)) return;
 
-  const res = await fetch("/api/print", {
+  const res = await fetch("api/print", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -548,11 +548,11 @@ updateJobSummary();
 loadQueue();
 async function loadPrinters() {
   try {
-    const res = await fetch("/api/printers", { headers: { "X-Scyzoryk-Request": "1" } });
+    const res = await fetch("api/printers", { headers: { "X-Scyzoryk-Request": "1" } });
     const data = await res.json();
     const printers = data.printers || [];
     if (printerSelectInput && printers.length) {
-      printerSelectInput.innerHTML = printers.map(p => `<option value="${p.name}"${p.isDefault ? " selected" : ""}>${p.name}${p.isDefault ? " (domyslna)" : ""}</option>`).join("");
+      printerSelectInput.innerHTML = printers.map(p => `<option value="${p.name}"${p.isDefault ? " selected" : ""}>${p.displayName || p.name}${p.isDefault ? " (domyslna)" : ""}</option>`).join("");
     }
   } catch (e) {}
 }

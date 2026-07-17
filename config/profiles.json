@@ -1,0 +1,22 @@
+{
+  "windows": {
+    "enabledApps": [
+      "drukarka",
+      "pieczatki",
+      "formularze",
+      "dokumenty-seryjne",
+      "wnioski-powykonawcze",
+      "karty-katalogowe",
+      "drukarka-projekty"
+    ]
+  },
+  "linux-pilot": {
+    "enabledApps": [
+      "pieczatki",
+      "drukarka",
+      "formularze",
+      "karty-katalogowe",
+      "drukarka-projekty"
+    ]
+  }
+}

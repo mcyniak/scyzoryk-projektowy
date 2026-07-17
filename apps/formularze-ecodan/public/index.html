@@ -559,8 +559,12 @@ input[type=checkbox]{accent-color:#d71924!important;width:18px!important;height:
       <form id="batchForm">
         <div class="grid">
           <label>Plik Excel inwestycji
-            <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
-            <span class="field-help">Wybierz plik .xlsx z inwestycją.</span>
+            <div style="display:flex; gap:10px; align-items:center;">
+              <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="flex:1;" />
+              <button type="button" id="excelBrowseBtn" class="ghost smallBtn" hidden>Wybierz z Dysku…</button>
+            </div>
+            <input type="hidden" name="driveFilePath" id="driveFilePathField" value="" />
+            <span class="field-help" id="excelFieldHelp">Wybierz plik .xlsx z inwestycją.</span>
           </label>
           <label>Nazwa inwestycji
             <input name="investmentName" id="investmentName" placeholder="np. Ślesin 2026" />
@@ -646,6 +650,7 @@ input[type=checkbox]{accent-color:#d71924!important;width:18px!important;height:
     </section>
   </div>
 
+  <script src="drive-picker.js"></script>
   <script src="inline-1.js"></script>
   <script src="inline-2.js"></script>
 </body>
