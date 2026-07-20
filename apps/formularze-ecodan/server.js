@@ -11,7 +11,7 @@ import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX, MA
 import { setProjectRoot, getProjectRoot, getOutputRoot } from './src/debug.js';
 import { scheduleCleanup, appendCriticalLog } from '../../lib/hardening.js';
 import { calculate } from './src/rules.js';
-import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob, getHeavyJobQueueState } from './src/jobs.js';
+import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob, getHeavyJobQueueState, startJobsCleanupTimer } from './src/jobs.js';
 import { readExcelRecords } from './src/excel.js';
 import { createStorageClient } from '../../lib/storage/googleDriveStorage.js';
 
@@ -191,6 +191,15 @@ async function validateXlsxFile(file) {
   }
 }
 
+// Status jest odpytywany co 1-2s podczas trwania batcha - "results"/"errors"
+// na samym jobie rosna z kazdym przetworzonym wierszem (i moga niesc cieżkie
+// pola typu runtimeEvents/cwuState per wiersz, patrz runAutomationInSession),
+// wiec zwracanie ich w CALOSCI przy kazdym pollu oznaczalo, ze pod koniec
+// duzego batcha (50+ wierszy) kazda odpowiedz statusu bywala wielokrotnie
+// wieksza niz cokolwiek, czego faktycznie potrzebuje UI (ktory i tak pokazuje
+// tylko resultsPreview - ostatnie 20 wierszy). Budujemy jawny DTO bez
+// spreadu calego joba, zeby "results"/"errors" nigdy przypadkiem nie
+// wrocily przy kolejnej zmianie pol na jobie.
 function publicJob(job) {
   const resultsPreview = (job.results || []).slice(-20).map(row => ({
     ...row,
@@ -199,7 +208,28 @@ function publicJob(job) {
   }));
 
   return {
-    ...job,
+    id: job.id,
+    status: job.status,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt,
+    current: job.current,
+    activeWorkers: job.activeWorkers,
+    concurrency: job.concurrency,
+    total: job.total,
+    done: job.done,
+    ok: job.ok,
+    failed: job.failed,
+    cancelled: job.cancelled,
+    cancelRequested: job.cancelRequested,
+    cancelRequestedAt: job.cancelRequestedAt,
+    cancelledRemaining: job.cancelledRemaining,
+    skippedExisting: job.skippedExisting,
+    skipped: job.skipped,
+    restartedSessions: job.restartedSessions,
+    closedSessionErrors: job.closedSessionErrors,
+    fatalReason: job.fatalReason,
+    pdfDir: job.pdfDir,
     pdfDirDisplay: displayPath(job.pdfDir) || job.pdfDir,
     errorsFileDisplay: displayPath(job.errorsFile) || job.errorsFile,
     resultsCsvDisplay: displayPath(job.resultsCsv) || job.resultsCsv,
@@ -409,6 +439,8 @@ app.get('/api/batch/jobs', (req, res) => {
     downloadZipUrl: `api/batch/download/${encodeURIComponent(job.id)}`
   })) });
 });
+
+startJobsCleanupTimer();
 
 const server = app.listen(PORT, HOST, () => {
   console.log(`Ecodan generator ${APP_VERSION} dziala tylko lokalnie: http://${HOST}:${PORT}`);

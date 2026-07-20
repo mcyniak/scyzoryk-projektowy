@@ -50,6 +50,47 @@ function terminalStatus(status) {
   return ['finished', 'finished-with-errors', 'fatal-error', 'cancelled'].includes(status);
 }
 
+// "jobs" nie mial zadnej retencji - kazdy uruchomiony batch/pojedynczy
+// rekord zostawal w pamieci NA ZAWSZE (do restartu procesu), wraz z pelnymi
+// tablicami results/errors. Na urzadzeniu dzialajacym tygodniami bez
+// restartu (Raspberry Pi jako pilot) to czysty wyciek pamieci. Usuwamy
+// wylacznie zadania w stanie TERMINALNYM (nigdy queued/running/cancelling)
+// starsze niz JOB_MAX_AGE_MS, a gdy mimo to jest ich za duzo na raz -
+// najstarsze zakonczone ponad JOB_MAX_COUNT.
+const JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const JOB_MAX_COUNT = 200;
+
+function cleanupOldJobs() {
+  const now = Date.now();
+  const terminalEntries = [];
+  for (const [id, job] of jobs.entries()) {
+    if (!terminalStatus(job.status)) continue;
+    const finishedAt = job.finishedAt ? Date.parse(job.finishedAt) : NaN;
+    if (Number.isFinite(finishedAt) && now - finishedAt > JOB_MAX_AGE_MS) {
+      jobs.delete(id);
+      jobSessions.delete(id);
+      continue;
+    }
+    terminalEntries.push([id, Number.isFinite(finishedAt) ? finishedAt : 0]);
+  }
+  if (jobs.size > JOB_MAX_COUNT) {
+    terminalEntries.sort((a, b) => a[1] - b[1]);
+    const overflow = jobs.size - JOB_MAX_COUNT;
+    for (let i = 0; i < overflow && i < terminalEntries.length; i++) {
+      jobs.delete(terminalEntries[i][0]);
+      jobSessions.delete(terminalEntries[i][0]);
+    }
+  }
+}
+
+let jobsCleanupTimer = null;
+export function startJobsCleanupTimer(intervalMs = 30 * 60 * 1000) {
+  if (jobsCleanupTimer) return jobsCleanupTimer;
+  jobsCleanupTimer = setInterval(cleanupOldJobs, intervalMs);
+  jobsCleanupTimer.unref?.();
+  return jobsCleanupTimer;
+}
+
 function getJobSessionSet(jobId) {
   if (!jobSessions.has(jobId)) jobSessions.set(jobId, new Set());
   return jobSessions.get(jobId);
@@ -263,10 +304,15 @@ export async function runAutomationInSession(input, session, pdfDir, options = {
   const desiredPath = path.join(pdfDir, desiredFileName);
   const outputRoot = path.dirname(pdfDir);
 
+  // "Pomin istniejacy" ma znaczyc DOKLADNIE to - zostawiamy plik dokladnie
+  // takim, jaki jest, bez otwierania/parsowania/ewentualnego przepisywania
+  // go przez keepFirstPdfPages. Wczesniej ta galaz i tak przycinala kazdy
+  // pomijany PDF do pierwszych stron, co bylo niepotrzebnym obciazeniem (caly
+  // plik ladowany przez pdf-lib) dla KAZDEGO pominietego wiersza w batchu, a
+  // w skrajnym przypadku moglo cicho ucinac plik, ktorego uzytkownik
+  // swiadomie NIE chcial regenerowac ani modyfikowac.
   if (options.skipExisting && await pathExists(desiredPath)) {
-    const pdfTrim = await keepFirstPdfPages(desiredPath).catch(error => ({ ok: false, error: String(error?.message || error) }));
-    if (!pdfTrim.ok) throw new Error(`Nie udało się skrócić istniejącego PDF do pierwszych 3 stron: ${pdfTrim.error}`);
-    return { ok: true, skippedExisting: true, result, pdf: desiredPath, pdfTrim, durationMs: Date.now() - startedAt };
+    return { ok: true, skippedExisting: true, result, pdf: desiredPath, durationMs: Date.now() - startedAt };
   }
 
   try {
