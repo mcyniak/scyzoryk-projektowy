@@ -10,6 +10,7 @@
     *{box-sizing:border-box} body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:linear-gradient(135deg,#f4f7fb,#e8eef8);color:var(--text)}
     .shell{max-width:1180px;margin:0 auto;padding:34px 22px 60px}.top{display:flex;justify-content:space-between;gap:18px;align-items:center;margin-bottom:24px}.back{color:var(--muted);text-decoration:none;font-weight:800}.badge{background:#eef3fb;border:1px solid var(--line);padding:9px 13px;border-radius:999px;color:var(--muted);font-weight:800}.hero{background:var(--panel);border:1px solid var(--line);border-radius:32px;box-shadow:var(--shadow);padding:30px;margin-bottom:22px} .hero p{max-width:850px}.kicker{color:var(--red);font-weight:900;text-transform:uppercase;letter-spacing:.08em;font-size:13px}h1{font-size:42px;line-height:1.05;margin:10px 0 10px}p{color:var(--muted);font-weight:650;line-height:1.5}.grid{display:grid;grid-template-columns:1.1fr .9fr;gap:22px}@media(max-width:900px){.grid{grid-template-columns:1fr}h1{font-size:32px}}
     .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:24px}.card h2{margin:0 0 15px;font-size:24px}.field{margin:16px 0}.label{display:block;font-weight:900;margin-bottom:8px}.hint{font-size:14px;color:var(--muted);font-weight:700;margin-top:8px}.input{width:100%;border:1px solid var(--line);border-radius:17px;padding:16px 17px;font-size:18px;font-weight:750;background:#fff;color:var(--text)}.filebox{border:2px dashed #f06b72;background:#fff8f8;border-radius:24px;padding:28px;text-align:center}.filebox strong{display:block;font-size:20px;margin-bottom:8px}.button{border:0;border-radius:18px;padding:16px 22px;font-size:17px;font-weight:900;cursor:pointer}.primary{background:var(--red);color:white;box-shadow:0 14px 26px rgba(229,29,42,.20)}.secondary{background:#fff;border:1px solid var(--line);color:#33435a}.button:disabled{opacity:.55;cursor:not-allowed}.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:20px}.list{margin-top:18px;border:1px solid var(--line);border-radius:20px;overflow:hidden;background:#fff}.row{display:flex;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);font-weight:800}.row:last-child{border-bottom:0}.row small{display:block;color:var(--muted);font-weight:700}.row .grow{flex:1}.remove{border:1px solid var(--line);background:#fff;border-radius:12px;padding:8px 10px;font-weight:900;cursor:pointer;color:#a20c18}.queue-note{margin-top:10px;color:var(--muted);font-size:14px;font-weight:800}.status{margin-top:16px;border-radius:18px;padding:16px;background:#f7f9fd;border:1px solid var(--line);font-weight:800}.status.ok{background:#effaf4;border-color:#b9e7cc;color:#09633f}.status.err{background:#fff1f2;border-color:#ffc6cb;color:#a20c18}.result a{display:inline-block;margin:8px 8px 0 0;color:#0f4e9a;font-weight:900;text-decoration:none}.steps{display:grid;gap:12px}.step{display:flex;gap:12px;align-items:flex-start;background:var(--soft);border:1px solid var(--line);border-radius:18px;padding:16px}.num{width:32px;height:32px;border-radius:50%;background:var(--red);color:white;display:grid;place-items:center;font-weight:900;flex:0 0 auto}.tech{margin-top:18px}.tech summary{cursor:pointer;color:var(--muted);font-weight:900}.check{display:flex;gap:10px;align-items:center;margin:12px 0;color:var(--muted);font-weight:850}.check input{width:18px;height:18px}.empty{color:var(--muted);font-weight:750;padding:18px}.mini{font-size:13px;color:var(--muted);font-weight:750}.envwarn{margin:14px 0;padding:14px;border-radius:16px;background:#fff1f2;border:1px solid #fecaca;color:#991b1b;font-weight:800;line-height:1.45}.row.ok{background:#effaf4}.row.err{background:#fff1f2}.row.dup{background:#fff1f2}.file-state{font-size:12px;font-weight:900;color:var(--muted);min-width:90px;text-align:right}.split{display:grid;grid-template-columns:1fr 1fr;gap:14px}@media(max-width:700px){.split{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
+    .hidden{display:none!important}.row input[type="checkbox"]{width:20px;height:20px;flex:0 0 auto;accent-color:var(--red)}.button.mode-active{outline:3px solid rgba(229,29,42,.22)}.row.muted-row{opacity:.72}
   
 
 /* UI refresh: wspolny, bardziej czysty wyglad */
@@ -421,7 +422,16 @@ input[type="file"]::-webkit-file-upload-button{margin-right:12px!important;borde
       </aside>
     </section>
 
-    <div class="grid">
+    <section class="card" id="modeChooser">
+      <h2>Co robimy?</h2>
+      <p class="hint">Wybierz, czy przerabiasz pojedyncze pliki, czy cały folder WM inwestycji naraz.</p>
+      <div class="actions">
+        <button class="button primary" id="modeManualBtn" type="button">Wgraj pliki ręcznie</button>
+        <button class="button secondary" id="modeFolderBtn" type="button">Cały folder WM (automatycznie)</button>
+      </div>
+    </section>
+
+    <div class="grid hidden" id="flowManual">
       <section class="card">
         <h2>1. Dodaj dokumenty</h2>
         <form id="form">
@@ -470,6 +480,69 @@ input[type="file"]::-webkit-file-upload-button{margin-right:12px!important;borde
           <div class="step"><span class="num">4</span><div><strong>PDF</strong><p>Eksportuje wynik do PDF przez Microsoft Word, żeby format się nie rozjechał.</p></div></div>
         </div>
       </aside>
+    </div>
+
+    <div class="grid hidden" id="flowFolder">
+      <section class="card">
+        <h2>1. Folder WM</h2>
+        <p class="hint">Podaj ścieżkę do folderu z wnioskami materiałowymi (np. folderu inwestycji, który zawiera podfoldery WM). Program sam znajdzie w każdym podfolderze plik WM do przerobienia na dokumentację powykonawczą.</p>
+        <div class="field">
+          <label class="label" for="wmFolderPath">Ścieżka folderu WM</label>
+          <input class="input" id="wmFolderPath" type="text" placeholder="np. G:\Dyski współdzielone\...\10. Nowe Ostrowy\WM">
+        </div>
+
+        <div class="split">
+          <div class="field">
+            <label class="label" for="wmFolderDate">Data dokumentacji powykonawczej</label>
+            <input class="input" id="wmFolderDate" type="date" required>
+            <div class="split" id="wmFolderMonthYearFields" style="display:none;margin-top:8px">
+              <input class="input" id="wmFolderMonthNum" type="number" inputmode="numeric" min="1" max="12" placeholder="MM">
+              <input class="input" id="wmFolderYearNum" type="number" inputmode="numeric" min="1900" max="2100" placeholder="RRRR">
+            </div>
+            <label class="check" for="wmFolderMonthOnly"><input type="checkbox" id="wmFolderMonthOnly"> Tylko miesiąc i rok</label>
+            <div class="hint" id="wmFolderDateHint">Ta sama data trafi do wszystkich miejsc w dokumentach.</div>
+          </div>
+          <div class="field">
+            <label class="label" for="wmFolderPrefix">Przedrostek nazwy PDF</label>
+            <input class="input" id="wmFolderPrefix" value="WM dok.pod">
+            <div class="hint">Przykład: WM dok.pod Pompa ciepła.pdf</div>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="button primary" id="wmScanBtn" type="button">Skanuj folder</button>
+        </div>
+        <div id="wmScanStatus" class="status" hidden aria-live="polite"></div>
+      </section>
+
+      <aside class="card">
+        <h2>Jak działa automatyczny tryb?</h2>
+        <div class="steps">
+          <div class="step"><span class="num">1</span><div><strong>Podaj folder</strong><p>Wklej ścieżkę do folderu z podfolderami WM - jednego na kategorię (np. "Pompa ciepła", "Zbiornik").</p></div></div>
+          <div class="step"><span class="num">2</span><div><strong>Skanowanie</strong><p>Program znajduje w każdym podfolderze plik "WM ..." i sprawdza, czy ma już wersję powykonawczą.</p></div></div>
+          <div class="step"><span class="num">3</span><div><strong>Przerobienie</strong><p>Zaznaczone kategorie przerabia jak zwykle (tytuł, data, usunięcie sekcji zatwierdzania).</p></div></div>
+          <div class="step"><span class="num">4</span><div><strong>Zapis</strong><p>Gotowy PDF trafia od razu do tego samego podfolderu WM, obok oryginału - nic nie trzeba pobierać.</p></div></div>
+        </div>
+      </aside>
+
+      <section class="card" id="wmResultsCard" hidden style="grid-column:1 / -1">
+        <h2>2. Znalezione kategorie</h2>
+        <p class="hint" id="wmResultsHint"></p>
+        <div class="list" id="wmToConvertList"></div>
+        <div id="wmAlreadyBlock" hidden>
+          <h2 style="font-size:17px;margin-top:18px">Już mają wersję powykonawczą (pominięte)</h2>
+          <div class="list" id="wmAlreadyList"></div>
+        </div>
+        <div id="wmMissingBlock" hidden>
+          <h2 style="font-size:17px;margin-top:18px">Brak pliku źródłowego DOCX (nie da się przerobić)</h2>
+          <div class="list" id="wmMissingList"></div>
+        </div>
+        <div class="actions">
+          <button class="button primary" id="wmConvertBtn" type="button">Przerób zaznaczone i zapisz w folderach</button>
+        </div>
+        <div id="wmConvertStatus" class="status" hidden aria-live="polite"></div>
+        <div id="wmConvertResult" class="result"></div>
+      </section>
     </div>
   </main>
 

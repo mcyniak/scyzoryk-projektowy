@@ -13,6 +13,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, runPowerShell, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
+const wmFolderScan = require('./src/wmFolderScan');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3005);
@@ -344,6 +345,93 @@ persistJobsIndex();
     job.error = error.message;
     persistJobsIndex();
     res.status(400).json({ ok: false, message: error.message });
+  }
+});
+
+// Automatyczny tryb "caly folder WM": uzytkownik podaje tylko sciezke
+// nadrzednego folderu (np. folderu inwestycji zawierajacego podfoldery WM),
+// a aplikacja sama znajduje w kazdym podfolderze plik "WM ..." do przerobienia.
+app.post('/api/wm-folder/scan', (req, res) => {
+  const folderPath = String(req.body?.folderPath || '').trim();
+  if (!folderPath) return res.status(400).json({ ok: false, message: 'Podaj ścieżkę folderu z wnioskami materiałowymi (WM).' });
+  let stat;
+  try { stat = fs.statSync(folderPath); } catch (_) { stat = null; }
+  if (!stat || !stat.isDirectory()) {
+    return res.status(400).json({ ok: false, message: 'Nie znaleziono folderu: ' + folderPath });
+  }
+  try {
+    const result = wmFolderScan.scanWmFolder(folderPath);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || 'Nie udało się przeskanować folderu WM.' });
+  }
+});
+
+// Przerabia wybrane kategorie na dokumentacje powykonawcza i zapisuje PDF-y
+// BEZPOSREDNIO w tych samych folderach, w ktorych lezaly zrodlowe pliki WM -
+// bez uploadu, bez ZIP-a do pobrania, tak jak przy zwyklym uploadzie tylko
+// ze sciezka docelowa jest folderem uzytkownika, nie folderem aplikacji.
+app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!items.length) return res.status(400).json({ ok: false, message: 'Wybierz przynajmniej jedną kategorię do przerobienia.' });
+  if (items.length > MAX_FILES) return res.status(400).json({ ok: false, message: `Za dużo pozycji na raz (limit ${MAX_FILES}).` });
+
+  let dateText;
+  let prefix;
+  try {
+    dateText = normalizeDate(req.body?.date);
+    prefix = cleanPrefix(req.body?.prefix || 'WM dok.pod');
+  } catch (err) {
+    return res.status(400).json({ ok: false, message: err.message });
+  }
+
+  const jobId = crypto.randomUUID();
+  const jobDir = path.join(OUTPUT_DIR, jobId);
+  await fsp.mkdir(jobDir, { recursive: true });
+
+  try {
+    const manifestFiles = items.map(item => {
+      const sourcePath = String(item.sourcePath || '');
+      const folderPath = String(item.folderPath || '');
+      let sourceStat;
+      try { sourceStat = fs.statSync(sourcePath); } catch (_) { sourceStat = null; }
+      if (!sourceStat || !sourceStat.isFile() || path.extname(sourcePath).toLowerCase() !== '.docx') {
+        throw new Error('Nie znaleziono pliku źródłowego DOCX: ' + sourcePath);
+      }
+      let folderStat;
+      try { folderStat = fs.statSync(folderPath); } catch (_) { folderStat = null; }
+      if (!folderStat || !folderStat.isDirectory()) throw new Error('Nie znaleziono folderu docelowego: ' + folderPath);
+
+      const pdfPath = uniquePath(folderPath, outputFileName(path.basename(sourcePath), prefix));
+      const debugDocxPath = path.join(jobDir, path.basename(pdfPath, '.pdf') + '.docx');
+      return { inputPath: sourcePath, category: String(item.category || ''), pdfPath, debugDocxPath };
+    });
+
+    const inputJson = path.join(jobDir, 'input.json');
+    const outputJson = path.join(jobDir, 'result.json');
+    writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx: false, visibleWord: false });
+
+    await wordQueue.run(() => runConvertScript(inputJson, outputJson));
+    const result = readJsonFileNoBom(outputJson);
+    if (!result.ok) throw new Error(result.error || 'Nie udało się przetworzyć dokumentów.');
+
+    const okItems = [];
+    const failed = [];
+    const byInputPath = new Map(manifestFiles.map(m => [m.inputPath, m]));
+    for (const item of result.results || []) {
+      const manifestEntry = byInputPath.get(item.input);
+      if (item.ok && item.pdf && fs.existsSync(item.pdf)) {
+        okItems.push({ category: manifestEntry?.category || '', file: path.basename(item.pdf), path: item.pdf });
+      } else {
+        failed.push({ category: manifestEntry?.category || '', input: item.input, error: item.error || 'Nieznany błąd' });
+      }
+    }
+
+    res.json({ ok: true, created: okItems.length, files: okItems, failed });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || 'Nie udało się przetworzyć dokumentów.' });
+  } finally {
+    await fsp.rm(jobDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 

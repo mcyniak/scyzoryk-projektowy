@@ -198,3 +198,171 @@ const $ = s => document.querySelector(s);
       }
     });
     renderFiles();
+
+    // --- Tryb "caly folder WM": skanowanie + przerobienie w miejscu ---
+    const flowManual = $('#flowManual');
+    const flowFolder = $('#flowFolder');
+    const modeManualBtn = $('#modeManualBtn');
+    const modeFolderBtn = $('#modeFolderBtn');
+
+    function setMode(mode) {
+      flowManual.classList.toggle('hidden', mode !== 'manual');
+      flowFolder.classList.toggle('hidden', mode !== 'folder');
+      modeManualBtn.classList.toggle('mode-active', mode === 'manual');
+      modeFolderBtn.classList.toggle('mode-active', mode === 'folder');
+    }
+    modeManualBtn.addEventListener('click', () => setMode('manual'));
+    modeFolderBtn.addEventListener('click', () => setMode('folder'));
+
+    const wmFolderPathInput = $('#wmFolderPath');
+    const wmFolderDateInput = $('#wmFolderDate');
+    const wmFolderMonthOnlyEl = $('#wmFolderMonthOnly');
+    const wmFolderDateHint = $('#wmFolderDateHint');
+    const wmFolderMonthYearFields = $('#wmFolderMonthYearFields');
+    const wmFolderMonthNumInput = $('#wmFolderMonthNum');
+    const wmFolderYearNumInput = $('#wmFolderYearNum');
+    const wmFolderPrefixInput = $('#wmFolderPrefix');
+    const wmScanBtn = $('#wmScanBtn');
+    const wmScanStatus = $('#wmScanStatus');
+    const wmResultsCard = $('#wmResultsCard');
+    const wmResultsHint = $('#wmResultsHint');
+    const wmToConvertList = $('#wmToConvertList');
+    const wmAlreadyBlock = $('#wmAlreadyBlock');
+    const wmAlreadyList = $('#wmAlreadyList');
+    const wmMissingBlock = $('#wmMissingBlock');
+    const wmMissingList = $('#wmMissingList');
+    const wmConvertBtn = $('#wmConvertBtn');
+    const wmConvertStatus = $('#wmConvertStatus');
+    const wmConvertResult = $('#wmConvertResult');
+    wmFolderDateInput.value = today.toISOString().slice(0, 10);
+    let wmScanItems = [];
+
+    function setWmFolderDateMode(monthOnly) {
+      if (monthOnly) {
+        wmFolderDateInput.hidden = true;
+        wmFolderDateInput.required = false;
+        wmFolderMonthYearFields.style.display = '';
+        if (!wmFolderMonthNumInput.value) wmFolderMonthNumInput.value = today.getMonth() + 1;
+        if (!wmFolderYearNumInput.value) wmFolderYearNumInput.value = today.getFullYear();
+        wmFolderDateHint.textContent = 'Wpisujesz tylko miesiąc i rok (liczbowo) - dzień zostanie pominięty we wszystkich dokumentach.';
+      } else {
+        wmFolderDateInput.hidden = false;
+        wmFolderDateInput.required = true;
+        wmFolderMonthYearFields.style.display = 'none';
+        wmFolderDateHint.textContent = 'Ta sama data trafi do wszystkich miejsc w dokumentach.';
+      }
+    }
+    wmFolderMonthOnlyEl.addEventListener('change', () => setWmFolderDateMode(wmFolderMonthOnlyEl.checked));
+
+    function getWmFolderDateValue() {
+      if (!wmFolderMonthOnlyEl.checked) return wmFolderDateInput.value;
+      const month = Number(wmFolderMonthNumInput.value);
+      const year = Number(wmFolderYearNumInput.value);
+      if (!month || month < 1 || month > 12 || !year) return '';
+      return `${year}-${pad2(month)}`;
+    }
+
+    function showWmScanStatus(text, type = '') {
+      wmScanStatus.hidden = false;
+      wmScanStatus.className = 'status ' + type;
+      wmScanStatus.textContent = text;
+    }
+    function showWmConvertStatus(text, type = '') {
+      wmConvertStatus.hidden = false;
+      wmConvertStatus.className = 'status ' + type;
+      wmConvertStatus.textContent = text;
+    }
+
+    function renderWmRow(item, { withCheckbox } = { withCheckbox: false }) {
+      const check = withCheckbox
+        ? `<input type="checkbox" data-wm-check="${escapeHtml(item.sourcePath)}" checked>`
+        : '';
+      const sub = item.status === 'juz-istnieje'
+        ? `już ma: ${escapeHtml(item.existingDokPod || '')}`
+        : item.status === 'brak-docx'
+          ? 'brak pliku WM ...docx w tym folderze'
+          : escapeHtml(item.sourceDocx || '');
+      return `
+        <div class="row${withCheckbox ? '' : ' muted-row'}">
+          ${check}
+          <div class="grow">${escapeHtml(item.category)}<small>${sub}</small></div>
+        </div>`;
+    }
+
+    wmScanBtn.addEventListener('click', async () => {
+      const folderPath = wmFolderPathInput.value.trim();
+      if (!folderPath) return showWmScanStatus('Podaj ścieżkę folderu WM.', 'err');
+      wmResultsCard.hidden = true;
+      wmConvertResult.innerHTML = '';
+      wmConvertStatus.hidden = true;
+      wmScanBtn.disabled = true;
+      showWmScanStatus('Skanuję folder...', '');
+      try {
+        const res = await fetch('/api/wm-folder/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+          body: JSON.stringify({ folderPath })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się przeskanować folderu.');
+        wmScanItems = data.items || [];
+        const toConvert = wmScanItems.filter(i => i.status === 'do-przerobienia');
+        const already = wmScanItems.filter(i => i.status === 'juz-istnieje');
+        const missing = wmScanItems.filter(i => i.status === 'brak-docx');
+
+        if (!wmScanItems.length) {
+          showWmScanStatus(`Nie znaleziono żadnego podfolderu z plikiem "WM ..." w: ${folderPath}`, 'err');
+          return;
+        }
+        wmResultsHint.textContent = `Znaleziono ${data.categoriesFound} kategorii WM, do przerobienia: ${toConvert.length}.`;
+        wmToConvertList.innerHTML = toConvert.length
+          ? toConvert.map(i => renderWmRow(i, { withCheckbox: true })).join('')
+          : '<div class="empty">Brak nowych kategorii do przerobienia - wszystkie mają już wersję powykonawczą albo brakuje pliku źródłowego.</div>';
+        wmAlreadyBlock.hidden = !already.length;
+        wmAlreadyList.innerHTML = already.map(i => renderWmRow(i, { withCheckbox: false })).join('');
+        wmMissingBlock.hidden = !missing.length;
+        wmMissingList.innerHTML = missing.map(i => renderWmRow(i, { withCheckbox: false })).join('');
+        wmResultsCard.hidden = false;
+        wmConvertBtn.disabled = !toConvert.length;
+        showWmScanStatus(`Gotowe. Znaleziono ${data.categoriesFound} kategorii.`, 'ok');
+      } catch (err) {
+        showWmScanStatus(err.message || 'Błąd skanowania folderu.', 'err');
+      } finally {
+        wmScanBtn.disabled = false;
+      }
+    });
+
+    wmConvertBtn.addEventListener('click', async () => {
+      const dateValue = getWmFolderDateValue();
+      if (!dateValue) return showWmConvertStatus('Wpisz poprawną datę (albo miesiąc i rok).', 'err');
+      const checked = [...wmToConvertList.querySelectorAll('[data-wm-check]:checked')]
+        .map(el => el.dataset.wmCheck);
+      const items = wmScanItems.filter(i => i.status === 'do-przerobienia' && checked.includes(i.sourcePath));
+      if (!items.length) return showWmConvertStatus('Zaznacz przynajmniej jedną kategorię do przerobienia.', 'err');
+
+      wmConvertBtn.disabled = true;
+      wmConvertResult.innerHTML = '';
+      showWmConvertStatus(`Przerabiam ${items.length} ${items.length === 1 ? 'kategorię' : 'kategorii'} w Wordzie i zapisuję w folderach...`, '');
+      try {
+        const res = await fetch('/api/wm-folder/convert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+          body: JSON.stringify({
+            items: items.map(i => ({ sourcePath: i.sourcePath, folderPath: i.folderPath, category: i.category })),
+            date: dateValue,
+            prefix: wmFolderPrefixInput.value
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się przerobić dokumentów.');
+        const failedList = data.failed || [];
+        showWmConvertStatus(`Gotowe. Utworzono i zapisano w folderach: ${data.created}.`, failedList.length ? '' : 'ok');
+        const okLines = (data.files || []).map(f => `<div class="row ok"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.file)}</small></div></div>`).join('');
+        const failLines = failedList.map(f => `<div class="row err"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.error)}</small></div></div>`).join('');
+        wmConvertResult.innerHTML = `<div class="list">${okLines}${failLines}</div>`;
+      } catch (err) {
+        showWmConvertStatus(err.message || 'Błąd przerabiania dokumentów.', 'err');
+      } finally {
+        wmConvertBtn.disabled = false;
+      }
+    });
