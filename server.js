@@ -5,10 +5,6 @@ const { spawn, spawnSync } = require('child_process');
 const { createRequire } = require('module');
 const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog, readJsonFileNoBom, appendCriticalLog } = require('./lib/hardening');
 const anonSession = require('./lib/auth/anonymousSession');
-const adminAuth = require('./lib/auth/adminAuth');
-const authCookies = require('./lib/auth/cookies');
-const authMiddleware = require('./lib/auth/middleware');
-const authRateLimit = require('./lib/auth/rateLimiter');
 
 const ROOT = __dirname;
 const diagnostics = setupProcessDiagnostics('panel-glowny', ROOT);
@@ -21,6 +17,16 @@ const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 // (zawsze wystarczy loopback - proces-rodzic i tak zawsze gada sam ze soba
 // na tej samej maszynie, nie potrzebuje wychodzic przez interfejs LAN).
 const CHILD_HEALTHCHECK_HOST = '127.0.0.1';
+// Adres, na ktorym MAJA nasluchiwac procesy-dzieci. Cala komunikacja z nimi
+// (health-check powyzej i proxy w tryHandleAppsProxy) i tak zawsze idzie
+// przez 127.0.0.1 - przegladarka w LAN nigdy nie laczy sie z dzieckiem
+// bezposrednio, tylko przez proxy panelu na porcie 80. Wczesniej dzieci
+// dostawaly to samo SCYZORYK_HOST co panel (np. "::" - dual-stack, widoczne
+// w calej sieci), co bez powodu wystawialo ich porty (3001, 3002, ...) na
+// LAN obok proxy panelu. SCYZORYK_CHILD_HOST pozwala to nadpisac recznie w
+// razie potrzeby (np. debugowanie bezposrednio na porcie dziecka), ale
+// domyslnie zawsze loopback.
+const CHILD_BIND_HOST = process.env.SCYZORYK_CHILD_HOST || '127.0.0.1';
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -151,7 +157,7 @@ function startChild(app, attempt = 0) {
   // PILOT_MODE jest zdefiniowane nizej w pliku, ale ta funkcja jest
   // faktycznie wywolywana dopiero na samym koncu (po zaladowaniu profilu),
   // wiec w momencie wywolania zmienna jest juz zainicjowana.
-  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_PILOT_MODE: PILOT_MODE ? '1' : '0', SCYZORYK_MAIN_PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: CHILD_BIND_HOST, SCYZORYK_PILOT_MODE: PILOT_MODE ? '1' : '0', SCYZORYK_MAIN_PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', err => {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
     appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
@@ -348,89 +354,18 @@ function safeDecodePathname(rawPathname) {
   try { return decodeURIComponent(rawPathname); } catch { return null; }
 }
 
-function readJsonBody(req, maxBytes = 8192) {
-  return new Promise((resolve, reject) => {
-    let data = '';
-    let size = 0;
-    req.on('data', chunk => {
-      size += chunk.length;
-      if (size > maxBytes) { reject(new Error('Zadanie zbyt duze.')); req.destroy(); return; }
-      data += chunk;
-    });
-    req.on('end', () => {
-      if (!data) return resolve({});
-      try { resolve(JSON.parse(data)); } catch { reject(new Error('Niepoprawny JSON.')); }
-    });
-    req.on('error', reject);
-  });
-}
-
-function clientIp(req) {
-  return req.socket?.remoteAddress || 'unknown';
-}
-
 // Pracownicy NIE maja kont ani ekranu logowania - kazda przegladarka w
 // firmowej sieci LAN od razu korzysta z narzedzi (patrz lib/auth/
 // anonymousSession.js - izolacja danych roboczych bez podawania
-// jakichkolwiek danych). Jedyne miejsce z prawdziwym haslem to panel
-// administratora (lib/auth/adminAuth.js). Oba mechanizmy sa aktywne tylko
-// dla profili innych niz "windows" - profil "windows" ma pozostac dokladnie
-// takim samym doswiadczeniem jak dzisiaj (bez panelu admina za haslem), zeby
-// ta sama galaz kodu dala sie bezpiecznie uruchomic tez z tym profilem.
+// jakichkolwiek danych). Panel techniczny /admin nie jest chroniony haslem -
+// to lokalne narzedzie diagnostyczne dla biura, nie system z rolami/
+// uprawnieniami. PILOT_MODE jest aktywne tylko dla profili innych niz
+// "windows" - profil "windows" ma pozostac dokladnie takim samym
+// doswiadczeniem jak dzisiaj, zeby ta sama galaz kodu dala sie bezpiecznie
+// uruchomic tez z tym profilem.
 const PILOT_MODE = ACTIVE_PROFILE !== 'windows';
 if (PILOT_MODE) {
   anonSession.startCleanupTimer();
-  adminAuth.startCleanupTimer();
-}
-
-// Ten sam wzorzec co w kazdej aplikacji-dziecku: zadania modyfikujace stan
-// musza niesc naglowek X-Scyzoryk-Request, ktorego zwykly <form> (bez JS) nie
-// potrafi ustawic, a przegladarka nie pozwoli ustawic go w zadaniu
-// miedzydomenowym bez zgody CORS, ktorej ten serwer nigdy nie daje.
-function isSameOriginRequest(req) {
-  return req.headers['x-scyzoryk-request'] === '1';
-}
-
-async function handleAdminLogin(req, res) {
-  if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
-  if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
-  const ip = clientIp(req);
-  let body;
-  try { body = await readJsonBody(req); }
-  catch (err) { return send(res, 400, JSON.stringify({ ok: false, error: err.message }), 'application/json; charset=utf-8'); }
-  const password = String(body.password || '');
-  if (authRateLimit.isRateLimited(ip, 'admin')) {
-    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'admin-login-rate-limited', ip });
-    return send(res, 429, JSON.stringify({ ok: false, error: 'Za duzo nieudanych prob logowania. Sprobuj ponownie za kilkanascie minut.' }), 'application/json; charset=utf-8');
-  }
-  if (!adminAuth.hasAdminPassword()) {
-    return send(res, 503, JSON.stringify({ ok: false, error: 'Haslo administratora nie zostalo jeszcze ustawione. Na serwerze uruchom: node scripts/set-admin-password.js' }), 'application/json; charset=utf-8');
-  }
-  const ok = await adminAuth.verifyAdminPassword(password);
-  if (!ok) {
-    authRateLimit.recordFailedAttempt(ip, 'admin');
-    appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'warn', event: 'admin-login-failed', ip });
-    return send(res, 401, JSON.stringify({ ok: false, error: 'Nieprawidlowe haslo.' }), 'application/json; charset=utf-8');
-  }
-  authRateLimit.recordSuccess(ip, 'admin');
-  const sid = adminAuth.createAdminSession();
-  appendJsonLine(path.join(ROOT, 'logs', 'auth.jsonl'), { level: 'info', event: 'admin-login-success', ip });
-  res.setHeader('Set-Cookie', authCookies.buildCookieHeader(authCookies.ADMIN_SESSION_COOKIE, sid));
-  send(res, 200, JSON.stringify({ ok: true }), 'application/json; charset=utf-8');
-}
-
-function handleAdminLogout(req, res) {
-  if (req.method !== 'POST') return send(res, 405, JSON.stringify({ ok: false, error: 'Method Not Allowed' }), 'application/json; charset=utf-8');
-  if (!isSameOriginRequest(req)) return send(res, 403, JSON.stringify({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' }), 'application/json; charset=utf-8');
-  const sid = authCookies.getCookieFromRequest(req, authCookies.ADMIN_SESSION_COOKIE);
-  if (sid) adminAuth.destroyAdminSession(sid);
-  res.setHeader('Set-Cookie', authCookies.buildClearCookieHeader(authCookies.ADMIN_SESSION_COOKIE));
-  send(res, 200, JSON.stringify({ ok: true }), 'application/json; charset=utf-8');
-}
-
-function handleAdminWhoami(req, res) {
-  const session = authMiddleware.getAdminSessionFromRequest(req);
-  send(res, 200, JSON.stringify({ ok: Boolean(session) }), 'application/json; charset=utf-8');
 }
 
 const server = http.createServer(async (req, res) => {
@@ -442,25 +377,10 @@ const server = http.createServer(async (req, res) => {
 
   if (tryHandleAppsProxy(decodedPath, req, res)) return;
 
-  if (decodedPath === '/admin/login') {
-    if (req.method === 'GET') return readStaticFile(path.join(PUBLIC_DIR, 'admin-login.html'), res);
-    return handleAdminLogin(req, res);
-  }
-  if (decodedPath === '/admin/logout') return handleAdminLogout(req, res);
-  if (decodedPath === '/admin/whoami') return handleAdminWhoami(req, res);
-
   if (decodedPath === '/admin' || decodedPath === '/admin.html') {
-    if (PILOT_MODE) {
-      const session = authMiddleware.requireAdminAuthHttp(req, res, send);
-      if (!session) return; // requireAdminAuthHttp juz wyslal odpowiedz (redirect/401)
-    }
     return readStaticFile(path.join(PUBLIC_DIR, 'admin.html'), res);
   }
   if (decodedPath === '/api/admin/logs') {
-    if (PILOT_MODE) {
-      const session = authMiddleware.requireAdminAuthHttp(req, res, send);
-      if (!session) return;
-    }
     return send(res, 200, JSON.stringify({ ok: true, lines: readLastLines(path.join(ROOT, 'logs', 'children.jsonl'), 100) }, null, 2), 'application/json; charset=utf-8');
   }
 
@@ -475,12 +395,7 @@ applyHttpTimeouts(server, 'SCYZORYK');
 ensureDependenciesBeforeStart();
 for (const app of apps) startChild(app);
 server.listen(PORT, HOST, () => {
-  console.log(`Scyzoryk Projektowy - profil: ${ACTIVE_PROFILE}${PILOT_MODE ? ' (panel administratora chroniony haslem)' : ''}`);
+  console.log(`Scyzoryk Projektowy - profil: ${ACTIVE_PROFILE}`);
   console.log(`http://${HOST}:${PORT}`);
   for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`);
-  if (PILOT_MODE && !adminAuth.hasAdminPassword()) {
-    console.log('');
-    console.log('UWAGA: haslo administratora nie zostalo jeszcze ustawione. Panel /admin bedzie niedostepny do czasu:');
-    console.log('  node scripts/set-admin-password.js --password=...');
-  }
 });
