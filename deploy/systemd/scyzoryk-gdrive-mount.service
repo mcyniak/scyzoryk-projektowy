@@ -14,8 +14,15 @@ User=mcyniak
 # nie utknal w tej samej pulapce bez interwencji. Wiodacy "-" ignoruje kod
 # bledu - przy zwyklym starcie (nic jeszcze nie zamontowane) ta komenda ma
 # PRAWO sie nie udac, to nie powod, zeby caly start uslugi mial nie ruszyc.
+# "/mnt" nalezy do roota (drwxr-xr-x root:root) na swiezym systemie - zwykly
+# "mkdir -p" jako User=mcyniak ponizej nie ma prawa utworzyc tam podkatalogu,
+# wiec caly start uslugi wisialby w petli Restart=always/RestartSec=5 na
+# zawsze na nowej instalacji. Prefiks "+" przed ExecStartPre uruchamia
+# WYLACZNIE te jedna komende jako root (niezaleznie od User= ponizej) - reszta
+# uslugi (samo montowanie rclone) nadal dziala jako zwykly uzytkownik.
+ExecStartPre=+/bin/mkdir -p /mnt/scyzoryk-google-drive
+ExecStartPre=+/bin/chown mcyniak:mcyniak /mnt/scyzoryk-google-drive
 ExecStartPre=-/bin/fusermount -uz /mnt/scyzoryk-google-drive
-ExecStartPre=/bin/mkdir -p /mnt/scyzoryk-google-drive
 # vfs-cache-mode=full (nie tylko "writes") - klasyfikacja zalacznikow czyta
 # zawartosc kazdego pliku (mammoth/pdf-parse), a bez cache odczytu KAZDY
 # odczyt idzie na zywo przez siec do Google - stad "bardzo dlugo szuka" przy

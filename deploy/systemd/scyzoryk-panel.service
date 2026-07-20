@@ -6,6 +6,13 @@ Wants=network-online.target
 # internetu przy starcie), panel i tak ma ruszyc - Karty katalogowe/Drukarka
 # projektow same zglosza "Dysk niedostepny" zamiast blokowac cala reszte
 # (Pieczatki/Drukarke/Formularze), ktore w ogole nie potrzebuja tej sciezki.
+# StartLimitIntervalSec/StartLimitBurst NALEZA do sekcji [Unit], nie
+# [Service] - w [Service] systemd je po cichu ignoruje ("Unknown key ...,
+# ignoring", widoczne w "systemd-analyze verify"), co znaczylo ze limit
+# restartow ("przestan probowac po 10 padach w 300s") w ogole nie dzialal
+# mimo ze wygladal na skonfigurowany.
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -27,8 +34,10 @@ Environment=SCYZORYK_GOOGLE_DRIVE_REMOTE=scyzoryk-drive:
 # "0.0.0.0" wiaze TYLKO IPv4 - klient, ktorego przegladarka rozwiaze "scyzoryk"
 # na adres IPv6 (router LAN potrafi zwracac oba rekordy, A i AAAA), dostawal
 # "polaczenie odrzucone" zamiast automatycznego przelaczenia na IPv4, bo po
-# stronie IPv6 nic nie nasluchiwalo. To ustawienie propaguje sie automatycznie
-# do wszystkich aplikacji-dzieci (kazda czyta SCYZORYK_HOST tak samo).
+# stronie IPv6 nic nie nasluchiwalo. Dzieci NIE dziedzicza juz tego adresu -
+# server.js jawnie nadpisuje im SCYZORYK_HOST na 127.0.0.1 (patrz
+# CHILD_BIND_HOST w server.js), bo cala komunikacja z nimi i tak zawsze idzie
+# przez proxy panelu po loopbacku - nie ma powodu wystawiac ich portow na LAN.
 Environment=SCYZORYK_HOST=::
 # Port 80, zeby panel byl dostepny pod adresem "http://scyzoryk" bez podawania
 # numeru portu. Uprawnienie do zbindowania portu <1024 nadane WYLACZNIE tej
@@ -36,13 +45,17 @@ Environment=SCYZORYK_HOST=::
 # potrzeba na wspoldzielonym urzadzeniu) - User ponizej zostaje zwyklym
 # uzytkownikiem, bez roota.
 Environment=PORT=80
+# Opcjonalny plik z nadpisaniami powyzszych wartosci (np. inna sciezka
+# SCYZORYK_PROJECTS_ROOT na innym urzadzeniu, inny port) - bez kopiowania
+# calej jednostki systemd. Wiodacy "-" oznacza "nie failuj startu, jesli
+# plik nie istnieje" - dziala od razu z samymi wartosciami domyslnymi
+# powyzej. Patrz .env.example - ten sam zestaw zmiennych.
+EnvironmentFile=-/etc/scyzoryk/scyzoryk.env
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/bin/node server.js
 Restart=always
 RestartSec=5
-StartLimitIntervalSec=300
-StartLimitBurst=10
 # Restart=always i tak NIE przeszkadza "systemctl stop" (systemd wie, ze to
 # swiadome zatrzymanie i nie odpala ponownie) - to jest wylacznie na
 # wypadek awarii/padu procesu, zgodnie z "ma sie resetowac sam".
