@@ -431,8 +431,15 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
 
   res.json({ ok: true });
 
+  let releasePrintLock = null;
   try {
     const printerName = String(req.body.printerName || "").trim();
+
+    releasePrintLock = await printService.acquirePrintLock("drukarka", {
+      onWaiting: () => {
+        state.status.message = "W kolejce drukowania - czeka na zakonczenie druku innego uzytkownika...";
+      }
+    });
 
     if (process.platform === "win32") {
       const printerSetup = await applyPrinterSides(sideMode, printerName);
@@ -498,6 +505,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
     state.status.error = String(err.message || err);
     state.status.message = "❌ Blad drukowania: " + state.status.error;
   } finally {
+    if (releasePrintLock) releasePrintLock();
     state.printing = false;
     state.status.printing = false;
   }
