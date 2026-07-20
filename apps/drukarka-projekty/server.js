@@ -587,6 +587,7 @@ app.post("/api/print", async (req, res) => {
   const copies = Math.max(1, Math.min(20, Number.isFinite(rawCopies) ? rawCopies : 1));
   const copyMode = req.body.copyMode === "set" ? "set" : "file";
   const printerName = String(req.body.printerName || "").trim();
+  const sideMode = req.body.sideMode === "two-sided" ? "two-sided" : "one-sided";
 
   const order = Array.isArray(req.body.order) ? req.body.order : [];
   if (order.length) {
@@ -607,7 +608,28 @@ app.post("/api/print", async (req, res) => {
   session.status = { printing: true, message: `Start drukowania: ${copies} kop.${printerLabel}`, current: 0, total: printJobs.length, percent: 0, done: false, error: null };
   res.json({ ok: true });
 
+  let releasePrintLock = null;
   try {
+    releasePrintLock = await printService.acquirePrintLock("drukarka-projekty", {
+      onWaiting: () => {
+        session.status.message = "W kolejce drukowania - czeka na zakonczenie druku innego uzytkownika...";
+      }
+    });
+
+    if (process.platform !== "win32" && sideMode === "two-sided" && printerName) {
+      // Nie zakladamy, ze kazda drukarka obsluguje dwustronny wydruk -
+      // sprawdzamy ZANIM cokolwiek wyslemy, zamiast udawac ze ustawienie
+      // zostalo zastosowane (patrz analogiczny kod w apps/drukarka/server.js).
+      try {
+        const printerOptions = await printService.getPrinterOptions(printerName);
+        if (!printerOptions.duplexSupported) {
+          session.status.warning = "Ta drukarka nie obsluguje druku dwustronnego - wydruk bedzie jednostronny.";
+        }
+      } catch (err) {
+        session.status.warning = `Nie udalo sie sprawdzic mozliwosci drukarki: ${err.message}`;
+      }
+    }
+
     for (let i = 0; i < printJobs.length; i++) {
       const job = printJobs[i];
       const item = job.item;
@@ -619,7 +641,9 @@ app.post("/api/print", async (req, res) => {
       await printService.printFileWindows(item.path, printerName, {
         cwd: __dirname,
         logDir: DATA_DIR,
-        timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_PS_TIMEOUT_MS || 120000)
+        timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_PS_TIMEOUT_MS || 120000),
+        copies: 1,
+        duplex: sideMode === "two-sided"
       });
 
       session.status.percent = Math.round(((i + 1) / printJobs.length) * 100);
@@ -630,10 +654,12 @@ app.post("/api/print", async (req, res) => {
     session.status.done = true;
 
     printService.closePdfAppsAfterBatch(__dirname);
+    session.queue = [];
   } catch (err) {
     session.status.error = String(err.message || err);
     session.status.message = "❌ Blad drukowania: " + session.status.error;
   } finally {
+    if (releasePrintLock) releasePrintLock();
     cleanupPrintedMergedFilesLater(itemsToPrint, session);
     session.printing = false;
     session.status.printing = false;
