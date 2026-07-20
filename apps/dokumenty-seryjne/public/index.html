@@ -431,11 +431,25 @@ input[type="file"]::-webkit-file-upload-button{margin-right:12px!important;borde
       </div>
       <div class="grid">
         <div class="field drop">
-          <label for="templateFile">Szablon Word</label>
-          <input id="templateFile" type="file" accept=".docx" webkitdirectory multiple>
-          <div class="hint" style="margin-top:6px">Kliknij i wybierz caly folder z szablonami (wykryte typy pojawia sie ponizej po wczytaniu).</div>
+          <label>Szablony Word</label>
+          <div class="actions" style="margin:0 0 10px">
+            <button type="button" id="templateSourceUploadBtn" class="button ghost">Wgraj folder</button>
+            <button type="button" id="templateSourceInvestmentBtn" class="button ghost">Wskaż folder inwestycji</button>
+          </div>
+          <div id="templateSourceUpload">
+            <input id="templateFile" type="file" accept=".docx" webkitdirectory multiple>
+            <div class="hint" style="margin-top:6px">Kliknij i wybierz caly folder z szablonami (wykryte typy pojawia sie ponizej po wczytaniu).</div>
+          </div>
+          <div id="templateSourceInvestment" class="hidden">
+            <input id="investmentPath" class="hint" type="text" style="width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:12px;font:inherit" placeholder="np. G:\Dyski współdzielone\...\6. Paradyż Żarnów">
+            <div class="hint" style="margin-top:6px">Program sam znajdzie w tym folderze podfolder ze wzorami oraz (jeśli jest) dane OZC/audytów do uzupełnienia dodatkowych pól.</div>
+            <div id="wzoryChoiceBox" class="hidden" style="margin-top:10px">
+              <div class="hint" style="margin-bottom:6px">Znaleziono kilka folderów ze wzorami — wybierz właściwy:</div>
+              <select id="wzoryChoiceSelect" class="select"></select>
+              <button type="button" id="wzoryChoiceConfirmBtn" class="button" style="margin-top:8px">Użyj tego folderu</button>
+            </div>
+          </div>
           <div id="templateGroupsBox" class="hidden" style="margin-top:12px"><div class="marker-head" style="margin-bottom:6px">Ktore dokumenty wygenerowac</div><div id="templateGroupsList"></div></div>
-          
           <div class="hint">Plik z korespondencją seryjną, format DOCX.</div>
         </div>
         <div class="field drop">
@@ -467,13 +481,6 @@ input[type="file"]::-webkit-file-upload-button{margin-right:12px!important;borde
         </div>
         <div id="uidColumnBox" class="hidden field" style="margin-top:12px"><label for="uidColumn">Kolumna wariantu (rozmiar zasobnika / moc pompy)</label><select id="uidColumn" class="select"></select><div class="hint">Wymagana, jeśli zaznaczone dokumenty mają warianty (np. rozmiar 250/300/400 albo moc pompy).</div></div>
         <div id="sheetHint" class="sheet-note">Po wczytaniu Excela wybierz właściwy arkusz.</div>
-      </div>
-
-      <div id="replacementsBox" class="field" style="margin-top:12px">
-        <label>Pola do wypełnienia w szablonie</label>
-        <div class="hint" id="replacementsHint">Wykryto w szablonie miejsca oznaczone żółtym podświetleniem (np. „Imię i Nazwisko", „XXX/X"). Przypisz każdemu kolumnę z Excela — pole bez przypisanej kolumny zostanie bez zmian w wygenerowanym dokumencie.</div>
-        <div id="replacementRows"></div>
-        <button id="addReplacementBtn" type="button" class="button ghost" style="margin-top:8px">+ Dodaj własną zamianę</button>
       </div>
 
       <div class="summary-card">

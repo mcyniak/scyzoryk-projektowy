@@ -12,6 +12,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
+const investmentScan = require('./src/investmentScan');
+const ozcMatch = require('./src/ozcMatch');
 
 
 function assertArchiverAvailable() {
@@ -345,21 +347,29 @@ function pickDefaultSheet(sheetNames, templateName = '') {
   return sheetNames[0];
 }
 
-const ROZMIARY_SZABLONU = ['250', '300', '400'];
+// Dopasowuje wartosc z kolumny "wariantu" w Excelu do jednego z faktycznie
+// wgranych wariantow danej grupy szablonow. Warianty NIE sa juz sztywna
+// lista (dawniej ROZMIARY_SZABLONU = ['250','300','400']) - to, co jest
+// prawidlowym wariantem, wynika z tego, jakie pliki/podfoldery user
+// faktycznie wgral, wiec dziala to dla kazdej wielkosci/nazwy modelu.
+// Dwa tryby:
+// - Kolektory: komorka ma format "liczba/rozmiar" (np. "2/250") - bierzemy
+//   ostatni segment po "/" i porownujemy jako liczbe z kluczami wariantow.
+// - PC i podobne: caly tekst komorki to nazwa modelu (np. "Varmero VPM9020"),
+//   porownywana z nazwa podfolderu (np. "VARMERO VPM 9020") po znormalizowaniu
+//   (male litery, bez spacji) - odporne na rozne zapisy tej samej nazwy.
+function resolveVariantKey(rawValue, variantKeys) {
+  const raw = String(rawValue ?? '').trim();
+  if (!raw || !variantKeys.length) return null;
 
-// Ta sama logika co w Kartach katalogowych - ostatnia liczba w UID (np.
-// "2/250" -> 250, "2x4/400" -> 400) okresla wielkosc zestawu. Dotyczy
-// TYLKO kolektorow slonecznych - pompy i kotly nie maja takiego podzialu.
-function parseRozmiarZUid(uidRaw) {
-  const uid = String(uidRaw ?? '').trim();
-  if (!uid) return null;
-  const parts = uid.split('/').map(s => s.trim()).filter(Boolean);
-  if (!parts.length) return null;
-  const last = parts[parts.length - 1];
-  const match = last.match(/(\d+)/);
-  if (!match) return null;
-  const rozmiar = match[1];
-  return ROZMIARY_SZABLONU.includes(rozmiar) ? rozmiar : null;
+  const slashParts = raw.split('/').map(s => s.trim()).filter(Boolean);
+  const lastPart = slashParts[slashParts.length - 1] || raw;
+  const numericMatch = lastPart.match(/^(\d+)$/);
+  if (numericMatch && variantKeys.includes(numericMatch[1])) return numericMatch[1];
+
+  const normalize = s => String(s).toLowerCase().replace(/\s+/g, '');
+  const normRaw = normalize(raw);
+  return variantKeys.find(k => normalize(k) === normRaw) || null;
 }
 
 // Grupuje wgrane pliki szablonow po "logicznej nazwie" - usuwa koncowke
@@ -367,23 +377,69 @@ function parseRozmiarZUid(uidRaw) {
 // "Protokol_300.docx", "Protokol_400.docx" w jedna pozycje do wyboru
 // "Protokol" z 3 wariantami w srodku. Szablony bez takiej koncowki (BIOZ,
 // pompy, kotly) zostaja jako pojedyncza pozycja bez wariantow.
+function classifyDocKind(baseName) {
+  const norm = baseName.toLowerCase();
+  if (/^st[_\s]/.test(norm)) return 'ST';
+  if (norm.includes('bioz')) return 'BIOZ';
+  if (norm.includes('opis')) return 'Opis techniczny';
+  // Brak rozpoznanego skrotu - uzywamy nazwy bazowej bez koncowych cyfr/kW
+  // jako "typu" (np. "Opis_techniczny 20" i "Opis_techniczny 12" i tak
+  // trafilyby tu tylko gdyby nie zawieraly slowa "opis" powyzej).
+  return baseName.replace(/[\s._-]*\d+\s*(kw)?\s*$/i, '').trim() || baseName;
+}
+
+// Grupuje wgrane pliki szablonow w dwa rozne sposoby, zaleznie od tego, GDZIE
+// lezal plik wzgledem wybranego folderu:
+// - plik lezacy WPROST w wybranym folderze (Kolektory): wariant to sufiks w
+//   nazwie pliku ("Protokol_250.docx" -> grupa "Protokol", wariant "250").
+// - plik lezacy w PODFOLDERZE (PC i podobne): wariant to nazwa TEGO
+//   podfolderu (np. "VARMERO VPM 9020"), a "typ" dokumentu to rozpoznany
+//   rodzaj (ST/BIOZ/Opis techniczny) wspolny dla wszystkich podfolderow.
+// Dwa pliki tego samego typu w tym samym podfolderze (zdarza sie realnie -
+// np. dwa "Opis techniczny" na rozna moc w jednym folderze modelu pompy) NIE
+// sa zgadywane - trafiaja do listy "ambiguous" i sa pomijane przy grupowaniu,
+// zeby uzytkownik dostal jasny komunikat zamiast cichego zlego dopasowania.
 function groupTemplatesByType(templates) {
+  const flat = templates.filter(t => !t.relFolder);
+  const foldered = templates.filter(t => t.relFolder);
   const groups = new Map();
-  for (const t of templates) {
+
+  for (const t of flat) {
     const base = t.originalName.replace(/\.docx$/i, '');
-    const m = base.match(/^(.*)_(250|300|400)$/);
+    const m = base.match(/^(.*)_(\d{2,4})$/);
     const groupName = m ? m[1] : base;
     const variant = m ? m[2] : null;
     if (!groups.has(groupName)) groups.set(groupName, { name: groupName, variants: {}, single: null });
     const g = groups.get(groupName);
     if (variant) g.variants[variant] = t; else g.single = t;
   }
-  return Array.from(groups.values()).map(g => ({
+
+  const byKind = new Map(); // kind -> Map(relFolder -> template)
+  const ambiguous = [];
+  for (const t of foldered) {
+    const base = t.originalName.replace(/\.docx$/i, '');
+    const kind = classifyDocKind(base);
+    if (!byKind.has(kind)) byKind.set(kind, new Map());
+    const perFolder = byKind.get(kind);
+    if (perFolder.has(t.relFolder)) {
+      ambiguous.push({ kind, relFolder: t.relFolder, files: [perFolder.get(t.relFolder).originalName, t.originalName] });
+      continue;
+    }
+    perFolder.set(t.relFolder, t);
+  }
+  for (const [kind, perFolder] of byKind) {
+    if (!groups.has(kind)) groups.set(kind, { name: kind, variants: {}, single: null });
+    const g = groups.get(kind);
+    for (const [relFolder, t] of perFolder) g.variants[relFolder] = t;
+  }
+
+  const groupList = Array.from(groups.values()).map(g => ({
     name: g.name,
     hasVariants: Object.keys(g.variants).length > 0,
     variants: g.variants,
     single: g.single
   }));
+  return { groups: groupList, ambiguous };
 }
 
 // Dla kazdej zaznaczonej "logicznej" pozycji buduje liste konkretnych zadan
@@ -405,19 +461,20 @@ function buildGenerationTasks(job, selectedGroupNames, uidColumn, selectedSheet,
       if (!t) continue;
       tasks.push({ groupName, templatePath: t.path, templateOriginalName: t.originalName, rowRecords: rowsForMerge.map(r => Number(r._record)) });
     } else {
+      const variantKeys = Object.keys(group.variants);
       const byVariant = new Map();
       for (const row of rowsForMerge) {
-        const uid = uidColumn ? row[uidColumn] : '';
-        const rozmiar = parseRozmiarZUid(uid);
-        if (!rozmiar || !group.variants[rozmiar]) {
-          skippedRows.push({ record: Number(row._record), reason: `Nierozpoznany rozmiar w UID ("${uid}") dla "${groupName}".` });
+        const cellValue = uidColumn ? row[uidColumn] : '';
+        const variant = resolveVariantKey(cellValue, variantKeys);
+        if (!variant) {
+          skippedRows.push({ record: Number(row._record), reason: `Nierozpoznany wariant ("${cellValue}") dla "${groupName}".` });
           continue;
         }
-        if (!byVariant.has(rozmiar)) byVariant.set(rozmiar, []);
-        byVariant.get(rozmiar).push(Number(row._record));
+        if (!byVariant.has(variant)) byVariant.set(variant, []);
+        byVariant.get(variant).push(Number(row._record));
       }
-      for (const [rozmiar, records] of byVariant) {
-        const t = group.variants[rozmiar];
+      for (const [variant, records] of byVariant) {
+        const t = group.variants[variant];
         tasks.push({ groupName, templatePath: t.path, templateOriginalName: t.originalName, rowRecords: records });
       }
     }
@@ -576,7 +633,50 @@ function parseJsonLines(job, chunk, state) {
   }
 }
 
-function startGeneration(job, options) {
+// Dla wierszy z pasujacym dokumentem OZC/audytu dokleja wyciagniete z niego
+// pary etykieta->wartosc jako DODATKOWE wlasciwosci rekordu - TYLKO tam,
+// gdzie dana kolumna jeszcze nie istnieje w wierszu Excela, wiec dane z
+// Excela zawsze wygrywaja. Get-RecordValue w mailmerge-to-pdf.ps1 dziala juz
+// dzis na dowolnych wlasciwosciach rekordu, wiec to nie wymaga zadnych zmian
+// po stronie PowerShell. Wyniki dopasowania sa cache'owane w ramach zadania,
+// zeby przy kilku grupach szablonow (ST/BIOZ/Opis techniczny) nie czytac i
+// nie parsowac tego samego pliku OZC po kilka razy.
+async function withOzcFallbackData(job, rows, addressColumn) {
+  const ozcFolders = job.ozcFolders || [];
+  if (!ozcFolders.length) return rows;
+  if (!job._ozcDataCache) job._ozcDataCache = new Map();
+
+  const result = [];
+  for (const row of rows) {
+    const record = Number(row._record);
+    if (!job._ozcDataCache.has(record)) {
+      const address = row[addressColumn];
+      const idCandidate = row.ID ?? row['ID projektu'] ?? row['LP gmina'] ?? row.F ?? null;
+      let ozcData = null;
+      try { ozcData = await ozcMatch.getOzcDataForRow(ozcFolders, { id: idCandidate, address }); } catch (_) { ozcData = null; }
+      job._ozcDataCache.set(record, ozcData);
+    }
+    const ozcData = job._ozcDataCache.get(record);
+    if (!ozcData) { result.push(row); continue; }
+    const merged = { ...row };
+    // PowerShellowe ConvertFrom-Json buduje slownik BEZ rozroznienia wielkosci
+    // liter w kluczach - "gmina" (z Excela) i "Gmina" (etykieta z OZC) to dla
+    // niego ta sama, zduplikowana wartosc i cale parsowanie danych rzuca
+    // wyjatkiem. W JS te dwa klucze sa rozne, wiec samo sprawdzenie
+    // `merged[k] === undefined` tego nie wylapie - trzeba porownywac po
+    // znormalizowanej (malymi literami) nazwie klucza.
+    const existingKeysLower = new Set(Object.keys(merged).map(key => key.toLowerCase()));
+    for (const [k, v] of Object.entries(ozcData)) {
+      if (existingKeysLower.has(k.toLowerCase())) continue;
+      merged[k] = v;
+      existingKeysLower.add(k.toLowerCase());
+    }
+    result.push(merged);
+  }
+  return result;
+}
+
+async function startGeneration(job, options) {
   const sheetName = String(options.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
   const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
   const addressColumn = String(options.addressColumn || guessAddressColumn(selectedSheet.columns || [])).trim() || 'Adres';
@@ -587,8 +687,9 @@ function startGeneration(job, options) {
   const filePrefix = cleanFilePrefix(options.filePrefix || '');
 
   const allRows = selectedSheet.rows || [];
-  const rowsForMerge = selectedRows.length ? allRows.filter(row => selectedRows.includes(Number(row._record))) : allRows;
+  let rowsForMerge = selectedRows.length ? allRows.filter(row => selectedRows.includes(Number(row._record))) : allRows;
   if (!rowsForMerge.length) throw new Error('Nie wybrano żadnych rekordów do wygenerowania.');
+  rowsForMerge = await withOzcFallbackData(job, rowsForMerge, addressColumn);
 
   const dataJsonPath = path.join(job.outputDir, 'merge-data.json');
   const debugJsonPath = path.join(job.outputDir, 'debug-events.jsonl');
@@ -754,20 +855,68 @@ app.get('/api/health', (req, res) => res.json({ ok: true, app: 'dokumenty-seryjn
 
 app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxCount: 1 }, { name: 'templates', maxCount: 60 }, { name: 'excel', maxCount: 1 }]), async (req, res) => {
   try {
-    const templateFiles = [...(req.files?.template || []), ...(req.files?.templates || [])];
     const excel = req.files?.excel?.[0];
-    if (!templateFiles.length || !excel) return res.status(400).json({ ok: false, message: 'Dodaj co najmniej jeden szablon Word DOCX i tabelę Excel XLSX.' });
-    for (const t of templateFiles) validateOfficeFile(t, ['.docx']);
+    if (!excel) return res.status(400).json({ ok: false, message: 'Dodaj tabelę Excel XLSX.' });
     validateOfficeFile(excel, ['.xlsx']);
+
+    const investmentPath = String(req.body?.investmentPath || '').trim();
+    let templateInfos;
+    let ozcFolders = [];
+
+    if (investmentPath) {
+      // Tryb "folder inwestycji": uzytkownik podaje tylko sciezke, program
+      // sam znajduje w niej folder ze wzorami (moze byc kilka - wtedy trzeba
+      // wybrac) oraz folder(y) z danymi OZC/audytow do uzupelnienia
+      // dodatkowych pol przy generowaniu.
+      let stat;
+      try { stat = fs.statSync(investmentPath); } catch (_) { stat = null; }
+      if (!stat || !stat.isDirectory()) return res.status(400).json({ ok: false, message: 'Nie znaleziono folderu: ' + investmentPath });
+
+      const wzoryFolderChoice = String(req.body?.wzoryFolderChoice || '').trim();
+      let chosenWzoryFolder = wzoryFolderChoice;
+      if (!chosenWzoryFolder) {
+        const wzoryFolders = investmentScan.findWzoryFolders(investmentPath);
+        if (!wzoryFolders.length) return res.status(400).json({ ok: false, message: 'Nie znaleziono w tym folderze podfolderu ze wzorami (nazwa zawierająca "wzór"/"wzory").' });
+        if (wzoryFolders.length > 1) {
+          return res.json({
+            ok: true,
+            needsWzoryChoice: true,
+            wzoryFolderOptions: wzoryFolders.map(f => ({ path: f, label: path.relative(investmentPath, f) }))
+          });
+        }
+        chosenWzoryFolder = wzoryFolders[0];
+      }
+
+      templateInfos = investmentScan.collectTemplateFilesFromDisk(chosenWzoryFolder);
+      if (!templateInfos.length) return res.status(400).json({ ok: false, message: 'Nie znaleziono plików DOCX w folderze wzorów: ' + chosenWzoryFolder });
+      ozcFolders = ozcMatch.findCandidateOzcFolders(investmentPath);
+    } else {
+      const templateFiles = [...(req.files?.template || []), ...(req.files?.templates || [])];
+      if (!templateFiles.length) return res.status(400).json({ ok: false, message: 'Dodaj co najmniej jeden szablon Word DOCX.' });
+      for (const t of templateFiles) validateOfficeFile(t, ['.docx']);
+
+      // Podfolder bezposrednio nad kazdym plikiem (np. "VARMERO VPM 9020"),
+      // wysylany przez klienta jako JSON tablica rownolegla do pola 'templates'
+      // (kolejnosc plikow w tym polu jest zachowana przez multer). Pole
+      // 'template' (pojedynczy, starszy sposob uploadu) nie ma podfolderow.
+      let relFoldersByTemplatesField = [];
+      try { relFoldersByTemplatesField = JSON.parse(req.body?.templateRelFolders || '[]'); } catch (_) { relFoldersByTemplatesField = []; }
+      const singleTemplateFiles = req.files?.template || [];
+      const multiTemplateFiles = req.files?.templates || [];
+      templateInfos = [
+        ...singleTemplateFiles.map(t => ({ path: t.path, originalName: decodeOriginalName(t.originalname), relFolder: '' })),
+        ...multiTemplateFiles.map((t, i) => ({ path: t.path, originalName: decodeOriginalName(t.originalname), relFolder: String(relFoldersByTemplatesField[i] || '') }))
+      ];
+    }
+
     const sheetNames = (await loadExcelWorkbook(excel.path)).worksheets.map(sheet => sheet.name);
-    const defaultSheet = pickDefaultSheet(sheetNames, decodeOriginalName(templateFiles[0].originalname));
+    const defaultSheet = pickDefaultSheet(sheetNames, templateInfos[0].originalName);
     const workbook = await parseWorkbook(excel.path, defaultSheet);
     const jobId = crypto.randomUUID();
     const outDir = path.join(OUTPUT_DIR, jobId);
     await fsp.mkdir(outDir, { recursive: true });
 
-    const templateInfos = templateFiles.map(t => ({ path: t.path, originalName: decodeOriginalName(t.originalname) }));
-    const templateGroups = groupTemplatesByType(templateInfos);
+    const { groups: templateGroups, ambiguous: ambiguousTemplates } = groupTemplatesByType(templateInfos);
 
     const job = {
       id: jobId,
@@ -777,6 +926,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       endedAt: null,
       template: templateInfos[0],
       templateGroups,
+      ozcFolders,
       excel: { path: excel.path, originalName: decodeOriginalName(excel.originalname) },
       workbook,
       outputDir: outDir,
@@ -790,7 +940,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     };
     jobs.set(jobId, job);
     persistJobsIndex();
-    appendLog(job, 'info', 'Wczytano pliki.', { templates: templateInfos.map(t => t.originalName), excel: job.excel.originalName, rows: workbook.totalRows, sheet: workbook.sheetName, sheets: workbook.summaries });
+    appendLog(job, 'info', 'Wczytano pliki.', { templates: templateInfos.map(t => t.originalName), excel: job.excel.originalName, rows: workbook.totalRows, sheet: workbook.sheetName, sheets: workbook.summaries, ozcFolders });
     res.json({
       ok: true,
       jobId,
@@ -798,56 +948,12 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       suggestedAddressColumn: guessAddressColumn(workbook.columns),
       suggestedUidColumn: guessUidColumn(workbook.columns),
       templateGroups: templateGroups.map(g => ({ name: g.name, hasVariants: g.hasVariants, variants: Object.keys(g.variants) })),
+      ambiguousTemplates,
+      ozcFoldersFound: ozcFolders.length,
       detectedTemplatePower: detectPowerFromText(templateInfos[0].originalName)
     });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Nie udało się wczytać plików.' });
-  }
-});
-
-function collectTemplatePaths(job) {
-  const paths = [];
-  for (const g of job.templateGroups || []) {
-    if (g.single) paths.push(g.single.path);
-    for (const v of Object.values(g.variants || {})) paths.push(v.path);
-  }
-  return [...new Set(paths)];
-}
-
-// Skanuje wgrane szablony .docx w poszukiwaniu tekstu podswietlonego na
-// zolto - prawdziwe szablony uzywaja tego jako wizualnego oznaczenia miejsc
-// do wypelnienia (np. "Imie i Nazwisko", "XXX/X"), zamiast pol MERGEFIELD
-// albo znacznikow {{...}}. Dlugie fragmenty (akapity do recznej edycji przez
-// projektanta, tabela materialowa) sa odfiltrowane po stronie skryptu.
-app.get('/api/placeholders/:jobId', async (req, res) => {
-  const job = getJob(req.params.jobId);
-  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
-  try {
-    const docxPaths = collectTemplatePaths(job);
-    if (!docxPaths.length) return res.json({ ok: true, placeholders: [] });
-
-    const listPath = path.join(job.outputDir, 'placeholder-scan-input.json');
-    writeJsonFileNoBom(listPath, docxPaths);
-
-    const exe = process.env.POWERSHELL_EXE || 'powershell.exe';
-    const psArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', SCAN_SCRIPT, '-TemplatesJson', listPath];
-    const result = await new Promise(resolveScan => {
-      const child = spawn(exe, psArgs, { cwd: ROOT, windowsHide: true });
-      let out = '', err = '';
-      child.stdout.on('data', d => { out += d.toString('utf8'); });
-      child.stderr.on('data', d => { err += d.toString('utf8'); });
-      child.on('error', e => resolveScan({ ok: false, message: e.message }));
-      child.on('close', () => {
-        try { fs.unlinkSync(listPath); } catch (_) {}
-        try { resolveScan(JSON.parse(stripBom(out).trim())); }
-        catch (_) { resolveScan({ ok: false, message: err || 'Brak wyniku skanowania szablonow.' }); }
-      });
-    });
-
-    if (!result.ok) return res.status(500).json({ ok: false, message: result.message || 'Nie udalo sie przeskanowac szablonow.' });
-    res.json({ ok: true, placeholders: result.placeholders || [] });
-  } catch (err) {
-    res.status(500).json({ ok: false, message: err.message || 'Blad skanowania szablonow.' });
   }
 });
 

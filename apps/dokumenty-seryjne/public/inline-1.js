@@ -10,7 +10,6 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     let detectedTemplatePower = '';
     let pollTimer = null;
     let lastStatus = null;
-    let replacementId = 0;
 
     const $ = id => document.getElementById(id);
     function setDisabled(id, isBusy) { const el = $(id); if (el) el.disabled = isBusy; }
@@ -20,7 +19,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     function esc(v) { return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 
     function setBusy(isBusy) {
-      ['uploadBtn','generateBtn','selectAllBtn','selectNoneBtn','selectVisibleBtn','selectVisibleNoneBtn','recordSearch','filePrefix','addReplacementBtn'].forEach(id => setDisabled(id, isBusy));
+      ['uploadBtn','generateBtn','selectAllBtn','selectNoneBtn','selectVisibleBtn','selectVisibleNoneBtn','recordSearch','filePrefix'].forEach(id => setDisabled(id, isBusy));
     }
 
     function setJobPill(text) { $('jobPill').textContent = text; show($('jobPill')); }
@@ -64,67 +63,6 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       }
       const preview = fileBasePreview($('filePrefix')?.value || '', address || 'Adres');
       $('fileNamePreview').textContent = `Przykładowa nazwa: ${preview}.pdf`;
-    }
-
-    function columnOptions(selected='') {
-      const cols = currentWorkbook?.columns || [];
-      return `<option value="" ${selected ? '' : 'selected'}>— wybierz —</option>` + cols.map(col => `<option value="${esc(col)}" ${col === selected ? 'selected' : ''}>${esc(col)}</option>`).join('');
-    }
-
-    function addReplacement(find='xxxxx', column='') {
-      const selected = column || '';
-      const id = ++replacementId;
-      const row = document.createElement('div');
-      row.className = 'marker-row';
-      row.dataset.replacementId = String(id);
-      row.innerHTML = `
-        <input class="rep-find" type="text" value="${esc(find)}" placeholder="np. xxxxx albo XXX">
-        <select class="rep-column">${columnOptions(selected)}</select>
-        <input class="rep-occurrence" type="text" value="wszystkie" placeholder="wszystkie albo 1">
-        <button class="mini-danger rep-remove" type="button">Usuń</button>`;
-      $('replacementRows').appendChild(row);
-      row.querySelector('.rep-remove').addEventListener('click', () => row.remove());
-    }
-
-    // Po wgraniu szablonow probujemy sami znalezc miejsca do wypelnienia
-    // (zolto podswietlony tekst w Wordzie, patrz /api/placeholders) i
-    // pokazac je od razu gotowe do zmapowania na kolumne - user tylko
-    // wybiera kolumne z listy, nie musi znac dokladnego tekstu placeholdera.
-    // Jesli skanowanie sie nie powiedzie albo nic nie znajdzie, wracamy do
-    // starego zachowania (jeden pusty wiersz z "xxxxx").
-    async function resetReplacements(suggestedAddressColumn='') {
-      $('replacementRows').innerHTML = '';
-      replacementId = 0;
-      let placeholders = [];
-      if (currentJob) {
-        try {
-          const res = await fetch(`/api/placeholders/${currentJob}`);
-          const data = await res.json();
-          if (data.ok) placeholders = data.placeholders || [];
-        } catch (_) {}
-      }
-      if (placeholders.length) {
-        for (const text of placeholders) addReplacement(text, '');
-      } else {
-        addReplacement('xxxxx', suggestedAddressColumn || $('addressColumn')?.value || 'Adres');
-      }
-      return placeholders.length;
-    }
-
-    function refreshReplacementColumns() {
-      document.querySelectorAll('.rep-column').forEach(sel => {
-        const current = sel.value;
-        sel.innerHTML = columnOptions(current);
-      });
-    }
-
-    function getTextReplacements() {
-      return [...document.querySelectorAll('#replacementRows .marker-row')].map(row => {
-        const find = row.querySelector('.rep-find')?.value?.trim() || '';
-        const column = row.querySelector('.rep-column')?.value || '';
-        const occurrence = row.querySelector('.rep-occurrence')?.value?.trim() || 'all';
-        return { find, column, occurrence };
-      }).filter(r => r.find && r.column);
     }
 
     function updateProgress(progress = {}) {
@@ -184,24 +122,70 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       }
     }
 
-    async function uploadFiles() {
+    let templateSourceMode = 'upload';
+    function setTemplateSourceMode(mode) {
+      templateSourceMode = mode;
+      $('templateSourceUpload').classList.toggle('hidden', mode !== 'upload');
+      $('templateSourceInvestment').classList.toggle('hidden', mode !== 'investment');
+      $('templateSourceUploadBtn').classList.toggle('ghost', mode !== 'upload');
+      $('templateSourceInvestmentBtn').classList.toggle('ghost', mode !== 'investment');
+    }
+    $('templateSourceUploadBtn')?.addEventListener('click', () => setTemplateSourceMode('upload'));
+    $('templateSourceInvestmentBtn')?.addEventListener('click', () => setTemplateSourceMode('investment'));
+    setTemplateSourceMode('upload');
+
+    async function uploadFiles(wzoryFolderChoice) {
       hide($('uploadStatus')); hide($('recordsPanel')); hide($('resultPanel')); hide($('progressPanel')); hide($('logPanel'));
+      hide($('wzoryChoiceBox'));
       stopPolling();
-      const templateFiles = [...$('templateFile').files].filter(f => /\.docx$/i.test(f.name));
       const excel = $('excelFile').files[0];
-      if (!templateFiles.length || !excel) return status($('uploadStatus'), 'Dodaj najpierw folder z szablonami Word i plik Excel.', 'err');
-      const fd = new FormData(); for (const f of templateFiles) fd.append('templates', f); fd.append('excel', excel);
+      if (!excel) return status($('uploadStatus'), 'Dodaj plik Excel.', 'err');
+      const fd = new FormData();
+      fd.append('excel', excel);
+
+      if (templateSourceMode === 'investment') {
+        const investmentPath = $('investmentPath').value.trim();
+        if (!investmentPath) return status($('uploadStatus'), 'Podaj ścieżkę folderu inwestycji.', 'err');
+        fd.append('investmentPath', investmentPath);
+        if (wzoryFolderChoice) fd.append('wzoryFolderChoice', wzoryFolderChoice);
+      } else {
+        const templateFiles = [...$('templateFile').files].filter(f => /\.docx$/i.test(f.name));
+        if (!templateFiles.length) return status($('uploadStatus'), 'Dodaj najpierw folder z szablonami Word.', 'err');
+        // Podfolder bezposrednio nad plikiem (np. "VARMERO VPM 9020") - dla
+        // szablonow lezacych wprost w wybranym folderze (jak dzis Kolektory)
+        // zostaje pusty, bo tam wariant siedzi w samej nazwie pliku (sufiks
+        // _250/_300/_400), nie w strukturze folderow.
+        const templateRelFolders = templateFiles.map(f => {
+          const rel = f.webkitRelativePath || '';
+          const parts = rel.split('/').filter(Boolean);
+          return parts.length >= 3 ? parts[parts.length - 2] : '';
+        });
+        for (const f of templateFiles) fd.append('templates', f);
+        fd.append('templateRelFolders', JSON.stringify(templateRelFolders));
+      }
       setBusy(true); status($('uploadStatus'), 'Wczytuję pliki i sprawdzam tabelę...', 'warn');
       try {
         const res = await fetch('/api/upload', { method: 'POST', headers, body: fd });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wczytać plików.');
+
+        if (data.needsWzoryChoice) {
+          const options = data.wzoryFolderOptions || [];
+          $('wzoryChoiceSelect').innerHTML = options.map(o => `<option value="${esc(o.path)}">${esc(o.label)}</option>`).join('');
+          show($('wzoryChoiceBox'));
+          status($('uploadStatus'), 'Znaleziono kilka folderów ze wzorami w tej inwestycji — wybierz właściwy powyżej.', 'warn');
+          return;
+        }
+
         currentJob = data.jobId; currentWorkbook = data.workbook; detectedTemplatePower = data.detectedTemplatePower || '';
         $('filePrefix').value = '';
         renderWorkbook(data.workbook, data.suggestedAddressColumn); refreshUidColumnOptions(data.workbook.columns || []); renderTemplateGroups(data.templateGroups || [], data.workbook.columns || [], data.suggestedUidColumn || '');
-        const placeholderCount = await resetReplacements(data.suggestedAddressColumn);
-        const placeholderNote = placeholderCount ? ` Wykryto ${placeholderCount} miejsc do wypełnienia w szablonie — przypisz im kolumny poniżej.` : '';
-        status($('uploadStatus'), `Wczytano ${data.workbook.totalRows} rekordów.${placeholderNote}`, 'ok');
+        const ambiguous = data.ambiguousTemplates || [];
+        const ambiguousNote = ambiguous.length
+          ? ` Uwaga: w ${ambiguous.length === 1 ? 'folderze' : 'folderach'} znaleziono więcej niż jeden pasujący plik tego samego typu (${ambiguous.map(a => `"${a.relFolder}": ${a.files.join(' / ')}`).join('; ')}) — pominięto, sprawdź ręcznie.`
+          : '';
+        const ozcNote = data.ozcFoldersFound ? ` Znaleziono dane OZC/audytów — dodatkowe pola w szablonach będą uzupełniane automatycznie tam, gdzie to możliwe.` : '';
+        status($('uploadStatus'), `Wczytano ${data.workbook.totalRows} rekordów.${ambiguousNote}${ozcNote}`, ambiguous.length ? 'warn' : 'ok');
         show($('recordsPanel')); setJobPill('Gotowe');
         await pollJob();
         $('recordsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -266,9 +250,8 @@ const headers = { 'X-Scyzoryk-Request': '1' };
           if (ch) { ch.checked = !ch.checked; updateSelectedMetric(); }
         });
       });
-      $('addressColumn').onchange = () => { $('metricColumn').textContent = $('addressColumn').value; refreshReplacementColumns(); updateFileNamePreview(); };
+      $('addressColumn').onchange = () => { $('metricColumn').textContent = $('addressColumn').value; updateFileNamePreview(); };
       $('sheetSelect').onchange = changeSheet;
-      refreshReplacementColumns();
       updateSelectedMetric(); hide($('recordsStatus'));
     }
 
@@ -337,7 +320,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       try {
         const res = await fetch(`/api/generate/${currentJob}`, {
           method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ selectedRows: rows, selectedGroups: selectedTemplateGroups(), uidColumn: $('uidColumn') ? $('uidColumn').value : '', sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value, filePrefix: $('filePrefix').value.trim(), textReplacements: getTextReplacements(), visibleWord: $('visibleWord').checked, debugMode: $('debugMode').checked })
+          body: JSON.stringify({ selectedRows: rows, selectedGroups: selectedTemplateGroups(), uidColumn: $('uidColumn') ? $('uidColumn').value : '', sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value, filePrefix: $('filePrefix').value.trim(), visibleWord: $('visibleWord').checked, debugMode: $('debugMode').checked })
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się rozpocząć generowania.');
@@ -390,9 +373,9 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       show($('resultPanel'));
     }
 
-    $('uploadBtn')?.addEventListener('click', uploadFiles);
+    $('uploadBtn')?.addEventListener('click', () => uploadFiles());
+    $('wzoryChoiceConfirmBtn')?.addEventListener('click', () => uploadFiles($('wzoryChoiceSelect').value));
     $('generateBtn')?.addEventListener('click', generate);
-    $('addReplacementBtn')?.addEventListener('click', () => addReplacement('', $('addressColumn')?.value || 'Adres'));
     $('cancelBtn')?.addEventListener('click', cancelJob);
     $('selectAllBtn')?.addEventListener('click', () => { document.querySelectorAll('.row-check').forEach(ch => ch.checked = true); updateSelectedMetric(); });
     $('selectNoneBtn')?.addEventListener('click', () => { document.querySelectorAll('.row-check').forEach(ch => ch.checked = false); updateSelectedMetric(); });
