@@ -60,6 +60,11 @@ const apiLimiter = rateLimit({
   max: Number(process.env.SERYJNE_API_RATE_LIMIT || 60),
   standardHeaders: true,
   legacyHeaders: false,
+  // /api/health i /api/job/:jobId sa odpytywane co kilka sekund (panel glowny) albo co 1s
+  // (pasek postepu podczas generowania, ktore realnie trwa kilka minut) - bez wylaczenia stad
+  // sam odczyt statusu wyczerpuje limit w ~1 minute i pasek postepu przestaje sie aktualizowac,
+  // mimo ze generowanie dalej trwa w tle.
+  skip: (req) => req.method === 'GET' && (req.path === '/health' || /^\/job\/[^/]+$/.test(req.path)),
   message: { ok: false, message: 'Za duzo zadan w krotkim czasie. Odczekaj chwile i sprobuj ponownie.' }
 });
 const heavyJobLimiter = rateLimit({

@@ -4,8 +4,9 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const { setupProcessDiagnostics, applyHttpTimeouts, runPowerShell, scheduleCleanup } = require("../../lib/hardening");
+const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require("../../lib/hardening");
 const printService = require("../../lib/printing");
+const pdfMerge = require("./src/pdfMerge");
 
 const app = express();
 setupProcessDiagnostics("drukarka", __dirname);
@@ -17,8 +18,9 @@ const MAX_QUEUE = Number(process.env.DRUKARKA_MAX_QUEUE || 200);
 
 const DATA_DIR = path.join(__dirname, "data");
 const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
-for (const dir of [DATA_DIR, UPLOAD_DIR]) if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-scheduleCleanup([UPLOAD_DIR], 24 * 60 * 60 * 1000, 60 * 60 * 1000);
+const MERGED_DIR = path.join(DATA_DIR, "merged");
+for (const dir of [DATA_DIR, UPLOAD_DIR, MERGED_DIR]) if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+scheduleCleanup([UPLOAD_DIR, MERGED_DIR], 24 * 60 * 60 * 1000, 60 * 60 * 1000);
 
 const SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
@@ -117,51 +119,9 @@ const upload = multer({
 
 
 
-function psEscape(str) {
-  return String(str).replace(/'/g, "''");
-}
-
-function runPrinterPowerShell(command) {
-  return runPowerShell(null, ["-Command", command], { cwd: __dirname, timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000), windowsHide: true });
-}
-
-async function applyPrinterSides(sideMode, printerName) {
-  if (process.platform !== "win32") {
-    return {
-      ok: false,
-      message: "Ustawienie jednostronnie/dwustronnie jest dostepne tylko na Windows."
-    };
-  }
-
-  const mode = sideMode === "two-sided" ? "TwoSidedLongEdge" : "OneSided";
-  const label = sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
-
-  const targetPrinterPs = printerName ? "'" + printerName.replace(/'/g, "''") + "'" : "$null"; const command = `
-    $ErrorActionPreference = 'Stop'
-    $printer = if (${targetPrinterPs}) { Get-CimInstance Win32_Printer | Where-Object { $_.Name -eq ${targetPrinterPs} } | Select-Object -First 1 } else { Get-CimInstance Win32_Printer | Where-Object { $_.Default -eq $true } | Select-Object -First 1 }
-    if (-not $printer) { throw 'Brak drukarki domyslnej.' }
-    Set-PrintConfiguration -PrinterName $printer.Name -DuplexingMode ${mode}
-    Write-Output ($printer.Name + '|' + '${label}')
-  `;
-
-  try {
-    const result = await runPrinterPowerShell(command);
-    const line = String(result.stdout || "").trim().split(/\r?\n/).pop() || "";
-    const [printerName] = line.split("|");
-
-    return {
-      ok: true,
-      message: printerName
-        ? `Ustawiono drukarke ${printerName}: ${label}.`
-        : `Ustawiono drukowanie: ${label}.`
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      message: `Nie udalo sie automatycznie ustawic trybu ${label}. Sterownik drukarki moze tego nie obslugiwac. Drukowanie bedzie wyslane z aktualnymi ustawieniami drukarki.`
-    };
-  }
-}
+// Ustawianie jednostronnie/dwustronnie (applyPrinterSides) zyje teraz w
+// ../../lib/printing.js - potrzebuje go tez apps/drukarka-projekty, wiec nie
+// ma sensu trzymac dwoch kopii tej samej logiki PowerShell.
 
 
 
@@ -187,6 +147,32 @@ function validateUploadedDocument(file) {
   if (ext === '.pdf' && !ascii.startsWith('%PDF-')) throw new Error(`Plik ${decodeOriginalName(file.originalname)} nie wyglada jak poprawny PDF.`);
   if (ext === '.docx' && !ascii.startsWith('PK')) throw new Error(`Plik ${decodeOriginalName(file.originalname)} nie wyglada jak poprawny DOCX.`);
   if (ext === '.doc' && !hex.startsWith('d0cf11e0')) throw new Error(`Plik ${decodeOriginalName(file.originalname)} nie wyglada jak poprawny DOC.`);
+}
+
+// Laczy kolejne (sasiadujace w kolejce) pliki PDF w jeden przed wyslaniem do
+// druku - mniej osobnych zadan druku = szybciej i bez przerw miedzy plikami.
+// DOC/DOCX nie da sie polaczyc bez konwersji do PDF (ktorej ta apka nie robi),
+// wiec zostaja jako osobne zadania na swoim miejscu w kolejnosci.
+async function buildMergedPrintItems(items) {
+  const result = [];
+  let i = 0;
+  while (i < items.length) {
+    if (items[i].ext === ".pdf") {
+      const run = [];
+      while (i < items.length && items[i].ext === ".pdf") { run.push(items[i]); i += 1; }
+      if (run.length >= 2) {
+        const mergedPath = path.join(MERGED_DIR, `${Date.now()}_${Math.round(Math.random() * 1e9)}_polaczone.pdf`);
+        await pdfMerge.mergePdfs(run.map(r => r.path), mergedPath);
+        result.push({ ...run[0], path: mergedPath, originalName: `Połączony PDF (${run.length} plików).pdf`, merged: true });
+      } else {
+        result.push(run[0]);
+      }
+    } else {
+      result.push(items[i]);
+      i += 1;
+    }
+  }
+  return result;
 }
 
 function cleanupFiles(items) {
@@ -378,8 +364,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
 
   printing = true;
 
-  const itemsToPrint = [...queue];
-  const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
+  const originalItems = [...queue];
   const sidesLabel = sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
   const copyLabel = copyMode === "set"
     ? "najpierw komplet, potem kolejna kopia kompletu"
@@ -389,7 +374,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
     printing: true,
     message: `Start drukowania: ${copies} kop. / ${sidesLabel} / ${copyLabel}`,
     current: 0,
-    total: printJobs.length,
+    total: originalItems.length,
     percent: 0,
     done: false,
     error: null,
@@ -398,9 +383,31 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
 
   res.json({ ok: true });
 
+  let itemsToPrint = originalItems;
   try {
-    const printerName = String(req.body.printerName || "").trim(); const printerSetup = await applyPrinterSides(sideMode, printerName);
-    status.warning = printerSetup.ok ? null : printerSetup.message;
+    // Laczenie PDF-ow ZMIENIA znaczenie "kopia przy kazdym pliku" (A,A,B,B) w
+    // "najpierw caly komplet" (A,B,A,B), bo po polaczeniu jest juz tylko jeden
+    // "plik" do powielenia - wiec laczymy tylko gdy to nie zmienia wyboru
+    // uzytkownika: albo jest tylko 1 kopia (kolejnosc kopii wtedy bez
+    // znaczenia), albo uzytkownik i tak wybral "najpierw komplet" (copyMode
+    // "set"), gdzie laczenie daje dokladnie to samo zachowanie co bez laczenia.
+    const mergeChangesCopySemantics = copies > 1 && copyMode === "file";
+    if (!mergeChangesCopySemantics && originalItems.filter(it => it.ext === ".pdf").length >= 2) {
+      status.message = "Łączę sąsiadujące PDF-y w jeden plik, żeby drukować szybciej...";
+      try {
+        itemsToPrint = await buildMergedPrintItems(originalItems);
+      } catch (mergeErr) {
+        itemsToPrint = originalItems;
+        status.warning = "Nie udało się połączyć PDF-ów w jeden plik - drukuję pojedynczo.";
+      }
+    }
+
+    const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
+    status.total = printJobs.length;
+
+    const printerName = String(req.body.printerName || "").trim();
+    const printerSetup = await printService.applyPrinterSides(sideMode, printerName);
+    status.warning = printerSetup.ok ? status.warning : printerSetup.message;
     status.message = printerSetup.ok
       ? printerSetup.message
       : printerSetup.message;
@@ -437,21 +444,26 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
     status.percent = 100;
     status.done = true;
 
-    // Nie usuwamy plikow natychmiast po wyslaniu do druku.
-    // Acrobat/Windows potrafi jeszcze doczytywac duze PDF-y po dodaniu zadania do kolejki.
-    // Natychmiastowe kasowanie uploadow moglo powodowac znikanie/anulowanie duzych zadan.
-    const cleanupDelayMs = 30 * 60 * 1000;
-    setTimeout(() => cleanupFiles(itemsToPrint), cleanupDelayMs).unref?.();
-
     // Acrobat nie jest zamykany przy kazdym pliku, bo to psulo buforowanie duzych PDF-ow.
     // Zamykamy go dopiero po calej serii i z opoznieniem, bez Stop-Process -Force.
     printService.closePdfAppsAfterBatch(__dirname, Number(process.env.DRUKARKA_CLOSE_ACROBAT_AFTER_SECONDS || 30));
-
-    queue = [];
   } catch (err) {
     status.error = String(err.message || err);
     status.message = "❌ Blad drukowania: " + status.error;
   } finally {
+    // Kolejka i sprzatanie plikow ida TUTAJ (nie tylko na sciezce sukcesu) -
+    // bez tego blad w polowie serii zostawial stara kolejke w pamieci, wiec
+    // ponowne kliknieccie "drukuj" potrafilo wyslac do druku po raz drugi
+    // pliki, ktore juz sie realnie wydrukowaly przed bledem.
+    queue = [];
+    // Nie usuwamy plikow natychmiast po wyslaniu do druku.
+    // Acrobat/Windows potrafi jeszcze doczytywac duze PDF-y po dodaniu zadania do kolejki.
+    // Natychmiastowe kasowanie uploadow moglo powodowac znikanie/anulowanie duzych zadan.
+    const cleanupDelayMs = 30 * 60 * 1000;
+    setTimeout(() => {
+      cleanupFiles(originalItems);
+      cleanupFiles(itemsToPrint.filter(it => it.merged));
+    }, cleanupDelayMs).unref?.();
     printing = false;
     status.printing = false;
   }

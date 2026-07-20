@@ -17,119 +17,194 @@
       <a class="button-link ghost top-link" href="http://127.0.0.1:3000">← Panel główny</a>
     </div>
 
-    <nav class="stepper" id="stepper" aria-label="Postęp">
-      <div class="step-dot" data-step="1"><span class="dot">1</span><span class="step-label">Arkusz</span></div>
-      <div class="step-line"></div>
-      <div class="step-dot" data-step="2"><span class="dot">2</span><span class="step-label">Adresy</span></div>
-      <div class="step-line"></div>
-      <div class="step-dot" data-step="3"><span class="dot">3</span><span class="step-label">Folder</span></div>
-      <div class="step-line"></div>
-      <div class="step-dot" data-step="4"><span class="dot">4</span><span class="step-label">Kolejność</span></div>
-      <div class="step-line"></div>
-      <div class="step-dot" data-step="5"><span class="dot">5</span><span class="step-label">Druk</span></div>
-    </nav>
-
-    <section class="hero">
+    <!-- Wybór trybu: projekty (arkusz Excel) albo wnioski materiałowe (WM) -->
+    <!-- To jest pierwsza rzecz jaka uzytkownik widzi i decyzja, od ktorej
+         zalezy cala reszta strony - musi wygladac jak GLOWNY punkt strony,
+         a nie jak jeszcze jeden maly krok, dlatego uzywa tych samych klas
+         .hero/.hero-main/.info-card co sekcje "Drukarka projektów"/"WM"
+         ponizej. -->
+    <section class="hero" id="panelModeChoice">
       <div class="glass hero-main">
-        <div class="kicker">Automatyczne przygotowanie dokumentacji</div>
-        <h1>Drukarka projektów</h1>
-        <p class="lead">Wgraj arkusz inwestycji, wybierz adres bez odbioru i rezygnacji, a narzędzie samo znajdzie folder projektu, odczyta kolejność z Opisu technicznego i przygotuje pliki do druku.</p>
+        <div class="kicker">Zacznij tutaj</div>
+        <h1>Co drukujesz?</h1>
+        <p class="lead">Wybierz tryb pracy - drukarka przeprowadzi Cię przez resztę krok po kroku. Pamięta oba tryby, ale pracujesz zawsze tylko w jednym naraz.</p>
+        <div class="hero-actions">
+          <button id="modeProjektyBtn" class="ghost mode-btn" type="button">📁 Drukuj projekty (arkusz Excel)</button>
+          <button id="modeWmBtn" class="ghost mode-btn" type="button">📄 Drukuj wnioski materiałowe (WM)</button>
+        </div>
       </div>
       <aside class="glass info-card">
-        <h2>5 kroków</h2>
+        <h2>2 tryby</h2>
         <div class="pill-list">
-          <div class="pill">Wgraj arkusz i wybierz zakładkę</div>
-          <div class="pill">Wybierz jeden lub kilka adresów naraz</div>
-          <div class="pill">Wskaż folder z projektami</div>
-          <div class="pill">Sprawdź proponowaną kolejność</div>
-          <div class="pill">Wyślij do druku</div>
+          <div class="pill">Projekty: arkusz Excel + folder z projektami adresów</div>
+          <div class="pill">Wnioski materiałowe (WM): jeden folder, jeden adres</div>
         </div>
       </aside>
     </section>
 
-    <!-- KROK 1: Arkusz -->
-    <section class="panel" id="panelExcel">
-      <div class="panel-header">
-        <div>
-          <h2 class="panel-title"><span class="step-num">1</span>Arkusz inwestycji</h2>
-          <p class="panel-desc">Wgraj plik Excel z tabelą adresów (np. Paradyż_Żarnów.xlsx), a potem wybierz właściwą zakładkę.</p>
-        </div>
-      </div>
-      <div class="field-row">
-        <label class="option-field">
-          <span>Plik Excel</span>
-          <input id="excelInput" type="file" accept=".xlsx,.xls" />
-        </label>
-        <label class="option-field">
-          <span>Zakładka</span>
-          <select id="sheetSelect" disabled>
-            <option value="">— najpierw wgraj plik —</option>
-          </select>
-        </label>
-      </div>
-      <div id="excelError"></div>
-    </section>
+    <div id="flowProjekty" style="display:none;">
+      <nav class="stepper" id="stepper" aria-label="Postęp">
+        <div class="step-dot" data-step="1"><span class="dot">1</span><span class="step-label">Arkusz</span></div>
+        <div class="step-line"></div>
+        <div class="step-dot" data-step="2"><span class="dot">2</span><span class="step-label">Adresy</span></div>
+        <div class="step-line"></div>
+        <div class="step-dot" data-step="3"><span class="dot">3</span><span class="step-label">Folder</span></div>
+        <div class="step-line"></div>
+        <div class="step-dot" data-step="4"><span class="dot">4</span><span class="step-label">Kolejność</span></div>
+        <div class="step-line"></div>
+        <div class="step-dot" data-step="5"><span class="dot">5</span><span class="step-label">Druk</span></div>
+      </nav>
 
-    <!-- KROK 2: Adresy -->
-    <section class="panel disabled" id="panelCandidates">
-      <div class="panel-header">
-        <div>
-          <h2 class="panel-title"><span class="step-num">2</span>Wybierz adresy</h2>
-          <p class="panel-desc">Lista pokazuje tylko adresy bez zaznaczonego odbioru i bez rezygnacji, posortowane po LP gminy. Zaznacz jeden albo kilka - można drukować całą paczkę naraz.</p>
+      <section class="hero">
+        <div class="glass hero-main">
+          <div class="kicker">Automatyczne przygotowanie dokumentacji</div>
+          <h1>Drukarka projektów</h1>
+          <p class="lead">Wgraj arkusz inwestycji, wybierz adres bez odbioru i rezygnacji, a narzędzie samo znajdzie folder projektu, odczyta kolejność z Opisu technicznego i przygotuje pliki do druku.</p>
         </div>
-      </div>
-      <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
-        <label style="display:flex; align-items:center; gap:8px; font-weight:800; color:#334155; cursor:pointer;">
-          <input type="checkbox" id="selectAllCandidates" /> Zaznacz wszystkie
+        <aside class="glass info-card">
+          <h2>5 kroków</h2>
+          <div class="pill-list">
+            <div class="pill">Wgraj arkusz i wybierz zakładkę</div>
+            <div class="pill">Wybierz jeden lub kilka adresów naraz</div>
+            <div class="pill">Wskaż folder z projektami</div>
+            <div class="pill">Sprawdź proponowaną kolejność</div>
+            <div class="pill">Wyślij do druku</div>
+          </div>
+        </aside>
+      </section>
+
+      <!-- KROK 1: Arkusz -->
+      <section class="panel" id="panelExcel">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title"><span class="step-num">1</span>Arkusz inwestycji</h2>
+            <p class="panel-desc">Wgraj plik Excel z tabelą adresów (np. Paradyż_Żarnów.xlsx), a potem wybierz właściwą zakładkę.</p>
+          </div>
+        </div>
+        <div class="field-row">
+          <label class="option-field">
+            <span>Plik Excel</span>
+            <input id="excelInput" type="file" accept=".xlsx,.xls" />
+          </label>
+          <label class="option-field">
+            <span>Zakładka</span>
+            <select id="sheetSelect" disabled>
+              <option value="">— najpierw wgraj plik —</option>
+            </select>
+          </label>
+        </div>
+        <div id="excelError"></div>
+      </section>
+
+      <!-- KROK 2: Adresy -->
+      <section class="panel disabled" id="panelCandidates">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title"><span class="step-num">2</span>Wybierz adresy</h2>
+            <p class="panel-desc">Lista pokazuje tylko adresy bez zaznaczonego odbioru i bez rezygnacji, posortowane po LP gminy. Zaznacz jeden albo kilka - można drukować całą paczkę naraz.</p>
+          </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
+          <label style="display:flex; align-items:center; gap:8px; font-weight:800; color:#334155; cursor:pointer;">
+            <input type="checkbox" id="selectAllCandidates" /> Zaznacz wszystkie
+          </label>
+          <span id="selectedCountLabel" class="help-note" style="margin:0;">0 zaznaczonych</span>
+        </div>
+        <ul id="candidateList" class="candidate-list"></ul>
+        <div style="margin-top:16px;">
+          <button id="candidatesNextBtn" type="button" disabled>Dalej →</button>
+        </div>
+      </section>
+
+      <!-- KROK 3: Folder -->
+      <section class="panel disabled" id="panelFolder">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title"><span class="step-num">3</span>Folder z projektami</h2>
+            <p class="panel-desc">Wklej ścieżkę do folderu, w którym są podfoldery adresów (np. ...\Kolektory\Projekty\Żarnów). Ten sam folder zostanie użyty dla wszystkich zaznaczonych adresów. Zapamiętam ją dla tej zakładki.</p>
+          </div>
+        </div>
+        <div class="field-row">
+          <label class="option-field" style="grid-column: 1 / -1;">
+            <span>Ścieżka folderu bazowego</span>
+            <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." />
+          </label>
+        </div>
+        <button id="matchBtn" type="button">Znajdź projekty</button>
+        <div id="matchError"></div>
+      </section>
+
+      <!-- KROK 4: Kolejność -->
+      <section class="panel disabled" id="panelOrder">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title"><span class="step-num">4</span>Proponowana kolejność</h2>
+            <p class="panel-desc">Dla każdego adresu: strona tytułowa → Opis techniczny → rysunki → załączniki wg listy z Opisu technicznego. Przeciągnij plik w obrębie adresu, żeby poprawić kolejność. Ikona oka = podgląd.</p>
+          </div>
+        </div>
+        <div id="batchSummary"></div>
+        <div id="missingFoldersBox"></div>
+        <div id="orderError"></div>
+        <div id="addressGroups"></div>
+        <div style="margin-top:16px; display:flex; gap:12px;">
+          <button id="confirmOrderBtn" type="button">Zatwierdź i dodaj wszystko do kolejki →</button>
+        </div>
+      </section>
+    </div>
+
+    <!-- Wnioski materiałowe (WM) - niezależna ścieżka, bez arkusza Excel -->
+    <div id="flowWm" style="display:none;">
+      <nav class="stepper" id="stepperWm" aria-label="Postęp">
+        <div class="step-dot" data-step="1"><span class="dot">1</span><span class="step-label">Folder WM</span></div>
+        <div class="step-line"></div>
+        <div class="step-dot" data-step="2"><span class="dot">2</span><span class="step-label">Wyniki</span></div>
+        <div class="step-line"></div>
+        <div class="step-dot" data-step="3"><span class="dot">3</span><span class="step-label">Druk</span></div>
+      </nav>
+
+      <section class="hero">
+        <div class="glass hero-main">
+          <div class="kicker">Automatyczne przygotowanie dokumentacji</div>
+          <h1>Wnioski materiałowe (WM)</h1>
+          <p class="lead">Wskaż folder z wnioskami materiałowymi dla jednego adresu, a narzędzie samo znajdzie strony tytułowe i załączniki, ułoży je w kolejności i przygotuje do druku.</p>
+        </div>
+        <aside class="glass info-card">
+          <h2>3 kroki</h2>
+          <div class="pill-list">
+            <div class="pill">Wskaż folder WM</div>
+            <div class="pill">Sprawdź znalezione dokumenty</div>
+            <div class="pill">Wyślij do druku</div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="panel" id="panelWm">
+        <div class="panel-header">
+          <div>
+            <h2 class="panel-title">Wnioski materiałowe (WM)</h2>
+            <p class="panel-desc">Wskaż folder z wnioskami materiałowymi (WM) dla jednego adresu, a narzędzie znajdzie strony tytułowe i załączniki gotowe do druku.</p>
+          </div>
+        </div>
+        <div class="field-row">
+          <label class="option-field" style="grid-column: 1 / -1;">
+            <span>Ścieżka folderu WM</span>
+            <input id="wmFolderInput" type="text" placeholder="G:\Dyski współdzielone\...\Projekty\<adres>\WM" />
+          </label>
+        </div>
+        <label style="display:flex; align-items:center; gap:8px; font-weight:800; color:#334155; cursor:pointer; margin-bottom:14px;">
+          <input type="checkbox" id="wmDokPodCheckbox" /> Wersja powykonawcza (dok.pod)
         </label>
-        <span id="selectedCountLabel" class="help-note" style="margin:0;">0 zaznaczonych</span>
-      </div>
-      <ul id="candidateList" class="candidate-list"></ul>
-      <div style="margin-top:16px;">
-        <button id="candidatesNextBtn" type="button" disabled>Dalej →</button>
-      </div>
-    </section>
+        <button id="wmScanBtn" type="button">Skanuj folder WM</button>
+        <div id="wmError"></div>
+        <div id="wmResults"></div>
+      </section>
+    </div>
 
-    <!-- KROK 3: Folder -->
-    <section class="panel disabled" id="panelFolder">
+    <!-- Druk - wspolny ostatni krok obu trybow, numer kroku ustawiany w JS wg wybranego trybu -->
+    <section class="panel disabled" id="panelPrint" style="display:none;">
       <div class="panel-header">
         <div>
-          <h2 class="panel-title"><span class="step-num">3</span>Folder z projektami</h2>
-          <p class="panel-desc">Wklej ścieżkę do folderu, w którym są podfoldery adresów (np. ...\Kolektory\Projekty\Żarnów). Ten sam folder zostanie użyty dla wszystkich zaznaczonych adresów. Zapamiętam ją dla tej zakładki.</p>
-        </div>
-      </div>
-      <div class="field-row">
-        <label class="option-field" style="grid-column: 1 / -1;">
-          <span>Ścieżka folderu bazowego</span>
-          <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." />
-        </label>
-      </div>
-      <button id="matchBtn" type="button">Znajdź projekty</button>
-      <div id="matchError"></div>
-    </section>
-
-    <!-- KROK 4: Kolejność -->
-    <section class="panel disabled" id="panelOrder">
-      <div class="panel-header">
-        <div>
-          <h2 class="panel-title"><span class="step-num">4</span>Proponowana kolejność</h2>
-          <p class="panel-desc">Dla każdego adresu: strona tytułowa → Opis techniczny → rysunki → załączniki wg listy z Opisu technicznego. Przeciągnij plik w obrębie adresu, żeby poprawić kolejność. Ikona oka = podgląd.</p>
-        </div>
-      </div>
-      <div id="batchSummary"></div>
-      <div id="missingFoldersBox"></div>
-      <div id="orderError"></div>
-      <div id="addressGroups"></div>
-      <div style="margin-top:16px; display:flex; gap:12px;">
-        <button id="confirmOrderBtn" type="button">Zatwierdź i dodaj wszystko do kolejki →</button>
-      </div>
-    </section>
-
-    <!-- KROK 5: Druk -->
-    <section class="panel disabled" id="panelPrint">
-      <div class="panel-header">
-        <div>
-          <h2 class="panel-title"><span class="step-num">5</span>Drukuj</h2>
+          <h2 class="panel-title"><span class="step-num" id="printStepNum">5</span>Drukuj</h2>
           <p class="panel-desc">Wybierz drukarkę i liczbę kopii, potem naciśnij DRUKUJ.</p>
         </div>
       </div>

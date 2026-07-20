@@ -20,7 +20,44 @@ const $ = s => document.querySelector(s);
     const today = new Date();
     let selectedFiles = [];
     let lastFailedKeys = new Set();
-    $('#date').value = today.toISOString().slice(0,10);
+    const dateInput = $('#date');
+    const monthOnlyEl = $('#monthOnly');
+    const dateHint = $('#dateHint');
+    const monthYearFields = $('#monthYearFields');
+    const monthNumInput = $('#monthNum');
+    const yearNumInput = $('#yearNum');
+    dateInput.value = today.toISOString().slice(0,10);
+
+    function pad2(n) { return String(n).padStart(2, '0'); }
+
+    // Osobne pola liczbowe na miesiac/rok (zamiast natywnego <input type=month>),
+    // zeby na kazdym systemie/przegladarce miesiac zawsze byl liczba, a nie
+    // nazwa slowna z natywnego kalendarza (np. "lipiec" w polskiej lokalizacji).
+    function setDateMode(monthOnly) {
+      if (monthOnly) {
+        dateInput.hidden = true;
+        dateInput.required = false;
+        monthYearFields.style.display = '';
+        if (!monthNumInput.value) monthNumInput.value = today.getMonth() + 1;
+        if (!yearNumInput.value) yearNumInput.value = today.getFullYear();
+        dateHint.textContent = 'Wpisujesz tylko miesiąc i rok (liczbowo) - dzień zostanie pominięty we wszystkich dokumentach.';
+      } else {
+        dateInput.hidden = false;
+        dateInput.required = true;
+        monthYearFields.style.display = 'none';
+        dateHint.textContent = 'Ta sama data trafi do wszystkich miejsc w dokumentach.';
+      }
+    }
+
+    monthOnlyEl.addEventListener('change', () => setDateMode(monthOnlyEl.checked));
+
+    function getDateValue() {
+      if (!monthOnlyEl.checked) return dateInput.value;
+      const month = Number(monthNumInput.value);
+      const year = Number(yearNumInput.value);
+      if (!month || month < 1 || month > 12 || !year) return '';
+      return `${year}-${pad2(month)}`;
+    }
 
     function showStatus(text, type='') {
       statusBox.hidden = false;
@@ -94,7 +131,8 @@ const $ = s => document.querySelector(s);
       lastFailedKeys = new Set();
       filesInput.value = '';
       form.reset();
-      $('#date').value = today.toISOString().slice(0,10);
+      monthOnlyEl.checked = false;
+      setDateMode(false);
       $('#prefix').value='WM dok.pod';
       fileList.innerHTML='<div class="empty">Nie dodano jeszcze plików.</div>';
       statusBox.hidden=true;
@@ -113,11 +151,13 @@ const $ = s => document.querySelector(s);
       e.preventDefault();
       const files = selectedFiles;
       if (!files.length) return showStatus('Dodaj przynajmniej jeden plik DOCX.', 'err');
+      const dateValue = getDateValue();
+      if (!dateValue) return showStatus('Wpisz poprawną datę (albo miesiąc i rok).', 'err');
       files.forEach(f => f._state = 'w kolejce');
       renderFiles();
       const fd = new FormData();
       files.forEach(f => fd.append('files', f));
-      fd.append('date', $('#date').value);
+      fd.append('date', dateValue);
       fd.append('prefix', $('#prefix').value);
       const saveDocxEl = $('#saveDocx');
       const visibleWordEl = $('#visibleWord');

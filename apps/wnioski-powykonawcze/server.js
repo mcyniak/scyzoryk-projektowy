@@ -2,8 +2,10 @@ const rateLimitLib = require('express-rate-limit');
 const rateLimit = rateLimitLib.rateLimit || rateLimitLib.default || rateLimitLib;
 const express = require('express');
 const multer = require('multer');
-const archiverModule = require('archiver');
-const archiver = typeof archiverModule === 'function' ? archiverModule : (archiverModule.default || archiverModule.create || archiverModule.archiver);
+// archiver 8.x jest czystym ESM i eksportuje klasy (ZipArchive) zamiast
+// starej funkcji-fabryki archiver('zip', opts) - bez tej zmiany kazde
+// pobranie ZIP-a konczylo sie realnym bledem "Nie udalo sie przygotowac paczki ZIP".
+const { ZipArchive } = require('archiver');
 const sanitize = require('sanitize-filename');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -11,13 +13,6 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, runPowerShell, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
-
-
-function assertArchiverAvailable() {
-  if (typeof archiver !== 'function') {
-    throw new Error('Nie udało się przygotować paczki ZIP. Uruchom ponownie instalację zależności.');
-  }
-}
 
 const app = express();
 const PORT = Number(process.env.PORT || 3005);
@@ -158,7 +153,11 @@ function normalizeDate(input) {
   if (m) return `${m[3]}.${m[2]}.${m[1]}`;
   m = raw.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/);
   if (m) return `${m[1].padStart(2, '0')}.${m[2].padStart(2, '0')}.${m[3]}`;
-  throw new Error('Nieprawidłowa data. Użyj formatu RRRR-MM-DD albo DD.MM.RRRR.');
+  m = raw.match(/^(\d{4})-(\d{2})$/);
+  if (m) return `${m[2]}.${m[1]}`;
+  m = raw.match(/^(\d{1,2})[.\/-](\d{4})$/);
+  if (m) return `${m[1].padStart(2, '0')}.${m[2]}`;
+  throw new Error('Nieprawidłowa data. Użyj formatu RRRR-MM-DD, DD.MM.RRRR albo MM.RRRR (tylko miesiąc i rok).');
 }
 
 function cleanPrefix(value) {
@@ -237,8 +236,7 @@ async function runConvertScript(inputJson, outputJson) {
 async function zipDirectory(sourceDir, zipPath) {
   await new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath);
-    assertArchiverAvailable();
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
     output.on('close', resolve);
     archive.on('error', reject);
     archive.pipe(output);

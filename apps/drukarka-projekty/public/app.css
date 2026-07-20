@@ -1,6 +1,9 @@
 /* app.css - Drukarka projektów: TYLKO rzeczy unikalne dla tego modułu.
    Wspólny wygląd (kolory, przyciski, panele) jest w base.css. */
 
+/* Wybor trybu (Projekty / WM) - ma wygladac jak GLOWNY punkt strony. */
+.mode-btn { font-size: 16px; padding: 16px 24px; }
+
 .candidate-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; max-height: 420px; overflow-y: auto; padding-right: 6px; }
 .candidate-item { display: grid; grid-template-columns: 48px 1fr auto; align-items: center; gap: 12px; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; cursor: pointer; transition: border-color .12s, box-shadow .12s; }
 .candidate-item:hover { border-color: rgba(207,23,31,.4); box-shadow: 0 12px 26px rgba(15,23,42,.07); }
@@ -9,6 +12,8 @@
 .candidate-info strong { display: block; color: var(--text); }
 .candidate-info span { color: var(--muted); font-size: 13px; }
 .candidate-arrow { color: var(--red); font-weight: 950; font-size: 18px; }
+
+.order-item .wm-item-checkbox { width: 20px; height: 20px; accent-color: var(--red); justify-self: center; }
 
 .order-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .order-item { display: grid; grid-template-columns: 34px 1fr auto 40px; align-items: center; gap: 10px; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; cursor: grab; user-select: none; }

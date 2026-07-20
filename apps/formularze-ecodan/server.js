@@ -4,23 +4,18 @@ import express from 'express';
 import { rateLimit } from 'express-rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
 import multer from 'multer';
 import sanitize from 'sanitize-filename';
+// archiver 8.x jest teraz czystym ESM i eksportuje klasy (ZipArchive) zamiast
+// starej funkcji-fabryki archiver('zip', opts) - stad "new ZipArchive(opts)"
+// nizej, nie "archiver('zip', opts)". Bez tej zmiany kazde pobranie ZIP-a
+// konczylo sie realnym bledem 500 "Nie udalo sie przygotowac paczki ZIP".
+import { ZipArchive } from 'archiver';
 import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX } from './src/config.js';
 import { setProjectRoot, getProjectRoot } from './src/debug.js';
 import { calculate } from './src/rules.js';
 import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob } from './src/jobs.js';
 import { readExcelRecords } from './src/excel.js';
-
-const require = createRequire(import.meta.url);
-const archiverModule = require('archiver');
-const archiver = typeof archiverModule === 'function' ? archiverModule : (archiverModule.default || archiverModule.create || archiverModule.archiver);
-function assertArchiverAvailable() {
-  if (typeof archiver !== 'function') {
-    throw new Error('Nie udało się przygotować paczki ZIP. Uruchom ponownie instalację zależności.');
-  }
-}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -282,8 +277,7 @@ app.get('/api/batch/download/:jobId', (req, res) => {
   const safeName = sanitize(job.options?.investmentName || job.investmentFolder || job.sourceFile || 'raporty-ecodan') || 'raporty-ecodan';
   res.attachment(`${safeName}.zip`);
 
-  assertArchiverAvailable();
-  const archive = archiver('zip', { zlib: { level: 9 } });
+  const archive = new ZipArchive({ zlib: { level: 9 } });
   archive.on('error', error => {
     if (!res.headersSent) res.status(500);
     res.end(String(error?.message || error));

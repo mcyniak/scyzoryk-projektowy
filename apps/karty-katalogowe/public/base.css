@@ -98,10 +98,10 @@ input[type="checkbox"]:focus-visible {
   outline: 2px solid var(--scz-red, var(--red, #cf171f));
   outline-offset: 2px;
 }
-input[type="file"]::file-selector-button { margin-right: 12px; border: 0; border-radius: 14px; padding: 11px 16px; cursor: pointer; background: linear-gradient(135deg, var(--red), var(--red2)); color: #fff; font-weight: 950; font: inherit; box-shadow: 0 10px 22px rgba(207,23,31,.20); }
+input[type="file"]::file-selector-button { margin-right: 12px; border: 0; border-radius: 14px; padding: 11px 16px; cursor: pointer; background: linear-gradient(135deg, var(--red), var(--red2)); color: #fff; font: inherit; font-weight: 950; box-shadow: 0 10px 22px rgba(207,23,31,.20); }
 
 /* Przyciski */
-button, .button-link { border: 0; border-radius: 16px; padding: 13px 18px; font-weight: 950; font: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, var(--red), var(--red2)); color: white; box-shadow: 0 14px 30px rgba(207,23,31,.24); transition: transform .12s, filter .12s, opacity .12s; text-decoration: none; }
+button, .button-link { border: 0; border-radius: 16px; padding: 13px 18px; font: inherit; font-weight: 950; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, var(--red), var(--red2)); color: white; box-shadow: 0 14px 30px rgba(207,23,31,.24); transition: transform .12s, filter .12s, opacity .12s; text-decoration: none; }
 button:hover, .button-link:hover { transform: translateY(-1px); filter: brightness(.98); text-decoration: none; }
 button.ghost, .button-link.ghost { background: #fff; color: #334155; border: 1px solid var(--line); box-shadow: none; }
 button:disabled { opacity: .55; cursor: not-allowed; transform: none; }

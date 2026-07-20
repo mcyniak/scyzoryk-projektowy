@@ -12,7 +12,6 @@
   .kk-field input[type=text] { width: 100%; box-sizing: border-box; padding: 12px 14px; border: 1px solid var(--scz-line, #e2e8f0); border-radius: 14px; font-size: 15px; font-family: inherit; }
   .kk-field input[type=file] { padding: 10px 0; }
   .kk-hint { font-size: 13px; color: var(--scz-muted, #64748b); margin-top: 8px; }
-  .kk-check { display: flex; align-items: center; gap: 10px; font-weight: 800; color: #334155; margin-bottom: 20px; }
   .kk-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
   .kk-chip { padding: 7px 13px; border-radius: 999px; font-weight: 900; font-size: 13px; border: 1px solid var(--scz-line, #e2e8f0); background: #f8fafc; color: #334155; }
   .kk-chip.ok { background: #dcfce7; color: #065f46; border-color: #a7f3d0; }
@@ -33,6 +32,8 @@
   #kkStatus { font-weight: 800; color: #334155; min-height: 20px; margin-top: 4px; }
   #kkStatus.err { color: #991b1b; }
   #kkResultsPanel { display: none; }
+  #runBtn[hidden] { display: none !important; }
+  .kk-run-controls { margin-top: 18px; }
 </style>
 </head>
 <body>
@@ -79,13 +80,8 @@
         <input type="text" id="rootPath" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\6. Paradyż Żarnów\Kolektory">
       </div>
 
-      <label class="kk-check">
-        <input type="checkbox" id="dryRun" checked>
-        Najpierw tylko podgląd (nic nie kopiuje)
-      </label>
-
       <div class="controls">
-        <button id="runBtn" class="print" type="button">Uruchom dobór kart</button>
+        <button id="checkBtn" class="print" type="button">Sprawdź tabelę</button>
       </div>
       <div id="kkStatus"></div>
     </section>
@@ -105,6 +101,9 @@
           </thead>
           <tbody id="kkTableBody"></tbody>
         </table>
+      </div>
+      <div class="controls kk-run-controls">
+        <button id="runBtn" class="print" type="button" hidden>Uruchom dobór kart</button>
       </div>
     </section>
   </main>

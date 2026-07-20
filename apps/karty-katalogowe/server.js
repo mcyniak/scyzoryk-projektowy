@@ -8,7 +8,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup, createSemaphore } = require('../../lib/hardening');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -92,8 +92,40 @@ const ZAWSZE_KARTY = ['Grupa pompowa.pdf', 'Kolektor KSG 21GT.pdf'];
 const ROZMIARY_ZASOBNIKA = ['250', '300', '400'];
 function nazwaZasobnika(rozmiar) { return `Zasobnik SGW(S)B ${rozmiar}.pdf`; }
 
+// Sprawdzanie kazdego adresu (listowanie folderu klienta na dysku, potem
+// ewentualne kopiowanie) bylo do tej pory SEKWENCYJNE - jeden adres na raz,
+// czeka na odpowiedz dysku sieciowego, dopiero potem nastepny. Przy 100+
+// wierszach to realnie kilka minut. Adresy sa od siebie niezalezne, wiec
+// przetwarzamy je rownolegle z ograniczeniem (nie bez ograniczenia - zbyt
+// duzo naraz zadan do dysku sieciowego mogloby zaczac dostawac bledy).
+const KK_CONCURRENCY = Math.max(1, Number(process.env.KK_CONCURRENCY || 8));
+
 function normalizujTekst(value) {
   return String(value ?? '').trim();
+}
+
+function normalizeHeader(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// Szuka kolumny po dopasowaniu znormalizowanego naglowka - ten sam wzorzec
+// co w apps/drukarka-projekty/src/excelInvestment.js, zeby dobor kolumn
+// przetrwal przestawienie kolejnosci kolumn w arkuszu (zamiast sztywnych
+// numerow indeksow jak wczesniej).
+function findColumn(headerRow, mustIncludeAll, mustNotInclude = []) {
+  for (let col = 0; col < headerRow.length; col += 1) {
+    const norm = normalizeHeader(headerRow[col]);
+    if (!norm) continue;
+    const hasAll = mustIncludeAll.every(kw => norm.includes(kw));
+    const hasNone = mustNotInclude.every(kw => !norm.includes(kw));
+    if (hasAll && hasNone) return col;
+  }
+  return -1;
 }
 
 function parseIdFolderu(value) {
@@ -114,7 +146,23 @@ function parseRozmiarZUid(uidRaw) {
   const match = last.match(/(\d+)/);
   if (!match) return null;
   const rozmiar = match[1];
-  return ROZMIARY_ZASOBNIKA.includes(rozmiar) ? rozmiar : { nieznany: rozmiar };
+  if (ROZMIARY_ZASOBNIKA.includes(rozmiar)) return rozmiar;
+  // Fizyczne zasobniki wystepuja tylko w tych konkretnych rozmiarach (karty
+  // katalogowe sa tylko dla 250/300/400) - liczba w UID to WYMAGANA
+  // pojemnosc (np. z obliczen doboru), ktora trzeba zaokraglic W GORE do
+  // najblizszego dostepnego rozmiaru (np. "200"/"220" -> 250), nigdy w dol -
+  // za maly zasobnik nie spelnilby wymogu. Realny przyklad z produkcji:
+  // 92 ze 147 wierszy mialo UID konczace sie na "200" i bylo odrzucane jako
+  // "nierozpoznany rozmiar", mimo ze 250 jest oczywistym, jedynym sensownym
+  // dopasowaniem. Liczby WIEKSZE niz najwiekszy dostepny rozmiar (>400) nadal
+  // sa bledem - nie ma czym ich zaspokoic, wiec nie zgadujemy w gore w
+  // nieskonczonosc.
+  const liczba = Number(rozmiar);
+  const najblizszyWiekszy = ROZMIARY_ZASOBNIKA
+    .map(Number)
+    .sort((a, b) => a - b)
+    .find(dostepny => dostepny >= liczba);
+  return najblizszyWiekszy ? String(najblizszyWiekszy) : { nieznany: rozmiar };
 }
 
 // Rozpoznaje nazwe gminy z nazwy arkusza, np. "Solary Paradyż" -> "Paradyż"
@@ -173,7 +221,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   // Druga warstwa ochrony obok sanityzacji w gminaZNazwyArkusza - nawet gdyby
   // sanityzacja kiedys zawiodla, nie pozwalamy wyjsc poza rootPath/Projekty.
   if (path.relative(projektyBazowyDir, projektyDir).startsWith('..')) {
-    wyniki.push({ gmina, id: null, adres: null, uid: null, status: 'blad', komunikat: 'Niepoprawna nazwa gminy z arkusza - pominieto.' });
+    wyniki.push({ gmina, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": niepoprawna nazwa gminy z arkusza - pominieto.` });
     return wyniki;
   }
 
@@ -181,65 +229,108 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   const nazwyFolderowKlientow = await listujFoldery(projektyDir);
 
   if (!kartyIstnieja) {
-    wyniki.push({ gmina, id: null, adres: null, uid: null, status: 'blad', komunikat: `Nie znaleziono folderu ze zrodlowymi kartami: ${kartyDir}` });
+    wyniki.push({ gmina, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono folderu ze zrodlowymi kartami: ${kartyDir}` });
     return wyniki;
   }
   if (nazwyFolderowKlientow === null) {
-    wyniki.push({ gmina, id: null, adres: null, uid: null, status: 'blad', komunikat: `Nie znaleziono folderu projektow dla gminy: ${projektyDir}` });
+    wyniki.push({ gmina, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono folderu projektow dla gminy: ${projektyDir}` });
     return wyniki;
   }
 
   const { mapa: mapaFolderow, duplikaty } = zbudujMapeFolderow(nazwyFolderowKlientow);
 
-  // rows[0] to naglowek
+  // rows[0] to naglowek - kolumny wykrywane po nazwie, nie po sztywnym
+  // numerze indeksu, zeby przestawienie kolumn w arkuszu nie psulo doboru.
   const header = rows[0] || [];
-  const idx = {
-    lpGmina: 1,
-    rezygnacja: 3,
-    adres: 6,
-    uid: 10
-  };
+  // "gmin" (rdzen), nie "gmina" - naglowek bywa odmieniony ("LP Gminy"),
+  // a dopasowanie po pelnym slowie "gmina" nie zlapaloby wtedy substringu
+  // (ten sam blad odmiany co wczesniej w drukarka-projekty/folderMatch.js).
+  const colLpGmina = findColumn(header, ['lp', 'gmin']);
+  const colRezygnacja = findColumn(header, ['rezygnacj']);
+  const colAdres = findColumn(header, ['adres'], ['kod', 'email', 'e mail']);
+  const colUid = findColumn(header, ['uid']);
+
+  const brakujaceKolumny = [];
+  if (colLpGmina === -1) brakujaceKolumny.push('LP gminy');
+  if (colAdres === -1) brakujaceKolumny.push('adres');
+  if (colUid === -1) brakujaceKolumny.push('UID');
+  if (brakujaceKolumny.length) {
+    wyniki.push({ gmina, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono kolumn: ${brakujaceKolumny.join(', ')}. Sprawdz naglowki w pierwszym wierszu arkusza.` });
+    return wyniki;
+  }
+  // colRezygnacja moze byc -1 (nie kazdy arkusz ma taka kolumne) - wtedy po
+  // prostu nikt nigdy nie ma rezygnacji, co jest bezpiecznym zachowaniem.
+
+  // FAZA 1 (szybka, synchroniczna): walidacja kazdego wiersza bez zadnych
+  // odwolan do dysku. Wiersze, ktore odpadaja tutaj, trafiaja do wynikiByIdx
+  // od razu; wiersze, ktore przeszly walidacje, licza sie do dalszej,
+  // rownoleglej fazy (potrzebuja listowania/kopiowania plikow).
+  const wynikiByIdx = new Array(rows.length).fill(null);
+  const zadania = [];
 
   for (let i = 1; i < rows.length; i += 1) {
+    const wiersz = i + 1; // numer wiersza w Excelu (1 = naglowek)
     const row = rows[i];
     if (!row || row.every(v => v === null || v === undefined || v === '')) continue;
 
-    const id = parseIdFolderu(row[idx.lpGmina]);
-    const rezygnacja = normalizujTekst(row[idx.rezygnacja]);
-    const adres = normalizujTekst(row[idx.adres]);
-    const uidRaw = row[idx.uid];
-    const uid = normalizujTekst(uidRaw);
+    const id = parseIdFolderu(row[colLpGmina]);
+    const rezygnacja = colRezygnacja !== -1 ? normalizujTekst(row[colRezygnacja]) : '';
+    const adres = normalizujTekst(row[colAdres]);
+    const uid = normalizujTekst(row[colUid]);
+    const opisAdresu = adres || '(brak adresu)';
 
-    if (!uid) continue; // wiersz bez UID pomijamy calkowicie (nie dotyczy solarow / brak danych)
-
+    // Rezygnacja PRZED brakiem UID - ktos kto zrezygnowal bardzo czesto ma
+    // tez puste pole UID (nikt nie wypelnia doboru dla anulowanego zlecenia),
+    // wiec sprawdzenie w odwrotnej kolejnosci klasyfikowaloby te wiersze jako
+    // "brak UID" zamiast "rezygnacja" - myllace, bo to nie jest zapomniany
+    // UID tylko naturalna konsekwencja rezygnacji. Realny przyklad z
+    // produkcji: kilka z 17 wierszy "brak UID" w jednym uruchomieniu to
+    // faktycznie byly rezygnacje z pustym UID.
     if (rezygnacja) {
-      wyniki.push({ gmina, id, adres, uid, status: 'pominieto-rezygnacja', komunikat: 'Rezygnacja - pominieto.' });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid: uid || null, status: 'pominieto-rezygnacja', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: rezygnacja dla adresu "${opisAdresu}" - pominieto.` };
+      continue;
+    }
+
+    if (!uid) {
+      // NIE pomijamy cicho - moze to byc adres ktory faktycznie nie dotyczy
+      // solarow (normalne), ale rownie dobrze ktos mogl zapomniec wpisac UID -
+      // uzytkownik ma to zobaczyc w raporcie, nie musiec zgadywac.
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid: null, status: 'pominieto-brak-uid', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak wartosci UID dla adresu "${opisAdresu}" - pominieto.` };
       continue;
     }
 
     if (!id) {
-      wyniki.push({ gmina, id: row[idx.lpGmina], adres, uid, status: 'blad', komunikat: 'Brak poprawnego "LP gminy" - nie mozna dopasowac folderu.' });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id: row[colLpGmina], adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak poprawnego "LP gminy" dla adresu "${opisAdresu}" - nie mozna dopasowac folderu.` };
       continue;
     }
 
     if (duplikaty.has(id)) {
-      wyniki.push({ gmina, id, adres, uid, status: 'blad', komunikat: `Na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" - wymaga recznego sprawdzenia.` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` };
       continue;
     }
 
     const folderNazwa = mapaFolderow.get(id);
     if (!folderNazwa) {
-      wyniki.push({ gmina, id, adres, uid, status: 'blad', komunikat: `Nie znaleziono na dysku folderu zaczynajacego sie od "${id} -".` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` };
       continue;
     }
 
     const rozmiar = parseRozmiarZUid(uid);
     if (!rozmiar || typeof rozmiar === 'object') {
       const nieznany = rozmiar && rozmiar.nieznany ? rozmiar.nieznany : uid;
-      wyniki.push({ gmina, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Nierozpoznany rozmiar zasobnika w UID ("${nieznany}"). Oczekiwano 250/300/400.` });
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nierozpoznany rozmiar zasobnika w UID ("${nieznany}") dla adresu "${opisAdresu}". Oczekiwano 250/300/400.` };
       continue;
     }
 
+    zadania.push({ idx: i, wiersz, id, adres, uid, opisAdresu, folderNazwa, rozmiar });
+  }
+
+  // FAZA 2 (rownolegla, z ograniczeniem KK_CONCURRENCY): listowanie folderu
+  // klienta i ewentualne kopiowanie - to jest czesc, ktora realnie czeka na
+  // dysk sieciowy, wiec robimy wiele adresow naraz zamiast jednego po drugim.
+  const semafor = createSemaphore(KK_CONCURRENCY);
+  await Promise.all(zadania.map(zadanie => semafor.run(async () => {
+    const { idx, wiersz, id, adres, uid, folderNazwa, rozmiar } = zadanie;
     const wymaganePliki = [...ZAWSZE_KARTY, nazwaZasobnika(rozmiar)];
     const folderKlienta = path.join(projektyDir, folderNazwa);
     const istniejace = await istniejacePlikiWFolderze(folderKlienta);
@@ -247,8 +338,8 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
     const doSkopiowania = wymaganePliki.filter(nazwa => !istniejace.has(nazwa.toLowerCase()));
 
     if (doSkopiowania.length === 0) {
-      wyniki.push({ gmina, id, adres, uid, folder: folderNazwa, status: 'pominieto-juz-sa', komunikat: 'Karty katalogowe juz sa w folderze klienta.' });
-      continue;
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'pominieto-juz-sa', komunikat: 'Karty katalogowe juz sa w folderze klienta.' };
+      return;
     }
 
     const skopiowane = [];
@@ -273,12 +364,19 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
     }
 
     if (bledy.length && skopiowane.length === 0) {
-      wyniki.push({ gmina, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: bledy.join('; ') });
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: ${bledy.join('; ')}` };
     } else if (bledy.length) {
-      wyniki.push({ gmina, id, adres, uid, folder: folderNazwa, status: 'czesciowo', komunikat: `Skopiowano: ${skopiowane.join(', ')}. Bledy: ${bledy.join('; ')}` });
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'czesciowo', komunikat: `Skopiowano: ${skopiowane.join(', ')}. Bledy: ${bledy.join('; ')}` };
     } else {
-      wyniki.push({ gmina, id, adres, uid, folder: folderNazwa, status: dryRun ? 'do-skopiowania' : 'skopiowano', komunikat: `Pliki: ${skopiowane.join(', ')}` });
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: dryRun ? 'do-skopiowania' : 'skopiowano', komunikat: `Pliki: ${skopiowane.join(', ')}` };
     }
+  })));
+
+  // Kolejnosc wierszy z arkusza zachowana (wynikiByIdx jest indeksowane
+  // pozycja w arkuszu), mimo ze FAZA 2 konczyla zadania w nieprzewidywalnej
+  // kolejnosci.
+  for (const wynik of wynikiByIdx) {
+    if (wynik) wyniki.push(wynik);
   }
 
   return wyniki;

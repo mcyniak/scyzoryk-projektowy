@@ -32,6 +32,9 @@ const zoomLevels = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 function fileExt(name) {
   return "." + String(name).split(".").pop().toLowerCase();
 }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 function clampNumber(value, min, max, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -42,11 +45,19 @@ function buildPreviewUrl(url) {
   if (!url) return "";
   const cleanUrl = String(url).split("#")[0];
   const zoomValue = previewZoom === "page-width" ? "page-width" : String(previewZoom);
-  return `${cleanUrl}#zoom=${encodeURIComponent(zoomValue)}`;
+  // "toolbar=0" wylacza WLASNY pasek narzedzi przegladarki (Chrome/Edge PDF
+  // viewer) w ramce podgladu - bez tego byly widoczne DWA rzedy kontrolek
+  // powiekszenia (nasz wlasny + natywny), a natywny mial tez wlasne przyciski
+  // "Drukuj"/"Pobierz", ktore omijaly kolejke/druk tej aplikacji.
+  return `${cleanUrl}#zoom=${encodeURIComponent(zoomValue)}&toolbar=0`;
 }
 
 function updateZoomLabel() {
-  zoomLabel.textContent = previewZoom === "page-width" ? "Dopasuj" : `${previewZoom}%`;
+  // W trybie "Dopasuj" etykieta pokazywala ten sam tekst co przycisk
+  // zoomFitBtn tuz obok - dwa razy "Dopasuj" wygladalo na pomylke, nie
+  // celowy design. Etykieta ma sens tylko dla konkretnego procentu, ktorego
+  // zaden przycisk juz nie pokazuje.
+  zoomLabel.textContent = previewZoom === "page-width" ? "" : `${previewZoom}%`;
 }
 
 function refreshPreviewZoom() {
@@ -89,6 +100,28 @@ function getPrintOptions() {
   return { copies, delaySeconds, sideMode, copyMode, printerName };
 }
 
+// Odzwierciedla dokladnie ta sama regule co server.js#buildMergedPrintItems:
+// sasiadujace w kolejce pliki PDF licza sie jako JEDNO zadanie druku, ale
+// tylko gdy to nie zmienia znaczenia "kopia przy kazdym pliku" (patrz
+// mergeChangesCopySemantics w server.js) - inaczej liczba pokazana tutaj
+// myliloby, ile realnie zadan pojdzie do drukarki.
+function countPrintUnits(copies, copyMode) {
+  if (copies > 1 && copyMode === "file") return queue.length;
+  let units = 0;
+  let i = 0;
+  while (i < queue.length) {
+    if (queue[i].ext === ".pdf") {
+      let runLength = 0;
+      while (i < queue.length && queue[i].ext === ".pdf") { runLength += 1; i += 1; }
+      units += 1;
+    } else {
+      units += 1;
+      i += 1;
+    }
+  }
+  return units;
+}
+
 function updateJobSummary() {
   const options = getPrintOptions();
   const sides = options.sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
@@ -96,7 +129,7 @@ function updateJobSummary() {
   const modeText = options.copyMode === "set"
     ? "najpierw komplet, potem kolejna kopia kompletu"
     : "kopia przy każdym pliku";
-  const jobCount = queue.length * options.copies;
+  const jobCount = countPrintUnits(options.copies, options.copyMode) * options.copies;
 
   jobSummary.textContent = `${copiesText} · ${sides} · ${modeText} · wydruków do wysłania: ${jobCount}`;
 }
@@ -436,10 +469,10 @@ clearBtn.addEventListener("click", async () => {
 });
 
 printBtn.addEventListener("click", async () => {
+  if (!queue.length) return;
   await saveOrder();
 
   const options = getPrintOptions();
-  if (!queue.length) return;
   const confirmText = `Wysłać do druku ${queue.length} plików, ${options.copies} kopii?`;
   if (!confirm(confirmText)) return;
 
@@ -552,7 +585,7 @@ async function loadPrinters() {
     const data = await res.json();
     const printers = data.printers || [];
     if (printerSelectInput && printers.length) {
-      printerSelectInput.innerHTML = printers.map(p => `<option value="${p.name}"${p.isDefault ? " selected" : ""}>${p.name}${p.isDefault ? " (domyslna)" : ""}</option>`).join("");
+      printerSelectInput.innerHTML = printers.map(p => `<option value="${escapeHtml(p.name)}"${p.isDefault ? " selected" : ""}>${escapeHtml(p.name)}${p.isDefault ? " (domyślna)" : ""}</option>`).join("");
     }
   } catch (e) {}
 }

@@ -18,15 +18,31 @@ function parseCookies(header) {
   return out;
 }
 
-function sessionMiddleware(defaultDataFactory) {
+// Wywolywany (opcjonalnie) tuz przed skasowaniem wygaslej sesji z mapy - zeby
+// wywolujacy (server.js) mogl posprzatac wlasne pliki tymczasowe (polaczone
+// PDF-y) powiazane z ta sesja, zamiast polegac wylacznie na niezaleznym,
+// duzo luzniej powiazanym sweep'ie scheduleCleanup nad calym MERGED_DIR.
+let onSessionExpire = null;
+
+function issueSessionCookie(res, sid) {
+  // Ustawiane PRZY KAZDYM zadaniu (nie tylko przy tworzeniu sesji) - inaczej
+  // Max-Age liczy sie od pierwszego wydania ciasteczka, wiec ktos pracujacy
+  // ciagle dluzej niz SESSION_MAX_IDLE_MS traci sesje (i kolejke) w polowie
+  // pracy, mimo ze serwerowe okno bezczynnosci (lastActivity) jest w
+  // rzeczywistosci przesuwane przy kazdym zadaniu.
+  res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_MAX_IDLE_MS / 1000)}`);
+}
+
+function sessionMiddleware(defaultDataFactory, onExpire) {
+  if (typeof onExpire === "function") onSessionExpire = onExpire;
   return (req, res, next) => {
     const cookies = parseCookies(req.headers.cookie);
     let sid = cookies[SESSION_COOKIE];
     if (!sid || !sessions.has(sid)) {
       sid = crypto.randomUUID();
       sessions.set(sid, { data: defaultDataFactory(), lastActivity: Date.now() });
-      res.setHeader("Set-Cookie", `${SESSION_COOKIE}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(SESSION_MAX_IDLE_MS / 1000)}`);
     }
+    issueSessionCookie(res, sid);
     const entry = sessions.get(sid);
     entry.lastActivity = Date.now();
     req.session = entry.data;
@@ -38,7 +54,10 @@ function sessionMiddleware(defaultDataFactory) {
 function cleanupOldSessions() {
   const now = Date.now();
   for (const [sid, entry] of sessions.entries()) {
-    if (now - entry.lastActivity > SESSION_MAX_IDLE_MS) sessions.delete(sid);
+    if (now - entry.lastActivity > SESSION_MAX_IDLE_MS) {
+      if (onSessionExpire) { try { onSessionExpire(entry.data); } catch (_) {} }
+      sessions.delete(sid);
+    }
   }
 }
 const cleanupTimer = setInterval(cleanupOldSessions, 30 * 60 * 1000);

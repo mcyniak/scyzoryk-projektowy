@@ -4,20 +4,18 @@ const express = require('express');
 const multer = require('multer');
 const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
-const archiverModule = require('archiver');
-const archiver = typeof archiverModule === 'function' ? archiverModule : (archiverModule.default || archiverModule.create || archiverModule.archiver);
+// archiver 8.x jest czystym ESM i eksportuje klasy (ZipArchive) zamiast
+// starej funkcji-fabryki archiver('zip', opts) - node'owy require() potrafi
+// zaladowac to synchronicznie i zwraca obiekt z named exports jako
+// wlasciwosci, wiec destrukturyzacja dziala mimo ze to CJS plik. Bez tej
+// zmiany kazde pobranie ZIP-a konczylo sie realnym bledem 500 "Nie udalo sie
+// przygotowac paczki ZIP".
+const { ZipArchive } = require('archiver');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
-
-
-function assertArchiverAvailable() {
-  if (typeof archiver !== 'function') {
-    throw new Error('Nie udało się przygotować paczki ZIP. Uruchom ponownie instalację zależności.');
-  }
-}
 
 const app = express();
 setupProcessDiagnostics('pieczatki-pdf', __dirname);
@@ -420,8 +418,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
 async function zipFiles(files, zipPath) {
   await new Promise((resolve, reject) => {
     const out = fs.createWriteStream(zipPath);
-    assertArchiverAvailable();
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
     out.on('close', resolve);
     archive.on('error', reject);
     archive.pipe(out);

@@ -234,7 +234,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       show(box);
       const anyVariant = groups.some(g => g.hasVariants);
       if (anyVariant) {
-        uidSelect.innerHTML = (columns || []).map(col => `<option ${col === suggestedUidColumn ? 'selected' : ''}>${esc(col)}</option>`).join('');
+        uidSelect.innerHTML = '<option value="">— wybierz kolumnę —</option>' + (columns || []).map(col => `<option ${col === suggestedUidColumn ? 'selected' : ''}>${esc(col)}</option>`).join('');
         show(uidBox);
       } else {
         hide(uidBox);

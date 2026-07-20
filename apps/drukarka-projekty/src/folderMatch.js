@@ -65,13 +65,20 @@ function filenameMatchesOwnAddress(filename, tokens) {
   return true;
 }
 
+// lpGmina pochodzi z wgranego arkusza Excel - nie ufamy jej wprost jako
+// gotowemu fragmentowi regexu (bez tego np. komorka z "(a+)+" trafiajaca do
+// new RegExp() bylaby wstrzyknieciem/potencjalnym ReDoS-em).
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function findAddressFolder(baseFolder, lpGmina) {
   if (!fs.existsSync(baseFolder) || !fs.statSync(baseFolder).isDirectory()) {
     throw new Error(`Folder bazowy nie istnieje: ${baseFolder}`);
   }
   const entries = fs.readdirSync(baseFolder, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name);
   const lpStr = String(lpGmina).trim();
-  const re = new RegExp(`^${lpStr}(?!\\d)`);
+  const re = new RegExp(`^${escapeRegExp(lpStr)}(?!\\d)`);
   const matches = entries.filter(name => re.test(name.trim()));
   return { matches, allFolders: entries };
 }
@@ -231,20 +238,34 @@ const KEYWORD_MAP = [
   [["protok", "uzgodni"], ["protok"]],
   [["kolektor", "slonecznego"], ["kolektor"]],
   [["zasobnik", "solarnego"], ["zasobnik"]],
-  [["grupa", "pompow"], ["grupa", "pomp"]],
+  // "grupa" (nie "grup") bylo bledem tego samego rodzaju co historyczny
+  // "pompa"/"pompy" - prawdziwy tekst zalacznikow uzywa odmiany ("grupy
+  // pompowej"), ktora nie zawiera literalnie "grupa" jako podciagu. Reszta
+  // KEYWORD_MAP juz konsekwentnie uzywa golych rdzeni z tego samego powodu.
+  [["grup", "pompow"], ["grupa", "pomp"]],
   [["sterownik"], ["sterownik", "regulator"]],
   [["bilans"], ["ozc", "bilans", "zapotrzebowani"]],
   [["dobor"], ["dobor", "doboru"]],
   [["bufor"], ["bufor"]],
   [["pomp", "ciepla"], ["pomp"]],
-  [["kocio"], ["kociol", "kociol"]],
+  // "kociol" byl tu wpisany dwa razy (kopiuj-wklej) - usuniete jako martwy
+  // duplikat. Jesli w praktyce ten wyzwalacz zacznie za rzadko trafiac,
+  // brakuje tu prawdopodobnie drugiego, innego slowa kluczowego - nie zgaduje
+  // go tutaj bez realnego przykladu dokumentu ktory by tego wymagal.
+  [["kocio"], ["kociol"]],
   [["kotl", "biomas"], ["katalogowa"]]
 ];
 
+// Wyzwalacz z wieloma slowami wymaga WSZYSTKICH z nich (np. ["kolektor",
+// "slonecznego"] nie powinno lapac samego "kolektor" bez "slonecznego") -
+// "|| triggers.some(...)" bylo tu bledem: skoro .every() bycie prawda i tak
+// zawsze implikuje .some() bycie prawda, caly warunek zawsze i tak sprowadzal
+// sie do samego .some() (dopasowanie po KTORYMKOLWIEK slowie), co dla
+// wieloslownych wyzwalaczy bylo szersze niz zamierzone.
 function guessKeywordsForAttachment(name) {
   const norm = normalize(name);
   for (const [triggers, keywords] of KEYWORD_MAP) {
-    if (triggers.every(t => norm.includes(t)) || triggers.some(t => norm.includes(t))) return keywords;
+    if (triggers.every(t => norm.includes(t))) return keywords;
   }
   const words = norm.split(" ").filter(w => w.length > 3);
   words.sort((a, b) => b.length - a.length);

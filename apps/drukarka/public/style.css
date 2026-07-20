@@ -83,7 +83,7 @@ h1 { margin: 14px 0 12px; max-width: 820px; font-size: clamp(34px, 5vw, 58px); l
 #pdfPreview { width: 100%; flex: 1; min-height: 460px; border: 0; border-radius: 14px; background: #f1f5f9; display: none; box-shadow: inset 0 0 0 1px var(--line); }
 .preview-fallback { flex: 1; border-radius: 14px; background: #f8fafc; border: 1px dashed var(--line); display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; padding: 20px; font-weight: 800; }
 
-button, .button-link { border: 0; border-radius: 15px; padding: 13px 18px; font-weight: 950; font: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, var(--red), var(--red2)); color: white; box-shadow: 0 14px 30px rgba(207,23,31,.24); transition: transform .12s, filter .12s, opacity .12s; text-decoration: none; }
+button, .button-link { border: 0; border-radius: 15px; padding: 13px 18px; font: inherit; font-weight: 950; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, var(--red), var(--red2)); color: white; box-shadow: 0 14px 30px rgba(207,23,31,.24); transition: transform .12s, filter .12s, opacity .12s; text-decoration: none; }
 button:hover, .button-link:hover { transform: translateY(-1px); filter: brightness(.98); text-decoration: none; }
 button.ghost, .button-link.ghost { background: #fff; color: #334155; border: 1px solid var(--line); box-shadow: none; }
 button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
@@ -95,7 +95,9 @@ button:disabled { opacity: .55; cursor: not-allowed; transform: none; }
 .option-field input:focus, .option-field select:focus { border-color: var(--red); box-shadow: 0 0 0 4px rgba(207,23,31,.10); }
 .option-field small { position: absolute; right: 26px; bottom: 25px; color: var(--muted); font-weight: 950; }
 .option-field.compact input { padding-right: 32px; }
-.job-summary { margin: 4px 0 14px; padding: 12px 14px; border: 1px solid #fecaca; border-radius: 16px; background: #fff7f7; color: #7f1d1d; font-weight: 850; line-height: 1.35; }
+/* Byl czerwony/rozowy jak komunikat bledu - to tylko neutralne podsumowanie
+   ustawien druku, wygladalo jak ostrzezenie mimo ze wszystko jest w porzadku. */
+.job-summary { margin: 4px 0 14px; padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 16px; background: #f8fafc; color: #334155; font-weight: 850; line-height: 1.35; }
 .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .print { margin-left: auto; min-width: 180px; }
 .status-box { margin-top: 16px; }

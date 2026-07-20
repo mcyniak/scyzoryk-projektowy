@@ -9,6 +9,7 @@
   "dependencies": {
     "express": "^4.19.2",
     "multer": "^2.0.2",
-    "express-rate-limit": "^7.5.0"
+    "express-rate-limit": "^7.5.0",
+    "pdf-lib": "^1.17.1"
   }
 }

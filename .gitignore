@@ -11,6 +11,7 @@ yarn-error.log*
 
 # Lokalne ustawienia Claude i Serena
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 .serena/cache/
 .serena/project.local.yml
 

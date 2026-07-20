@@ -8,6 +8,7 @@ const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJson
 const { sessionMiddleware } = require("./lib/sessionStore");
 const excelInvestment = require("./src/excelInvestment");
 const folderMatch = require("./src/folderMatch");
+const wmFolder = require("./src/wmFolder");
 const printService = require("../../lib/printing");
 const pdfMerge = require("./src/pdfMerge");
 
@@ -15,6 +16,9 @@ const app = express();
 setupProcessDiagnostics("drukarka-projekty", __dirname);
 const PORT = Number(process.env.PORT || 3010);
 const HOST = process.env.SCYZORYK_HOST || "127.0.0.1";
+// Brak takiego limitu bylo niespojnoscia wobec apps/drukarka (MAX_QUEUE=200) -
+// skan WM potrafi realnie zwrocic 100+ pozycji z jednego folderu.
+const MAX_QUEUE = Number(process.env.DRUKARKA_PROJEKTY_MAX_QUEUE || 500);
 const DATA_DIR = path.join(__dirname, "data");
 const LAST_FOLDERS_FILE = path.join(DATA_DIR, "ostatnie-foldery.json");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -41,7 +45,12 @@ app.use(sessionMiddleware(() => ({
   printing: false,
   lastBaseFolder: null,
   status: { printing: false, message: "Gotowy", current: 0, total: 0, percent: 0, done: false, error: null }
-})));
+}), (expiredSessionData) => {
+  // Sesja wygasa niezaleznie od tego, czy ktos zdazyl kliknac "drukuj" - bez
+  // tego polaczone PDF-y porzuconej sesji czekaly az do niezaleznego,
+  // znacznie luzniej powiazanego sweep'a scheduleCleanup nad calym MERGED_DIR.
+  cleanupSessionMergedFiles(expiredSessionData);
+}));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -100,6 +109,26 @@ app.get("/api/excel/:token/sheets/:sheetName/candidates", (req, res) => {
     res.json({ ok: true, candidates, columnsFound, lastFolder: lastFolders[req.params.sheetName] || "" });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac zakladki.", columnsFound: err.columnsFound });
+  }
+});
+
+app.post("/api/wm/scan", async (req, res) => {
+  const folderPath = String(req.body?.folderPath || "").trim();
+  const powykonawczy = !!req.body?.powykonawczy;
+  if (!folderPath) return res.status(400).json({ ok: false, message: "Podaj sciezke folderu z wnioskami materialowymi (WM)." });
+  let stat;
+  try { stat = fs.statSync(folderPath); } catch (_) { stat = null; }
+  if (!stat || !stat.isDirectory()) {
+    return res.status(400).json({ ok: false, message: "Nie znaleziono folderu: " + folderPath });
+  }
+  try {
+    // Ten sam mechanizm ograniczenia sciezek co przy dopasowaniu adresu -
+    // /api/queue/set zaakceptuje potem tylko pliki lezace w tym folderze.
+    req.session.lastBaseFolder = folderPath;
+    const result = await wmFolder.scanWmFolder(folderPath, { powykonawczy });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || "Nie udalo sie przeskanowac folderu WM." });
   }
 });
 
@@ -335,6 +364,9 @@ app.post("/api/queue/set-merged", async (req, res) => {
   if (!built.length) {
     return res.status(400).json({ ok: false, message: "Nie utworzono żadnych pozycji w kolejce. Brak plików do dodania.", missing });
   }
+  if (built.length > MAX_QUEUE) {
+    return res.status(400).json({ ok: false, message: `Za duzo pozycji w kolejce (${built.length}). Limit: ${MAX_QUEUE}. Podziel na mniejsze paczki.` });
+  }
   req.session.queue = built;
   res.json({ ok: true, queue: req.session.queue });
 });
@@ -357,6 +389,9 @@ app.post("/api/queue/set", (req, res) => {
   }
   if (missing.length) {
     return res.status(400).json({ ok: false, message: "Niektore pliki nie istnieja na dysku.", missing });
+  }
+  if (built.length > MAX_QUEUE) {
+    return res.status(400).json({ ok: false, message: `Za duzo pozycji w kolejce (${built.length}). Limit: ${MAX_QUEUE}. Podziel na mniejsze paczki.` });
   }
   req.session.queue = built;
   res.json({ ok: true, queue: req.session.queue });
@@ -462,6 +497,7 @@ app.post("/api/print", async (req, res) => {
   const copies = Math.max(1, Math.min(20, Number.isFinite(rawCopies) ? rawCopies : 1));
   const copyMode = req.body.copyMode === "set" ? "set" : "file";
   const printerName = String(req.body.printerName || "").trim();
+  const sideMode = req.body.sideMode === "one-sided" ? "one-sided" : "two-sided";
 
   const order = Array.isArray(req.body.order) ? req.body.order : [];
   if (order.length) {
@@ -483,6 +519,14 @@ app.post("/api/print", async (req, res) => {
   res.json({ ok: true });
 
   try {
+    // Bez tego wybor "Jednostronnie/Dwustronnie" w UI byl czystą dekoracją -
+    // serwer nigdy nie czytal ani nie stosowal sideMode, wiec druk zawsze
+    // wychodzil z takim ustawieniem duplexu, jakie akurat mial fizycznie
+    // ustawione sterownik drukarki (patrz audyt: prawdziwy, zywy blad).
+    const printerSetup = await printService.applyPrinterSides(sideMode, printerName);
+    if (!printerSetup.ok) session.status.message = printerSetup.message;
+    if (printerSetup.ok) await printService.wait(800);
+
     for (let i = 0; i < printJobs.length; i++) {
       const job = printJobs[i];
       const item = job.item;
@@ -509,6 +553,15 @@ app.post("/api/print", async (req, res) => {
     session.status.error = String(err.message || err);
     session.status.message = "❌ Blad drukowania: " + session.status.error;
   } finally {
+    // Kolejka NIE czyscila sie nigdy po druku (ani tu, ani we froncie) - drugi
+    // klik DRUKUJ po prostu wysylal cala kolejke jeszcze raz. Czyscimy JEJ
+    // referencje w pamieci zawsze (sukces i blad), tak jak juz robi
+    // apps/drukarka, zeby przypadkowy powtorny klik nie powielal fizycznego
+    // wydruku. Same PLIKI polaczonych PDF-ow NIE sa kasowane od razu tutaj -
+    // to robi ponizsze cleanupPrintedMergedFilesLater, z opoznieniem (patrz
+    // jego komentarz: Acrobat/Windows potrafi jeszcze czytac plik tuz po
+    // wyslaniu do druku).
+    session.queue = [];
     cleanupPrintedMergedFilesLater(itemsToPrint, session);
     session.printing = false;
     session.status.printing = false;

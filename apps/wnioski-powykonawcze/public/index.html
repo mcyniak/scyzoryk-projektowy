@@ -436,7 +436,12 @@ input[type="file"]::-webkit-file-upload-button{margin-right:12px!important;borde
             <div class="field">
               <label class="label" for="date">Data dokumentacji powykonawczej</label>
               <input class="input" id="date" name="date" type="date" required>
-              <div class="hint">Ta sama data trafi do wszystkich miejsc w dokumentach.</div>
+              <div class="split" id="monthYearFields" style="display:none;margin-top:8px">
+                <input class="input" id="monthNum" type="number" inputmode="numeric" min="1" max="12" placeholder="MM">
+                <input class="input" id="yearNum" type="number" inputmode="numeric" min="1900" max="2100" placeholder="RRRR">
+              </div>
+              <label class="check" for="monthOnly"><input type="checkbox" id="monthOnly"> Tylko miesiąc i rok</label>
+              <div class="hint" id="dateHint">Ta sama data trafi do wszystkich miejsc w dokumentach.</div>
             </div>
             <div class="field">
               <label class="label" for="prefix">Przedrostek nazwy PDF</label>

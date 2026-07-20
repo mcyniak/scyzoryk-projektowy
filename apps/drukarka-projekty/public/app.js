@@ -8,7 +8,8 @@
     selectedLp: new Set(),
     batchResults: [],
     pendingGroups: [],
-    batchSummary: null
+    batchSummary: null,
+    wmGroups: []
   };
 
   const $ = (id) => document.getElementById(id);
@@ -44,14 +45,29 @@
   function enablePanel(id) { $(id).classList.remove("disabled"); }
   function disablePanel(id) { $(id).classList.add("disabled"); }
 
-  function setStep(n) {
-    document.querySelectorAll(".step-dot").forEach(el => {
+  function setMode(mode) {
+    state.mode = mode;
+    $("flowProjekty").style.display = mode === "projekty" ? "" : "none";
+    $("flowWm").style.display = mode === "wm" ? "" : "none";
+    $("modeProjektyBtn").classList.toggle("ghost", mode !== "projekty");
+    $("modeWmBtn").classList.toggle("ghost", mode !== "wm");
+    // Krok "Drukuj" jest wspolny dla obu trybow, ale nie ma sensu go w ogole
+    // pokazywac, dopoki uzytkownik nie wybral, co drukuje.
+    $("panelPrint").style.display = mode ? "" : "none";
+    $("printStepNum").textContent = mode === "wm" ? "3" : "5";
+  }
+  $("modeProjektyBtn").addEventListener("click", () => setMode("projekty"));
+  $("modeWmBtn").addEventListener("click", () => setMode("wm"));
+
+  function setStep(n, scopeId = "stepper") {
+    document.querySelectorAll(`#${scopeId} .step-dot`).forEach(el => {
       const s = Number(el.dataset.step);
       el.classList.toggle("active", s === n);
       el.classList.toggle("done", s < n);
     });
   }
   setStep(1);
+  setStep(1, "stepperWm");
 
   async function loadPrinters() {
     const select = $("printerSelect");
@@ -330,7 +346,7 @@
   function renderOrderList(gIdx) {
     const okResults = state.batchResults.filter(r => r.ok);
     const result = okResults[gIdx];
-    const list = document.querySelector(`.order-list[data-gidx="${gIdx}"]`);
+    const list = document.querySelector(`#addressGroups .order-list[data-gidx="${gIdx}"]`);
     if (!result || !list) return;
     list.innerHTML = result.order.map((item, idx) => {
       const confident = SETTLED.has(item.confidence);
@@ -365,7 +381,12 @@
 
   let dragSrc = null;
   function attachDragHandlers(gIdx) {
-    const items = document.querySelectorAll(`.order-item[data-gidx="${gIdx}"]`);
+    // Skopowane do #addressGroups - bez tego, odkad tryb WM uzywa tych samych
+    // klas .order-item/.order-list i data-gidx we wlasnym #wmGroupsContainer,
+    // ten (globalny) selektor mogl przypadkiem zlapac elementy z drugiego,
+    // ukrytego trybu, jesli uzytkownik uzyl obu trybow w tej samej sesji
+    // strony (przelaczanie trybow nie czysci DOM-u tego drugiego).
+    const items = document.querySelectorAll(`#addressGroups .order-item[data-gidx="${gIdx}"]`);
     items.forEach(item => {
       item.addEventListener("dragstart", () => {
         dragSrc = { gIdx: Number(item.dataset.gidx), idx: Number(item.dataset.idx) };
@@ -442,6 +463,206 @@
       btn.textContent = "Zatwierdź i dodaj wszystko do kolejki →";
     }
   });
+
+  // Grupuje plaska liste wynikow skanu WM po kategorii (Pompa ciepla, Zasobnik
+  // c.w.u. itd.). Trzymane w state.wmGroups (nie przeliczane przy kazdym
+  // renderze), zeby przeciaganie moglo trwale zmieniac kolejnosc w grupie.
+  function groupWmItems(items) {
+    const groups = [];
+    const byCategory = new Map();
+    items.forEach((item) => {
+      const key = item.categoryPath || item.category || "";
+      if (!byCategory.has(key)) {
+        const group = { category: item.category || "", categoryPath: item.categoryPath || "", items: [] };
+        byCategory.set(key, group);
+        groups.push(group);
+      }
+      byCategory.get(key).items.push({ ...item });
+    });
+    return groups;
+  }
+
+  // WM ma inne teksty pewnosci niz tryb adresowy ("pewne (dopasowane z listy
+  // Zalacznikow)" itp.), wiec dopasowanie po prefiksie zamiast Set.has.
+  function wmConfidenceBadge(confidence) {
+    const c = String(confidence || "");
+    if (c.startsWith("pewne")) return `<span class="badge ok">${escapeHtml(c)}</span>`;
+    if (c.startsWith("brak")) return `<span class="badge unknown">${escapeHtml(c)}</span>`;
+    return `<span class="badge guess">${escapeHtml(c)}</span>`;
+  }
+
+  function wmGroupNeedsReview(group) {
+    return group.items.some(it => (it.confidence || "").startsWith("brak"));
+  }
+
+  function renderWmResults(data) {
+    const items = data.items || [];
+    const box = $("wmResults");
+    setStep(2, "stepperWm");
+    if (!items.length) {
+      state.wmGroups = [];
+      box.innerHTML = `<div class="help-note">Nie znaleziono żadnych dokumentów WM w tym folderze.</div>`;
+      return;
+    }
+    state.wmGroups = groupWmItems(items);
+    box.innerHTML = `
+      <div class="summary-banner">
+        <div class="summary-stat ${data.missingCount ? "warn" : "ok"}">📁 ${data.categoriesFound} kategori(i), ${items.length} pozycji${data.missingCount ? `, ${data.missingCount} braków` : ""}</div>
+      </div>
+      <div id="wmGroupsContainer"></div>
+      <div style="margin-top:16px;">
+        <button id="wmAddToQueueBtn" type="button">Dodaj zaznaczone do kolejki druku →</button>
+      </div>
+    `;
+    renderWmGroups();
+    $("wmAddToQueueBtn").addEventListener("click", addWmToQueue);
+  }
+
+  // Ta sama karta z naglowkiem (numer/nazwa/status/chevron) co grupy adresow
+  // w trybie Projekty - tylko lista w srodku to teraz .order-list (przeciagalne
+  // pozycje), zamiast prostej listy z checkboxami.
+  function renderWmGroups() {
+    const container = $("wmGroupsContainer");
+    container.innerHTML = state.wmGroups.map((group, gIdx) => {
+      const numMatch = /^(\d+)/.exec(String(group.categoryPath).split("/")[0] || "");
+      const tag = numMatch ? numMatch[1] : String(gIdx + 1);
+      const reviewCount = group.items.filter(it => (it.confidence || "").startsWith("brak")).length;
+      const statusHtml = reviewCount
+        ? `<span class="badge guess">⚠ ${reviewCount} do sprawdzenia</span>`
+        : `<span class="badge ok">✓ komplet</span>`;
+      return `
+        <div class="address-group collapsed" data-gidx="${gIdx}">
+          <div class="address-group-header" data-toggle="${gIdx}">
+            <div class="lp-tag">${escapeHtml(tag)}</div>
+            <div><strong>${escapeHtml(group.category)}</strong></div>
+            <div class="group-status">${statusHtml}</div>
+            <span class="chevron">▾</span>
+          </div>
+          <ul class="order-list" data-gidx="${gIdx}"></ul>
+        </div>`;
+    }).join("");
+
+    container.querySelectorAll(".address-group-header").forEach(header => {
+      header.addEventListener("click", () => header.closest(".address-group").classList.toggle("collapsed"));
+    });
+
+    state.wmGroups.forEach((group, gIdx) => renderWmItemList(gIdx));
+  }
+
+  function renderWmItemList(gIdx) {
+    const group = state.wmGroups[gIdx];
+    const list = document.querySelector(`#wmGroupsContainer .order-list[data-gidx="${gIdx}"]`);
+    if (!group || !list) return;
+    const prefix = `${group.category}: `;
+    list.innerHTML = group.items.map((item, idx) => {
+      const missing = !item.fullPath;
+      const confident = String(item.confidence || "").startsWith("pewne");
+      const classes = ["order-item"];
+      classes.push(confident ? "compact" : "needs-review");
+      const shortLabel = item.label.startsWith(prefix) ? item.label.slice(prefix.length) : item.label;
+      return `
+        <li class="${classes.join(" ")}" draggable="true" data-gidx="${gIdx}" data-idx="${idx}">
+          <span class="handle">⠿</span>
+          <div class="info">
+            <strong>${escapeHtml(shortLabel)}</strong>
+            <span>${missing ? "brak pliku - dodaj ręcznie" : ""}</span>
+          </div>
+          ${wmConfidenceBadge(item.confidence)}
+          <input type="checkbox" class="wm-item-checkbox" data-gidx="${gIdx}" data-idx="${idx}" ${missing ? "disabled" : "checked"} />
+        </li>`;
+    }).join("");
+    attachWmDragHandlers(gIdx);
+  }
+
+  let wmDragSrc = null;
+  function attachWmDragHandlers(gIdx) {
+    const items = document.querySelectorAll(`#wmGroupsContainer .order-item[data-gidx="${gIdx}"]`);
+    items.forEach(item => {
+      item.addEventListener("dragstart", () => {
+        wmDragSrc = { gIdx: Number(item.dataset.gidx), idx: Number(item.dataset.idx) };
+        item.classList.add("dragging");
+      });
+      item.addEventListener("dragend", () => item.classList.remove("dragging"));
+      item.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        items.forEach(x => x.classList.remove("drop-before"));
+        item.classList.add("drop-before");
+      });
+      item.addEventListener("drop", (e) => {
+        e.preventDefault();
+        const targetGIdx = Number(item.dataset.gidx);
+        const targetIdx = Number(item.dataset.idx);
+        if (!wmDragSrc || wmDragSrc.gIdx !== targetGIdx || wmDragSrc.idx === targetIdx) return;
+        const group = state.wmGroups[targetGIdx];
+        const moved = group.items.splice(wmDragSrc.idx, 1)[0];
+        group.items.splice(targetIdx, 0, moved);
+        renderWmItemList(targetGIdx);
+      });
+    });
+  }
+
+  $("wmScanBtn").addEventListener("click", async () => {
+    const folderPath = $("wmFolderInput").value.trim();
+    if (!folderPath) { showError("wmError", "Podaj ścieżkę folderu WM."); return; }
+    showError("wmError", "");
+    const btn = $("wmScanBtn");
+    btn.disabled = true;
+    btn.textContent = "Skanuję...";
+    try {
+      const powykonawczy = $("wmDokPodCheckbox").checked;
+      const data = await api("/api/wm/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folderPath, powykonawczy })
+      });
+      renderWmResults(data);
+    } catch (err) {
+      showError("wmError", err.message);
+      $("wmResults").innerHTML = "";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Skanuj folder WM";
+    }
+  });
+
+  async function addWmToQueue() {
+    const btn = $("wmAddToQueueBtn");
+    // Grupuj po kategorii (podfolderze) i wyslij przez set-merged, zeby serwer
+    // polaczyl PDF-y tej samej kategorii w jeden plik - drukarka wysyla wtedy
+    // jedno zadanie druku zamiast wielu osobnych, tak jak przy laczeniu
+    // adresow w trybie Projekty (buildQueueFromGroups juz to potrafi).
+    // Kolejnosc pozycji w kazdej grupie to aktualna kolejnosc po ewentualnym
+    // przeciagnieciu (state.wmGroups[gIdx].items), nie oryginalna z API.
+    const groups = state.wmGroups.map((group, gIdx) => {
+      const items = group.items
+        .map((item, idx) => ({ item, idx }))
+        .filter(({ item, idx }) => item.fullPath && document.querySelector(`.wm-item-checkbox[data-gidx="${gIdx}"][data-idx="${idx}"]`)?.checked)
+        .map(({ item }) => ({ fullPath: item.fullPath, label: item.label }));
+      return { label: group.category, items };
+    }).filter(g => g.items.length);
+
+    if (!groups.length) { showError("wmError", "Zaznacz przynajmniej jedną pozycję z plikiem."); return; }
+
+    btn.disabled = true;
+    btn.textContent = "Dodaję...";
+    try {
+      const data = await api("/api/queue/set-merged", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groups })
+      });
+      updateQueueStatus(`Kolejka gotowa: ${data.queue?.length || 0} pozycji.`);
+      enablePanel("panelPrint");
+      setStep(3, "stepperWm");
+      window.scrollTo({ top: document.querySelector("#panelPrint").offsetTop, behavior: "smooth" });
+      showError("wmError", "");
+    } catch (err) {
+      showError("wmError", err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Dodaj zaznaczone do kolejki druku →";
+    }
+  }
 
   $("clearBtn").addEventListener("click", () => window.location.reload());
 

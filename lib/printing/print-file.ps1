@@ -17,8 +17,13 @@ if (-not (Test-Path -LiteralPath $FilePath)) { throw "PRINT_PATH: Nie znaleziono
 # tego wspolnego skryptu, co mieszaloby diagnostyke wielu modulow w jednym pliku.
 $LogDirResolved = if ($LogDir -and $LogDir.Trim()) { $LogDir } else { Join-Path $PSScriptRoot "..\..\logs" }
 $LogFile = Join-Path $LogDirResolved "print-log.txt"
+# "Out-File -Encoding utf8" (Windows PowerShell 5.1) dopisuje BOM przy
+# pierwszym zapisie do pliku - niespojne z reszta projektu, ktora swiadomie
+# unika BOM (patrz writeJsonFileNoBom w lib/hardening.js). AppendAllText z
+# jawnym UTF8Encoding($false) nigdy nie dopisuje BOM.
+$script:Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 function Write-PrintLog([string]$msg) {
-  try { "$(Get-Date -Format "yyyy-MM-dd HH:mm:ss") | $msg" | Out-File -FilePath $LogFile -Append -Encoding utf8 } catch {}
+  try { [System.IO.File]::AppendAllText($LogFile, "$(Get-Date -Format "yyyy-MM-dd HH:mm:ss") | $msg`r`n", $script:Utf8NoBom) } catch {}
 }
 Write-PrintLog "--- START druku: $FilePath | drukarka: $PrinterName ---"
 
@@ -37,12 +42,30 @@ function Get-DefaultPrinterName {
   return $null
 }
 
-function Get-PrintJobCount([string]$printerName) {
-  if (-not $printerName) { return -1 }
+# Zwraca ZBIOR Id aktualnych zadan tej drukarki (albo $null, gdy sledzenie
+# nie jest dostepne). Poprzednia wersja liczyla tylko ILOSC zadan - na
+# wspoldzielonej (sieciowej) drukarce cudze zadanie znikajace/pojawiajace
+# sie w tym samym momencie moglo dac ta sama (lub przypadkiem wieksza)
+# liczbe, co dawalo falszywy sygnal "nasze zadanie zostalo przyjete". Zbior
+# konkretnych Id pozwala sprawdzic, czy pojawilo sie NOWE zadanie, a nie
+# tylko czy liczba sie zmienila.
+function Get-PrintJobIds([string]$printerName) {
+  if (-not $printerName) { return $null }
   try {
-    return (Get-PrintJob -PrinterName $printerName -ErrorAction SilentlyContinue | Measure-Object).Count
+    $jobs = Get-PrintJob -PrinterName $printerName -ErrorAction SilentlyContinue
+    $ids = New-Object 'System.Collections.Generic.HashSet[int]'
+    if ($null -ne $jobs) {
+      foreach ($j in @($jobs)) { if ($null -ne $j) { [void]$ids.Add([int]$j.Id) } }
+    }
+    # "return ,$ids" (nie samo "return $ids") - PowerShell domyslnie
+    # ROZWIJA kolekcje pisane do potoku; przy 0 lub 1 elemencie zwracalby
+    # wtedy $null albo goly Int32 zamiast obiektu HashSet, co dalej psulo
+    # "$jobIdsBefore.Contains(...)" bledem "Int32 nie ma metody Contains"
+    # (zlapane realnym testem, nie tylko czytaniem kodu). Unarny przecinek
+    # wymusza, zeby caly HashSet trafil do potoku jako jeden obiekt.
+    return ,$ids
   } catch {
-    return -1
+    return $null
   }
 }
 
@@ -113,7 +136,7 @@ try { $originalForeground = [ScyzorykFocusGuard]::GetForegroundWindow() } catch 
 Set-PrintAppWindowsMinimized
 
 $printerName = if ($useTargetedPrinter) { $PrinterName.Trim() } else { Get-DefaultPrinterName }
-$jobCountBefore = Get-PrintJobCount $printerName
+$jobIdsBefore = Get-PrintJobIds $printerName
 
 function Invoke-PrintWithShell([string]$path) {
   try { return Start-Process -FilePath $path -Verb Print -PassThru -WindowStyle Hidden }
@@ -181,14 +204,18 @@ Restore-Foreground $originalForeground
 
 $maxWaitMs = 20000
 $waited = 0
-$trackingAvailable = ($printerName -and $jobCountBefore -ge 0)
+$trackingAvailable = ($printerName -and $null -ne $jobIdsBefore)
 
 while ($waited -lt $maxWaitMs) {
   Set-PrintAppWindowsMinimized
   Restore-Foreground $originalForeground
   if ($trackingAvailable) {
-    $current = Get-PrintJobCount $printerName
-    if ($current -gt $jobCountBefore) { break }
+    $jobIdsNow = Get-PrintJobIds $printerName
+    $hasNewJob = $false
+    if ($null -ne $jobIdsNow) {
+      foreach ($id in $jobIdsNow) { if (-not $jobIdsBefore.Contains($id)) { $hasNewJob = $true; break } }
+    }
+    if ($hasNewJob) { break }
   } elseif ($waited -ge 300) {
     break
   }

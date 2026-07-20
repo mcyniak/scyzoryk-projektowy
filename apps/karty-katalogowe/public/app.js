@@ -3,20 +3,25 @@ const STATUS_LABELS = {
   'do-skopiowania': ['Do skopiowania', 'ok'],
   'pominieto-juz-sa': ['Już są', 'skip'],
   'pominieto-rezygnacja': ['Rezygnacja', 'skip'],
+  'pominieto-brak-uid': ['Brak UID', 'skip'],
   'czesciowo': ['Częściowo', 'warn'],
   'blad': ['Błąd', 'err']
 };
 
+const checkBtn = document.getElementById('checkBtn');
 const runBtn = document.getElementById('runBtn');
 const statusEl = document.getElementById('kkStatus');
 const resultsPanel = document.getElementById('kkResultsPanel');
 const tableBody = document.getElementById('kkTableBody');
 const summaryEl = document.getElementById('kkSummary');
 
-runBtn.addEventListener('click', async () => {
+// Dwa kroki zamiast checkboxa "tylko podglad": "Sprawdz tabele" zawsze
+// najpierw analizuje bez kopiowania (dryRun=true); dopiero po tym pojawia
+// sie "Uruchom dobor kart", ktory robi prawdziwe kopiowanie (dryRun=false)
+// na tym samym pliku/sciezce.
+async function runJob(dryRun) {
   const fileInput = document.getElementById('excelFile');
   const rootPath = document.getElementById('rootPath').value.trim();
-  const dryRun = document.getElementById('dryRun').checked;
 
   statusEl.className = '';
   statusEl.textContent = '';
@@ -29,8 +34,9 @@ runBtn.addEventListener('click', async () => {
   formData.append('rootPath', rootPath);
   formData.append('dryRun', String(dryRun));
 
+  checkBtn.disabled = true;
   runBtn.disabled = true;
-  statusEl.textContent = dryRun ? 'Analizuję (podgląd, bez kopiowania)...' : 'Kopiuję karty katalogowe...';
+  statusEl.textContent = dryRun ? 'Sprawdzam tabelę (bez kopiowania)...' : 'Kopiuję karty katalogowe...';
 
   try {
     const resp = await fetch('/api/run', { method: 'POST', body: formData, headers: { 'X-Scyzoryk-Request': '1' } });
@@ -38,7 +44,7 @@ runBtn.addEventListener('click', async () => {
     if (!data.ok) throw new Error(data.message || 'Nieznany błąd.');
 
     statusEl.className = '';
-    statusEl.textContent = `Gotowe. Przetworzono ${data.wyniki.length} wierszy.` + (dryRun ? ' (tryb podglądu — nic nie skopiowano)' : '');
+    statusEl.textContent = `Gotowe. Sprawdzono ${data.wyniki.length} wierszy.` + (dryRun ? ' (tryb podglądu — nic nie skopiowano)' : ' (skopiowano)');
 
     summaryEl.innerHTML = Object.entries(data.podsumowanie).map(([status, count]) => {
       const [label, cls] = STATUS_LABELS[status] || [status, 'skip'];
@@ -59,10 +65,18 @@ runBtn.addEventListener('click', async () => {
     }).join('');
 
     resultsPanel.style.display = 'block';
+
+    // Po udanym sprawdzeniu (podglad) pokaz przycisk do prawdziwego
+    // kopiowania - dopiero teraz uzytkownik widzial co dokladnie sie stanie.
+    if (dryRun) runBtn.hidden = false;
   } catch (err) {
     statusEl.className = 'err';
     statusEl.textContent = 'Błąd: ' + err.message;
   } finally {
+    checkBtn.disabled = false;
     runBtn.disabled = false;
   }
-});
+}
+
+checkBtn.addEventListener('click', () => runJob(true));
+runBtn.addEventListener('click', () => runJob(false));

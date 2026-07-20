@@ -13,7 +13,7 @@ import {
   RECORD_TIMEOUT_MS
 } from './config.js';
 import { calculate } from './rules.js';
-import { saveDebug, cleanupDebugArtifact, getProjectRoot, getOutputRoot } from './debug.js';
+import { saveDebug, cleanupDebugArtifact, getOutputRoot } from './debug.js';
 import { readExcelRecords, makePdfName, pathExists } from './excel.js';
 import { createAutomationSession, closeAutomationSession } from './automation/session.js';
 import {
@@ -375,7 +375,6 @@ async function processRecordWithWorker(record, recordIndex, worker, job, pdfDir,
   worker.recordsInCurrentSession += 1;
   workerState.finishedLastRowAt = new Date().toISOString();
 
-  const relativePdf = response.pdf ? path.relative(getProjectRoot(), response.pdf).replace(/\\/g, '/') : null;
   const durationMs = response.durationMs || (Date.now() - startedAt);
 
   if (response.cancelled || job.cancelRequested) {
@@ -406,7 +405,12 @@ async function processRecordWithWorker(record, recordIndex, worker, job, pdfDir,
       name: record.input.name,
       address: record.input.address,
       pdf: response.pdf,
-      pdfUrl: relativePdf ? `/${relativePdf}` : null,
+      // Wskazuje na PRAWDZIWY endpoint serwujacy ten plik (server.js:
+      // GET /api/batch/pdf/:jobId/:rowNumber), nie na surowa sciezke
+      // filesystemowa - "output/..." nigdy nie bylo pod zadnym
+      // express.static, wiec link "Otworz PDF" konczylby sie 404 bez
+      // pokrywajacej to logiki w publicJob() po stronie server.js.
+      pdfUrl: response.pdf ? `api/batch/pdf/${encodeURIComponent(job.id)}/${encodeURIComponent(record.rowNumber)}` : null,
       skippedExisting: !!response.skippedExisting,
       retriedAfterClosedSession: !!response.retriedAfterClosedSession,
       durationMs,

@@ -59,7 +59,7 @@ h3 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
 .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 6px 10px; border: 1px solid var(--line); color: var(--muted); background: #fff; font-weight: 950; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
 .badge.online { color: #065f46; background: #dff7eb; border-color: #a7f3d0; }
 .badge.offline { color: #991b1b; background: #fee2e2; border-color: #fecaca; }
-.button-link { border: 0; border-radius: 16px; padding: 14px 18px; font-weight: 950; font: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, var(--red), var(--red2)); color: white; box-shadow: 0 14px 30px rgba(215,25,32,.22); transition: transform .12s, filter .12s, opacity .12s; text-decoration: none; margin-top: auto; }
+.button-link { border: 0; border-radius: 16px; padding: 14px 18px; font: inherit; font-weight: 950; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: linear-gradient(135deg, var(--red), var(--red2)); color: white; box-shadow: 0 14px 30px rgba(215,25,32,.22); transition: transform .12s, filter .12s, opacity .12s; text-decoration: none; margin-top: auto; }
 .button-link:hover { transform: translateY(-1px); filter: brightness(.98); }
 .support-panel { margin-top: 18px; overflow: hidden; }
 .support-panel summary { cursor: pointer; padding: 18px 22px; font-weight: 950; color: #344054; list-style: none; }
