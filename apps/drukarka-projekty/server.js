@@ -84,11 +84,18 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: "2mb" }));
 
+// Rejestrowany PRZED middleware sesyjnym ponizej - root server.js odpytuje
+// to co ~10s jako health-check, bez ciasteczka sesji. Gdyby ta trasa lezala
+// ZA sessionMiddleware (jak wczesniej /api/status), kazdy pojedynczy
+// health-check tworzylby nowa sesje w tej Mapie - w praktyce tysiace
+// martwych sesji dziennie z samej diagnostyki.
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+
 app.use(sessionMiddleware(() => ({
   queue: [],
   printing: false,
   lastBaseFolder: null,
-  status: { printing: false, message: "Gotowy", current: 0, total: 0, percent: 0, done: false, error: null }
+  status: { printing: false, message: "Gotowy", current: 0, total: 0, percent: 0, done: false, error: null, warning: null }
 })));
 
 const apiLimiter = rateLimit({
@@ -329,11 +336,21 @@ function buildQueueItem(fullPath, label) {
   };
 }
 
+// .toLowerCase() bezwarunkowo bylo poprawne tylko dla Windows (NTFS domyslnie
+// nie rozroznia wielkosci liter) - na Linuksie (ext4, oraz FUSE/rclone
+// montowanie Dysku Google) sciezki SA case-sensitive, wiec lowercase po obu
+// stronach robil to sprawdzenie zbyt permisywne (np. dwa rozne, faktycznie
+// istniejace foldery "Projekt" i "projekt" wygladalyby jak ten sam).
 function isPathInsideFolder(filePath, folderPath) {
   if (!filePath || !folderPath) return false;
   try {
-    const resolved = path.resolve(String(filePath)).toLowerCase();
-    const resolvedFolder = path.resolve(String(folderPath)).toLowerCase();
+    const caseInsensitive = process.platform === 'win32';
+    let resolved = path.resolve(String(filePath));
+    let resolvedFolder = path.resolve(String(folderPath));
+    if (caseInsensitive) {
+      resolved = resolved.toLowerCase();
+      resolvedFolder = resolvedFolder.toLowerCase();
+    }
     return resolved === resolvedFolder || resolved.startsWith(resolvedFolder + path.sep);
   } catch (_) {
     return false;
@@ -466,9 +483,9 @@ app.post("/api/queue/set-merged", async (req, res) => {
 
 app.post("/api/queue/set", (req, res) => {
   normalizeSessionPrinting(req.session);
+  if (req.session.printing) return res.status(409).json({ ok: false, message: "Trwa drukowanie." });
   cleanupSessionMergedFiles(req.session);
   const items = Array.isArray(req.body?.items) ? req.body.items : [];
-  if (req.session.printing) return res.status(409).json({ ok: false, message: "Trwa drukowanie." });
 
   const missing = [];
   const built = [];
@@ -603,27 +620,37 @@ app.post("/api/print", async (req, res) => {
   session.printing = true;
   const itemsToPrint = [...session.queue];
   const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
+  // Patrz analogiczny komentarz w apps/drukarka/server.js - pozwala retry po
+  // czesciowej awarii wyslac tylko to, co jeszcze nie zostalo przyjete przez
+  // CUPS, zamiast cala serie od nowa.
+  const remainingCopies = new Map(itemsToPrint.map(item => [item.id, copies]));
   const printerLabel = printerName ? ` na drukarke "${printerName}"` : "";
 
-  session.status = { printing: true, message: `Start drukowania: ${copies} kop.${printerLabel}`, current: 0, total: printJobs.length, percent: 0, done: false, error: null };
+  session.status = { printing: true, message: `Start drukowania: ${copies} kop.${printerLabel}`, current: 0, total: printJobs.length, percent: 0, done: false, error: null, warning: null };
   res.json({ ok: true });
 
   let releasePrintLock = null;
   try {
     releasePrintLock = await printService.acquirePrintLock("drukarka-projekty", {
+      printerName,
       onWaiting: () => {
         session.status.message = "W kolejce drukowania - czeka na zakonczenie druku innego uzytkownika...";
       }
     });
 
+    let effectiveDuplex = sideMode === "two-sided";
     if (process.platform !== "win32" && sideMode === "two-sided" && printerName) {
       // Nie zakladamy, ze kazda drukarka obsluguje dwustronny wydruk -
       // sprawdzamy ZANIM cokolwiek wyslemy, zamiast udawac ze ustawienie
       // zostalo zastosowane (patrz analogiczny kod w apps/drukarka/server.js).
+      // Ostrzezenie samo w sobie nie wystarczy - effectiveDuplex musi
+      // realnie zmienic sie na false, inaczej wysylamy "sides=two-sided-..."
+      // do CUPS mimo wlasnego ostrzezenia.
       try {
         const printerOptions = await printService.getPrinterOptions(printerName);
         if (!printerOptions.duplexSupported) {
           session.status.warning = "Ta drukarka nie obsluguje druku dwustronnego - wydruk bedzie jednostronny.";
+          effectiveDuplex = false;
         }
       } catch (err) {
         session.status.warning = `Nie udalo sie sprawdzic mozliwosci drukarki: ${err.message}`;
@@ -638,14 +665,18 @@ app.post("/api/print", async (req, res) => {
       session.status.percent = Math.round((i / printJobs.length) * 100);
       session.status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}: ${item.label ? item.label + " - " : ""}${item.originalName}`;
 
-      await printService.printFileWindows(item.path, printerName, {
+      const printResult = await printService.printFileWindows(item.path, printerName, {
         cwd: __dirname,
         logDir: DATA_DIR,
         timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_PS_TIMEOUT_MS || 120000),
         copies: 1,
-        duplex: sideMode === "two-sided"
+        duplex: effectiveDuplex
       });
+      if (printResult && printResult.accepted === false) {
+        session.status.warning = `Nie udalo sie potwierdzic przyjecia "${item.originalName}" przez kolejke drukowania - sprawdz, czy druk faktycznie sie odbyl.`;
+      }
 
+      remainingCopies.set(item.id, remainingCopies.get(item.id) - 1);
       session.status.percent = Math.round(((i + 1) / printJobs.length) * 100);
       await printService.wait(delaySeconds * 1000);
     }
@@ -658,6 +689,8 @@ app.post("/api/print", async (req, res) => {
   } catch (err) {
     session.status.error = String(err.message || err);
     session.status.message = "❌ Blad drukowania: " + session.status.error;
+    // Patrz analogiczny komentarz w apps/drukarka/server.js.
+    session.queue = session.queue.filter(item => (remainingCopies.get(item.id) ?? 0) > 0);
   } finally {
     if (releasePrintLock) releasePrintLock();
     cleanupPrintedMergedFilesLater(itemsToPrint, session);

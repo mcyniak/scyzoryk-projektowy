@@ -530,13 +530,14 @@
     const timer = setInterval(async () => {
       try {
         const s = await api("api/status");
-        $("statusText").textContent = s.message || "";
+        $("statusText").textContent = s.warning ? `${s.message || ""} (${s.warning})` : (s.message || "");
         $("progressBar").style.width = (s.percent || 0) + "%";
         if (!s.printing) {
           clearInterval(timer);
           $("printBtn").disabled = false;
           if (s.done && !s.error) {
-            $("statusText").innerHTML = `<div class="success-panel"><span class="big-check">✅</span>Wysłano do druku. Sprawdź drukarkę.</div>`;
+            const warningHtml = s.warning ? `<div class="help-note">⚠️ ${escapeHtml(s.warning)}</div>` : "";
+            $("statusText").innerHTML = `<div class="success-panel"><span class="big-check">✅</span>Wysłano do druku. Sprawdź drukarkę.</div>${warningHtml}`;
           }
         }
       } catch (_) {

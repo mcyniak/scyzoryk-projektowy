@@ -58,6 +58,14 @@ const heavyJobLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
+// Rejestrowany PRZED middleware sesyjnym ponizej - root server.js odpytuje
+// to co ~10s jako health-check, bez ciasteczka sesji. Gdyby ta trasa lezala
+// ZA ensureAnonymousSessionExpress (jak wczesniej /api/status), kazdy
+// pojedynczy health-check tworzylby nowa anonimowa sesje (plik na dysku +
+// wpis w sessionStates ponizej) - w praktyce tysiace martwych sesji dziennie
+// z samej diagnostyki, nigdy nie uzytych przez zadnego czlowieka.
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+
 // Pracownicy NIE musza sie logowac - to tylko anonimowa izolacja danych
 // roboczych miedzy przegladarkami, NIGDY nie blokuje zadania. Bez tego
 // (SCYZORYK_PILOT_MODE nieustawione, tak jak dzis na Windows) kolejka
@@ -82,20 +90,37 @@ app.get("/api/panel-info", (req, res) => {
 // jak dzisiaj) zostaje jeden wspolny stan - to narzedzie bylo projektowane
 // dla jednego stanowiska/jednej osoby na raz, wiec zachowanie tam sie nie
 // zmienia.
-const sessionStates = new Map(); // sessionId -> stan kolejki tej sesji
+// sessionId -> { state, lastActivity } - bez TTL ta Mapa rosla bez konca
+// (kazdy health-check/nowa przegladarka to nowy wpis, nigdy nie usuwany do
+// restartu procesu). SESSION_STATE_MAX_IDLE_MS/cleanup nizej to ogranicza.
+const sessionStates = new Map();
+const SESSION_STATE_MAX_IDLE_MS = 12 * 60 * 60 * 1000;
 function freshState() {
   return {
     queue: [],
     printing: false,
-    status: { printing: false, message: "Gotowy", current: 0, total: 0, percent: 0, done: false, error: null }
+    status: { printing: false, message: "Gotowy", current: 0, total: 0, percent: 0, done: false, error: null, warning: null }
   };
 }
 const globalState = freshState();
 function getState(req) {
   if (!PILOT_MODE) return globalState;
   const sid = req.sessionId || 'anonim';
-  if (!sessionStates.has(sid)) sessionStates.set(sid, freshState());
-  return sessionStates.get(sid);
+  if (!sessionStates.has(sid)) sessionStates.set(sid, { state: freshState(), lastActivity: Date.now() });
+  const entry = sessionStates.get(sid);
+  entry.lastActivity = Date.now();
+  return entry.state;
+}
+function cleanupOldSessionStates() {
+  const now = Date.now();
+  for (const [sid, entry] of sessionStates.entries()) {
+    if (entry.state.printing) continue; // nigdy nie usuwaj aktywnie drukujacej sesji
+    if (now - entry.lastActivity > SESSION_STATE_MAX_IDLE_MS) sessionStates.delete(sid);
+  }
+}
+if (PILOT_MODE) {
+  const sessionStatesCleanupTimer = setInterval(cleanupOldSessionStates, 30 * 60 * 1000);
+  sessionStatesCleanupTimer.unref?.();
 }
 
 
@@ -413,6 +438,13 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
 
   const itemsToPrint = [...state.queue];
   const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
+  // Ile kopii KAZDEJ pozycji jeszcze zostalo do wyslania - jesli seria
+  // przerwie sie w polowie (blad na jednym z plikow), pozycje ktore juz
+  // zdazyly wyslac WSZYSTKIE swoje kopie do CUPS znikaja z kolejki, zeby
+  // ponowne kliknięcie "Drukuj" wyslalo tylko to, co faktycznie zostalo -
+  // bez tego caly zestaw wysylal sie od nowa, drukujac duplikaty juz
+  // przyjetych przez drukarke plikow.
+  const remainingCopies = new Map(itemsToPrint.map(item => [item.id, copies]));
   const sidesLabel = sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
   const copyLabel = copyMode === "set"
     ? "najpierw komplet, potem kolejna kopia kompletu"
@@ -436,11 +468,13 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
     const printerName = String(req.body.printerName || "").trim();
 
     releasePrintLock = await printService.acquirePrintLock("drukarka", {
+      printerName,
       onWaiting: () => {
         state.status.message = "W kolejce drukowania - czeka na zakonczenie druku innego uzytkownika...";
       }
     });
 
+    let effectiveDuplex = sideMode === "two-sided";
     if (process.platform === "win32") {
       const printerSetup = await applyPrinterSides(sideMode, printerName);
       state.status.warning = printerSetup.ok ? null : printerSetup.message;
@@ -449,11 +483,15 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
     } else if (sideMode === "two-sided" && printerName) {
       // Nie zakladamy, ze kazda drukarka obsluguje dwustronny wydruk -
       // sprawdzamy ZANIM cokolwiek wyslemy, zamiast udawac ze ustawienie
-      // zostalo zastosowane.
+      // zostalo zastosowane. Ostrzezenie samo w sobie nie wystarczy - jesli
+      // drukarka faktycznie nie wspiera duplexu, effectiveDuplex musi
+      // realnie zmienic sie na false, inaczej i tak wysylamy "sides=two-
+      // sided-..." do CUPS mimo wlasnego ostrzezenia.
       try {
         const printerOptions = await printService.getPrinterOptions(printerName);
         if (!printerOptions.duplexSupported) {
           state.status.warning = "Ta drukarka nie obsluguje druku dwustronnego - wydruk bedzie jednostronny.";
+          effectiveDuplex = false;
         }
       } catch (err) {
         state.status.warning = `Nie udalo sie sprawdzic mozliwosci drukarki: ${err.message}`;
@@ -470,14 +508,18 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
       state.status.percent = Math.round((i / printJobs.length) * 100);
       state.status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
 
-      await printService.printFileWindows(item.path, printerName, {
+      const printResult = await printService.printFileWindows(item.path, printerName, {
         cwd: __dirname,
         logDir: DATA_DIR,
         timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000),
         copies: 1,
-        duplex: sideMode === "two-sided"
+        duplex: effectiveDuplex
       });
+      if (printResult && printResult.accepted === false) {
+        state.status.warning = `Nie udalo sie potwierdzic przyjecia "${item.originalName}" przez kolejke drukowania - sprawdz, czy druk faktycznie sie odbyl.`;
+      }
 
+      remainingCopies.set(item.id, remainingCopies.get(item.id) - 1);
       state.status.percent = Math.round(((i + 1) / printJobs.length) * 100);
       state.status.message = `Dodano do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
 
@@ -504,6 +546,11 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
   } catch (err) {
     state.status.error = String(err.message || err);
     state.status.message = "❌ Blad drukowania: " + state.status.error;
+    // Pozycje, ktore zdazyly wyslac WSZYSTKIE swoje kopie zanim wystapil
+    // blad, znikaja z kolejki - zostaja tylko te jeszcze nie w pelni wyslane
+    // (w tym pozycja, na ktorej wystapil blad), zeby kolejna proba drukowania
+    // nie wyslala calej serii od nowa.
+    state.queue = state.queue.filter(item => (remainingCopies.get(item.id) ?? 0) > 0);
   } finally {
     if (releasePrintLock) releasePrintLock();
     state.printing = false;
