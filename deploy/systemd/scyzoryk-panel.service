@@ -1,11 +1,17 @@
 [Unit]
 Description=Scyzoryk Projektowy - panel glowny (pilot linuksowy)
 After=network-online.target scyzoryk-gdrive-mount.service
-Wants=network-online.target
-# Nie "Requires=" - jesli montowanie Dysku Google akurat nie wstanie (np. brak
-# internetu przy starcie), panel i tak ma ruszyc - Karty katalogowe/Drukarka
-# projektow same zglosza "Dysk niedostepny" zamiast blokowac cala reszte
-# (Pieczatki/Drukarke/Formularze), ktore w ogole nie potrzebuja tej sciezki.
+# Wants= (nie tylko After=) dla obu - "After=" sama w sobie tylko ustala
+# KOLEJNOSC startu, JESLI dana usluga i tak ma sie uruchomic; nie powoduje
+# jej faktycznego uruchomienia. Bez Wants=scyzoryk-gdrive-mount.service,
+# gdyby ta usluga z jakiegos powodu nie byla wlaczona/uruchomiona osobno
+# (np. swiezy system, recznie odpalony tylko panel), montowanie Dysku
+# nigdy by samo nie wstalo. Nie "Requires=" - jesli montowanie Dysku Google
+# akurat nie wstanie (np. brak internetu przy starcie), panel i tak ma
+# ruszyc - Karty katalogowe/Drukarka projektow same zglosza "Dysk
+# niedostepny" zamiast blokowac cala reszte (Pieczatki/Drukarke/Formularze),
+# ktore w ogole nie potrzebuja tej sciezki.
+Wants=network-online.target scyzoryk-gdrive-mount.service
 # StartLimitIntervalSec/StartLimitBurst NALEZA do sekcji [Unit], nie
 # [Service] - w [Service] systemd je po cichu ignoruje ("Unknown key ...,
 # ignoring", widoczne w "systemd-analyze verify"), co znaczylo ze limit

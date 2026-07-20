@@ -7,13 +7,16 @@ Before=scyzoryk-panel.service
 [Service]
 Type=simple
 User=mcyniak
-# "-uz" (nie samo "-u") sprzata tez POPRZEDNIE, nie do konca odmontowane
-# punkty montowania (widziane raz przy recznym restarcie: mkdir -p walil sie
-# na katalogu, ktory formalnie wciaz byl FUSE-mountpointem starego, juz
-# martwego procesu rclone) - wazne, zeby AUTOMATYCZNY restart (Restart=always)
-# nie utknal w tej samej pulapce bez interwencji. Wiodacy "-" ignoruje kod
-# bledu - przy zwyklym starcie (nic jeszcze nie zamontowane) ta komenda ma
-# PRAWO sie nie udac, to nie powod, zeby caly start uslugi mial nie ruszyc.
+# KOLEJNOSC PONIZEJ MA ZNACZENIE. Najpierw fusermount -uz, DOPIERO POTEM
+# mkdir/chown - "-uz" (nie samo "-u") sprzata POPRZEDNIE, nie do konca
+# odmontowane punkty montowania. Martwy/osierocony punkt montowania FUSE
+# potrafi sprawiac, ze ZWYKLE "stat"/"mkdir -p"/"chown" na tej samej sciezce
+# hangowalo albo konczylo sie bledem "Transport endpoint is not connected" -
+# wiec mkdir/chown MUSZA isc PO posprzataniu starego mountu, nie przed.
+# Wiodacy "-" przy fusermount ignoruje kod bledu - przy zwyklym starcie (nic
+# jeszcze nie zamontowane) ta komenda ma PRAWO sie nie udac, to nie powod,
+# zeby caly start uslugi mial nie ruszyc.
+ExecStartPre=-/bin/fusermount -uz /mnt/scyzoryk-google-drive
 # "/mnt" nalezy do roota (drwxr-xr-x root:root) na swiezym systemie - zwykly
 # "mkdir -p" jako User=mcyniak ponizej nie ma prawa utworzyc tam podkatalogu,
 # wiec caly start uslugi wisialby w petli Restart=always/RestartSec=5 na
@@ -22,7 +25,6 @@ User=mcyniak
 # uslugi (samo montowanie rclone) nadal dziala jako zwykly uzytkownik.
 ExecStartPre=+/bin/mkdir -p /mnt/scyzoryk-google-drive
 ExecStartPre=+/bin/chown mcyniak:mcyniak /mnt/scyzoryk-google-drive
-ExecStartPre=-/bin/fusermount -uz /mnt/scyzoryk-google-drive
 # vfs-cache-mode=full (nie tylko "writes") - klasyfikacja zalacznikow czyta
 # zawartosc kazdego pliku (mammoth/pdf-parse), a bez cache odczytu KAZDY
 # odczyt idzie na zywo przez siec do Google - stad "bardzo dlugo szuka" przy
