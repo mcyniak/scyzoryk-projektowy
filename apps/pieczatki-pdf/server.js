@@ -16,7 +16,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup, createSemaphore } = require('../../lib/hardening');
 const { ensureAnonymousSessionExpress } = require('../../lib/auth/middleware');
 
 // multer/busboy dekoduja naglowek Content-Disposition multipart uploadu jako
@@ -44,6 +44,18 @@ const MAX_FILE_MB = Number(process.env.MAX_FILE_MB || 80);
 const MAX_FILES = Number(process.env.MAX_FILES || 30);
 const MAX_STAMPS = Number(process.env.MAX_STAMPS || 20);
 const MAX_PAGES_PER_PDF = Number(process.env.MAX_PAGES_PER_PDF || 300);
+// MAX_FILE_MB/MAX_FILES ograniczaja pojedynczy plik i liczbe plikow, ale nie
+// SUME rozmiarow calej paczki - 30 plikow po 80MB to do 2.4GB wejscia w
+// jednym zadaniu. pdf-lib parsuje kazdy PDF do struktur w pamieci JS,
+// zazwyczaj kilka razy wiekszych niz surowy plik, wiec na Raspberry Pi
+// (ograniczony RAM, wspoldzielony z reszta narzedzi) to realne ryzyko OOM.
+const MAX_TOTAL_MB = Number(process.env.PIECZATKI_MAX_TOTAL_MB || 250);
+// Stemplowanie (pdf-lib) i pakowanie do ZIP sa ciezkie procesorowo/pamieciowo
+// - bez globalnego limitu wspolbieznosci kilka rownoleglych zadan (od roznych
+// osob w biurze) moze naraz obciazyc slaby procesor/RAM Raspberry Pi. Rate
+// limiter ponizej ogranicza CZESTOTLIWOSC zadan w czasie, nie ich
+// WSPOLBIEZNOSC - to dwie rozne rzeczy.
+const heavyJobQueue = createSemaphore(Number(process.env.PIECZATKI_MAX_CONCURRENT_JOBS || 1));
 
 for (const dir of [UPLOAD_DIR, OUTPUT_DIR, TMP_DIR]) {
   fs.mkdirSync(dir, { recursive: true });
@@ -217,14 +229,28 @@ function optionsForPage(opts, pageNumber) {
   return { ...opts, ...override };
 }
 
-function safeOutputName(originalName) {
+// usedNames sledzi nazwy JUZ przydzielone w tej samej paczce - bez tego dwa
+// wejsciowe pliki o tej samej nazwie (np. oba "projekt.pdf", realny
+// przypadek gdy ktos stempluje skany z kilku roznych zrodel) dawaly IDENTYCZNA
+// nazwe wyjsciowa i drugi plik po cichu NADPISYWAL wynik pierwszego na dysku
+// - w paczce ZIP/pobraniu brakowalo wtedy jednego dokumentu bez zadnego bledu.
+function safeOutputName(originalName, usedNames) {
   const ext = path.extname(originalName || '.pdf') || '.pdf';
   const base = path.basename(originalName || 'plik.pdf', ext)
     .replace(/[\\/:*?"<>|]+/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 120) || 'plik';
-  return `${base} - ostemplowany.pdf`;
+  let candidate = `${base} - ostemplowany.pdf`;
+  if (usedNames) {
+    let suffix = 2;
+    while (usedNames.has(candidate)) {
+      candidate = `${base} - ostemplowany (${suffix}).pdf`;
+      suffix += 1;
+    }
+    usedNames.add(candidate);
+  }
+  return candidate;
 }
 
 function normalizeHexColor(hex, fallback = '#d40000') {
@@ -413,7 +439,7 @@ function drawPreparedStampOnPage(page, preparedStamp, opts) {
   }
 }
 
-async function stampPdf(inputFile, stamps, jobDir) {
+async function stampPdf(inputFile, stamps, jobDir, usedNames) {
   const bytes = await fsp.readFile(inputFile.path);
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
   const pages = doc.getPages();
@@ -444,7 +470,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
   }
 
   const outputBytes = await doc.save({ useObjectStreams: true });
-  const outPath = path.join(jobDir, safeOutputName(decodeOriginalName(inputFile.originalname)));
+  const outPath = path.join(jobDir, safeOutputName(decodeOriginalName(inputFile.originalname), usedNames));
   await fsp.writeFile(outPath, outputBytes);
   return outPath;
 }
@@ -490,6 +516,12 @@ app.post('/api/stamp', heavyJobLimiter, upload.array('pdfs', MAX_FILES), async (
     }
     for (const file of uploadedPdfs) validateUploadedPdfFile(file);
 
+    const totalBytes = uploadedPdfs.reduce((sum, f) => sum + (f.size || 0), 0);
+    if (totalBytes > MAX_TOTAL_MB * 1024 * 1024) {
+      await removeFiles(cleanup);
+      return res.status(400).json({ error: `Laczny rozmiar paczki (${(totalBytes / 1024 / 1024).toFixed(0)} MB) przekracza limit ${MAX_TOTAL_MB} MB. Podziel wgrywanie na mniejsze paczki.` });
+    }
+
     const stamps = parseStampsFromRequest(req.body);
     if (!stamps.length) {
       await removeFiles(cleanup);
@@ -497,17 +529,24 @@ app.post('/api/stamp', heavyJobLimiter, upload.array('pdfs', MAX_FILES), async (
     }
 
     await fsp.mkdir(jobDir, { recursive: true });
-    const outputs = [];
-    for (const pdf of uploadedPdfs) {
-      outputs.push(await stampPdf(pdf, stamps, jobDir));
-    }
+    const usedNames = new Set();
+    // Stemplowanie (pdf-lib) I pakowanie do ZIP-a razem w jednym semaforze -
+    // obie operacje sa ciezkie procesorowo, wiec limit wspolbieznosci ma
+    // sens dla calego zadania, nie tylko jego pierwszej polowy.
+    const outputs = await heavyJobQueue.run(async () => {
+      const results = [];
+      for (const pdf of uploadedPdfs) {
+        results.push(await stampPdf(pdf, stamps, jobDir, usedNames));
+      }
+      if (results.length > 1) await zipFiles(results, zipPath);
+      return results;
+    });
 
     if (outputs.length === 1) {
       res.download(outputs[0], path.basename(outputs[0]), async () => {
         await removeFiles([...cleanup, jobDir]);
       });
     } else {
-      await zipFiles(outputs, zipPath);
       res.download(zipPath, 'ostemplowane-pdf.zip', async () => {
         await removeFiles([...cleanup, jobDir, zipPath]);
       });

@@ -118,6 +118,13 @@ function nazwaZasobnika(rozmiar) { return `Zasobnik SGW(S)B ${rozmiar}.pdf`; }
 // rownolegle z ograniczeniem (nie bez ograniczenia - zbyt duzo naraz
 // zadan do Google/rclone mogloby zaczac dostawac bledy limitu zapytan).
 const KK_CONCURRENCY = Math.max(1, Number(process.env.KK_CONCURRENCY || 8));
+// Globalny, JEDEN semafor dla calego procesu - musi byc utworzony RAZ tutaj,
+// nie wewnatrz przetworzArkusz() (jak wczesniej). Semafor tworzony na nowo
+// przy kazdym wywolaniu funkcji dawal KAZDEMU zadaniu WLASNY limit
+// KK_CONCURRENCY - dwa rownolegle joby (dwie osoby, albo dwa arkusze jednego
+// uzytkownika) mnozyly faktyczna wspolbieznosc zapytan do Dysku/rclone
+// zamiast dzielic jeden wspolny limit.
+const globalnySemaforDysku = createSemaphore(KK_CONCURRENCY);
 
 function normalizujTekst(value) {
   return String(value ?? '').trim();
@@ -335,8 +342,9 @@ async function przetworzArkusz({ sheetName, rows, client, baseRelative, dryRun }
   // FAZA 2 (rownolegla, z ograniczeniem KK_CONCURRENCY): listowanie folderu
   // klienta i ewentualne kopiowanie - to jest czesc, ktora realnie czeka na
   // siec, wiec robimy wiele adresow naraz zamiast jednego po drugim.
-  const semafor = createSemaphore(KK_CONCURRENCY);
-  await Promise.all(zadania.map(zadanie => semafor.run(async () => {
+  // Uzywa WSPOLNEGO semafora calego procesu (patrz globalnySemaforDysku
+  // wyzej), nie wlasnego per-wywolanie.
+  await Promise.all(zadania.map(zadanie => globalnySemaforDysku.run(async () => {
     const { idx, wiersz, id, adres, uid, opisAdresu, folderNazwa, rozmiar } = zadanie;
     const wymaganePliki = [...ZAWSZE_KARTY, nazwaZasobnika(rozmiar)];
     const folderKlientaRel = path.join(projektyRel, folderNazwa);
