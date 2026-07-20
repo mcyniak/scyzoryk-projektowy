@@ -519,6 +519,110 @@ function Fill-HighlightedTableCells($doc, $record, [System.Collections.Generic.L
   return $filledCount
 }
 
+# Niektore szablony (potwierdzone na Opis_techniczny dla pomp ciepla) nie maja
+# pol do wypelnienia w komorkach tabeli, tylko jako zolto podswietlone
+# wielokropki WEWNATRZ zdania, np. "Powierzchnia ogrzewana budynku wynosi
+# …… m²". Nie ma tu sasiedniej komorki-etykiety jak w Fill-HighlightedTableCells
+# - jedynym sygnalem, co wstawic, jest tekst BEZPOSREDNIO PRZED wielokropkiem w
+# tym samym zdaniu. To dopasowanie jest CELOWO waskie i recznie zweryfikowane
+# (nie ogolny "zgadnij po dowolnym slowie przed kropkami") - w tych samych
+# szablonach sa TEZ wielokropki, ktorych NIE wolno automatycznie wypelniac
+# (numer egzemplarza "………/2", wybor wariantu tekstu przez projektanta typu
+# "w proporcji …… / ……% ogrzewania grzejnikowego", stare zuzycie opalu, ktorego
+# nie ma ani w Excelu ani w OZC) - te po prostu nie pasuja do zadnego wpisu
+# ponizej i zostaja bez zmian, co jest bezpiecznym, oczekiwanym zachowaniem.
+$script:NarrativeBlankKeywords = @(
+  # Kolejnosc kandydatow ma znaczenie: kolumna z Excela ("Pow.") jest goly
+  # numer bez jednostki, pasujacy do statycznego " m²" juz obecnego w
+  # szablonie zaraz po tym wielokropku - wartosc wyciagnieta z dokumentu OZC
+  # ("Powierzchnia ogrzewana" = "70 m²") juz ma jednostke w sobie, wiec
+  # wstawiona zamiast golego numeru dawalaby "70 m² m²". Excel idzie wiec
+  # pierwszy, OZC jest fallbackiem tylko gdy w Excelu nie ma tej kolumny.
+  @{ keyword = 'powierzchnia ogrzewana'; candidates = @('Pow.', 'Powierzchnia ogrzewana', 'Powierzchnia') }
+  # Realne zdanie w szablonie to "...rok JEGO budowy to ……" - samo "rok
+  # budowy" jako szukany podciag NIE trafia (nie sa obok siebie). Samo
+  # "budowy" wystarcza, bo okno tekstu przed wielokropkiem jest juz waskie
+  # (patrz $lastEnd powyzej), wiec nie zlapie niczego z innego zdania.
+  @{ keyword = 'budowy'; candidates = @('Rok budowy') }
+)
+$wdWithInTable = 12
+
+function Fill-NarrativeBlanks($doc, $record, [System.Collections.Generic.List[object]]$fieldDebug) {
+  $filledCount = 0
+  $targets = New-Object System.Collections.Generic.List[object]
+  try {
+    $docEnd = 0
+    try { $docEnd = [int]$doc.Content.End } catch { return 0 }
+    $searchRange = $doc.Range(0, $docEnd)
+    $guard = 0
+    # Poprzedni wielokropek moze lezec w tym samym zdaniu, kilkanascie znakow
+    # przed kolejnym (patrz przyklad w komentarzu funkcji) - okno "tekstu przed"
+    # NIE moze wiec cofac sie dalej niz do konca POPRZEDNIEGO znalezionego
+    # podswietlenia, bo inaczej slowo kluczowe pierwszego wielokropka
+    # "przecieka" i falszywie dopasowuje sie tez do drugiego.
+    $lastEnd = 0
+    while ($guard -lt 500) {
+      $guard++
+      $find = $null
+      try { $find = $searchRange.Find } catch { break }
+      if ($null -eq $find) { break }
+      try { $find.ClearFormatting() } catch {}
+      $find.Highlight = $true
+      $find.Text = ""
+      $find.Forward = $true
+      $find.Wrap = 0
+      $found = $false
+      try { $found = [bool]$find.Execute() } catch { break }
+      if (-not $found) { break }
+
+      $foundStart = $searchRange.Start
+      $foundEnd = $searchRange.End
+      if ($foundEnd -le $foundStart) { break }
+
+      $inTable = $false
+      try { $inTable = [bool]$searchRange.Information($wdWithInTable) } catch {}
+      if (-not $inTable) {
+        $precedingText = ""
+        try {
+          $windowStart = [Math]::Max($lastEnd, $foundStart - 140)
+          $precedingRange = $doc.Range($windowStart, $foundStart)
+          $precedingText = ($precedingRange.Text -replace "[\r\a\t\f\v]", " ").Trim()
+        } catch {}
+        $precedingLower = $precedingText.ToLowerInvariant()
+
+        foreach ($rule in $script:NarrativeBlankKeywords) {
+          if (-not $precedingLower.Contains($rule.keyword)) { continue }
+          $value = ""
+          foreach ($candidate in $rule.candidates) {
+            $value = Get-RecordValue $record $candidate
+            if (-not [string]::IsNullOrWhiteSpace($value)) { break }
+          }
+          if ([string]::IsNullOrWhiteSpace($value)) { continue }
+          $targets.Add([pscustomobject]@{ StartPos = $foundStart; EndPos = $foundEnd; Value = [string]$value; Keyword = $rule.keyword }) | Out-Null
+          if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ type = "narrative-match"; keyword = $rule.keyword; preceding = $precedingText; value = $value }) | Out-Null }
+          break
+        }
+      }
+
+      $lastEnd = $foundEnd
+      $searchRange.Start = $foundEnd
+      $searchRange.End = $docEnd
+      if ($searchRange.Start -ge $docEnd) { break }
+    }
+  } catch {}
+
+  $sortedTargets = $targets | Sort-Object -Property StartPos -Descending
+  foreach ($target in $sortedTargets) {
+    try {
+      $valueRange = $doc.Range($target.StartPos, $target.EndPos)
+      $valueRange.HighlightColorIndex = $wdNoHighlight
+      $valueRange.Text = $target.Value
+      $filledCount++
+    } catch {}
+  }
+  return $filledCount
+}
+
 function Remove-MailMergeFromDocx([string]$src) {
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("scyzoryk_docx_" + [Guid]::NewGuid().ToString("N"))
@@ -664,12 +768,16 @@ try {
         $tableFieldDebug = New-Object System.Collections.Generic.List[object]
         $tableFilledCount = Fill-HighlightedTableCells $mergedDoc $record $tableFieldDebug
 
+        Write-Log "info" "Wypelniam podswietlone wielokropki w tresci zdan." ([pscustomobject]@{ row = $rowNumber; address = $address })
+        $narrativeFieldDebug = New-Object System.Collections.Generic.List[object]
+        $narrativeFilledCount = Fill-NarrativeBlanks $mergedDoc $record $narrativeFieldDebug
+
         Write-Log "info" "Podmieniam pola MERGEFIELD." ([pscustomobject]@{ row = $rowNumber; address = $address })
         $fieldDebug = Replace-AllMergeFields $mergedDoc $record
         $textDebug = Replace-AllTextMarkers $mergedDoc $record $textReplacementRules
         if ($DebugMode) {
-          Write-Log "info" "Mapa podstawionych pol." ([pscustomobject]@{ row = $rowNumber; tableLabelFilled = $tableFilledCount; tableLabels = $tableFieldDebug; fields = $fieldDebug; textMarkers = $textDebug })
-          Write-JsonLine ([pscustomobject]@{ event = "field-map"; row = $rowNumber; address = $address; tableLabelFilled = $tableFilledCount; tableLabels = $tableFieldDebug; fields = $fieldDebug; textMarkers = $textDebug })
+          Write-Log "info" "Mapa podstawionych pol." ([pscustomobject]@{ row = $rowNumber; tableLabelFilled = $tableFilledCount; tableLabels = $tableFieldDebug; narrativeFilled = $narrativeFilledCount; narrativeLabels = $narrativeFieldDebug; fields = $fieldDebug; textMarkers = $textDebug })
+          Write-JsonLine ([pscustomobject]@{ event = "field-map"; row = $rowNumber; address = $address; tableLabelFilled = $tableFilledCount; tableLabels = $tableFieldDebug; narrativeFilled = $narrativeFilledCount; narrativeLabels = $narrativeFieldDebug; fields = $fieldDebug; textMarkers = $textDebug })
         }
 
         # Nie aktualizujemy wszystkich pol Worda, bo spis tresci / PAGEREF potrafia mocno spowalniac albo zatrzymywac eksport.
