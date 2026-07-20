@@ -38,6 +38,7 @@ function sessionMiddleware(defaultDataFactory) {
 function cleanupOldSessions() {
   const now = Date.now();
   for (const [sid, entry] of sessions.entries()) {
+    if (entry.data && entry.data.printing) continue; // nigdy nie usuwaj aktywnie drukujacej sesji
     if (now - entry.lastActivity > SESSION_MAX_IDLE_MS) sessions.delete(sid);
   }
 }
