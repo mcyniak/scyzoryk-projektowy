@@ -1,0 +1,415 @@
+// Etap 1+2+3 planu, przepisane 2026-07-21 na Google Cloud Vision zamiast
+// Tesseracta (patrz pamiec projektu/artefakt porownania silnikow OCR z tego
+// samego dnia - Tesseract praktycznie nie czytal odrecznych wpisow na tych
+// formularzach, Vision czyta wiekszosc poprawnie na kilkunastu realnych
+// audytach z rozny inwestycji).
+// Dla kazdego wgranego PDF-a (funkcja analyzeDocument):
+//   1. jesli PDF juz ma prawdziwa warstwe tekstu (rodzina "FLEXIPOWER") - kopiujemy
+//      bez zmian, OCR pominiety, jeden blok (caly plik = jeden adres);
+//   2. w przeciwnym razie wyciagamy osadzone obrazy stron, wysylamy KAZDA
+//      strone do Google Cloud Vision (`visionEngine.ocrImage`, rownolegle,
+//      patrz mapWithConcurrency), wykrywamy i (jesli trzeba) korygujemy
+//      fizyczny obrot pikseli na podstawie geometrii zwroconych slow (patrz
+//      rotationDetect.js - zero dodatkowego wywolania OSD/silnika), a
+//      nastepnie sami skladamy PDF z niewidoczna warstwa tekstu (patrz
+//      buildOcrPdf) - Vision, w odroznieniu od Tesseracta, nie ma
+//      wbudowanego trybu "searchable pdf", wiec te warstwe budujemy recznie
+//      przez pdf-lib na podstawie wspolrzednych slow;
+//   3. na podstawie juz rozpoznanego tekstu proponujemy podzial na bloki
+//      (adresy) - patrz bundleSplit.js - ale NIGDY nie dzielimy automatycznie:
+//      wywolujacy (server.js) pokazuje ekran potwierdzenia z miniaturami stron,
+//      a dopiero zatwierdzone (ewentualnie poprawione recznie) bloki tna juz
+//      raz zrobiony OCR na osobne pliki wyjsciowe (funkcja assemblePdfRange) -
+//      OCR NIGDY nie jest powtarzany dla tego samego dokumentu.
+const fs = require('fs/promises');
+const path = require('path');
+const { PDFDocument } = require('pdf-lib');
+const { Jimp } = require('jimp');
+const { checkTextLayer } = require('./textLayerCheck');
+const { extractPageImages } = require('./pdfImageExtractor');
+const { ocrImage, isConfigured } = require('./visionEngine');
+const { detectRotationFromWords, rotatePoint } = require('./rotationDetect');
+const { detectBlockBoundaries, boundariesToBlocks } = require('./bundleSplit');
+const { embedUnicodeFont } = require('./textFont');
+
+// Male ograniczenie rownoleglosci zapytan do Vision per dokument - typowy
+// audyt ma <=20 stron, wiec to i tak szybciej niz sekwencyjnie, ale nie
+// odpalamy np. 20 rownoczesnych zadan HTTPS naraz bez potrzeby.
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < items.length) {
+      const current = cursor++;
+      results[current] = await fn(items[current], current);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+async function ocrPage(page) {
+  const { text, words } = await ocrImage(page.imagePath);
+  return { ...page, ocrText: text, ocrWords: words };
+}
+
+// Sklada plik wyjsciowy z zakresu stron [range.startPage..range.endPage]
+// (0-based, wlacznie) - dla stron z rozpoznanym obrazem bierze odpowiadajaca
+// strone z JUZ gotowego, calodokumentowego PDF-a po OCR (ocrDoc), dla reszty
+// kopiuje 1:1 z oryginalu. ocrPageCursor liczy sie od poczatku CALEGO
+// dokumentu (nie od range.startPage), bo strony w ocrDoc odpowiadaja tylko
+// stronom z obrazem, w kolejnosci calego pliku - stad przeliczenie offsetu
+// przez policzenie stron-z-obrazem PRZED range.startPage.
+async function assemblePdfRange({ sourcePdfPath, ocrPdfPath, pages, range, outPath }) {
+  const finalDoc = await PDFDocument.create();
+  const sourceBytes = await fs.readFile(sourcePdfPath);
+  const sourceDoc = await PDFDocument.load(sourceBytes, { updateMetadata: false });
+  const ocrDoc = ocrPdfPath ? await PDFDocument.load(await fs.readFile(ocrPdfPath), { updateMetadata: false }) : null;
+
+  const startPage = range?.startPage ?? 0;
+  const endPage = range?.endPage ?? pages.length - 1;
+  let ocrPageCursor = pages.slice(0, startPage).filter((p) => p.imagePath).length;
+
+  for (let i = startPage; i <= endPage; i++) {
+    const info = pages[i];
+    if (info.imagePath) {
+      const [copied] = await finalDoc.copyPages(ocrDoc, [ocrPageCursor]);
+      finalDoc.addPage(copied);
+      ocrPageCursor += 1;
+    } else {
+      const [copied] = await finalDoc.copyPages(sourceDoc, [info.pageIndex]);
+      finalDoc.addPage(copied);
+    }
+  }
+
+  const outBytes = await finalDoc.save();
+  await fs.writeFile(outPath, outBytes);
+}
+
+// Miniatury stron (JPEG, maly rozmiar) do ekranu potwierdzenia podzialu -
+// generowane z JUZ skorygowanych (obroconych) obrazow stron, wiec pokazuja
+// dokladnie to, co trafi do OCR-u/wyniku. Strony bez rozpoznanego obrazu
+// zrodlowego (rzadkie - patrz pdfImageExtractor.js) nie dostaja miniatury,
+// UI pokazuje dla nich zastepczy placeholder.
+async function buildThumbnails(pages, thumbDir, { maxWidth = 220, quality = 65 } = {}) {
+  await fs.mkdir(thumbDir, { recursive: true });
+  const thumbs = [];
+  for (const p of pages) {
+    if (!p.imagePath) { thumbs.push({ pageIndex: p.pageIndex, available: false }); continue; }
+    const image = await Jimp.read(p.imagePath);
+    if (image.bitmap.width > maxWidth) image.resize({ w: maxWidth });
+    const fileName = `page-${String(p.pageIndex + 1).padStart(3, '0')}.jpg`;
+    await image.write(path.join(thumbDir, fileName), { quality });
+    thumbs.push({ pageIndex: p.pageIndex, available: true, file: fileName });
+  }
+  return thumbs;
+}
+
+function trySetPixel(image, x, y, colorHex) {
+  if (x < 0 || y < 0 || x >= image.bitmap.width || y >= image.bitmap.height) return;
+  image.setPixelColor(colorHex, x, y);
+}
+
+function drawRectOutline(image, x0, y0, x1, y1, colorHex, thickness = 4) {
+  for (let t = 0; t < thickness; t++) {
+    for (let x = x0; x <= x1; x++) { trySetPixel(image, x, y0 + t, colorHex); trySetPixel(image, x, y1 - t, colorHex); }
+    for (let y = y0; y <= y1; y++) { trySetPixel(image, x0 + t, y, colorHex); trySetPixel(image, x1 - t, y, colorHex); }
+  }
+}
+
+// Podglad konkretnego pola do recznej poprawki (patrz src/fieldExtraction.js) -
+// przycina hojny obszar wokol etykiety+wartosci ze strony (juz skorygowanej
+// pod katem obrotu) i rysuje czerwona ramke dokladnie tam, gdzie wartosc
+// powinna sie znajdowac - zwykly uzytkownik od razu widzi, gdzie patrzec,
+// bez szukania po calej stronie. Zwraca null, jesli nie mamy ZADNEJ pozycji
+// (etykieta tez nie zostala znaleziona - rzadki przypadek, np. caly wiersz
+// formularza zgubiony przez OCR) - wywolujacy pokazuje wtedy miniature calej
+// strony bez zaznaczenia zamiast tego podgladu.
+async function buildFieldPreview({ pageImagePath, labelBBox, valueBBox, outPath, maxWidth = 1100 }) {
+  const refBBox = labelBBox && valueBBox
+    ? {
+        minX: Math.min(labelBBox.minX, valueBBox.minX),
+        minY: Math.min(labelBBox.minY, valueBBox.minY),
+        maxX: Math.max(labelBBox.maxX, valueBBox.maxX),
+        maxY: Math.max(labelBBox.maxY, valueBBox.maxY)
+      }
+    : (labelBBox || valueBBox);
+  if (!refBBox) return null;
+
+  const image = await Jimp.read(pageImagePath);
+  const width = image.bitmap.width;
+  const height = image.bitmap.height;
+  // Asymetrycznie w prawo - wartosc na tych formularzach ZAWSZE lezy na
+  // prawo od etykiety (nigdy na lewo), a gdy pole nie zostalo w ogole
+  // znalezione (brak valueBBox, tylko labelBBox), symetryczny margines
+  // ucinal kadr zanim dotarl do rzeczywiscie zapisanej wartosci - user
+  // report 2026-07-21: "szkoda ze nie widze dalej w bok". Prawy margines
+  // siega niemal do krawedzi strony, zeby dlugie odreczne odpowiedzi
+  // zawsze zmiescily sie w kadrze.
+  const padXLeft = 140;
+  const padXRight = 900;
+  const padYTop = 90;
+  const padYBottom = 170;
+
+  const cropX = Math.max(0, Math.round(refBBox.minX - padXLeft));
+  const cropY = Math.max(0, Math.round(refBBox.minY - padYTop));
+  const cropRight = Math.min(width, Math.round(refBBox.maxX + padXRight));
+  const cropBottom = Math.min(height, Math.round(refBBox.maxY + padYBottom));
+  const cropW = Math.max(1, cropRight - cropX);
+  const cropH = Math.max(1, cropBottom - cropY);
+  image.crop({ x: cropX, y: cropY, w: cropW, h: cropH });
+
+  if (valueBBox) {
+    const rx0 = Math.max(0, Math.round(valueBBox.minX - cropX) - 8);
+    const ry0 = Math.max(0, Math.round(valueBBox.minY - cropY) - 8);
+    const rx1 = Math.min(cropW - 1, Math.round(valueBBox.maxX - cropX) + 8);
+    const ry1 = Math.min(cropH - 1, Math.round(valueBBox.maxY - cropY) + 8);
+    drawRectOutline(image, rx0, ry0, rx1, ry1, 0xff2222ff);
+  }
+
+  if (image.bitmap.width > maxWidth) image.resize({ w: maxWidth });
+  await image.write(outPath, { quality: 82 });
+  return outPath;
+}
+
+// Buduje JEDEN wielostronicowy PDF (tylko dla stron z obrazem) z niewidoczna
+// warstwa tekstu - odpowiednik dawnego trybu "pdf" Tesseracta, ktorego Vision
+// nie ma wbudowanego. Kazde slowo rysowane jest z opacity:0 dokladnie nad
+// swoim prostokatem ograniczajacym (bez uwzgledniania skosu - wystarczajace
+// do zaznaczania/wyszukiwania, dokladny ksztalt glifow nie ma znaczenia
+// skoro tekst i tak sie nie renderuje wizualnie).
+// UWAGA: pdf-lib 1.17.1 (wersja w tym projekcie) NIE OBSLUGUJE opcji
+// `renderingMode` w drawText() - jest po cichu ignorowana (zweryfikowane w
+// zrodle: PDFPage.prototype.drawText czyta tylko color/opacity/font/size/
+// rotate/xSkew/ySkew/x/y/lineHeight/maxWidth/wordBreaks/blendMode). Pierwsza
+// wersja tej funkcji uzywala `renderingMode: TextRenderingMode.Invisible`,
+// co skutkowalo NORMALNYM, WIDOCZNYM czarnym tekstem rysowanym na obrazie
+// (realny bug zlapany przez wlasciciela na prawdziwym wyniku - "dwa teksty
+// na sobie"). `opacity: 0` jest prawidlowym rozwiazaniem w tej bibliotece -
+// tekst pozostaje prawdziwym obiektem tekstowym PDF-a (zaznaczalny/
+// przeszukiwalny), tylko wizualnie w pelni przezroczysty.
+// Zwraca tez statystyki pewnosci rozpoznania (Vision zwraca 0-1, tutaj
+// przeliczane na 0-100 dla spojnosci z reszta UI).
+async function buildOcrPdf({ pages, outPath }) {
+  const pdfDoc = await PDFDocument.create();
+  const font = await embedUnicodeFont(pdfDoc);
+  let confSum = 0;
+  let confCount = 0;
+  let lowConfCount = 0;
+
+  for (const page of pages) {
+    const imageBytes = await fs.readFile(page.imagePath);
+    const ext = path.extname(page.imagePath).toLowerCase();
+    const embeddedImage = ext === '.png' ? await pdfDoc.embedPng(imageBytes) : await pdfDoc.embedJpg(imageBytes);
+    const dpi = page.dpi || 300;
+    const scale = 72 / dpi;
+    const pageWidthPt = page.width * scale;
+    const pageHeightPt = page.height * scale;
+    const pdfPage = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
+    pdfPage.drawImage(embeddedImage, { x: 0, y: 0, width: pageWidthPt, height: pageHeightPt });
+
+    for (const word of page.ocrWords || []) {
+      if (typeof word.confidence === 'number') {
+        confSum += word.confidence;
+        confCount += 1;
+        if (word.confidence < 0.6) lowConfCount += 1;
+      }
+      const v = word.vertices;
+      if (!v || v.length < 4 || !word.text) continue;
+      const xs = v.map((p) => p.x * scale);
+      const ys = v.map((p) => p.y * scale);
+      const left = Math.min(...xs);
+      const top = Math.min(...ys);
+      const boxWidth = Math.max(...xs) - left;
+      const boxHeight = Math.max(...ys) - top;
+      if (boxWidth <= 0 || boxHeight <= 0) continue;
+      const fontSize = Math.max(4, boxHeight * 0.85);
+      let textWidth = 0;
+      try { textWidth = font.widthOfTextAtSize(word.text, fontSize); } catch (_) { textWidth = 0; }
+      const finalSize = textWidth > 0 ? Math.min(fontSize * (boxWidth / textWidth), fontSize * 4) : fontSize;
+      const pdfY = pageHeightPt - (top + boxHeight);
+      try {
+        pdfPage.drawText(word.text, { x: left, y: pdfY, size: finalSize, font, opacity: 0 });
+      } catch (_) { /* pojedynczy niekodowalny znak nie powinien wywalac calej strony */ }
+    }
+  }
+
+  const outBytes = await pdfDoc.save();
+  await fs.writeFile(outPath, outBytes);
+  const avgConfidence = confCount ? (confSum / confCount) * 100 : null;
+  const lowConfidenceRatio = confCount ? lowConfCount / confCount : 0;
+  return { avgConfidence, lowConfidenceRatio };
+}
+
+// workDir: katalog roboczy analizy (obrazy posrednie, miniatury) - MUSI
+// przetrwac az do finalizeSplit (uzytkownik przeglada/poprawia podzial na
+// bloki miedzy tymi wywolaniami) - wywolujacy (server.js) sprzata go dopiero
+// po finalizacji/wygasnieciu sesji analizy.
+// Zwraca `pages`+`ocrPdfPath` potrzebne finalizeSplit do pociecia JUZ
+// zrobionego OCR-u na finalne pliki (patrz assemblePdfRange) - OCR nigdy nie
+// jest powtarzany.
+async function analyzeDocument({ sourcePdfPath, workDir }) {
+  await fs.mkdir(workDir, { recursive: true });
+
+  const textCheck = await checkTextLayer(sourcePdfPath);
+  if (textCheck.hasText) {
+    const sourceDoc = await PDFDocument.load(await fs.readFile(sourcePdfPath), { updateMetadata: false });
+    const pageCount = sourceDoc.getPageCount();
+    return {
+      status: 'skipped-already-has-text',
+      textLength: textCheck.textLength,
+      pageCount,
+      pages: null,
+      ocrPdfPath: null,
+      avgConfidence: null,
+      lowConfidenceRatio: 0,
+      warnings: [],
+      blocks: [{ startPage: 0, endPage: pageCount - 1 }],
+      thumbnails: []
+    };
+  }
+
+  if (!isConfigured()) {
+    throw new Error('Brak klucza API Google Cloud Vision. Ustaw zmienna srodowiskowa OCR_VISION_API_KEY i uruchom ponownie.');
+  }
+
+  const { pageCount, pages: extractedPages } = await extractPageImages(sourcePdfPath, workDir);
+  const warnings = [];
+  const skippedPages = extractedPages.filter((p) => !p.imagePath);
+
+  for (const p of skippedPages) {
+    warnings.push(`Strona ${p.pageIndex + 1}: brak rozpoznanego obrazu (${p.unsupportedFilter ? 'nieobslugiwany format: ' + p.unsupportedFilter : 'brak osadzonego obrazu'}) - skopiowana bez OCR.`);
+  }
+  for (const p of extractedPages) {
+    if (p.rotate) warnings.push(`Strona ${p.pageIndex + 1}: PDF deklaruje obrot strony (/Rotate=${p.rotate}) niezalezny od wykrywania orientacji obrazu.`);
+  }
+
+  // Rozpoznawanie tekstu KAZDEJ strony z obrazem, rownolegle (patrz
+  // mapWithConcurrency) - jedno zadanie do Vision na strone, wynik zawiera
+  // juz cala tresc + wspolrzedne slow potrzebne pozniej do wykrywania obrotu
+  // i budowy warstwy tekstowej PDF-a.
+  const imagedExtracted = extractedPages.filter((p) => p.imagePath);
+  const ocrResults = await mapWithConcurrency(imagedExtracted, 5, ocrPage);
+  const ocrByIndex = new Map(ocrResults.map((p) => [p.pageIndex, p]));
+  let pages = extractedPages.map((p) => ocrByIndex.get(p.pageIndex) || p);
+
+  // Wykrywanie fizycznego obrotu KAZDEJ strony z obrazem na podstawie
+  // geometrii slow zwroconych przez Vision (patrz rotationDetect.js) - bez
+  // dodatkowego wywolania API/silnika. Realne partie skanow sa obracane jako
+  // CALOSC (caly plik podany do skanera "do gory nogami"), nie strona po
+  // stronie - zweryfikowane na prawdziwym pliku (Kazimierz Biskupi, 19/20
+  // stron zgodnie wykrylo ten sam obrot, jedna strona ze szkicem odrecznym -
+  // za malo tekstu do pewnego wykrycia). Jesli wyrazna wiekszosc stron z
+  // pewnym wykryciem zgadza sie co do jednego obrotu, strony bez pewnego
+  // wykrycia dostosowuja sie do reszty partii zamiast zostac bledne.
+  const CONFIDENT_SIGNAL = 0.5;
+  const detections = pages.map((p) => (p.imagePath ? detectRotationFromWords(p.ocrWords || []) : null));
+  const imagedCount = pages.filter((p) => p.imagePath).length;
+  const confidentRotations = detections
+    .filter((d) => d && d.rotate && d.total > 0 && d.votes / d.total >= CONFIDENT_SIGNAL)
+    .map((d) => d.rotate);
+  let majorityRotation = null;
+  if (confidentRotations.length) {
+    const counts = confidentRotations.reduce((acc, r) => { acc[r] = (acc[r] || 0) + 1; return acc; }, {});
+    const [rot, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    if (count / imagedCount >= 0.5) majorityRotation = Number(rot);
+  }
+
+  const correctedPages = [];
+  for (let i = 0; i < pages.length; i++) {
+    const p = pages[i];
+    if (!p.imagePath) { correctedPages.push(p); continue; }
+    const d = detections[i];
+    const hasConfidentDetection = d.rotate && d.total > 0 && d.votes / d.total >= CONFIDENT_SIGNAL;
+    let rotate = hasConfidentDetection ? d.rotate : 0;
+    let inferred = false;
+    if (!hasConfidentDetection && majorityRotation) {
+      rotate = majorityRotation;
+      inferred = true;
+    }
+    if (!rotate) { correctedPages.push({ ...p, detectedRotation: 0 }); continue; }
+
+    const image = await Jimp.read(p.imagePath);
+    image.rotate((360 - rotate) % 360);
+    await image.write(p.imagePath);
+    const swapped = rotate === 90 || rotate === 270;
+    const rotatedWords = (p.ocrWords || []).map((w) => ({
+      ...w,
+      vertices: (w.vertices || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate))
+    }));
+    correctedPages.push({
+      ...p,
+      width: swapped ? p.height : p.width,
+      height: swapped ? p.width : p.height,
+      ocrWords: rotatedWords,
+      detectedRotation: rotate,
+      rotationInferredFromBatch: inferred
+    });
+    warnings.push(inferred
+      ? `Strona ${p.pageIndex + 1}: automatyczne wykrywanie obrotu nie dalo pewnego wyniku (za malo tekstu) - obrocono o ${rotate} stopni na podstawie reszty partii skanow. Warto sprawdzic wzrokowo.`
+      : `Strona ${p.pageIndex + 1}: wykryto i skorygowano obrot o ${rotate} stopni.`);
+  }
+  pages = correctedPages;
+
+  const imagedPages = pages.filter((p) => p.imagePath);
+  if (!imagedPages.length) {
+    return {
+      status: 'no-ocr-possible',
+      textLength: textCheck.textLength,
+      pageCount,
+      pages,
+      ocrPdfPath: null,
+      avgConfidence: null,
+      lowConfidenceRatio: 0,
+      warnings,
+      blocks: [{ startPage: 0, endPage: pageCount - 1 }],
+      thumbnails: []
+    };
+  }
+
+  const ocrOutPath = path.join(workDir, 'ocr-output.pdf');
+  const { avgConfidence, lowConfidenceRatio } = await buildOcrPdf({ pages: imagedPages, outPath: ocrOutPath });
+  if (avgConfidence !== null && avgConfidence < 70) {
+    warnings.push(`Niska srednia pewnosc rozpoznania tekstu (${avgConfidence.toFixed(0)}%) - czesc tekstu (np. odreczne wpisy) moze byc rozpoznana niepoprawnie.`);
+  }
+
+  const boundaries = detectBlockBoundaries({ imagedPages });
+  const blocks = boundariesToBlocks(boundaries, pageCount);
+  if (blocks.length > 1) {
+    warnings.push(`Wykryto ${blocks.length} prawdopodobne bloki adresowe w jednym pliku (powtarzajacy sie naglowek protokolu) - sprawdz i w razie potrzeby popraw podzial przed pobraniem.`);
+  }
+
+  const thumbDir = path.join(workDir, 'thumbs');
+  const thumbnails = await buildThumbnails(pages, thumbDir);
+
+  return {
+    status: 'ocr-done',
+    textLength: textCheck.textLength,
+    pageCount,
+    pages,
+    ocrPdfPath: ocrOutPath,
+    avgConfidence,
+    lowConfidenceRatio,
+    warnings,
+    blocks,
+    thumbnails
+  };
+}
+
+// Finalizuje podzial: dla kazdego zatwierdzonego bloku tnie JUZ zrobiony OCR
+// (analyzeDocument.ocrPdfPath+pages) na osobny plik wyjsciowy. Dla plikow bez
+// OCR-u (skipped-already-has-text / no-ocr-possible, pages===null) kazdy blok
+// to zwykla kopia oryginalu (w praktyce zawsze dokladnie jeden blok - patrz
+// analyzeDocument powyzej, ale nie zakladamy tego na sztywno).
+async function finalizeSplit({ sourcePdfPath, ocrPdfPath, pages, blocks, outPaths }) {
+  for (let i = 0; i < blocks.length; i++) {
+    const outPath = outPaths[i];
+    if (!pages) {
+      await fs.copyFile(sourcePdfPath, outPath);
+    } else {
+      await assemblePdfRange({ sourcePdfPath, ocrPdfPath, pages, range: blocks[i], outPath });
+    }
+  }
+}
+
+module.exports = { analyzeDocument, finalizeSplit, assemblePdfRange, buildThumbnails, buildFieldPreview };

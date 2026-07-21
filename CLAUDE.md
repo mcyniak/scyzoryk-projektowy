@@ -53,8 +53,8 @@ ESM per-app, no bundler, no jest/mocha).
 
 - Defines the `apps` registry: slug, display name, directory, port, and a `healthPath` used for liveness
   checks. Ports are configurable via env vars (`DRUKARKA_PORT`, `PIECZATKI_PORT`, `FORMULARZE_PORT`,
-  `SERYJNE_PORT`, `WNIOSKI_PORT`, `KARTY_PORT`, `DRUKARKA_PROJEKTY_PORT`), default `PORT=3000` for the
-  panel itself.
+  `SERYJNE_PORT`, `WNIOSKI_PORT`, `KARTY_PORT`, `DRUKARKA_PROJEKTY_PORT`, `OCR_AUDYTOW_PORT`), default
+  `PORT=3000` for the panel itself.
 - Spawns each app as a child process (`spawn(process.execPath, ['server.js'], { cwd: app.dir, ... })`),
   captures stdout/stderr into prefixed log lines, and auto-restarts crashed children with backoff
   (capped at 30s), tracking restart/failure counts per app.
@@ -104,6 +104,23 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
 - `wnioski-powykonawcze` — converts DOCX "wniosek materiałowy" files into "dokumentacja powykonawcza" PDFs.
 - `karty-katalogowe` — matches a UID column in an Excel sheet to product spec-sheet files and copies them
   into per-client folders.
+- `ocr-audytow` — OCR for scanned audit PDFs (incl. Polish handwriting): outputs a PDF with an invisible,
+  selectable/searchable text layer, splitting multi-address bundled files into one PDF per address after
+  a user-reviewed confirmation screen (never auto-splits silently). Uses **Google Cloud Vision**
+  (`DOCUMENT_TEXT_DETECTION`) for text recognition — requires the `OCR_VISION_API_KEY` env var (a Google
+  Cloud API key restricted to Cloud Vision API); optionally `OCR_VISION_REGION=eu` to route through the
+  EU endpoint. This was a deliberate swap from an earlier Tesseract-based version after real-file testing
+  (13 investments' worth of real audits) showed Tesseract essentially cannot read the handwritten
+  field-values on these forms while Vision reads most of them correctly, at a fraction of the runtime —
+  see `apps/ocr-audytow/src/visionEngine.js`. Page-rotation detection (`src/rotationDetect.js`) is derived
+  purely from the geometry of word bounding-boxes Vision already returns (no separate OCR/OSD engine
+  needed) — real scan batches can be fed to the scanner "upside down" as a whole batch, without a `/Rotate`
+  flag in the PDF. Since Vision has no built-in "searchable PDF" output mode (unlike Tesseract), the
+  invisible text layer is assembled by hand via `pdf-lib` + `@pdf-lib/fontkit` (`src/ocrPipeline.js`'s
+  `buildOcrPdf` — needs a Unicode-capable font for Polish diacritics, read live from
+  `C:\Windows\Fonts\arial.ttf`, same pattern as `pieczatki-pdf`, not vendored in the repo). This is also
+  the only child app in the repo that makes outbound network calls — every other app is deliberately
+  offline/`127.0.0.1`-only end-to-end.
 
 Each app's `data/`, `logs/`, `uploads/`, `output/`, `tmp/` directories are runtime state (uploads, job
 data, generated output), not source — they're excluded from `scripts/check-project.js` and should not be

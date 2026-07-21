@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OCR audytów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="base.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <main class="shell">
+    <div class="topbar">
+      <a class="logo" href="/" aria-label="Wróć do panelu głównego">
+        <span class="logo-mark" aria-hidden="true"></span>
+        <span><span class="logo-small">Scyzoryk</span>OCR audytów</span>
+      </a>
+      <a class="button-link ghost top-link" href="/">← Panel główny</a>
+    </div>
+
+    <section class="hero">
+      <div class="glass hero-main">
+        <div class="kicker">Rozpoznawanie tekstu</div>
+        <h1>OCR skanów audytów</h1>
+        <p class="lead">Wgraj zeskanowane PDF-y audytów. Program rozpozna tekst i odda ten sam dokument z niewidoczną warstwą tekstu - da się w niej zaznaczać, kopiować i wyszukiwać. Wygląd oryginału (w tym odręczne notatki) zostaje bez zmian.</p>
+      </div>
+      <aside class="glass info-card">
+        <h2>Jak to działa?</h2>
+        <div class="pill-list">
+          <div class="pill">Dokumenty, które już mają tekst (np. eksporty z aplikacji), zostają bez zmian - OCR jest pomijany.</div>
+          <div class="pill">Reszta strony przechodzi przez rozpoznawanie tekstu, zachowując oryginalny obraz.</div>
+          <div class="pill">Przy niskiej pewności rozpoznania (częste przy odręcznym piśmie) dostaniesz ostrzeżenie.</div>
+          <div class="pill">Jeśli w jednym pliku jest kilka adresów, przed pobraniem zobaczysz miniatury stron i sam potwierdzisz podział.</div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="glass panel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">1</span>Dodaj pliki PDF</h2>
+          <p class="panel-desc">Możesz wgrać kilka plików naraz. Każdy zostanie rozpoznany osobno - jeśli plik zawiera kilka adresów, w następnym kroku sprawdzisz i potwierdzisz podział.</p>
+        </div>
+      </div>
+
+      <form id="form">
+        <div class="drop-zone" id="dropZone">
+          <strong>Przeciągnij pliki PDF tutaj</strong>
+          <span class="panel-desc">albo</span>
+          <div style="margin-top:10px">
+            <input id="files" name="files" type="file" accept=".pdf" multiple>
+          </div>
+        </div>
+
+        <div class="file-list" id="fileList" hidden></div>
+
+        <div class="hero-actions">
+          <button type="submit" id="submitBtn">Rozpoznaj tekst</button>
+          <button type="button" id="clearBtn" class="ghost">Wyczyść</button>
+        </div>
+      </form>
+
+      <div id="status" class="status-box" hidden aria-live="polite">
+        <div id="statusText"></div>
+        <div class="progress"><div id="progressBar"></div></div>
+      </div>
+      <div id="errorBox"></div>
+    </section>
+
+    <section class="glass panel" id="reviewPanel" hidden>
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">2</span>Sprawdź podział na adresy</h2>
+          <p class="panel-desc">Tekst jest już rozpoznany. Program zaproponował podział na podstawie powtarzającego się nagłówka protokołu - sprawdź miniatury stron, w razie potrzeby popraw podział (przyciski między stronami) i nazwy adresów.</p>
+        </div>
+      </div>
+      <div id="reviewFiles"></div>
+      <div class="hero-actions">
+        <button type="button" id="confirmBtn">Zatwierdź podział</button>
+        <button type="button" id="cancelReviewBtn" class="ghost">Anuluj</button>
+      </div>
+    </section>
+
+    <section class="glass panel" id="fieldsPanel" hidden>
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">3</span>Uzupełnij dane</h2>
+          <p class="panel-desc" id="fieldsIntro">Program nie wszystko odczytał pewnie - dla każdego brakującego pola zobaczysz podgląd miejsca na skanie. Wpisz wartość i naciśnij Enter, żeby przejść dalej. Jeśli pole faktycznie jest puste w oryginale, kliknij "Brak w oryginale".</p>
+        </div>
+      </div>
+
+      <div id="fieldsQueue">
+        <div class="field-progress" id="fieldProgress"></div>
+        <div class="field-review-card">
+          <div class="field-preview-box">
+            <img id="fieldPreviewImg" alt="Podgląd miejsca na skanie">
+            <p id="fieldPreviewMissing" class="help-note" hidden>Nie udało się zlokalizować tego pola na skanie - sprawdź je samodzielnie w oryginalnym dokumencie.</p>
+          </div>
+          <div class="field-input-box">
+            <div class="field-doc-name" id="fieldDocName"></div>
+            <label class="field-label" id="fieldLabel" for="fieldValueInput"></label>
+            <form id="fieldForm">
+              <input type="text" id="fieldValueInput" autocomplete="off" placeholder="Wpisz odczytaną wartość...">
+              <div class="hero-actions">
+                <button type="submit">Zapisz i dalej (Enter)</button>
+                <button type="button" id="fieldSkipBtn" class="ghost">Brak w oryginale</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div id="excelStep" hidden>
+        <div class="option-field" style="margin-top:18px">
+          <span>Ścieżka do tabelki Excela (.xlsx) - dopisze wiersz, tworzy plik jeśli nie istnieje</span>
+          <input type="text" id="excelPathInput" placeholder="G:\Dyski współdzielone\...\tabela-audytow.xlsx">
+        </div>
+        <p class="help-note">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y.</p>
+        <div class="hero-actions">
+          <button type="button" id="finalizeBtn">Zapisz i pobierz</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="glass panel" id="resultsPanel" hidden>
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">4</span>Gotowe pliki</h2>
+          <p class="panel-desc">Pobierz rozpoznane PDF-y - oryginalny plik źródłowy nie został zmieniony.</p>
+        </div>
+      </div>
+      <div class="result-list" id="resultList"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

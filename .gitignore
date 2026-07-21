@@ -33,8 +33,14 @@ node-report-*.json
 **/data/print-log.txt
 **/data/ostatnie-foldery.json
 
+# ocr-audytow: skany audytow (dane osobowe) + posrednie obrazy stron -
+# nigdy nie commitowac, w odroznieniu od innych apek data/ tu trzyma
+# realna tresc dokumentow, nie tylko historie zadan
+apps/ocr-audytow/data/
+
 # Testy zawierajace prawdziwe dokumenty
 apps/drukarka-projekty/test/fixtures/
+
 
 # Pliki tymczasowe
 ~$*
