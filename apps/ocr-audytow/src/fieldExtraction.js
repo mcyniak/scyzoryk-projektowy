@@ -55,6 +55,16 @@ const MAX_VALUE_WORDS = 8;
 const COMPOSITE_CONFIDENCE_CAP = 0.5; // ponizej progu 0.7 - zawsze trafia do przegladu, chyba ze rozpoznanie bylo wyjatkowo pewne
 const LOW_CONFIDENCE_THRESHOLD = 0.7;
 const CHECKBOX_CHECKED = /[☑☒✓✔]/;
+// Niezaznaczony checkbox - UWAGA: celowo NIE laczymy tego z CHECKBOX_CHECKED
+// w jeden "glif checkboxa" do zatrzymywania collectValueWords, bo
+// extractInlineChoiceField WYMAGA, zeby zaznaczone "☑Tak"/"☒Nie" nadal
+// przechodzily przez collectValueWords (to jest jego jedyny sygnal). Tylko
+// NIEzaznaczony checkbox jest bezpieczny jako uniwersalna granica - to
+// zawsze "nastepna, nieistotna opcja", nigdy czesc prawdziwej wartosci
+// (realny bug zlapany 2026-07-22: "grubosc: 8 cm ☐Nie" dolaczalo "Nie" do
+// wartosci jako smiec, bo nic wczesniej nie zatrzymywalo zbierania na
+// niezaznaczonym checkboxie).
+const CHECKBOX_UNCHECKED = /[☐□]/;
 
 function bbox(word) {
   const xs = word.vertices.map((v) => v.x);
@@ -129,7 +139,7 @@ function startsAnyLabel(words, idx, allLabelPatterns) {
 // etykiety, w tej samej polowie strony), nie po sasiedztwie w tablicy -
 // dopiero znalezione kandydaty ukladamy od lewej do prawej wedlug
 // wspolrzednej X, zeby odtworzyc prawdziwa kolejnosc czytania W TEJ LINII.
-function collectValueWords(words, labelEndIdx, labelBBox, pageWidth, allLabelPatterns) {
+function collectValueWordsAtTolerance(words, labelEndIdx, labelBBox, pageWidth, allLabelPatterns, tolerance, gapMultiplier = 6) {
   const labelHeight = labelBBox.maxY - labelBBox.minY || 20;
   const labelMidY = (labelBBox.minY + labelBBox.maxY) / 2;
   const labelIsLeftHalf = labelBBox.minX < pageWidth / 2;
@@ -141,7 +151,7 @@ function collectValueWords(words, labelEndIdx, labelBBox, pageWidth, allLabelPat
     const w = words[i];
     const b = bbox(w);
     const midY = (b.minY + b.maxY) / 2;
-    if (Math.abs(midY - labelMidY) > labelHeight * SAME_LINE_TOLERANCE) continue;
+    if (Math.abs(midY - labelMidY) > labelHeight * tolerance) continue;
     if (b.minX < labelBBox.maxX - labelHeight * 0.3) continue; // musi byc na prawo od etykiety (z mala tolerancja)
     if (b.maxX > maxX || b.minX < minXAllowed) continue;
     candidates.push({ idx: i, word: w, b });
@@ -152,18 +162,136 @@ function collectValueWords(words, labelEndIdx, labelBBox, pageWidth, allLabelPat
   let prevMaxX = labelBBox.maxX;
   for (const c of candidates) {
     if (collected.length >= MAX_VALUE_WORDS) break;
-    if (c.b.minX - prevMaxX > labelHeight * 6) break;
+    if (c.b.minX - prevMaxX > labelHeight * gapMultiplier) break;
     if (allLabelPatterns.length && startsAnyLabel(words, c.idx, allLabelPatterns)) break;
+    // Niezaznaczony checkbox = poczatek NASTEPNEJ, nieistotnej opcji (np.
+    // "grubosc: 8 cm ☐Nie") - break, nie continue, bo wszystko po tym
+    // punkcie nalezy juz do czegos innego.
+    if (CHECKBOX_UNCHECKED.test(c.word.text)) break;
     // Strona 2 ma kazde pytanie poprzedzone numerem porzadkowym ("23.",
     // "24." itd, patrz numeracja w tresci skanu) - taki sam token czasem
     // trafia geometrycznie zaraz PO wartosci poprzedniego pola (bo to
     // numer NASTEPNEGO pytania), wiec trzeba go pominac tak samo jak
     // interpunkcje, inaczej dolacza sie do wartosci poprzedniego pola.
     if (/^[.\-_:()]+$/.test(c.word.text) || /^\d{1,2}\.$/.test(c.word.text)) { prevMaxX = c.b.maxX; continue; }
+    // Odreczny znak stopnia (°) bywa odczytany przez Vision jako osobny,
+    // "obcy" token (np. cudzyslow/prim/diereza), nie jako literalne "°" -
+    // to jest zawsze smiec dolaczony do liczby, nigdy sama wartosc (realny
+    // przypadek zlapany 2026-07-22: "40°" -> "40 ¨ 0" - pomijamy, nie
+    // zaliczamy do wartosci).
+    if (/^[¨´`'"′″]+$/.test(c.word.text)) { prevMaxX = c.b.maxX; continue; }
     collected.push(c.word);
     prevMaxX = c.b.maxX;
   }
   return collected;
+}
+
+// Znajduje WSZYSTKIE wystapienia WSZYSTKICH znanych etykiet na stronie
+// (SIMPLE_FIELDS + SECTION_SUBFIELDS + UNTRACKED_LABEL_PATTERNS - patrz
+// ALL_LABEL_PATTERNS) - nie tylko tej jednej, ktorej aktualnie szukamy.
+// Podstawa "strefowego" wyszukiwania wartosci (patrz
+// collectValueWordsInZone) - pomysl wlasciciela 2026-07-22: zamiast zgadywac
+// stala tolerancje wokol WLASNEJ etykiety pola, wyznaczamy PRAWDZIWA granice
+// strefy odpowiedzi na podstawie pozycji SASIEDNICH, znanych pytan (ktore i
+// tak juz niezawodnie znajdujemy) - dokladnie tak jakbysmy znali uklad
+// czystego wzoru formularza, tylko wyprowadzone z tego, co juz i tak wiemy,
+// bez osobnego rejestru/wyrownywania skanu do referencyjnego wzoru.
+function findAllKnownLabelPositions(words) {
+  const positions = [];
+  for (const patterns of ALL_LABEL_PATTERNS) {
+    let from = 0;
+    while (from < words.length) {
+      const label = findLabel(words, patterns, from);
+      if (!label) break;
+      positions.push(unionBBox(label.indices.map((idx) => words[idx])));
+      from = Math.max(...label.indices) + 1;
+    }
+  }
+  return positions;
+}
+
+// Druga proba (po nieudanej pierwszej, waskiej) - zamiast sztywnej
+// wielokrotnosci wysokosci etykiety, strefa odpowiedzi to CALA przestrzen
+// miedzy NAJBLIZSZYM znanym pytaniem NAD (w tej samej kolumnie) a
+// NAJBLIZSZYM znanym pytaniem POD (w tej samej kolumnie), dodatkowo
+// zawezona z prawej strony przez najblizsze znane pytanie W TYM SAMYM
+// WIERSZU (przypadek "2 pytania w jednym gestym wierszu formularza", np.
+// "13. Cyrkulacja..." + "14. Pompa cyrkulacji..."). Odpowiedz znaleziona
+// GDZIEKOLWIEK w tej strefie (nad linia WLASNEJ etykiety LUB pod nia) jest
+// bezpieczna, bo fizycznie nie moze przekroczyc granicy z sasiednim, juz
+// rozpoznanym pytaniem - w odroznieniu od dwoch wczesniejszych,
+// wycofanych prob (sztywna tolerancja * 3 w obie strony), ktore nie mialy
+// zadnej takiej naturalnej granicy i zlepialy sasiednie odpowiedzi.
+function collectValueWordsInZone(words, labelBBox, allLabelPositions, allLabelPatterns) {
+  const labelHeight = labelBBox.maxY - labelBBox.minY || 20;
+  const columnTolerance = labelHeight * 4;
+  let zoneTop = labelBBox.minY - labelHeight * 0.6;
+  let zoneBottom = labelBBox.maxY + labelHeight * 2.5; // konserwatywny domyslny limit, gdy brak sasiada ponizej
+  let zoneRight = Infinity;
+  for (const pos of allLabelPositions) {
+    const sameColumn = pos.minX <= labelBBox.maxX + columnTolerance && pos.maxX >= labelBBox.minX - columnTolerance;
+    if (sameColumn && pos.minY > labelBBox.maxY && pos.minY < zoneBottom) zoneBottom = pos.minY - 2;
+    if (sameColumn && pos.maxY < labelBBox.minY && pos.maxY > zoneTop) zoneTop = pos.maxY + 2;
+    const sameRow = pos.minY < labelBBox.maxY && pos.maxY > labelBBox.minY;
+    if (sameRow && pos.minX > labelBBox.maxX && pos.minX < zoneRight) zoneRight = pos.minX - 2;
+  }
+
+  const candidates = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const b = bbox(w);
+    const midY = (b.minY + b.maxY) / 2;
+    if (midY < zoneTop || midY > zoneBottom) continue;
+    if (b.minX < labelBBox.maxX - labelHeight * 0.3) continue; // musi byc na prawo od etykiety
+    if (b.maxX > zoneRight) continue;
+    candidates.push({ idx: i, word: w, b });
+  }
+  candidates.sort((a, b) => a.b.minY - b.b.minY || a.b.minX - b.b.minX);
+
+  const collected = [];
+  for (const c of candidates) {
+    if (collected.length >= MAX_VALUE_WORDS) break;
+    if (allLabelPatterns.length && startsAnyLabel(words, c.idx, allLabelPatterns)) break;
+    if (CHECKBOX_UNCHECKED.test(c.word.text)) continue;
+    if (/^[.\-_:()]+$/.test(c.word.text) || /^\d{1,2}\.$/.test(c.word.text)) continue;
+    if (/^[¨´`'"′″]+$/.test(c.word.text)) continue;
+    collected.push(c.word);
+  }
+  return collected;
+}
+
+// PRZETESTOWANE i WYCOFANE 2026-07-22: probowano tu drugiego, szerszego
+// przebiegu (3x tolerancja) gdy pierwszy nic nie znajdzie, majac pomoc w
+// przypadkach jak odreczna odpowiedz zapisana jako obliczenie
+// ("5 x 15 = 75m2"). Realny test na kilkunastu audytach pokazal, ze (a) nie
+// naprawilo to zgloszonego przypadku, (b) wprowadzilo NOWY, gorszy problem -
+// szerszy przebieg zaczal dolaczac tekst z SASIEDNICH, niesledzonych
+// etykiet (np. "kod pocztowy" z etykiety adresu zamiast prawdziwego imienia
+// i nazwiska) - te etykiety nie sa w ALL_LABEL_PATTERNS (bo pole "adres" w
+// ogole nie jest sledzone), wiec nic ich nie zatrzymywalo. Bezpieczniej
+// zostawic pole puste (do recznego przegladu) niz zgarnac tekst z innego
+// pytania - stad tylko jeden, sciasniony przebieg.
+// PRZETESTOWANE i WYCOFANE PONOWNIE 2026-07-22: druga, szersza proba (w obie
+// strony) zostala przywrocona z rozszerzona stop-lista (patrz
+// UNTRACKED_LABEL_PATTERNS) po zaobserwowaniu, ze odreczne odpowiedzi na tym
+// formularzu nie trzymaja sie konsekwentnie jednej strony wzgledem etykiety
+// ("40"/kąt dachu i "kotłownia"/bufor sa NAD linia, ale "2000"/data montażu
+// drzwi jest POD linia). Rozszerzona stop-lista naprawila TEN konkretny
+// stary problem (drukowany tekst "kod pocztowy" juz nie wchodzi jako
+// wartosc imienia i nazwiska), ALE realny test na tym samym pliku pokazal
+// NOWY, gorszy problem: szerszy przebieg zaczyna zlepiac ODRECZNA
+// odpowiedz JEDNEGO pola z ODRECZNA odpowiedzia SASIEDNIEGO pola (np.
+// "kotłownia" (bufor) + "beton" (opis podlogi, inne pole) w jedna wartosc
+// "kottownia beton") - stop-lista pomaga tylko przy DRUKOWANYM tekscie,
+// nie chroni przed zlepieniem dwoch ODRECZNYCH odpowiedzi, ktorych nie da
+// sie odroznic samym slownikiem. To silniejszy dowod, ze geometryczne
+// poszerzanie okna Y w OBIE strony ma twardy sufit dla tego konkretnego,
+// bardzo gestego formularza - potrzeba innej techniki (np. grupowania
+// Vision na poziomie akapitu/bloku, nie pojedynczych slow), nie kolejnej
+// poprawki tolerancji. Zostawione jako jeden, sciasniony przebieg -
+// bezpieczniejsze niz zgadywanie.
+function collectValueWords(words, labelEndIdx, labelBBox, pageWidth, allLabelPatterns, gapMultiplier) {
+  return collectValueWordsAtTolerance(words, labelEndIdx, labelBBox, pageWidth, allLabelPatterns, SAME_LINE_TOLERANCE, gapMultiplier);
 }
 
 function wordConfidence(words) {
@@ -184,9 +312,21 @@ function wordConfidence(words) {
 // - odroznienie kluczowe dla toFieldResult (patrz nizej): "pytania tu nie ma"
 // (nie proponuj do recznego przegladu) vs "pytanie jest, ale nic nie
 // zaznaczono/nie udalo sie odczytac" (prawdziwy przypadek do przegladu).
+// Na tym formularzu kazda grupa checkboxow (options) jest z definicji
+// wyborem JEDNEJ opcji - zauwazone przez wlasciciela 2026-07-22 na
+// przegladzie realnych audytow ("do kazdego podpunktu jest zaznaczony tylko
+// jeden checkbox"). To daje uzyteczna kontrole poprawnosci: jesli program
+// wykryje WIECEJ niz jeden zaznaczony checkbox w tej samej grupie, to
+// zawsze sygnal bledu (OCR pomylil odczyt niezaznaczonego checkboxa, albo
+// naprawde sa dwa zaznaczenia na skanie) - NIE nalezy po cichu brac
+// pierwszego znalezionego, tak jak wczesniej, bo to moze byc zly wybor.
+// Taki przypadek jest zwracany jako `ambiguous:true` - wywolujacy powinien
+// to zawsze traktowac jako niepewne (do recznego przegladu), nigdy jako
+// zaufana wartosc.
 function findCheckedOption(words, options, rangeStart = 0, rangeEnd) {
   const end = rangeEnd ?? words.length;
   let anyOptionTextFound = false;
+  const checkedMatches = [];
   for (const option of options) {
     let searchFrom = rangeStart;
     while (searchFrom < end) {
@@ -196,10 +336,20 @@ function findCheckedOption(words, options, rangeStart = 0, rangeEnd) {
       const firstIdx = label.indices[0];
       const candidates = [words[firstIdx].text, firstIdx > 0 ? words[firstIdx - 1].text : ''];
       if (candidates.some((t) => CHECKBOX_CHECKED.test(t))) {
-        return { option, words: label.indices.map((idx) => words[idx]) };
+        checkedMatches.push({ option, words: label.indices.map((idx) => words[idx]) });
+        break; // ta opcja juz znaleziona zaznaczona - nie szukaj JEJ kolejnych wystapien
       }
       searchFrom = firstIdx + 1;
     }
+  }
+  if (checkedMatches.length === 1) return checkedMatches[0];
+  if (checkedMatches.length > 1) {
+    return {
+      option: null,
+      ambiguous: true,
+      conflictLabels: checkedMatches.map((m) => m.option.label),
+      words: checkedMatches.flatMap((m) => m.words)
+    };
   }
   return anyOptionTextFound ? { option: null } : null;
 }
@@ -223,18 +373,48 @@ function groupIntoLines(words, rangeStart, rangeEnd) {
   return lines;
 }
 
-// Szuka linii (patrz groupIntoLines) w [rangeStart,rangeEnd) ktorej PIERWSZE
-// slowo niesie znacznik zaznaczonego checkboxa I ktora pasuje do
-// `contentPattern` (np. /KW/) - zwraca cala linie jako wartosc.
+// Dzieli JEDNA "linie" (patrz groupIntoLines, juz posortowana po X) na
+// osobne klastry, gdy miedzy sasiednimi slowami jest duza przerwa w X -
+// wiele checkboxowych opcji na tym formularzu jest wydrukowanych PO DWIE w
+// jednym wierszu tabeli (dwie niezalezne kolumny, ta sama wysokosc Y) - bez
+// tego podzialu findCheckedLine zwracal CALY wiersz jako jedna wartosc,
+// doklejajac tekst SASIEDNIEJ, niezaznaczonej opcji do zaznaczonej (realny
+// bug zlapany 2026-07-22: "Kocioł na paliwo stałe" (zaznaczone) zlepione z
+// "Kocioł na gaz olej - jednofunkcyjny (z osobnym zasobnikiem c.w.u." -
+// obie opcje wydrukowane w tym samym wierszu formularza).
+function splitLineIntoClusters(items) {
+  const clusters = [];
+  let current = [];
+  let prevMaxX = null;
+  for (const item of items) {
+    const h = item.b.maxY - item.b.minY || 20;
+    if (prevMaxX !== null && item.b.minX - prevMaxX > h * 4) {
+      clusters.push(current);
+      current = [];
+    }
+    current.push(item);
+    prevMaxX = item.b.maxX;
+  }
+  if (current.length) clusters.push(current);
+  return clusters;
+}
+
+// Szuka linii (patrz groupIntoLines) w [rangeStart,rangeEnd), a w niej
+// KLASTRA (patrz splitLineIntoClusters) ktorego PIERWSZE slowo niesie
+// znacznik zaznaczonego checkboxa I ktory pasuje do `contentPattern`
+// (np. /KW/) - zwraca TYLKO ten klaster jako wartosc, nie cala linie.
 function findCheckedLine(words, rangeStart, rangeEnd, contentPattern) {
   const lines = groupIntoLines(words, rangeStart, rangeEnd);
   for (const line of lines) {
     if (!line.items.length) continue;
-    const first = line.items[0].w.text;
-    if (!CHECKBOX_CHECKED.test(first)) continue;
-    const text = line.items.map((it) => it.w.text).join(' ');
-    if (!contentPattern.test(text.toUpperCase())) continue;
-    return { text: text.replace(CHECKBOX_CHECKED, '').trim(), words: line.items.map((it) => it.w) };
+    for (const cluster of splitLineIntoClusters(line.items)) {
+      if (!cluster.length) continue;
+      const first = cluster[0].w.text;
+      if (!CHECKBOX_CHECKED.test(first)) continue;
+      const text = cluster.map((it) => it.w.text).join(' ');
+      if (!contentPattern.test(text.toUpperCase())) continue;
+      return { text: text.replace(CHECKBOX_CHECKED, '').trim(), words: cluster.map((it) => it.w) };
+    }
   }
   return null;
 }
@@ -273,6 +453,14 @@ const SECTION_HEADERS = [
   { key: 'zaworyMieszajace', patterns: [/RODZAJ/, /ISTNIEJ[AĄ]CYCH/, /ZAWOR[OÓ]W/] },
   { key: 'gleba', patterns: [/RODZAJ/, /GLEBY/] },
   { key: 'kolizje', patterns: [/KOLIZJE/] },
+  // Sekcje z wariantu formularza uzywanego w gminie Rychwal (2026-07-22) -
+  // te podpunkty NIE wystepuja w referencyjnym wzor.pdf (Kazimierz Biskupi),
+  // ale sa czescia tej samej rodziny "GRUNTOWA POMPA CIEPLA" - inna gmina,
+  // ten sam tytul protokolu, dodatkowe/przestawione podpunkty.
+  { key: 'podlogaGruncie', patterns: [/POD[LŁ]OGA/, /NA/, /GRUNCIE/] },
+  { key: 'klinkier', patterns: [/KLINKIEREM/] },
+  { key: 'lokalizacjaIzolacjiSection', patterns: [/LOKALIZACJA/, /IZOLACJI/] },
+  { key: 'scianaWielowarstwowaSection', patterns: [/[SŚ]CIANA/, /WIELOWARSTWOWA/] },
   { key: 'koniec', patterns: [/JAKO/, /OSOBA/, /UPOWA[ZŻ]NIONA/] }
 ];
 
@@ -303,56 +491,87 @@ function findSectionRange(words, sectionStarts, sectionKey) {
 // --- Pola bez sekcji (etykieta jednoznaczna na calej stronie) ----------
 
 const SIMPLE_FIELDS = [
-  { key: 'imieNazwisko', columnLabel: 'Imię i nazwisko', labelPatterns: [/IMI/, /NAZWISKO/, /UCZESTNIKA/, /PROJEKTU|W[LŁ]A[SŚ]CICIELA/] },
-  { key: 'telefon', columnLabel: 'Telefon', labelPatterns: [/TELEFON/] },
+  // Etykieta na formularzu to "Imię i Nazwisko Uczestnika projektu/
+  // Właściciela:" - CALA fraza, obie czesci ("projektu" ORAZ "Właściciela",
+  // nie "albo") musza byc w labelPatterns, inaczej wzorzec konczy sie
+  // przedwczesnie i "/ Właściciela" (koniec WLASNEJ etykiety) zostaje
+  // zebrane jako wartosc zamiast prawdziwego imienia i nazwiska - realny,
+  // powszechny bug zlapany 2026-07-22 przy przegladzie kilkunastu realnych
+  // audytow (imieNazwisko wychodzilo jako "/ Właściciela" w KAZDYM pliku).
+  { key: 'imieNazwisko', columnLabel: 'Imię i nazwisko', labelPatterns: [/IMI/, /NAZWISKO/, /UCZESTNIKA/, /PROJEKTU/, /W[LŁ]A[SŚ]CICIELA/] },
+  { key: 'telefon', columnLabel: 'Telefon', labelPatterns: [/TELEFON/], valueKind: 'numeric' },
   { key: 'email', columnLabel: 'E-mail', labelPatterns: [/E-?MAIL/] },
-  { key: 'dataProtokolu', columnLabel: 'Data sporządzenia protokołu', labelPatterns: [/SPORZ/, /DNIA/] },
-  { key: 'rokBudowy', columnLabel: 'Rok budowy budynku', labelPatterns: [/ROK/, /BUDOWY/, /BUDYNKU/] },
-  { key: 'liczbaOsob', columnLabel: 'Liczba osób w gospodarstwie', labelPatterns: [/LICZBA/, /OS[OÓ]B/, /GOSPODARSTWIE/] },
-  { key: 'powierzchnia', columnLabel: 'Powierzchnia ogrzewana', labelPatterns: [/POWIERZCHNIA/, /OGRZEWAN/, /BUDYNKU/] },
-  { key: 'iloscKondygnacji', columnLabel: 'Ilość kondygnacji', labelPatterns: [/ILO[SŚ][CĆ]/, /KONDYGNACJI/] },
-  { key: 'wysokoscPiwnica', columnLabel: 'Wysokość - piwnica', labelPatterns: [/PIWNIC/, /[SŚ]R/, /WYSOKO[SŚ][CĆ]/] },
-  { key: 'wysokoscParter', columnLabel: 'Wysokość - parter', labelPatterns: [/PARTER/, /[SŚ]R/, /WYSOKO[SŚ][CĆ]/] },
-  { key: 'wysokoscPietro', columnLabel: 'Wysokość - piętro', labelPatterns: [/PI[EĘ]TRO/, /ILO[SŚ][CĆ]/] },
-  { key: 'wysokoscPoddasze', columnLabel: 'Wysokość - poddasze', labelPatterns: [/PODDASZE/, /[SŚ]R/, /WYSOKO[SŚ][CĆ]/] },
-  { key: 'wysokoscStrych', columnLabel: 'Wysokość - strych', labelPatterns: [/STRYCH/, /[SŚ]R/, /WYSOKO[SŚ][CĆ]/] },
-  { key: 'katDachuPlaski', columnLabel: 'Kąt dachu (płaski)', labelPatterns: [/P[LŁ]ASKI/, /K[AĄ]T/, /DACHU/] },
-  { key: 'katDachuSkosny', columnLabel: 'Kąt dachu (skośny)', labelPatterns: [/SKO[SŚ]NY/, /K[AĄ]T/, /DACHU/] },
+  { key: 'dataProtokolu', columnLabel: 'Data sporządzenia protokołu', labelPatterns: [/SPORZ/, /DNIA/], valueKind: 'numeric' },
+  { key: 'rokBudowy', columnLabel: 'Rok budowy budynku', labelPatterns: [/ROK/, /BUDOWY/, /BUDYNKU/], valueKind: 'numeric' },
+  { key: 'liczbaOsob', columnLabel: 'Liczba osób w gospodarstwie', labelPatterns: [/LICZBA/, /OS[OÓ]B/, /GOSPODARSTWIE/], valueKind: 'numeric' },
+  { key: 'powierzchnia', columnLabel: 'Powierzchnia ogrzewana', labelPatterns: [/POWIERZCHNIA/, /OGRZEWAN/, /BUDYNKU/], valueKind: 'numeric' },
+  { key: 'iloscKondygnacji', columnLabel: 'Ilość kondygnacji', labelPatterns: [/ILO[SŚ][CĆ]/, /KONDYGNACJI/], valueKind: 'numeric' },
+  // checkboxGated:true - te pola sa "przyklejone" do WLASNEGO checkboxa
+  // (pierwsze slowo etykiety = nazwa opcji, ktora ma wlasny checkbox tuz
+  // przed soba, np. "☒Skośny (orientacyjny kąt dachu): 40°" vs
+  // "☐Płaski (orientacyjny kąt dachu): ....") - jesli TA KONKRETNA opcja nie
+  // jest zaznaczona, pole jest z definicji nie dotyczace tego dokumentu
+  // (nie "puste do sprawdzenia"), patrz komentarz przy extractSimpleField.
+  // Zgloszone przez wlasciciela 2026-07-22 na przykladzie kata dachu -
+  // dotyczy tez wysokosci kondygnacji (Piwnica/Parter/Pietro/Poddasze/
+  // Strych to niezalezne od siebie "zaznacz wszystkie ktore dotycza" pola,
+  // nie jeden wybor).
+  { key: 'wysokoscPiwnica', columnLabel: 'Wysokość - piwnica', labelPatterns: [/PIWNIC/, /[SŚ]R/, /WYSOKO[SŚ][CĆ]/], checkboxGated: true, valueKind: 'numeric' },
+  { key: 'wysokoscParter', columnLabel: 'Wysokość - parter', labelPatterns: [/PARTER/, /[SŚ]R/, /WYSOKO[SŚ][CĆ]/], checkboxGated: true, valueKind: 'numeric' },
+  { key: 'wysokoscPietro', columnLabel: 'Wysokość - piętro', labelPatterns: [/PI[EĘ]TRO/, /ILO[SŚ][CĆ]/], checkboxGated: true, valueKind: 'numeric' },
+  { key: 'wysokoscPoddasze', columnLabel: 'Wysokość - poddasze', labelPatterns: [/PODDASZE/, /[SŚ]R/, /WYSOKO[SŚ][CĆ]/], checkboxGated: true, valueKind: 'numeric' },
+  { key: 'wysokoscStrych', columnLabel: 'Wysokość - strych', labelPatterns: [/STRYCH/, /[SŚ]R/, /WYSOKO[SŚ][CĆ]/], checkboxGated: true, valueKind: 'numeric' },
+  { key: 'katDachuPlaski', columnLabel: 'Kąt dachu (płaski)', labelPatterns: [/P[LŁ]ASKI/, /K[AĄ]T/, /DACHU/], checkboxGated: true, valueKind: 'numeric' },
+  { key: 'katDachuSkosny', columnLabel: 'Kąt dachu (skośny)', labelPatterns: [/SKO[SŚ]NY/, /K[AĄ]T/, /DACHU/], checkboxGated: true, valueKind: 'numeric' },
   // Strona 2 - pola tekstowe/numeryczne bez checkboxow
   { key: 'miejsceBufor', columnLabel: 'Planowane miejsce na bufor', labelPatterns: [/PLANOWANE/, /MIEJSCE/, /NA/, /BUFOR/] },
-  { key: 'wysokoscPomieszczeniaBufor', columnLabel: 'Wysokość pomieszczenia (bufor)', labelPatterns: [/WYSOKO[SŚ][CĆ]/, /POMIESZCZENIA/] },
+  { key: 'wysokoscPomieszczeniaBufor', columnLabel: 'Wysokość pomieszczenia (bufor)', labelPatterns: [/WYSOKO[SŚ][CĆ]/, /POMIESZCZENIA/], valueKind: 'numeric' },
   { key: 'opisPodlogiBufor', columnLabel: 'Opis podłogi w pomieszczeniu', labelPatterns: [/OPIS/, /POD[LŁ]OGI/, /W/, /POMIESZCZENIU/] },
-  { key: 'odlegloscPompyOdBufora', columnLabel: 'Odległość pompy ciepła od bufora', labelPatterns: [/ODLEG[LŁ]O[SŚ][CĆ]/, /POMPY/, /CIEP[LŁ]A/, /OD/, /BUFORA/] },
-  { key: 'szerokoscPrzewezenia', columnLabel: 'Szerokość przewężenia', labelPatterns: [/SZEROKO[SŚ][CĆ]/, /PRZEW[EĘ][ZŻ]ENIA/, /DROGA/, /WNIESIENIA/, /URZ[AĄ]DZE[NŃ]/] },
-  { key: 'mocPrzylacza', columnLabel: 'Przyznana moc przyłącza elektrycznego', labelPatterns: [/PRZYZNANA/, /MOC/, /PRZY[LŁ][AĄ]CZA/, /ELEKTRYCZNEGO/] },
-  { key: 'zabezpieczenieGlowne', columnLabel: 'Zabezpieczenie elektryczne główne', labelPatterns: [/ZABEZPIECZENIE/, /ELEKTRYCZNE/, /G[LŁ][OÓ]WNE/] },
-  { key: 'zuzycieObecnegoPaliwa', columnLabel: 'Roczne zużycie obecnego paliwa', labelPatterns: [/ROCZNE/, /ZU[ZŻ]YCIE/, /OBECNEGO/, /PALIWA/] },
-  { key: 'iloscObiegowGrzewczych', columnLabel: 'Ilość wydzielonych obiegów grzewczych', labelPatterns: [/ILO[SŚ][CĆ]/, /WYDZIELONYCH/, /OBIEG[OÓ]W/] },
-  { key: 'iloscZaworowMieszajacych', columnLabel: 'Ilość obiegów z zaworami mieszającymi', labelPatterns: [/ILO[SŚ][CĆ]/, /OBIEG[OÓ]W/, /C\.?O/, /WYPOSA[ZŻ]ONYCH/] },
-  { key: 'udzialGrzejnikowy', columnLabel: 'Udział ogrzewania grzejnikowego (%)', labelPatterns: [/UDZIA[LŁ]/, /OGRZEWANIA/, /GRZEJNIKOWEGO/] },
-  { key: 'udzialPlaszczyznowy', columnLabel: 'Udział ogrzewania płaszczyznowego (%)', labelPatterns: [/UDZIA[LŁ]/, /OGRZEWANIA/, /P[LŁ]ASZCZYZNOWEGO/] },
-  { key: 'temperaturaPomieszczenia', columnLabel: 'Żądana temperatura w pomieszczeniach', labelPatterns: [/[ZŻ][AĄ]DANA/, /TEMPERATURA/, /W/, /POMIESZCZENIACH/] },
-  { key: 'temperaturaCwu', columnLabel: 'Żądana temperatura c.w.u.', labelPatterns: [/[ZŻ][AĄ]DANA/, /TEMPERATURA/, /C\.?W\.?U/] },
-  { key: 'powierzchniaDzialki', columnLabel: 'Powierzchnia działki (dolne źródło)', labelPatterns: [/POWIERZCHNIA/, /DZIA[LŁ]KI/] }
+  { key: 'odlegloscPompyOdBufora', columnLabel: 'Odległość pompy ciepła od bufora', labelPatterns: [/ODLEG[LŁ]O[SŚ][CĆ]/, /POMPY/, /CIEP[LŁ]A/, /OD/, /BUFORA/], valueKind: 'numeric' },
+  { key: 'szerokoscPrzewezenia', columnLabel: 'Szerokość przewężenia', labelPatterns: [/SZEROKO[SŚ][CĆ]/, /PRZEW[EĘ][ZŻ]ENIA/, /DROGA/, /WNIESIENIA/, /URZ[AĄ]DZE[NŃ]/], valueKind: 'numeric' },
+  { key: 'mocPrzylacza', columnLabel: 'Przyznana moc przyłącza elektrycznego', labelPatterns: [/PRZYZNANA/, /MOC/, /PRZY[LŁ][AĄ]CZA/, /ELEKTRYCZNEGO/], valueKind: 'numeric' },
+  { key: 'zabezpieczenieGlowne', columnLabel: 'Zabezpieczenie elektryczne główne', labelPatterns: [/ZABEZPIECZENIE/, /ELEKTRYCZNE/, /G[LŁ][OÓ]WNE/], valueKind: 'numeric' },
+  { key: 'zuzycieObecnegoPaliwa', columnLabel: 'Roczne zużycie obecnego paliwa', labelPatterns: [/ROCZNE/, /ZU[ZŻ]YCIE/, /OBECNEGO/, /PALIWA/], valueKind: 'numeric' },
+  { key: 'iloscObiegowGrzewczych', columnLabel: 'Ilość wydzielonych obiegów grzewczych', labelPatterns: [/ILO[SŚ][CĆ]/, /WYDZIELONYCH/, /OBIEG[OÓ]W/], valueKind: 'numeric' },
+  { key: 'iloscZaworowMieszajacych', columnLabel: 'Ilość obiegów z zaworami mieszającymi', labelPatterns: [/ILO[SŚ][CĆ]/, /OBIEG[OÓ]W/, /C\.?O/, /WYPOSA[ZŻ]ONYCH/], valueKind: 'numeric' },
+  { key: 'udzialGrzejnikowy', columnLabel: 'Udział ogrzewania grzejnikowego (%)', labelPatterns: [/UDZIA[LŁ]/, /OGRZEWANIA/, /GRZEJNIKOWEGO/], valueKind: 'numeric' },
+  { key: 'udzialPlaszczyznowy', columnLabel: 'Udział ogrzewania płaszczyznowego (%)', labelPatterns: [/UDZIA[LŁ]/, /OGRZEWANIA/, /P[LŁ]ASZCZYZNOWEGO/], valueKind: 'numeric' },
+  { key: 'temperaturaPomieszczenia', columnLabel: 'Żądana temperatura w pomieszczeniach', labelPatterns: [/[ZŻ][AĄ]DANA/, /TEMPERATURA/, /W/, /POMIESZCZENIACH/], valueKind: 'numeric' },
+  { key: 'temperaturaCwu', columnLabel: 'Żądana temperatura c.w.u.', labelPatterns: [/[ZŻ][AĄ]DANA/, /TEMPERATURA/, /C\.?W\.?U/], valueKind: 'numeric' },
+  { key: 'powierzchniaDzialki', columnLabel: 'Powierzchnia działki (dolne źródło)', labelPatterns: [/POWIERZCHNIA/, /DZIA[LŁ]KI/], valueKind: 'numeric' }
 ];
 
 // --- Pola zagniezdzone w sekcjach (ta sama pod-etykieta powtarza sie w
 // kilku sekcjach, dlatego wymagaja ograniczenia zakresu) ----------------
 
 const SECTION_SUBFIELDS = [
-  { key: 'dataMontażuOkien', columnLabel: 'Data montażu stolarki okiennej', sectionKey: 'stolarka', labelPatterns: [/PRZYBLI[ZŻ]ONA/, /DATA/, /MONTA[ZŻ]U/] },
-  { key: 'wymiaryDrzwiZewn', columnLabel: 'Wymiary drzwi zewnętrznych', sectionKey: 'drzwiZewn', labelPatterns: [/WYMIARY/] },
-  { key: 'dataMontażuDrzwiZewn', columnLabel: 'Data montażu drzwi zewnętrznych', sectionKey: 'drzwiZewn', labelPatterns: [/PRZYBLI[ZŻ]ONA/, /DATA/, /MONTA[ZŻ]U/] },
-  { key: 'iloscDrzwiZewn', columnLabel: 'Ilość drzwi zewnętrznych', sectionKey: 'drzwiZewn', labelPatterns: [/ILO[SŚ][CĆ]/] },
-  { key: 'wymiaryDrzwiGaraz', columnLabel: 'Wymiary drzwi garażowych', sectionKey: 'drzwiGaraz', labelPatterns: [/WYMIARY/] },
-  { key: 'dataMontażuDrzwiGaraz', columnLabel: 'Data montażu drzwi garażowych', sectionKey: 'drzwiGaraz', labelPatterns: [/PRZYBLI[ZŻ]ONA/, /DATA/, /MONTA[ZŻ]U/] },
-  { key: 'iloscDrzwiGaraz', columnLabel: 'Ilość drzwi garażowych', sectionKey: 'drzwiGaraz', labelPatterns: [/ILO[SŚ][CĆ]/] },
+  { key: 'dataMontażuOkien', columnLabel: 'Data montażu stolarki okiennej', sectionKey: 'stolarka', labelPatterns: [/PRZYBLI[ZŻ]ONA/, /DATA/, /MONTA[ZŻ]U/], valueKind: 'numeric' },
+  { key: 'wymiaryDrzwiZewn', columnLabel: 'Wymiary drzwi zewnętrznych', sectionKey: 'drzwiZewn', labelPatterns: [/WYMIARY/], valueKind: 'numeric' },
+  { key: 'dataMontażuDrzwiZewn', columnLabel: 'Data montażu drzwi zewnętrznych', sectionKey: 'drzwiZewn', labelPatterns: [/PRZYBLI[ZŻ]ONA/, /DATA/, /MONTA[ZŻ]U/], valueKind: 'numeric' },
+  { key: 'iloscDrzwiZewn', columnLabel: 'Ilość drzwi zewnętrznych', sectionKey: 'drzwiZewn', labelPatterns: [/ILO[SŚ][CĆ]/], valueKind: 'numeric' },
+  { key: 'wymiaryDrzwiGaraz', columnLabel: 'Wymiary drzwi garażowych', sectionKey: 'drzwiGaraz', labelPatterns: [/WYMIARY/], valueKind: 'numeric' },
+  { key: 'dataMontażuDrzwiGaraz', columnLabel: 'Data montażu drzwi garażowych', sectionKey: 'drzwiGaraz', labelPatterns: [/PRZYBLI[ZŻ]ONA/, /DATA/, /MONTA[ZŻ]U/], valueKind: 'numeric' },
+  { key: 'iloscDrzwiGaraz', columnLabel: 'Ilość drzwi garażowych', sectionKey: 'drzwiGaraz', labelPatterns: [/ILO[SŚ][CĆ]/], valueKind: 'numeric' },
   // Dodane po porownaniu z prawdziwym cyfrowym raportem "Ustalenia
   // montazowe" (rodzina B, ktorej audytow firma sie pozbywa, ale ktora
   // pokazuje pelen zestaw pol biznesowych do Excela) - "Grubosc izolacji
   // dachu" jest tez na papierowym formularzu ("Izolacja dachu: Tak...,
   // grubosc: ...cm"), po prostu nie zostalo dodane w ETAP5/6.
-  { key: 'grubIzolacjiDachu', columnLabel: 'Grubość izolacji dachu', sectionKey: 'dach', labelPatterns: [/GRUBO[SŚ][CĆ]/] }
+  // checkboxAnchorPattern - "Izolacja dachu: Tak, ..., grubosc: ...cm / Nie"
+  // - grubosc dotyczy WYLACZNIE gdy "Tak" jest zaznaczone (jedyna para
+  // Tak/Nie w calej sekcji 'dach', wiec bezpieczne szukac w calym zakresie
+  // sekcji bez dodatkowego zawezania). Zgloszone przez wlasciciela
+  // 2026-07-22 na przykladzie identycznego wzorca (kat dachu) - to samo
+  // dotyczy tego pola, tylko przeoczone przy pierwszym dodaniu w ETAP6.
+  { key: 'grubIzolacjiDachu', columnLabel: 'Grubość izolacji dachu', sectionKey: 'dach', labelPatterns: [/GRUBO[SŚ][CĆ]/], checkboxAnchorPattern: /^TAK,?$/, valueKind: 'numeric' },
+  // Ta sama logika co grubIzolacjiDachu - "Izolacja: Tak, grubość...cm Nie"
+  // w sekcji sciany fundamentowej, przeoczone razem z materialem tej
+  // sciany przy pierwszym przejrzeniu.
+  { key: 'grubIzolacjiFundamentowej', columnLabel: 'Grubość izolacji ściany fundamentowej', sectionKey: 'scianaFundamentowa', labelPatterns: [/GRUBO[SŚ][CĆ]/], checkboxAnchorPattern: /^TAK,?$/, valueKind: 'numeric' },
+  // Wariant Rychwal - "Czy zewn. powierzchnia ściany pokryta jest
+  // klinkierem: Tak, grubość: ...cm / Nie" - wlasna sekcja 'klinkier'
+  // zakotwiczona na samym slowie "klinkierem" (patrz SECTION_HEADERS).
+  { key: 'grubKlinkieru', columnLabel: 'Grubość okładziny klinkierowej', sectionKey: 'klinkier', labelPatterns: [/GRUBO[SŚ][CĆ]/], checkboxAnchorPattern: /^TAK,?$/, valueKind: 'numeric' }
 ];
 
 const CHECKBOX_FIELDS = [
@@ -459,6 +678,69 @@ const CHECKBOX_FIELDS = [
       { label: 'Wilgotna gliniasta', patterns: [/WILGOTNA/, /GLINIASTA/] },
       { label: 'Przewodząca wody gruntowe', patterns: [/PRZEWODZ[AĄ]CA/] }
     ]
+  },
+  // Wariant Rychwal (2026-07-22, zgloszone na realnym pliku "Dabroszyn
+  // 38A.pdf") - nie wystepuja w referencyjnym wzor.pdf (Kazimierz Biskupi),
+  // ale sa czescia tej samej rodziny "GRUNTOWA POMPA CIEPLA", inna wersja
+  // formularza. UWAGA: te 3 pola byly najpierw zbudowane jako
+  // INLINE_CHOICE_FIELDS (zakotwiczone do WLASNEJ etykiety w TEJ SAMEJ
+  // linii), ale na realnym ukladzie tego wariantu naglowek pytania
+  // ("Lokalizacja izolacji:"/"Ściana wielowarstwowa:") i same checkboxy sa
+  // na SASIEDNICH liniach (naglowek, potem checkboxy pod nim), nie w jednej
+  // linii - stad przeniesione tutaj (CHECKBOX_FIELDS + sectionKey), gdzie
+  // wyszukiwanie dziala w calym zakresie sekcji, nie tylko na jednej linii.
+  {
+    key: 'lokalizacjaIzolacjiSciany', columnLabel: 'Lokalizacja izolacji ściany zewn.', sectionKey: 'lokalizacjaIzolacjiSection',
+    options: [
+      // Sekwencja MUSI zaczynac sie od "Na" (nie samo /ZEWN[AĄ]TRZ/) -
+      // checkbox jest przed "Na", nie przed "zewnątrz" - ten sam bug co
+      // przy "Warstwa betonu chudego" (patrz komentarz w
+      // MULTI_MATERIAL_FIELDS) - miejsce startu sekwencji wyznacza, przy
+      // ktorym slowie sprawdzany jest znacznik zaznaczenia.
+      { label: 'Na zewnątrz', patterns: [/^NA$/, /ZEWN[AĄ]TRZ/] },
+      { label: 'Wewnątrz', patterns: [/WEWN[AĄ]TRZ/] }
+    ]
+  },
+  {
+    key: 'scianaWielowarstwowa', columnLabel: 'Ściana wielowarstwowa', sectionKey: 'scianaWielowarstwowaSection',
+    options: [
+      { label: 'Tak', patterns: [/^TAK$/] },
+      { label: 'Nie', patterns: [/^NIE$/] }
+    ]
+  },
+  {
+    key: 'klinkier', columnLabel: 'Zewn. powierzchnia pokryta klinkierem', sectionKey: 'klinkier',
+    options: [
+      { label: 'Tak', patterns: [/^TAK$/] },
+      { label: 'Nie', patterns: [/^NIE$/] }
+    ]
+  },
+  // Przeniesione z INLINE_CHOICE_FIELDS - naglowek "Planowane miejsce na
+  // zasobnik c.w.u.:" i same checkboxy sa na SASIEDNICH liniach (naglowek,
+  // potem opcje pod nim), nie w jednej linii - ten sam bug jak przy
+  // lokalizacjaIzolacjiSciany/scianaWielowarstwowa/klinkier (patrz komentarz
+  // tam) - reuzywa juz istniejacej sekcji 'zasobnikSection'.
+  {
+    key: 'zasobnikCwu', columnLabel: 'Miejsce na zasobnik c.w.u.', sectionKey: 'zasobnikSection',
+    options: [
+      { label: 'Takie samo jak bufor', patterns: [/TAKIE/] },
+      { label: 'Inne', patterns: [/^INNE$/] }
+    ]
+  },
+  // Przeniesione z INLINE_CHOICE_FIELDS - "Typ instalacji elektrycznej w
+  // pomieszczeniu montazu pompy ciepla:" (naglowek) i "3-fazowa/1-fazowa/
+  // Brak" (checkboxy) sa na SASIEDNICH liniach, ten sam bug jak przy
+  // zasobnikCwu/lokalizacjaIzolacjiSciany. Bezpieczne mimo szerokiej sekcji
+  // 'elektrykaSection' (zawiera tez gniazdoElektryczne/dostepInternet) bo
+  // opcje "3-fazowa"/"1-fazowa"/"Brak" sa unikalne, nie generyczne Tak/Nie
+  // jak w tamtych dwoch polach.
+  {
+    key: 'typInstalacjiElektrycznej', columnLabel: 'Typ instalacji elektrycznej', sectionKey: 'elektrykaSection',
+    options: [
+      { label: '3-fazowa', patterns: [/^3$/, /FAZOWA/] },
+      { label: '1-fazowa', patterns: [/^1$/, /FAZOWA/] },
+      { label: 'Brak', patterns: [/^BRAK$/] }
+    ]
   }
 ];
 
@@ -473,8 +755,6 @@ const CHECKBOX_FIELDS = [
 const INLINE_CHOICE_FIELDS = [
   { key: 'gniazdoElektryczne', columnLabel: 'Gniazdo elektryczne', labelPatterns: [/GNIAZDO/, /ELEKTRYCZNE/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
   { key: 'dostepInternet', columnLabel: 'Dostęp do internetu (bufor)', labelPatterns: [/DOST[EĘ]P/, /DO/, /INTERNETU/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
-  { key: 'typInstalacjiElektrycznej', columnLabel: 'Typ instalacji elektrycznej', labelPatterns: [/TYP/, /INSTALACJI/, /ELEKTRYCZNEJ/], choices: [{ label: '3-fazowa', pattern: /3-?FAZOWA/ }, { label: '1-fazowa', pattern: /1-?FAZOWA/ }, { label: 'Brak', pattern: /BRAK/ }] },
-  { key: 'zasobnikCwu', columnLabel: 'Miejsce na zasobnik c.w.u.', labelPatterns: [/PLANOWANE/, /MIEJSCE/, /NA/, /ZASOBNIK/], choices: [{ label: 'Takie samo jak bufor', pattern: /TAKIE/ }, { label: 'Inne', pattern: /INNE/ }] },
   { key: 'rodzajInstalacjiCoOtwZamk', columnLabel: 'Rodzaj instalacji c.o. (otwarta/zamknięta)', labelPatterns: [/RODZAJ/, /ISTNIEJ[AĄ]CEJ/, /INSTALACJI/, /C\.?O/], choices: [{ label: 'Układ otwarty', pattern: /OTWARTY/ }, { label: 'Układ zamknięty', pattern: /ZAMKNI[EĘ]TY/ }] },
   { key: 'demontazZrodla', columnLabel: 'Demontaż istniejącego źródła ciepła', labelPatterns: [/DEMONTA[ZŻ]/, /ISTNIEJ[AĄ]CEGO/, /[ZŹ]R[OÓ]D[LŁ]A/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
   { key: 'instalacjaSolarna', columnLabel: 'Istniejąca instalacja solarna', labelPatterns: [/ISTNIEJ[AĄ]CA/, /INSTALACJA/, /SOLARNA/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
@@ -483,7 +763,13 @@ const INLINE_CHOICE_FIELDS = [
   { key: 'kratkaOdplywowa', columnLabel: 'Kratka odpływowa', labelPatterns: [/KRATKA/, /ODP[LŁ]YWOWA/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
   { key: 'reduktorWody', columnLabel: 'Reduktor na wodzie zimnej', labelPatterns: [/REDUKTOR/, /NA/, /WODZIE/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
   { key: 'demontazKostki', columnLabel: 'Demontaż kostki brukowej (prace ziemne)', labelPatterns: [/DEMONTA[ZŻ]/, /KOSTKI/, /BRUKOWEJ/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
-  { key: 'usuniecieDrzew', columnLabel: 'Usunięcie drzew/krzewów (prace ziemne)', labelPatterns: [/USUNI[EĘ]CIE/, /DRZEW/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] }
+  { key: 'usuniecieDrzew', columnLabel: 'Usunięcie drzew/krzewów (prace ziemne)', labelPatterns: [/USUNI[EĘ]CIE/, /DRZEW/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
+  // "Izolacja: Tak/Nie" (bez wlasnej wartosci - sam material jest osobnym
+  // MATERIAL_FIELD ponizej, zaleznym od tego Tak) - wymaga sectionKey, bo
+  // etykieta "Izolacja:" powtarza sie w kilku sekcjach na stronie
+  // (sciana fundamentowa, strop ogrzewane, strop nieogrzewane, dach).
+  { key: 'izolacjaStropOgrzewane', columnLabel: 'Izolacja stropu nad ogrzewanymi', sectionKey: 'stropOgrzewane', labelPatterns: [/IZOLACJA/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] },
+  { key: 'izolacjaStropNieogrzewane', columnLabel: 'Izolacja stropu nad nieogrzewanymi', sectionKey: 'stropNieogrzewane', labelPatterns: [/IZOLACJA/], choices: [{ label: 'Tak', pattern: /TAK/ }, { label: 'Nie', pattern: /NIE/ }] }
 ];
 
 // Strona 2 - pole wielokrotnego wyboru (kolizje z uzbrojeniem podziemnym) -
@@ -498,7 +784,10 @@ const MULTI_CHECKBOX_FIELDS = [
       { label: 'Ciepłownicza', patterns: [/CIEP[LŁ]OWNICZA/] },
       { label: 'Gazowa', patterns: [/GAZOWA\b/] },
       { label: 'Elektryczna', patterns: [/ELEKTRYCZNA\b/] },
-      { label: 'Kanalizacja deszczowa', patterns: [/DESZCZOWA/] },
+      // Musi zaczynac sie od "Kanalizacja" (checkbox jest przed tym slowem),
+      // nie samo /DESZCZOWA/ - ten sam bug jak przy "Warstwa betonu
+      // chudego"/"Z siłownikiem" (patrz komentarze przy tych polach).
+      { label: 'Kanalizacja deszczowa', patterns: [/^KANALIZACJA$/, /DESZCZOWA/] },
       { label: 'Korona drzew', patterns: [/KORONA/] }
     ]
   }
@@ -554,7 +843,12 @@ const MATERIAL_FIELDS = [
       { label: 'Cegła pełna', patterns: [/CEG[LŁ]A/, /PE[LŁ]NA/] },
       { label: 'Pustak', patterns: [/PUSTAK/] },
       { label: 'Kamień', patterns: [/KAMIE[NŃ]/] },
-      { label: 'Bloczek betonowy', patterns: [/BLOCZEK/] }
+      { label: 'Bloczek betonowy', patterns: [/BLOCZEK/] },
+      // Wariant Rychwal - inny zestaw opcji niz Kazimierz Biskupi ("Taki
+      // sam jak sciany zewn." / "Inny: <odrecznie>") - freeText:true bo
+      // wartosc po "Inny:" to slowo (np. "bloczek"), nie liczba.
+      { label: 'Taki sam jak ściana zewnętrzna', patterns: [/TAKI/, /SAM/] },
+      { label: 'Inny', patterns: [/^INNY$/], freeText: true }
     ]
   },
   {
@@ -571,6 +865,25 @@ const MATERIAL_FIELDS = [
       { label: 'Strop żelbetowy monolityczny', patterns: [/STROP/, /[ZŻ]ELBETOWY/] },
       { label: 'Strop gęsto żebrowy', patterns: [/STROP/, /G[EĘ]STO/] },
       { label: 'Strop drewniany', patterns: [/STROP/, /DREWNIANY/] }
+    ]
+  },
+  // Materiał izolacji stropu - ma sens TYLKO gdy izolacjaStropOgrzewane/
+  // Nieogrzewane (powyzej, INLINE_CHOICE_FIELDS) = Tak, stad
+  // checkboxAnchorPattern (ta sama sekcja - jedyna para Tak/Nie w niej).
+  {
+    key: 'materialIzolacjiStropOgrzewane', columnLabel: 'Materiał izolacji stropu nad ogrzewanymi', sectionKey: 'stropOgrzewane', checkboxAnchorPattern: /^TAK$/,
+    options: [
+      { label: 'Styropian', patterns: [/STYROPIAN/] },
+      { label: 'Wełna', patterns: [/WE[LŁ]NA/] },
+      { label: 'Pianka', patterns: [/PIANKA/] }
+    ]
+  },
+  {
+    key: 'materialIzolacjiStropNieogrzewane', columnLabel: 'Materiał izolacji stropu nad nieogrzewanymi', sectionKey: 'stropNieogrzewane', checkboxAnchorPattern: /^TAK$/,
+    options: [
+      { label: 'Styropian', patterns: [/STYROPIAN/] },
+      { label: 'Wełna', patterns: [/WE[LŁ]NA/] },
+      { label: 'Pianka', patterns: [/PIANKA/] }
     ]
   },
   // Strona 2 - rodzaj rur instalacji (c.o./wody zimnej/wody cieplej maja
@@ -608,7 +921,30 @@ const MATERIAL_FIELDS = [
     key: 'zaworyMieszajaceRodzaj', columnLabel: 'Rodzaj zaworów mieszających (ilość)', sectionKey: 'zaworyMieszajace',
     options: [
       { label: 'Termostatyczne', patterns: [/TERMOSTATYCZNE/] },
-      { label: 'Z siłownikiem', patterns: [/SI[LŁ]OWNIKIEM/] }
+      // Musi zaczynac sie od "Z" (checkbox jest przed tym slowem), nie
+      // samo /SI[LŁ]OWNIKIEM/ - ten sam bug jak przy "Kanalizacja
+      // deszczowa" powyzej.
+      { label: 'Z siłownikiem', patterns: [/^Z$/, /SI[LŁ]OWNIKIEM/] }
+    ]
+  }
+];
+
+// "F. Podloga na gruncie (konstrukcja) - zaznaczyc wystepujace warstwy" -
+// wielokrotny wybor (moze byc kilka warstw naraz), kazda z wlasna gruboscia
+// - przeoczone przy pierwszym przejrzeniu formularza, dodane 2026-07-22 po
+// prosbie wlasciciela o przejrzenie wszystkich checkboxow w wzor.pdf.
+const MULTI_MATERIAL_FIELDS = [
+  {
+    key: 'podlogaGruncie', columnLabel: 'Podłoga na gruncie (warstwy, grubość)', sectionKey: 'podlogaGruncie',
+    options: [
+      { label: 'Wylewka betonowa', patterns: [/WYLEWKA/] },
+      { label: 'Izolacja', patterns: [/^IZOLACJA/] },
+      // UWAGA: musi zaczynac sie od /WARSTWA/, nie /BETONU/ - checkbox jest
+      // PRZED "Warstwa", nie przed "betonu" - patterns[0] wyznacza pozycje
+      // od ktorej sprawdzany jest znacznik zaznaczenia (1 slowo wstecz),
+      // wiec zle miejsce startu = szukanie checkboxa przy zlym slowie
+      // (realny bug zlapany 2026-07-22 testem symulujacym realny skan).
+      { label: 'Warstwa betonu chudego', patterns: [/WARSTWA/, /BETONU/, /CHUDEGO/] }
     ]
   }
 ];
@@ -620,7 +956,24 @@ const RZGOW_SIMPLE_FIELDS = [
   { key: 'istniejaceZrodloCiepla', columnLabel: 'Istniejące źródło ciepła', labelPatterns: [/ISTNIEJ[AĄ]CE/, /[ZŹ]R[OÓ]D[LŁ]O/, /CIEP[LŁ]A/] }
 ];
 
-const ALL_LABEL_PATTERNS = SIMPLE_FIELDS.map((f) => f.labelPatterns);
+// Etykiety, ktore NIE sa samodzielnymi polami do wyciagniecia (nikt ich nie
+// zbiera do Excela), ale ktore realnie wystepuja na formularzu jako
+// wydrukowany tekst - MUSZA byc w stop-liscie (patrz ALL_LABEL_PATTERNS
+// nizej), inaczej szersza, dwukierunkowa proba wyszukiwania wartosci (patrz
+// collectValueWords) moglaby je pomylic z odreczna odpowiedzia. Realny
+// przypadek zlapany 2026-07-22: "Adres miejsca instalacji (ulica, nr
+// budynku/lokalu, kod pocztowy):" lezy PRZY "Imię i Nazwisko..." (czesto
+// linia nizej) - bez tego wpisu w stop-liscie "kod pocztowy" bylo lapane
+// jako (bledna) wartosc imienia i nazwiska.
+const UNTRACKED_LABEL_PATTERNS = [
+  [/ADRES/, /MIEJSCA/, /INSTALACJI/]
+];
+
+const ALL_LABEL_PATTERNS = [
+  ...SIMPLE_FIELDS.map((f) => f.labelPatterns),
+  ...SECTION_SUBFIELDS.map((f) => f.labelPatterns),
+  ...UNTRACKED_LABEL_PATTERNS
+];
 
 const COLUMN_ORDER = [
   'adres',
@@ -631,19 +984,78 @@ const COLUMN_ORDER = [
   ...INLINE_CHOICE_FIELDS.map((f) => f.key),
   ...MULTI_CHECKBOX_FIELDS.map((f) => f.key),
   ...MATERIAL_FIELDS.map((f) => f.key),
+  ...MULTI_MATERIAL_FIELDS.map((f) => f.key),
   ...RZGOW_SIMPLE_FIELDS.map((f) => f.key)
 ];
 const COLUMN_LABELS = { adres: 'Adres' };
-for (const f of [...SIMPLE_FIELDS, ...SECTION_SUBFIELDS, ...CHECKED_LINE_FIELDS, ...CHECKBOX_FIELDS, ...INLINE_CHOICE_FIELDS, ...MULTI_CHECKBOX_FIELDS, ...MATERIAL_FIELDS, ...RZGOW_SIMPLE_FIELDS]) {
+for (const f of [...SIMPLE_FIELDS, ...SECTION_SUBFIELDS, ...CHECKED_LINE_FIELDS, ...CHECKBOX_FIELDS, ...INLINE_CHOICE_FIELDS, ...MULTI_CHECKBOX_FIELDS, ...MATERIAL_FIELDS, ...MULTI_MATERIAL_FIELDS, ...RZGOW_SIMPLE_FIELDS]) {
   COLUMN_LABELS[f.key] = f.columnLabel;
 }
 
-function extractSimpleField(words, def, pageWidth, rangeStart = 0, rangeEnd) {
+function extractSimpleField(words, def, pageWidth, rangeStart = 0, rangeEnd, labelPositions) {
   const label = findLabel(words.slice(0, rangeEnd), def.labelPatterns, rangeStart);
   if (!label) return { value: '', confidence: null, found: false };
+  // checkboxGated: pierwsze slowo etykiety to nazwa wlasnej opcji checkboxa
+  // (np. "Piwnica"/"Skośny") - jesli TA konkretna opcja nie jest zaznaczona,
+  // pole nie dotyczy tego dokumentu (found:false), a NIE "puste do
+  // przegladu" - inaczej program pyta o wysokosc piwnicy nawet gdy budynek
+  // nie ma piwnicy. Patrz komentarz przy SIMPLE_FIELDS.
+  if (def.checkboxGated) {
+    const firstIdx = label.indices[0];
+    const marker = [words[firstIdx].text, firstIdx > 0 ? words[firstIdx - 1].text : ''];
+    if (!marker.some((t) => CHECKBOX_CHECKED.test(t))) return { value: '', confidence: null, found: false };
+  }
+  // checkboxAnchorPattern: dla pol gdzie checkbox NIE jest na pierwszym
+  // slowie wlasnej etykiety (np. "Izolacja dachu: |  Tak, pomiedzy
+  // krokwiami/na zewnatrz*, grubosc: ...cm |  Nie" - etykieta pola to
+  // "grubosc", ale checkbox do sprawdzenia jest na slowie "Tak" kilka slow
+  // wczesniej, za daleko na prosty firstIdx-1 lookback).
+  // UWAGA: szuka TYLKO do pozycji WLASNEJ etykiety (nie calej sekcji) i
+  // bierze PIERWSZE (najblizsze) wystapienie wzorca, NIE "jakiekolwiek
+  // zaznaczone w calej sekcji" - realny bug zlapany 2026-07-22 na
+  // "Ściana fundamentowa": sekcja ta zawiera TAKZE nastepne, niezwiazane
+  // pytanie "Ściana wielowarstwowa: Tak/Nie" - stara wersja skanowala cala
+  // sekcje i "przeskakiwala" przez prawidlowe (ale niezaznaczone) "Tak" tuz
+  // przed etykieta "grubosc", zamiast tego lapiac PRZYPADKOWO zaznaczone
+  // "Tak" z tego zupelnie innego pytania kilkanascie slow dalej.
+  if (def.checkboxAnchorPattern) {
+    const searchEnd = Math.min(rangeEnd ?? words.length, Math.max(...label.indices));
+    let anchorFound = false;
+    let anchorChecked = false;
+    for (let i = rangeStart; i < searchEnd; i++) {
+      if (!def.checkboxAnchorPattern.test(words[i].text.toUpperCase())) continue;
+      const marker = [words[i].text, i > 0 ? words[i - 1].text : ''];
+      anchorFound = true;
+      anchorChecked = marker.some((t) => CHECKBOX_CHECKED.test(t));
+      break;
+    }
+    if (!anchorFound || !anchorChecked) return { value: '', confidence: null, found: false };
+  }
   const labelWords = label.indices.map((idx) => words[idx]);
   const labelBBox = unionBBox(labelWords);
-  const valueWords = collectValueWords(words, Math.max(...label.indices) + 1, labelBBox, pageWidth, ALL_LABEL_PATTERNS);
+  let valueWords = collectValueWords(words, Math.max(...label.indices) + 1, labelBBox, pageWidth, ALL_LABEL_PATTERNS);
+  // Druga proba - "strefowa" (patrz collectValueWordsInZone) - TYLKO gdy
+  // pierwsza, wasko-liniowa proba nic nie znalazla. Pomysl wlasciciela
+  // 2026-07-22: wyznacz strefe odpowiedzi na podstawie sasiednich, juz
+  // znanych pytan, zamiast zgadywac tolerancje - lapie odpowiedzi napisane
+  // nad LUB pod linia wlasnej etykiety, bez ryzyka zlepienia z sasiednim
+  // polem (bo strefa jest naturalnie ograniczona przez NAJBLIZSZE INNE
+  // znane pytanie, nie przez sztywna wielokrotnosc wysokosci).
+  if (!valueWords.length && labelPositions) {
+    valueWords = collectValueWordsInZone(words, labelBBox, labelPositions, ALL_LABEL_PATTERNS);
+  }
+  // extractSimpleField jest zawsze uzywana dla pol liczbowych/tekstowych
+  // (nazwa, telefon, data, liczba, grubosc...) - nigdy dla prawdziwej
+  // odpowiedzi Tak/Nie (te ida przez INLINE_CHOICE_FIELDS/CHECKBOX_FIELDS),
+  // wiec bare "Tak"/"Nie" na KONCU zebranej wartosci jest zawsze smieciem z
+  // geometrycznie sasiadujacej, ale niepowiazanej nastepnej opcji checkboxa
+  // (Vision'owy word-order nie jest kolejnoscia czytania - patrz komentarz
+  // przy collectValueWords) - realny przypadek zlapany 2026-07-22:
+  // "grubosc: 8 cm Nie" (bare "Nie", bez wlasnego glifu checkboxa, wiec
+  // CHECKBOX_UNCHECKED go nie zlapal).
+  while (valueWords.length && /^(TAK|NIE)$/.test(valueWords[valueWords.length - 1].text.toUpperCase())) {
+    valueWords = valueWords.slice(0, -1);
+  }
   if (!valueWords.length) return { value: '', confidence: null, found: true, labelBBox };
   return {
     value: valueWords.map((w) => w.text).join(' ').trim(),
@@ -657,6 +1069,19 @@ function extractSimpleField(words, def, pageWidth, rangeStart = 0, rangeEnd) {
 function extractCheckboxField(words, def, rangeStart = 0, rangeEnd) {
   const checked = findCheckedOption(words, def.options, rangeStart, rangeEnd);
   if (!checked) return { value: '', confidence: null, found: false };
+  if (checked.ambiguous) {
+    // Pokazujemy oba sprzeczne odczyty w wartosci (zamiast pustego pola) -
+    // uzytkownik od razu widzi NA CZYM polega problem przy przegladzie,
+    // a COMPOSITE_CONFIDENCE_CAP gwarantuje, ze to zawsze trafia do
+    // recznego sprawdzenia, nigdy nie zostanie po cichu zaakceptowane.
+    return {
+      value: `Sprzeczne odczyty: ${checked.conflictLabels.join(' / ')}`,
+      confidence: Math.min(wordConfidence(checked.words) ?? 1, COMPOSITE_CONFIDENCE_CAP),
+      found: true,
+      labelBBox: unionBBox(checked.words),
+      valueBBox: unionBBox(checked.words)
+    };
+  }
   if (!checked.option) return { value: '', confidence: null, found: true };
   return {
     value: checked.option.label,
@@ -685,16 +1110,80 @@ function extractCheckedLineField(words, def, rangeStart, rangeEnd) {
   };
 }
 
+// checkboxAnchorPattern (opcjonalne) - dla pol typu "Izolacja: Tak/Nie |
+// Material: Styropian.../Wełna.../Pianka..." gdzie wybor materialu ma sens
+// TYLKO gdy "Tak" jest zaznaczone - patrz komentarz przy
+// extractSimpleField's checkboxAnchorPattern, ta sama idea.
 function extractMaterialField(words, def, rangeStart, rangeEnd) {
+  // Bierze PIERWSZE (najblizsze) wystapienie wzorca w zakresie, nie
+  // "jakiekolwiek zaznaczone" - patrz komentarz przy extractSimpleField's
+  // checkboxAnchorPattern (ta sama poprawka, ten sam realny bug).
+  if (def.checkboxAnchorPattern) {
+    const end = rangeEnd ?? words.length;
+    let anchorFound = false;
+    let anchorChecked = false;
+    for (let i = rangeStart; i < end; i++) {
+      if (!def.checkboxAnchorPattern.test(words[i].text.toUpperCase())) continue;
+      const marker = [words[i].text, i > 0 ? words[i - 1].text : ''];
+      anchorFound = true;
+      anchorChecked = marker.some((t) => CHECKBOX_CHECKED.test(t));
+      break;
+    }
+    if (!anchorFound || !anchorChecked) return { value: '', confidence: null, found: false };
+  }
   const checked = findCheckedOption(words, def.options, rangeStart, rangeEnd);
   if (!checked) return { value: '', confidence: null, found: false };
+  if (checked.ambiguous) {
+    return {
+      value: `Sprzeczne odczyty: ${checked.conflictLabels.join(' / ')}`,
+      confidence: Math.min(wordConfidence(checked.words) ?? 1, COMPOSITE_CONFIDENCE_CAP),
+      found: true,
+      labelBBox: unionBBox(checked.words),
+      valueBBox: unionBBox(checked.words)
+    };
+  }
   if (!checked.option) return { value: '', confidence: null, found: true };
   const optionBBox = unionBBox(checked.words);
+  // freeText: dla opcji typu "Inny: ......." (np. wariant formularza z
+  // Rychwala, gdzie "Ściana fundamentowa" moze byc "Inny: bloczek" -
+  // odrecznie wpisane slowo, nie liczba) - collectValueWords zamiast
+  // szukania konkretnie liczby.
+  if (checked.option.freeText) {
+    const textWords = collectValueWords(words, Math.max(...checked.words.map((w) => words.indexOf(w))) + 1, optionBBox, Infinity, []);
+    const value = textWords.length ? `${checked.option.label}: ${textWords.map((w) => w.text).join(' ')}` : checked.option.label;
+    const conf = Math.min(wordConfidence(checked.words) ?? 1, COMPOSITE_CONFIDENCE_CAP);
+    return { value, confidence: conf, found: true, labelBBox: optionBBox, valueBBox: textWords.length ? unionBBox(textWords) : optionBBox };
+  }
   const numberWords = collectValueWords(words, Math.max(...checked.words.map((w) => words.indexOf(w))) + 1, optionBBox, Infinity, []);
   const numeric = numberWords.find((w) => /\d/.test(w.text));
   const value = numeric ? `${checked.option.label}, ${numeric.text}` : checked.option.label;
   const conf = Math.min(wordConfidence(checked.words) ?? 1, COMPOSITE_CONFIDENCE_CAP);
   return { value, confidence: conf, found: true, labelBBox: optionBBox, valueBBox: numeric ? bbox(numeric) : optionBBox };
+}
+
+// Jak extractMaterialField, ale dla pol WIELOKROTNEGO wyboru gdzie KAZDA
+// zaznaczona opcja ma wlasna liczbe (np. "Podloga na gruncie - zaznaczyc
+// wystepujace warstwy" - moze byc zaznaczone kilka na raz, kazda z wlasna
+// gruboscia).
+function extractMultiMaterialField(words, def, rangeStart, rangeEnd) {
+  const found = findAllCheckedOptions(words, def.options, rangeStart, rangeEnd);
+  if (!found.length) return { value: '', confidence: null, found: false };
+  const parts = [];
+  const allWords = [];
+  for (const f of found) {
+    const optionBBox = unionBBox(f.words);
+    const numberWords = collectValueWords(words, Math.max(...f.words.map((w) => words.indexOf(w))) + 1, optionBBox, Infinity, []);
+    const numeric = numberWords.find((w) => /\d/.test(w.text));
+    parts.push(numeric ? `${f.option.label}, ${numeric.text}` : f.option.label);
+    allWords.push(...f.words, ...(numeric ? [numeric] : []));
+  }
+  return {
+    value: parts.join(' | '),
+    confidence: Math.min(wordConfidence(allWords) ?? 1, COMPOSITE_CONFIDENCE_CAP),
+    found: true,
+    labelBBox: unionBBox(allWords),
+    valueBBox: unionBBox(allWords)
+  };
 }
 
 // Jak extractSimpleField, ale zamiast zwracac caly zebrany tekst, szuka
@@ -706,12 +1195,38 @@ function extractInlineChoiceField(words, def, pageWidth, rangeStart = 0, rangeEn
   if (!label) return { value: '', confidence: null, found: false };
   const labelWords = label.indices.map((idx) => words[idx]);
   const labelBBox = unionBBox(labelWords);
-  const valueWords = collectValueWords(words, Math.max(...label.indices) + 1, labelBBox, pageWidth, ALL_LABEL_PATTERNS);
+  // pageWidth=Infinity (nie prawdziwa szerokosc strony) - wylacza limit
+  // "polowa strony" w collectValueWords, ktory mial zapobiegac
+  // przeskakiwaniu do SASIEDNIEJ KOLUMNY na prostszych stronach. gapMultiplier
+  // 14 (nie domyslne 6) - podniesiony limit odstepu miedzy etykieta a jej
+  // wartoscia. Strona 2 tego formularza upakowuje po 2 numerowane pytania w
+  // jednym gestym wierszu (np. "13. Cyrkulacja c.w.u.: Tak Nie  14. Pompa
+  // cyrkulacji..."), wiec prawdziwa odpowiedz (np. zaznaczone "Nie") wypada
+  // daleko na prawo (potwierdzone na realnym pliku: odstep ~10x wysokosci
+  // etykiety) i byla odrzucana przez OBA limity (56% szerokosci strony ORAZ
+  // limit odstepu 6x) - realny bug zlapany 2026-07-22 (dostepInternet/
+  // cyrkulacjaCwu/pompaCyrkulacji/kratkaOdplywowa/reduktorWody i inne
+  // wychodzily puste mimo wyraznie zaznaczonego checkboxa na skanie).
+  // Bezpieczne mimo usunietych limitow, bo szukamy tylko slowa z
+  // KONKRETNEGO, waskiego zestawu `def.choices` (nie dowolnego tekstu) -
+  // ten sam wzorzec juz uzywany w MATERIAL_FIELDS' numeric-grab.
+  const valueWords = collectValueWords(words, Math.max(...label.indices) + 1, labelBBox, Infinity, ALL_LABEL_PATTERNS, 14);
   for (let i = 0; i < valueWords.length; i++) {
     const text = valueWords[i].text.toUpperCase();
-    const prevText = i > 0 ? valueWords[i - 1].text : '';
-    if (!CHECKBOX_CHECKED.test(text) && !CHECKBOX_CHECKED.test(prevText)) continue;
-    const choice = def.choices.find((c) => c.pattern.test(text));
+    // Znacznik zaznaczenia bywa 2+ slowa wstecz, nie tylko bezposrednio
+    // przed (np. "☑ | Układ | otwarty" - "otwarty" to jest slowo
+    // rozrozniajace opcje, ale checkbox jest przy "Układ", 2 pozycje
+    // wczesniej) - sprawdzamy do 3 slow wstecz, nie tylko i-1 (realny
+    // przypadek zlapany 2026-07-22).
+    const nearbyChecked = [text, ...valueWords.slice(Math.max(0, i - 3), i).map((w) => w.text)].some((t) => CHECKBOX_CHECKED.test(t));
+    if (!nearbyChecked) continue;
+    // Niektore odpowiedzi Vision dzieli na wiele tokenow (np. "3-fazowa"
+    // jako trzy osobne slowa "3"/"-"/"fazowa") - sklejamy do 3 kolejnych
+    // slow i probujemy dopasowac tez do tego (realny przypadek zlapany
+    // 2026-07-22: "3-fazowa" nie dopasowywalo sie do zadnego pojedynczego
+    // tokenu).
+    const joined = valueWords.slice(i, i + 3).map((w) => w.text).join('').toUpperCase();
+    const choice = def.choices.find((c) => c.pattern.test(text) || c.pattern.test(joined));
     if (!choice) continue;
     return {
       value: choice.label,
@@ -776,13 +1291,68 @@ function extractMultiCheckboxField(words, def, rangeStart, rangeEnd) {
 // paczki, z czego znaczna czesc to byly pola nieistniejace w konkretnym
 // dokumencie (nie prawdziwe braki) - to rozroznienie jest bezposrednia
 // odpowiedzia na ten problem.
-function toFieldResult(extracted, pageIndex) {
+// Heurystyka "czy to wyglada jak prawdziwy odczyt, nie belkot OCR" - bez
+// slownika/AI (ta apka ma juz jedyne polaczenie sieciowe w calym Scyzoryku
+// - Vision - nie dodajemy kolejnego zaleznosci ani wywolania). Zgloszone
+// przez wlasciciela 2026-07-22: przy 100 audytach na raz liczba pol do
+// recznego potwierdzenia/wpisania to bedzie najwiekszy koszt czasowy, wiec
+// niskopewne odczyty ktore i tak trafiaja do przegladu powinny byc
+// pokazywane jako podpowiedz w polu do wpisania TYLKO gdy wygladaja
+// sensownie - w przeciwnym razie lepiej pokazac puste pole (uzytkownik i
+// tak musi to sprawdzic/wpisac recznie, ale bledna podpowiedz moglaby
+// zmylic pochopne "Enter" bez czytania skanu).
+// - Pola liczbowe (valueKind:'numeric' - data/kat/grubosc/ilosc/...): musi
+//   zawierac przynajmniej jedna cyfre.
+// - Pola tekstowe: stosunek samoglosek do wszystkich liter - prawdziwe
+//   polskie/angielskie slowo ma jakas naturalna proporcje (np. "Wicher" =
+//   2/6 ≈ 33%), przypadkowy belkot OCR typu "sdvnjsv;sjk" ma zero
+//   samoglosek. Prog 15% jest celowo permisywny (male ryzyko odrzucenia
+//   prawdziwej, ale niefortunnie skroconej wartosci).
+const POLISH_VOWELS = /[aeiouyąęó]/gi;
+function looksPlausible(text, valueKind) {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return true; // puste to inna sprawa - needsReview i tak zadziala
+  if (valueKind === 'numeric') {
+    if (!/\d/.test(trimmed)) return false;
+    // Dwie osobne, "gole" liczby (np. "40 0") to zwykle dwa niezalezne,
+    // kolidujace odczyty (np. prawdziwa liczba + osobno zmyslony token z
+    // odrecznego znaku stopnia), NIE jedna prawdziwa wartosc - prawdziwe
+    // pomiary/daty/wymiary maja separator (°, cm, /, x, :, .) miedzy
+    // liczbami, nigdy goly odstep. Realny przypadek zlapany 2026-07-22:
+    // "40 0" (kat dachu) mial wysoka pewnosc i auto-zatwierdzil sie mimo
+    // ze druga liczba to smiec.
+    const bareNumberTokens = trimmed.split(/\s+/).filter((t) => /^\d+$/.test(t));
+    if (bareNumberTokens.length >= 2) return false;
+    return true;
+  }
+  const letters = trimmed.replace(/[^a-ząćęłńóśźżA-ZĄĆĘŁŃÓŚŹŻ]/g, '');
+  if (letters.length < 3) return true; // zbyt krotkie by ocenic sensownie, nie blokuj
+  const vowelCount = (letters.match(POLISH_VOWELS) || []).length;
+  return vowelCount / letters.length >= 0.15;
+}
+
+// found:false znaczy "ta etykieta/checkbox/sekcja NIE wystapila ANI RAZU w
+// calym dokumencie" - to pole strukturalnie nie dotyczy TEGO KONKRETNEGO
+// formularza (np. pole specyficzne dla wariantu Rzgow na dokumencie z innej
+// gminy, albo cala sekcja z drugiej strony formularza ktorej dany szablon
+// nie ma) - uzytkownik i tak nie ma czego przepisac ze skanu, wiec NIE
+// trafia do kolejki recznego przegladu (needsReview:false, resolved:true od
+// razu, puste w Excelu) - odroznione od found:true+value:'' (etykieta
+// istnieje, ale nic nie zaznaczono/nie udalo sie odczytac - TO juz jest
+// prawdziwy przypadek do przegladu).
+function toFieldResult(extracted, pageIndex, valueKind) {
   if (!extracted.found) {
     return { value: '', confidence: null, pageIndex, labelBBox: null, valueBBox: null, needsReview: false, resolved: true };
   }
-  const needsReview = !extracted.value || extracted.confidence === null || extracted.confidence < LOW_CONFIDENCE_THRESHOLD;
+  let value = extracted.value || '';
+  // Belkot OCR nie jest wartosciowa podpowiedzia - czyscimy PRZED
+  // needsReview, wiec pole z belkotem zawsze trafia do przegladu z pustym
+  // polem do wpisania, nawet jesli surowa pewnosc OCR byla wysoka (Vision
+  // bywa bardzo pewny siebie przy zle odczytanym pismie recznym).
+  if (value && !looksPlausible(value, valueKind)) value = '';
+  const needsReview = !value || extracted.confidence === null || extracted.confidence < LOW_CONFIDENCE_THRESHOLD;
   return {
-    value: extracted.value || '',
+    value,
     confidence: extracted.confidence,
     pageIndex,
     labelBBox: extracted.labelBBox || null,
@@ -802,27 +1372,30 @@ function extractFields(pages, block) {
   const perPageSections = new Map();
   for (const page of blockPages) perPageSections.set(page.pageIndex, findAllSectionStarts(page.ocrWords));
 
-  function tryEachPage(fn) {
+  const perPageLabelPositions = new Map();
+  for (const page of blockPages) perPageLabelPositions.set(page.pageIndex, findAllKnownLabelPositions(page.ocrWords));
+
+  function tryEachPage(fn, valueKind) {
     let best = { value: '', confidence: null, found: false };
     let bestPageIndex = null;
     for (const page of blockPages) {
       const extracted = fn(page);
-      if (extracted.found && extracted.value) return toFieldResult(extracted, page.pageIndex);
+      if (extracted.found && extracted.value) return toFieldResult(extracted, page.pageIndex, valueKind);
       if (extracted.found && !best.found) { best = extracted; bestPageIndex = page.pageIndex; }
     }
-    return toFieldResult(best, bestPageIndex);
+    return toFieldResult(best, bestPageIndex, valueKind);
   }
 
   for (const def of SIMPLE_FIELDS) {
-    result[def.key] = tryEachPage((page) => extractSimpleField(page.ocrWords, def, page.width));
+    result[def.key] = tryEachPage((page) => extractSimpleField(page.ocrWords, def, page.width, 0, undefined, perPageLabelPositions.get(page.pageIndex)), def.valueKind);
   }
 
   for (const def of SECTION_SUBFIELDS) {
     result[def.key] = tryEachPage((page) => {
       const range = findSectionRange(page.ocrWords, perPageSections.get(page.pageIndex), def.sectionKey);
       if (!range) return { value: '', confidence: null, found: false };
-      return extractSimpleField(page.ocrWords, def, page.width, range.start, range.end);
-    });
+      return extractSimpleField(page.ocrWords, def, page.width, range.start, range.end, perPageLabelPositions.get(page.pageIndex));
+    }, def.valueKind);
   }
 
   for (const def of CHECKED_LINE_FIELDS) {
@@ -834,11 +1407,19 @@ function extractFields(pages, block) {
   }
 
   for (const def of CHECKBOX_FIELDS) {
-    result[def.key] = tryEachPage((page) => extractCheckboxField(page.ocrWords, def));
+    result[def.key] = tryEachPage((page) => {
+      const range = def.sectionKey ? findSectionRange(page.ocrWords, perPageSections.get(page.pageIndex), def.sectionKey) : null;
+      if (def.sectionKey && !range) return { value: '', confidence: null, found: false };
+      return extractCheckboxField(page.ocrWords, def, range?.start, range?.end);
+    });
   }
 
   for (const def of INLINE_CHOICE_FIELDS) {
-    result[def.key] = tryEachPage((page) => extractInlineChoiceField(page.ocrWords, def, page.width));
+    result[def.key] = tryEachPage((page) => {
+      const range = def.sectionKey ? findSectionRange(page.ocrWords, perPageSections.get(page.pageIndex), def.sectionKey) : null;
+      if (def.sectionKey && !range) return { value: '', confidence: null, found: false };
+      return extractInlineChoiceField(page.ocrWords, def, page.width, range?.start, range?.end);
+    });
   }
 
   for (const def of MULTI_CHECKBOX_FIELDS) {
@@ -858,7 +1439,15 @@ function extractFields(pages, block) {
   }
 
   for (const def of RZGOW_SIMPLE_FIELDS) {
-    result[def.key] = tryEachPage((page) => extractSimpleField(page.ocrWords, def, page.width));
+    result[def.key] = tryEachPage((page) => extractSimpleField(page.ocrWords, def, page.width, 0, undefined, perPageLabelPositions.get(page.pageIndex)));
+  }
+
+  for (const def of MULTI_MATERIAL_FIELDS) {
+    result[def.key] = tryEachPage((page) => {
+      const range = def.sectionKey ? findSectionRange(page.ocrWords, perPageSections.get(page.pageIndex), def.sectionKey) : null;
+      if (def.sectionKey && !range) return { value: '', confidence: null, found: false };
+      return extractMultiMaterialField(page.ocrWords, def, range?.start, range?.end);
+    });
   }
 
   return result;

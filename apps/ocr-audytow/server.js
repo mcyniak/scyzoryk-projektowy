@@ -7,6 +7,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { Jimp } = require('jimp');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
 const { analyzeDocument, finalizeSplit, buildFieldPreview } = require('./src/ocrPipeline');
 const { isConfigured: isVisionConfigured } = require('./src/visionEngine');
@@ -288,6 +289,21 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
         const previewDir = path.join(fileEntry.workDir, 'fields');
         await fsp.mkdir(previewDir, { recursive: true });
 
+        // Kazda strona bywa uzywana przez dziesiatki pol (wiele
+        // brakujacych/niepewnych pol trafia na te sama strone formularza) -
+        // dekodowanie tego samego duzego JPEG-a od zera dla kazdego z nich
+        // bylo najdrozsza czescia calego generowania podgladow (Jimp jest
+        // czystym JS, bez natywnego kodu) - dekodujemy raz per strona i
+        // podajemy juz-zdekodowany obraz do buildFieldPreview (patrz
+        // sourceImage w ocrPipeline.js), zamiast raz na kazde pole.
+        const pageImageCache = new Map();
+        async function loadPageImage(imagePath) {
+          if (!pageImageCache.has(imagePath)) {
+            pageImageCache.set(imagePath, await Jimp.read(imagePath));
+          }
+          return pageImageCache.get(imagePath);
+        }
+
         const resolvedBlocks = [];
         for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
           const block = blocks[blockIndex];
@@ -300,13 +316,24 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
             const page = fileEntry.pages.find((p) => p.pageIndex === field.pageIndex);
             if (!page?.imagePath) continue;
             const previewFile = `block${blockIndex}-${key}.jpg`;
-            await buildFieldPreview({
+            const sourceImage = await loadPageImage(page.imagePath);
+            const builtPath = await buildFieldPreview({
               pageImagePath: page.imagePath,
               labelBBox: field.labelBBox,
               valueBBox: field.valueBBox,
-              outPath: path.join(previewDir, previewFile)
+              outPath: path.join(previewDir, previewFile),
+              sourceImage
             });
-            field.previewUrl = `/api/analysis/${analysisId}/files/${fileEntry.fileId}/field-preview/${encodeURIComponent(previewFile)}`;
+            // buildFieldPreview zwraca null, jesli nie udalo sie wygenerowac
+            // podgladu (patrz jej wlasny komentarz) - poprzednio previewUrl
+            // bylo ustawiane BEZWARUNKOWO, wiec przeglądarka probowala
+            // wczytac obrazek, ktory nigdy nie zostal zapisany na dysk =
+            // zepsuta ikonka zamiast czytelnego komunikatu "nie udalo sie
+            // zlokalizowac" (realny bug zgloszony przez wlasciciela
+            // 2026-07-22 - "większość tych podglądów było popsute").
+            if (builtPath) {
+              field.previewUrl = `/api/analysis/${analysisId}/files/${fileEntry.fileId}/field-preview/${encodeURIComponent(previewFile)}`;
+            }
           }
 
           resolvedBlocks.push({ ...block, blockIndex, fields });

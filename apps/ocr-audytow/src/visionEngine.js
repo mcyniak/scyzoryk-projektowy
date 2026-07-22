@@ -87,10 +87,23 @@ async function ocrImage(imagePath) {
         for (const word of para.words || []) {
           const text = (word.symbols || []).map((s) => s.text).join('');
           if (!text) continue;
+          // Rzadki przypadek zaobserwowany na realnym pliku 2026-07-22:
+          // Vision czasem zwraca slowo BEZ boundingBox w ogole (pusta tablica
+          // vertices) - takie slowo jest bezuzyteczne dla dopasowania
+          // przestrzennego (etykieta/wartosc na podstawie polozenia) i co
+          // gorsza, Math.min()/Math.max() na pustej liscie w bbox()
+          // (fieldExtraction.js) dawaly Infinity/-Infinity zamiast bledu -
+          // taki "zepsuty" bbox przechodzil niezauwazony przez kolejne
+          // klamry Math.min/max (Infinity to prawidlowa liczba dla nich) az
+          // do rysowania podgladu pola, gdzie zawieszal caly request.
+          // Pomijamy takie slowo calkowicie - i tak nie da sie go geometrycznie
+          // dopasowac do niczego.
+          const vertices = word.boundingBox?.vertices || [];
+          if (vertices.length < 4) continue;
           words.push({
             text,
             confidence: typeof word.confidence === 'number' ? word.confidence : null,
-            vertices: (word.boundingBox?.vertices || []).map((v) => ({ x: v.x || 0, y: v.y || 0 }))
+            vertices: vertices.map((v) => ({ x: v.x || 0, y: v.y || 0 }))
           });
         }
       }

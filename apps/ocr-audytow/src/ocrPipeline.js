@@ -48,9 +48,22 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
+// Realny blad zlapany 2026-07-22 na przegladzie kilkunastu audytow: jeden
+// nietypowy/uszkodzony osadzony obraz na jednej stronie ("Bad image data" z
+// Vision) wywalal CALE `analyzeDocument` (Promise.all w
+// mapWithConcurrency propaguje pierwszy blad, przerywajac wszystkie inne
+// strony/adresy w tym samym dokumencie) - jedna zla strona nie powinna
+// uniemozliwiac przetworzenia calego pliku. Zamiast przerywac, strona z
+// nieudanym OCR-em jest traktowana jak strona bez osadzonego obrazu wcale -
+// kopiowana bez OCR, z ostrzezeniem dla uzytkownika (patrz warnings w
+// analyzeDocument), reszta dokumentu przetwarza sie normalnie dalej.
 async function ocrPage(page) {
-  const { text, words } = await ocrImage(page.imagePath);
-  return { ...page, ocrText: text, ocrWords: words };
+  try {
+    const { text, words } = await ocrImage(page.imagePath);
+    return { ...page, ocrText: text, ocrWords: words };
+  } catch (err) {
+    return { ...page, ocrText: '', ocrWords: [], ocrError: err.message || 'Rozpoznawanie tekstu nie powiodlo sie' };
+  }
 }
 
 // Sklada plik wyjsciowy z zakresu stron [range.startPage..range.endPage]
@@ -96,11 +109,18 @@ async function buildThumbnails(pages, thumbDir, { maxWidth = 220, quality = 65 }
   const thumbs = [];
   for (const p of pages) {
     if (!p.imagePath) { thumbs.push({ pageIndex: p.pageIndex, available: false }); continue; }
-    const image = await Jimp.read(p.imagePath);
-    if (image.bitmap.width > maxWidth) image.resize({ w: maxWidth });
-    const fileName = `page-${String(p.pageIndex + 1).padStart(3, '0')}.jpg`;
-    await image.write(path.join(thumbDir, fileName), { quality });
-    thumbs.push({ pageIndex: p.pageIndex, available: true, file: fileName });
+    // Ten sam fizycznie uszkodzony obraz, ktory wywala embedowanie do PDF-a
+    // (patrz buildOcrPdf), wywala tez Jimp tutaj - traktujemy identycznie:
+    // brak miniatury dla tej JEDNEJ strony, reszta dokumentu dalej.
+    try {
+      const image = await Jimp.read(p.imagePath);
+      if (image.bitmap.width > maxWidth) image.resize({ w: maxWidth });
+      const fileName = `page-${String(p.pageIndex + 1).padStart(3, '0')}.jpg`;
+      await image.write(path.join(thumbDir, fileName), { quality });
+      thumbs.push({ pageIndex: p.pageIndex, available: true, file: fileName });
+    } catch (_) {
+      thumbs.push({ pageIndex: p.pageIndex, available: false });
+    }
   }
   return thumbs;
 }
@@ -110,7 +130,18 @@ function trySetPixel(image, x, y, colorHex) {
   image.setPixelColor(colorHex, x, y);
 }
 
+// x0/y0/x1/y1 juz powinny byc skonczonymi liczbami wewnatrz granic obrazu
+// (patrz isValidBBox w buildFieldPreview) - dodatkowy limit ponizej jest
+// tylko druga linia obrony na wypadek gdyby jakis przyszly wywolujacy nie
+// przefiltrowal wejscia: bez tego zepsuty/astronomiczny zakres (np. NaN
+// przechodzacy przez Math.min/max niezauwazenie jako Infinity) zawiesza caly
+// request w praktycznie nieskonczonej petli po pikselach - kazda iteracja
+// tania, wiec proces wyglada na "zawieszony przy zerowym zuzyciu CPU", nie
+// na crash - realny bug zlapany 2026-07-21.
 function drawRectOutline(image, x0, y0, x1, y1, colorHex, thickness = 4) {
+  const MAX_SPAN = 8000;
+  if (![x0, y0, x1, y1].every(Number.isFinite)) return;
+  if (x1 - x0 > MAX_SPAN || y1 - y0 > MAX_SPAN) return;
   for (let t = 0; t < thickness; t++) {
     for (let x = x0; x <= x1; x++) { trySetPixel(image, x, y0 + t, colorHex); trySetPixel(image, x, y1 - t, colorHex); }
     for (let y = y0; y <= y1; y++) { trySetPixel(image, x0 + t, y, colorHex); trySetPixel(image, x1 - t, y, colorHex); }
@@ -125,18 +156,45 @@ function drawRectOutline(image, x0, y0, x1, y1, colorHex, thickness = 4) {
 // (etykieta tez nie zostala znaleziona - rzadki przypadek, np. caly wiersz
 // formularza zgubiony przez OCR) - wywolujacy pokazuje wtedy miniature calej
 // strony bez zaznaczenia zamiast tego podgladu.
-async function buildFieldPreview({ pageImagePath, labelBBox, valueBBox, outPath, maxWidth = 1100 }) {
-  const refBBox = labelBBox && valueBBox
+// Zabezpieczenie przed zepsutym bboxem (np. slowo z Vision o pustej/
+// niekompletnej tablicy `vertices` - Math.min()/Math.max() na pustej liscie
+// daja Infinity/-Infinity, nie 0) - realny bug zlapany 2026-07-21: taki bbox
+// przechodzil przez wszystkie dotychczasowe Math.min/Math.max klamry bez
+// wyjatku (Infinity/-Infinity to prawidlowe liczby dla tych funkcji), po
+// czym drawRectOutline dostawal wspolrzedne prostokata siegajace Infinity -
+// caly request wisial (utkniety w praktycznie nieskonczonej petli rysowania
+// pikseli), zero CPU-friendly bo kazda pojedyncza iteracja byla tania, ale
+// bylo ich astronomicznie duzo. Walidacja tutaj (nie w fieldExtraction.js)
+// bo to jest jedyne miejsce, gdzie zepsuty bbox faktycznie powoduje szkode -
+// gdziekolwiek indziej po prostu przechodzi jako wartosc liczbowa.
+function isValidBBox(b) {
+  return !!b && Number.isFinite(b.minX) && Number.isFinite(b.minY) && Number.isFinite(b.maxX) && Number.isFinite(b.maxY);
+}
+
+// sourceImage (opcjonalny): juz-zdekodowany obraz strony (Jimp) do
+// sklonowania, zamiast czytac+dekodowac plik JPEG od nowa - wywolujacy
+// (server.js) trzyma jedna zdekodowana kopie per strona i podaje ja tutaj
+// dla KAZDEGO pola z tej strony, bo dekodowanie duzego JPEG-a (Jimp, czysty
+// JS, bez natywnego kodu) jest najdrozsza czescia tej funkcji, a wiele pol
+// czesto patrzy na te sama strone (2026-07-22, przyspieszenie na prosbe
+// wlasciciela - poprzednio kazde pole samo od zera Jimp.read() tej samej
+// strony, przy 4 adresach x ~20 pol to bylo dziesiatki powtorzonych
+// dekodowan tego samego pliku). `.clone()` bo `image.crop()` mutuje w
+// miejscu - nie mozna reuzywac tej samej instancji miedzy polami.
+async function buildFieldPreview({ pageImagePath, labelBBox, valueBBox, outPath, maxWidth = 1100, sourceImage = null }) {
+  const safeLabelBBox = isValidBBox(labelBBox) ? labelBBox : null;
+  const safeValueBBox = isValidBBox(valueBBox) ? valueBBox : null;
+  const refBBox = safeLabelBBox && safeValueBBox
     ? {
-        minX: Math.min(labelBBox.minX, valueBBox.minX),
-        minY: Math.min(labelBBox.minY, valueBBox.minY),
-        maxX: Math.max(labelBBox.maxX, valueBBox.maxX),
-        maxY: Math.max(labelBBox.maxY, valueBBox.maxY)
+        minX: Math.min(safeLabelBBox.minX, safeValueBBox.minX),
+        minY: Math.min(safeLabelBBox.minY, safeValueBBox.minY),
+        maxX: Math.max(safeLabelBBox.maxX, safeValueBBox.maxX),
+        maxY: Math.max(safeLabelBBox.maxY, safeValueBBox.maxY)
       }
-    : (labelBBox || valueBBox);
+    : (safeLabelBBox || safeValueBBox);
   if (!refBBox) return null;
 
-  const image = await Jimp.read(pageImagePath);
+  const image = sourceImage ? sourceImage.clone() : await Jimp.read(pageImagePath);
   const width = image.bitmap.width;
   const height = image.bitmap.height;
   // Asymetrycznie w prawo - wartosc na tych formularzach ZAWSZE lezy na
@@ -159,11 +217,11 @@ async function buildFieldPreview({ pageImagePath, labelBBox, valueBBox, outPath,
   const cropH = Math.max(1, cropBottom - cropY);
   image.crop({ x: cropX, y: cropY, w: cropW, h: cropH });
 
-  if (valueBBox) {
-    const rx0 = Math.max(0, Math.round(valueBBox.minX - cropX) - 8);
-    const ry0 = Math.max(0, Math.round(valueBBox.minY - cropY) - 8);
-    const rx1 = Math.min(cropW - 1, Math.round(valueBBox.maxX - cropX) + 8);
-    const ry1 = Math.min(cropH - 1, Math.round(valueBBox.maxY - cropY) + 8);
+  if (safeValueBBox) {
+    const rx0 = Math.max(0, Math.round(safeValueBBox.minX - cropX) - 8);
+    const ry0 = Math.max(0, Math.round(safeValueBBox.minY - cropY) - 8);
+    const rx1 = Math.min(cropW - 1, Math.round(safeValueBBox.maxX - cropX) + 8);
+    const ry1 = Math.min(cropH - 1, Math.round(safeValueBBox.maxY - cropY) + 8);
     drawRectOutline(image, rx0, ry0, rx1, ry1, 0xff2222ff);
   }
 
@@ -198,14 +256,30 @@ async function buildOcrPdf({ pages, outPath }) {
   let lowConfCount = 0;
 
   for (const page of pages) {
-    const imageBytes = await fs.readFile(page.imagePath);
-    const ext = path.extname(page.imagePath).toLowerCase();
-    const embeddedImage = ext === '.png' ? await pdfDoc.embedPng(imageBytes) : await pdfDoc.embedJpg(imageBytes);
     const dpi = page.dpi || 300;
     const scale = 72 / dpi;
     const pageWidthPt = page.width * scale;
     const pageHeightPt = page.height * scale;
     const pdfPage = pdfDoc.addPage([pageWidthPt, pageHeightPt]);
+
+    // Realny blad zlapany 2026-07-22: jeden PLIK mial fizycznie uszkodzone
+    // dane osadzonego obrazu na jednej stronie ("SOI not found in JPEG" -
+    // brakuje nawet naglowka JPEG, nie da sie tego wczytac) - bez tego
+    // try/catch caly wielostronicowy dokument wywalal sie na tej JEDNEJ
+    // stronie. Rozmiar strony jest juz znany niezaleznie od tego, czy dane
+    // obrazu sa uzywalne (page.width/height pochodza z wczesniejszego kroku
+    // ekstrakcji, patrz pdfImageExtractor.js), wiec strona zawsze powstaje
+    // w prawidlowym rozmiarze - jesli obrazu nie da sie osadzic, zostaje po
+    // prostu biala (bez tresci OCR, bo i tak nie ma tla do podpisania), a
+    // reszta dokumentu przetwarza sie normalnie dalej.
+    let embeddedImage = null;
+    try {
+      const imageBytes = await fs.readFile(page.imagePath);
+      const ext = path.extname(page.imagePath).toLowerCase();
+      embeddedImage = ext === '.png' ? await pdfDoc.embedPng(imageBytes) : await pdfDoc.embedJpg(imageBytes);
+    } catch (_) {
+      continue; // strona zostaje biala, bez warstwy tekstu - nic wiecej nie da sie z niej zrobic
+    }
     pdfPage.drawImage(embeddedImage, { x: 0, y: 0, width: pageWidthPt, height: pageHeightPt });
 
     for (const word of page.ocrWords || []) {
@@ -287,11 +361,17 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
   // Rozpoznawanie tekstu KAZDEJ strony z obrazem, rownolegle (patrz
   // mapWithConcurrency) - jedno zadanie do Vision na strone, wynik zawiera
   // juz cala tresc + wspolrzedne slow potrzebne pozniej do wykrywania obrotu
-  // i budowy warstwy tekstowej PDF-a.
+  // i budowy warstwy tekstowej PDF-a. Limit 15 (nie 5) - to czysto sieciowe
+  // wywolania do Google Cloud Vision, nasz proces czeka na odpowiedz, nie
+  // liczy nic same - podniesienie limitu nie obciaza naszego CPU, tylko
+  // krocej czekamy (2026-07-22, na prosbe wlasciciela o przyspieszenie).
   const imagedExtracted = extractedPages.filter((p) => p.imagePath);
-  const ocrResults = await mapWithConcurrency(imagedExtracted, 5, ocrPage);
+  const ocrResults = await mapWithConcurrency(imagedExtracted, 15, ocrPage);
   const ocrByIndex = new Map(ocrResults.map((p) => [p.pageIndex, p]));
   let pages = extractedPages.map((p) => ocrByIndex.get(p.pageIndex) || p);
+  for (const p of pages) {
+    if (p.ocrError) warnings.push(`Strona ${p.pageIndex + 1}: rozpoznawanie tekstu nie powiodlo sie (${p.ocrError}) - strona skopiowana bez OCR.`);
+  }
 
   // Wykrywanie fizycznego obrotu KAZDEJ strony z obrazem na podstawie
   // geometrii slow zwroconych przez Vision (patrz rotationDetect.js) - bez
