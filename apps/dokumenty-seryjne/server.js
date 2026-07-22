@@ -14,6 +14,7 @@ const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
 const investmentScan = require('./src/investmentScan');
 const ozcMatch = require('./src/ozcMatch');
+const { detectMailMergeSheetBinding } = require('./src/mailMergeSheetBinding');
 
 
 function assertArchiverAvailable() {
@@ -910,7 +911,14 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     }
 
     const sheetNames = (await loadExcelWorkbook(excel.path)).worksheets.map(sheet => sheet.name);
-    const defaultSheet = pickDefaultSheet(sheetNames, templateInfos[0].originalName);
+    // Niektore szablony (np. Slesin) maja na stale podpiety przez Word
+    // "Wybierz odbiorcow" konkretny arkusz Excela - to jest pewna informacja,
+    // wiec ma pierwszenstwo przed zgadywaniem mocy z nazwy pliku.
+    const boundSheet = detectMailMergeSheetBinding(templateInfos[0].path);
+    const boundSheetName = boundSheet
+      ? sheetNames.find(name => String(name).toLowerCase() === String(boundSheet.sheetName).toLowerCase())
+      : null;
+    const defaultSheet = boundSheetName || pickDefaultSheet(sheetNames, templateInfos[0].originalName);
     const workbook = await parseWorkbook(excel.path, defaultSheet);
     const jobId = crypto.randomUUID();
     const outDir = path.join(OUTPUT_DIR, jobId);
@@ -950,7 +958,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       templateGroups: templateGroups.map(g => ({ name: g.name, hasVariants: g.hasVariants, variants: Object.keys(g.variants) })),
       ambiguousTemplates,
       ozcFoldersFound: ozcFolders.length,
-      detectedTemplatePower: detectPowerFromText(templateInfos[0].originalName)
+      detectedTemplatePower: boundSheetName || detectPowerFromText(templateInfos[0].originalName)
     });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Nie udało się wczytać plików.' });
