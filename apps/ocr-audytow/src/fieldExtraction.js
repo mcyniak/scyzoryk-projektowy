@@ -179,7 +179,7 @@ function collectValueWordsAtTolerance(words, labelEndIdx, labelBBox, pageWidth, 
     // to jest zawsze smiec dolaczony do liczby, nigdy sama wartosc (realny
     // przypadek zlapany 2026-07-22: "40°" -> "40 ¨ 0" - pomijamy, nie
     // zaliczamy do wartosci).
-    if (/^[¨´`'"′″]+$/.test(c.word.text)) { prevMaxX = c.b.maxX; continue; }
+    if (/^[¨´`'"′″#^]+$/.test(c.word.text)) { prevMaxX = c.b.maxX; continue; }
     collected.push(c.word);
     prevMaxX = c.b.maxX;
   }
@@ -187,8 +187,8 @@ function collectValueWordsAtTolerance(words, labelEndIdx, labelBBox, pageWidth, 
 }
 
 // Znajduje WSZYSTKIE wystapienia WSZYSTKICH znanych etykiet na stronie
-// (SIMPLE_FIELDS + SECTION_SUBFIELDS + UNTRACKED_LABEL_PATTERNS - patrz
-// ALL_LABEL_PATTERNS) - nie tylko tej jednej, ktorej aktualnie szukamy.
+// (SIMPLE_FIELDS + SECTION_SUBFIELDS - patrz ALL_LABEL_PATTERNS) - nie tylko
+// tej jednej, ktorej aktualnie szukamy.
 // Podstawa "strefowego" wyszukiwania wartosci (patrz
 // collectValueWordsInZone) - pomysl wlasciciela 2026-07-22: zamiast zgadywac
 // stala tolerancje wokol WLASNEJ etykiety pola, wyznaczamy PRAWDZIWA granice
@@ -198,7 +198,21 @@ function collectValueWordsAtTolerance(words, labelEndIdx, labelBBox, pageWidth, 
 // bez osobnego rejestru/wyrownywania skanu do referencyjnego wzoru.
 function findAllKnownLabelPositions(words) {
   const positions = [];
-  for (const patterns of ALL_LABEL_PATTERNS) {
+  // Oprocz ALL_LABEL_PATTERNS (etykiety pol) dolaczamy tez wzorce OPCJI
+  // checkboxowych (CHECKBOX_FIELDS) - same opcje ("10 kW", "25 kW" itd.) nie
+  // sa "etykietami pol" (nie maja wlasnej wartosci do zebrania), ale ich
+  // POZYCJA na stronie musi ograniczac strefe INNYCH pol - inaczej strefowe
+  // wyszukiwanie (patrz collectValueWordsInZone) rozciaga sie az do
+  // najblizszego wiersza checkboxow i zbiera go jako smiec. Realny przypadek
+  // zlapany 2026-07-22 (formularz Kotly): "Liczba osob mieszkajacych w
+  // budynku:" zbieralo "30 kW" z zupelnie innego pytania ("1. Moc kotla"),
+  // bo zaden ZNANY LABEL nie ograniczal strefy od dolu w tej samej kolumnie.
+  // Dodane TYLKO tutaj (nie do ALL_LABEL_PATTERNS uzywanego jako stop-slowo
+  // przy iteracji) - celowo minimalny, izolowany zasieg zmiany, zeby nie
+  // ryzykowac regresji w juz sprawdzonym mechanizmie stop-slow dla rodziny
+  // Pompy ciepla.
+  const patternSources = [...ALL_LABEL_PATTERNS, ...CHECKBOX_FIELDS.flatMap((f) => f.options.map((o) => o.patterns))];
+  for (const patterns of patternSources) {
     let from = 0;
     while (from < words.length) {
       const label = findLabel(words, patterns, from);
@@ -254,7 +268,7 @@ function collectValueWordsInZone(words, labelBBox, allLabelPositions, allLabelPa
     if (allLabelPatterns.length && startsAnyLabel(words, c.idx, allLabelPatterns)) break;
     if (CHECKBOX_UNCHECKED.test(c.word.text)) continue;
     if (/^[.\-_:()]+$/.test(c.word.text) || /^\d{1,2}\.$/.test(c.word.text)) continue;
-    if (/^[¨´`'"′″]+$/.test(c.word.text)) continue;
+    if (/^[¨´`'"′″#^]+$/.test(c.word.text)) continue;
     collected.push(c.word);
   }
   return collected;
@@ -323,10 +337,57 @@ function wordConfidence(words) {
 // Taki przypadek jest zwracany jako `ambiguous:true` - wywolujacy powinien
 // to zawsze traktowac jako niepewne (do recznego przegladu), nigdy jako
 // zaufana wartosc.
+// Fallback dla dokumentow o SILNIE przemieszanej kolejnosci slow w tablicy
+// Vision (zaobserwowane 2026-07-22 na formularzu "PROTOKÓŁ UZGODNIEŃ
+// PROJEKTOWYCH" - kotly/solary, woj. lodzkie) - tam odrecznie wpisane
+// odpowiedzi INNYCH pol fizycznie wciskaja sie miedzy checkbox a jego
+// wlasna etykiete w tablicy Vision, np. "☐ 20 kW STRIPS 12/24 Wymiary : 25
+// KW 30 kW" - prawdziwy zaznaczony glif dla "25" jest o kilkanascie pozycji
+// dalej niz words[firstIdx-1] (zwykly, tablicowy sasiad), wiec standardowe
+// sprawdzenie array-adjacency nigdy go nie znajduje. Szukamy zamiast tego
+// NAJBLIZSZEGO GEOMETRYCZNIE glifu checkboxa (ta sama linia, na lewo od
+// etykiety) - to dziala niezaleznie od pozycji w tablicy, bo bazuje na
+// realnych wspolrzednych ze skanu. Uzywane TYLKO jako fallback, gdy
+// bezposredni sasiad w tablicy nie jest ANI zaznaczonym ANI niezaznaczonym
+// checkboxem (a wiec array-adjacency nie daje zadnej odpowiedzi) - nie
+// nadpisuje przypadkow, gdzie array-adjacency juz poprawnie dziala (rodzina
+// Pompy ciepla), minimalizujac ryzyko regresji.
+function findNearbyCheckboxGeometric(words, targetIdx) {
+  const targetBox = bbox(words[targetIdx]);
+  const targetHeight = targetBox.maxY - targetBox.minY || 20;
+  let best = null;
+  let bestDist = Infinity;
+  for (let i = 0; i < words.length; i++) {
+    if (i === targetIdx) continue;
+    const text = words[i].text;
+    const checked = CHECKBOX_CHECKED.test(text);
+    const unchecked = CHECKBOX_UNCHECKED.test(text);
+    if (!checked && !unchecked) continue;
+    const b = bbox(words[i]);
+    const sameLine = Math.abs((b.minY + b.maxY) / 2 - (targetBox.minY + targetBox.maxY) / 2) < targetHeight * 0.5;
+    if (!sameLine) continue;
+    if (b.minX > targetBox.minX) continue; // checkbox zawsze na lewo od wlasnej etykiety
+    const dist = targetBox.minX - b.maxX;
+    // Promien celowo ciasny (kilka szerokosci wlasnego slowa) - szerszy
+    // promien (probowany pierwotnie, targetHeight*15) lapal checkboxy z
+    // INNYCH, nie powiazanych wierszy/pytan gdzie wlasciwy glif byl po
+    // prostu nieobecny w OCR, dajac falszywe (pewne siebie) trafienia
+    // zamiast poprawnego "nic w poblizu" - zlapane na realnym pliku Solary
+    // 2026-07-22 (falszywie "zaznaczone" 3/300 obok naprawde zaznaczonego
+    // 2/250).
+    if (dist < 0 || dist > targetHeight * 4) continue;
+    if (dist < bestDist) { bestDist = dist; best = checked; }
+  }
+  return best; // true (zaznaczony) / false (niezaznaczony) / null (nic w poblizu)
+}
+
 function findCheckedOption(words, options, rangeStart = 0, rangeEnd) {
   const end = rangeEnd ?? words.length;
   let anyOptionTextFound = false;
   const checkedMatches = [];
+  // Sledzi status KAZDEJ znalezionej opcji (nie tylko zaznaczonych) - patrz
+  // "wnioskowanie przez eliminacje" ponizej.
+  const seenOptions = [];
   for (const option of options) {
     let searchFrom = rangeStart;
     while (searchFrom < end) {
@@ -335,7 +396,18 @@ function findCheckedOption(words, options, rangeStart = 0, rangeEnd) {
       anyOptionTextFound = true;
       const firstIdx = label.indices[0];
       const candidates = [words[firstIdx].text, firstIdx > 0 ? words[firstIdx - 1].text : ''];
-      if (candidates.some((t) => CHECKBOX_CHECKED.test(t))) {
+      let status = candidates.some((t) => CHECKBOX_CHECKED.test(t)) ? 'checked'
+        : candidates.some((t) => CHECKBOX_UNCHECKED.test(t)) ? 'unchecked'
+        : null;
+      if (status === null) {
+        // Ani zaznaczony ani niezaznaczony glif w bezposrednim sasiedztwie
+        // tablicowym - realny znacznik jest gdzies indziej w silnie
+        // przemieszanej tablicy, sprobuj geometrycznie.
+        const geo = findNearbyCheckboxGeometric(words, firstIdx);
+        status = geo === true ? 'checked' : geo === false ? 'unchecked' : 'unknown';
+      }
+      seenOptions.push({ option, status, words: label.indices.map((idx) => words[idx]) });
+      if (status === 'checked') {
         checkedMatches.push({ option, words: label.indices.map((idx) => words[idx]) });
         break; // ta opcja juz znaleziona zaznaczona - nie szukaj JEJ kolejnych wystapien
       }
@@ -350,6 +422,22 @@ function findCheckedOption(words, options, rangeStart = 0, rangeEnd) {
       conflictLabels: checkedMatches.map((m) => m.option.label),
       words: checkedMatches.flatMap((m) => m.words)
     };
+  }
+  // Wnioskowanie przez eliminacje - zaobserwowane 2026-07-22 na realnym
+  // formularzu Solary: dla kilku pytan Vision NIE wykrywa checkboxa
+  // PRZY zaznaczonej opcji w ogole (prawdopodobnie odreczny "check"
+  // rysowany przez/na obrysie kwadratu jest trudniejszy do wysegmentowania
+  // niz czysty pusty kwadrat "☐"), a jednoczesnie POPRAWNIE wykrywa
+  // niezaznaczone kwadraty przy WSZYSTKICH pozostalych opcjach. Jesli
+  // dokladnie JEDNA opcja wypadla jako 'unknown' (brak jakiegokolwiek
+  // glifu w poblizu) a WSZYSTKIE INNE znalezione opcje sa jednoznacznie
+  // 'unchecked', ta jedna to niemal na pewno prawdziwa odpowiedz - ale
+  // pewnosc jest capowana nizej (patrz wywolujacy: extractCheckboxField),
+  // bo to wnioskowanie, nie bezposrednia obserwacja.
+  const unknownOnes = seenOptions.filter((s) => s.status === 'unknown');
+  const uncheckedOnes = seenOptions.filter((s) => s.status === 'unchecked');
+  if (unknownOnes.length === 1 && uncheckedOnes.length === seenOptions.length - 1 && seenOptions.length > 1) {
+    return { option: unknownOnes[0].option, words: unknownOnes[0].words, inferredByElimination: true };
   }
   return anyOptionTextFound ? { option: null } : null;
 }
@@ -461,6 +549,22 @@ const SECTION_HEADERS = [
   { key: 'klinkier', patterns: [/KLINKIEREM/] },
   { key: 'lokalizacjaIzolacjiSection', patterns: [/LOKALIZACJA/, /IZOLACJI/] },
   { key: 'scianaWielowarstwowaSection', patterns: [/[SŚ]CIANA/, /WIELOWARSTWOWA/] },
+  // Strona "OBRYS BUDYNKU, SZKICE ELEWACJI I KOTŁOWNI" - do 2026-07-22
+  // uwazana za czysty rysunek techniczny i celowo pomijana (patrz ETAP6),
+  // ale zawiera realne, drukowane pola do wypelnienia (ksztalt budynku +
+  // powierzchnia okien kazdej elewacji), potrzebne do OZC (wlasciciel
+  // przeslal zaznaczone zdjecia formularza 2026-07-22). Dwie odrebne,
+  // scisle (^...$) dopasowane sekcje - "Regularny"/"Nieregularny" - zeby
+  // "Dlugosc:"/"Szerokosc:" (Regularny) nigdy nie pomylily sie z "Dlugosc
+  // scian od strony..." (Nieregularny), ktore stoi fizycznie obok w
+  // sasiedniej kolumnie tego samego wiersza.
+  { key: 'ksztaltRegularnySection', patterns: [/^REGULARNY$/] },
+  { key: 'ksztaltNieregularnySection', patterns: [/^NIEREGULARNY$/] },
+  // Sekcje formularza "PROTOKÓŁ UZGODNIEŃ PROJEKTOWYCH" (kotly/solary) -
+  // patrz komentarz przy nowych CHECKBOX_FIELDS ponizej.
+  { key: 'kotlyZasobnikSection', patterns: [/ISTNIEJ[AĄ]CY/, /ZASOBNIK/] },
+  { key: 'solaryZasobnikSection', patterns: [/PLANOWANE/, /MIEJSCE/, /MONTA[ZŻ]U/, /ZASOBNIKA/] },
+  { key: 'solaryZestawSection', patterns: [/RODZAJ/, /ZESTAWU/] },
   { key: 'koniec', patterns: [/JAKO/, /OSOBA/, /UPOWA[ZŻ]NIONA/] }
 ];
 
@@ -503,7 +607,13 @@ const SIMPLE_FIELDS = [
   { key: 'email', columnLabel: 'E-mail', labelPatterns: [/E-?MAIL/] },
   { key: 'dataProtokolu', columnLabel: 'Data sporządzenia protokołu', labelPatterns: [/SPORZ/, /DNIA/], valueKind: 'numeric' },
   { key: 'rokBudowy', columnLabel: 'Rok budowy budynku', labelPatterns: [/ROK/, /BUDOWY/, /BUDYNKU/], valueKind: 'numeric' },
-  { key: 'liczbaOsob', columnLabel: 'Liczba osób w gospodarstwie', labelPatterns: [/LICZBA/, /OS[OÓ]B/, /GOSPODARSTWIE/], valueKind: 'numeric' },
+  // Rozszerzone 2026-07-22 o wariant "Liczba osób mieszkających w budynku"
+  // (rodzina formularzy Kotly/Solary, woj. lodzkie) obok istniejacego
+  // "Liczba osob w gospodarstwie" (rodzina Pompy ciepla) - bezpieczne, bo
+  // KAZDY realny dokument ma TYLKO JEDNO z tych dwoch slow w tej pozycji
+  // (w odroznieniu od buga imieNazwisko z tej sesji, gdzie oba slowa
+  // wystepowaly RAZEM w jednej etykiecie i trzeba bylo wymagac obu).
+  { key: 'liczbaOsob', columnLabel: 'Liczba osób w gospodarstwie', labelPatterns: [/LICZBA/, /OS[OÓ]B/, /GOSPODARSTWIE|BUDYNKU/], valueKind: 'numeric' },
   { key: 'powierzchnia', columnLabel: 'Powierzchnia ogrzewana', labelPatterns: [/POWIERZCHNIA/, /OGRZEWAN/, /BUDYNKU/], valueKind: 'numeric' },
   { key: 'iloscKondygnacji', columnLabel: 'Ilość kondygnacji', labelPatterns: [/ILO[SŚ][CĆ]/, /KONDYGNACJI/], valueKind: 'numeric' },
   // checkboxGated:true - te pola sa "przyklejone" do WLASNEGO checkboxa
@@ -538,7 +648,36 @@ const SIMPLE_FIELDS = [
   { key: 'udzialPlaszczyznowy', columnLabel: 'Udział ogrzewania płaszczyznowego (%)', labelPatterns: [/UDZIA[LŁ]/, /OGRZEWANIA/, /P[LŁ]ASZCZYZNOWEGO/], valueKind: 'numeric' },
   { key: 'temperaturaPomieszczenia', columnLabel: 'Żądana temperatura w pomieszczeniach', labelPatterns: [/[ZŻ][AĄ]DANA/, /TEMPERATURA/, /W/, /POMIESZCZENIACH/], valueKind: 'numeric' },
   { key: 'temperaturaCwu', columnLabel: 'Żądana temperatura c.w.u.', labelPatterns: [/[ZŻ][AĄ]DANA/, /TEMPERATURA/, /C\.?W\.?U/], valueKind: 'numeric' },
-  { key: 'powierzchniaDzialki', columnLabel: 'Powierzchnia działki (dolne źródło)', labelPatterns: [/POWIERZCHNIA/, /DZIA[LŁ]KI/], valueKind: 'numeric' }
+  { key: 'powierzchniaDzialki', columnLabel: 'Powierzchnia działki (dolne źródło)', labelPatterns: [/POWIERZCHNIA/, /DZIA[LŁ]KI/], valueKind: 'numeric' },
+  // Strona "OBRYS BUDYNKU..." (patrz komentarz przy SECTION_HEADERS) -
+  // powierzchnia okien kazdej z 4 elewacji, potrzebne do OZC. Kazda
+  // etykieta jest jednoznaczna (litera+kierunek), wiec bez sectionKey.
+  { key: 'elewacjaAPowierzchniaOkien', columnLabel: 'Elewacja A (Północna) - powierzchnia okien', labelPatterns: [/ELEWACJA/, /^A$/, /P[OÓ][LŁ]NOCNA/, /POWIERZCHNIA/, /OKIEN/], valueKind: 'numeric' },
+  { key: 'elewacjaBPowierzchniaOkien', columnLabel: 'Elewacja B (Wschodnia) - powierzchnia okien', labelPatterns: [/ELEWACJA/, /^B$/, /WSCHODNIA/, /POWIERZCHNIA/, /OKIEN/], valueKind: 'numeric' },
+  { key: 'elewacjaCPowierzchniaOkien', columnLabel: 'Elewacja C (Południowa) - powierzchnia okien', labelPatterns: [/ELEWACJA/, /^C$/, /PO[LŁ]UDNIOWA/, /POWIERZCHNIA/, /OKIEN/], valueKind: 'numeric' },
+  { key: 'elewacjaDPowierzchniaOkien', columnLabel: 'Elewacja D (Zachodnia) - powierzchnia okien', labelPatterns: [/ELEWACJA/, /^D$/, /ZACHODNIA/, /POWIERZCHNIA/, /OKIEN/], valueKind: 'numeric' },
+  // Wczesniej TYLKO wpis w UNTRACKED_LABEL_PATTERNS (celowo niewyciagane, uzywane
+  // jedynie jako stop-granica dla imieNazwisko) - teraz prawdziwe pole, bo do
+  // tabelki adresowej trzeba rozbic adres na "Adres"/"Miejscowosc" (patrz
+  // tabelaAdresowaMapping.js). Etykieta pelnej dlugosci (rodzina Pompy ciepla:
+  // "Adres miejsca instalacji (ulica, nr budynku/lokalu, kod pocztowy):") -
+  // wymaga WSZYSTKICH trzech slow (nie samego "ADRES"), inaczej "miejsca
+  // instalacji (...)" zostaloby zebrane jako (bledna) wartosc - dokladnie ten
+  // sam blad, ktoremu ten wpis pierwotnie mial zapobiegac jako stop-lista.
+  { key: 'adresInstalacji', columnLabel: 'Adres miejsca instalacji', labelPatterns: [/ADRES/, /MIEJSCA/, /INSTALACJI/] },
+  // UWAGA: swiadomie NIE dodajemy analogicznego pola dla krotkiej etykiety
+  // "Adres:" (rodzina Kotly/Solary) - probowane 2026-07-22, ale kazdy
+  // wystarczajaco krotki/generyczny wzorzec zaczynajacy sie od samego slowa
+  // "Adres" ryzykuje zlapanie TEJ SAMEJ pozycji co dluzsza etykieta Pompy
+  // ciepla powyzej (ktora TEZ zaczyna sie od "Adres") i zebranie jej reszty
+  // ("miejsca instalacji...") jako smiecia. Zamiast tego adres dla Kotly/
+  // Solary bierzemy z istniejacej etykiety bloku/nazwy pliku (addressLabel w
+  // server.js) - i tak juz uzywanej jako fallback dla kolumny "adres" - patrz
+  // tabelaAdresowaMapping.js's splitAddress().
+  // Rodzina "PROTOKÓŁ UZGODNIEŃ PROJEKTOWYCH" (Kotly/Solary) - patrz komentarz
+  // przy nowych CHECKBOX_FIELDS.
+  { key: 'kotlyMocIstniejacegoZrodla', columnLabel: 'Moc istniejącego źródła ciepła', labelPatterns: [/ISTNIEJ[AĄ]CE/, /[ZŹ]R[OÓ]D[LŁ]O/, /CIEP[LŁ]A/, /MOC/], valueKind: 'numeric' },
+  { key: 'solaryPokrycieDachu', columnLabel: 'Pokrycie dachu', labelPatterns: [/POKRYCIE/, /DACHU/] }
 ];
 
 // --- Pola zagniezdzone w sekcjach (ta sama pod-etykieta powtarza sie w
@@ -571,10 +710,38 @@ const SECTION_SUBFIELDS = [
   // Wariant Rychwal - "Czy zewn. powierzchnia ściany pokryta jest
   // klinkierem: Tak, grubość: ...cm / Nie" - wlasna sekcja 'klinkier'
   // zakotwiczona na samym slowie "klinkierem" (patrz SECTION_HEADERS).
-  { key: 'grubKlinkieru', columnLabel: 'Grubość okładziny klinkierowej', sectionKey: 'klinkier', labelPatterns: [/GRUBO[SŚ][CĆ]/], checkboxAnchorPattern: /^TAK,?$/, valueKind: 'numeric' }
+  { key: 'grubKlinkieru', columnLabel: 'Grubość okładziny klinkierowej', sectionKey: 'klinkier', labelPatterns: [/GRUBO[SŚ][CĆ]/], checkboxAnchorPattern: /^TAK,?$/, valueKind: 'numeric' },
+  // Kazdy z tych 6 dotyczy tylko JEDNEJ z dwoch wykluczajacych sie opcji
+  // (Regularny/Nieregularny) - patrz komentarz przy SECTION_HEADERS. NIE
+  // sa checkboxGated (auditor moze zostawic pole puste nawet gdy ta opcja
+  // jest zaznaczona) - jesli druga opcja zostala wybrana, te pola po
+  // prostu wychodza puste (found:true, needsReview:true) tak jak kazde
+  // inne nieuzupelnione pole - drobny, zaakceptowany koszt (2 dodatkowe
+  // pola do potwierdzenia "Brak w oryginale" w polowie przypadkow), nie
+  // wart dodatkowej zlozonosci gating-u na wlasny checkbox oddalony o linie.
+  { key: 'dlugoscBudynku', columnLabel: 'Długość budynku (regularny)', sectionKey: 'ksztaltRegularnySection', labelPatterns: [/^D[LŁ]UGO[SŚ][CĆ]$/], valueKind: 'numeric' },
+  { key: 'szerokoscBudynku', columnLabel: 'Szerokość budynku (regularny)', sectionKey: 'ksztaltRegularnySection', labelPatterns: [/SZEROKO[SŚ][CĆ]/], valueKind: 'numeric' },
+  { key: 'dlugoscScianPolnocnej', columnLabel: 'Długość ścian od strony północnej', sectionKey: 'ksztaltNieregularnySection', labelPatterns: [/D[LŁ]UGO[SŚ][CĆ]/, /[SŚ]CIAN/, /OD/, /STRONY/, /P[OÓ][LŁ]NOCNEJ/], valueKind: 'numeric' },
+  { key: 'dlugoscScianPoludniowej', columnLabel: 'Długość ścian od strony południowej', sectionKey: 'ksztaltNieregularnySection', labelPatterns: [/D[LŁ]UGO[SŚ][CĆ]/, /[SŚ]CIAN/, /OD/, /STRONY/, /PO[LŁ]UDNIOWEJ/], valueKind: 'numeric' },
+  { key: 'dlugoscScianWschodniej', columnLabel: 'Długość ścian od strony wschodniej', sectionKey: 'ksztaltNieregularnySection', labelPatterns: [/D[LŁ]UGO[SŚ][CĆ]/, /[SŚ]CIAN/, /OD/, /STRONY/, /WSCHODNIEJ/], valueKind: 'numeric' },
+  { key: 'dlugoscScianZachodniej', columnLabel: 'Długość ścian od strony zachodniej', sectionKey: 'ksztaltNieregularnySection', labelPatterns: [/D[LŁ]UGO[SŚ][CĆ]/, /[SŚ]CIAN/, /OD/, /STRONY/, /ZACHODNIEJ/], valueKind: 'numeric' },
+  // Rodzina "PROTOKÓŁ UZGODNIEŃ PROJEKTOWYCH" (Kotly/Solary) - patrz komentarz
+  // przy CHECKBOX_FIELDS. Ten sam sprawdzony wzorzec co grubIzolacjiFundamentowej/
+  // grubIzolacjiDachu - checkboxAnchorPattern zamiast checkboxGated, bo checkbox
+  // ("Tak"/"Kotłownia") jest kilka slow PRZED wlasna etykieta pola ("pojemność"/
+  // "Wys. pom."), nie bezposrednio przed nia.
+  { key: 'kotlyZasobnikCwu', columnLabel: 'Zasobnik c.w.u. (pojemność)', sectionKey: 'kotlyZasobnikSection', labelPatterns: [/POJEMNO[SŚ][CĆ]/], checkboxAnchorPattern: /^TAK,?$/, valueKind: 'numeric' },
+  { key: 'solaryWysokoscKotlowni', columnLabel: 'Wysokość kotłowni', sectionKey: 'solaryZasobnikSection', labelPatterns: [/WYS/, /POM/], checkboxAnchorPattern: /^KOT[LŁ]OWNIA$/, valueKind: 'numeric' }
 ];
 
 const CHECKBOX_FIELDS = [
+  {
+    key: 'ksztaltBudynku', columnLabel: 'Kształt budynku',
+    options: [
+      { label: 'Regularny', patterns: [/^REGULARNY$/] },
+      { label: 'Nieregularny', patterns: [/^NIEREGULARNY$/] }
+    ]
+  },
   {
     key: 'wentylacja', columnLabel: 'Wentylacja',
     options: [
@@ -740,6 +907,68 @@ const CHECKBOX_FIELDS = [
       { label: '3-fazowa', patterns: [/^3$/, /FAZOWA/] },
       { label: '1-fazowa', patterns: [/^1$/, /FAZOWA/] },
       { label: 'Brak', patterns: [/^BRAK$/] }
+    ]
+  },
+  // --- Rodzina "PROTOKÓŁ UZGODNIEŃ PROJEKTOWYCH" (woj. łódzkie/Galewice) -
+  // CALKOWICIE inny formularz niz "PROTOKÓŁ UZGODNIEŃ MONTAŻOWYCH" (Kazimierz
+  // Biskupi) uzywany dla reszty pol powyzej - osobny dla kotlow na pellet i
+  // osobny dla kolektorow slonecznych, zweryfikowane na realnych plikach
+  // 2026-07-22 (Galewice, "kocioł"/"kolektor"). Klucze prefiksowane
+  // kotly*/solary* zeby nie kolidowac z istniejacymi kluczami o podobnie
+  // brzmiacej polskiej etykiecie ale INNYM znaczeniu (np. typKonstrukcji
+  // powyzej to Lekka/Srednia/Ciezka dla pomp ciepla, solaryTypKonstrukcji to
+  // zupelnie inne pytanie o Dach plaski/skosny/Elewacje).
+  {
+    key: 'kotlyMocKotla', columnLabel: 'Moc kotła',
+    options: [
+      { label: '10 kW', patterns: [/^10$/, /KW/] },
+      { label: '15 kW', patterns: [/^15$/, /KW/] },
+      { label: '20 kW', patterns: [/^20$/, /KW/] },
+      { label: '25 kW', patterns: [/^25$/, /KW/] },
+      { label: '30 kW', patterns: [/^30$/, /KW/] }
+    ]
+  },
+  {
+    // Zweryfikowane na realnym pliku 2026-07-22: Vision tokenizuje ten
+    // wiersz niespojnie - zaznaczony checkbox bywa ZLEPIONY z pierwsza
+    // cyfra w JEDEN token ("☑2", nie osobne "☑"+"2"), a caly numer bywa
+    // ALBO rozbity ("2","/","250") ALBO jednym tokenem ("3/300"). Jeden
+    // wzorzec na opcje (nie dwa) - wymaganie DRUGIEGO oddzielnego slowa na
+    // "250"/"300"/"400" zawodzi wlasnie wtedy, gdy caly numer jest jednym
+    // tokenem (nic juz nie zostaje do dopasowania drugim wzorcem). Zakres
+    // ograniczony do sectionKey (patrz SECTION_HEADERS), zeby goly "2"/"3"/
+    // "4" nie zlapal czegos innego wczesniej na stronie.
+    key: 'solaryRodzajZestawu', columnLabel: 'Rodzaj zestawu', sectionKey: 'solaryZestawSection',
+    options: [
+      { label: '2/250', patterns: [/^[☑☒✓✔☐□]?2(\/?250)?$/] },
+      { label: '3/300', patterns: [/^[☑☒✓✔☐□]?3(\/?300)?$/] },
+      { label: '4/400', patterns: [/^[☑☒✓✔☐□]?4(\/?400)?$/] }
+    ]
+  },
+  {
+    key: 'solaryTypBudynku', columnLabel: 'Typ budynku',
+    options: [
+      { label: 'Bud. mieszkalny', patterns: [/^BUD$|^BUD\.?$/, /MIESZKALNY/] },
+      { label: 'Bud. gospodarczy', patterns: [/^BUD$|^BUD\.?$/, /GOSPODARCZY/] }
+    ]
+  },
+  {
+    key: 'solaryTypKonstrukcji', columnLabel: 'Typ konstrukcji',
+    options: [
+      { label: 'Dach płaski', patterns: [/^DACH$/, /P[LŁ]ASKI/] },
+      { label: 'Dach skośny', patterns: [/^DACH$/, /SKO[SŚ]NY/] },
+      { label: 'Elewacja', patterns: [/^ELEWACJA$/] }
+    ]
+  },
+  {
+    key: 'solaryMiejsceMontazu', columnLabel: 'Miejsce montażu',
+    options: [
+      { label: 'Dach płaski lub zbliżony', patterns: [/^DACH$/, /P[LŁ]ASKI/, /LUB/, /ZBLI[ZŻ]ONY/] },
+      { label: 'Balkon, taras', patterns: [/^BALKON$/] },
+      { label: 'Dach skośny', patterns: [/^DACH$/, /SKO[SŚ]NY/] },
+      { label: 'Grunt', patterns: [/^GRUNT$/] },
+      { label: 'Elewacja budynku, wysoko', patterns: [/^ELEWACJA$/, /BUDYNKU/, /WYSOKO/] },
+      { label: 'Elewacja budynku, nisko', patterns: [/^ELEWACJA$/, /BUDYNKU/, /NISKO/] }
     ]
   }
 ];
@@ -957,16 +1186,29 @@ const RZGOW_SIMPLE_FIELDS = [
 ];
 
 // Etykiety, ktore NIE sa samodzielnymi polami do wyciagniecia (nikt ich nie
-// zbiera do Excela), ale ktore realnie wystepuja na formularzu jako
-// wydrukowany tekst - MUSZA byc w stop-liscie (patrz ALL_LABEL_PATTERNS
-// nizej), inaczej szersza, dwukierunkowa proba wyszukiwania wartosci (patrz
-// collectValueWords) moglaby je pomylic z odreczna odpowiedzia. Realny
-// przypadek zlapany 2026-07-22: "Adres miejsca instalacji (ulica, nr
-// budynku/lokalu, kod pocztowy):" lezy PRZY "Imię i Nazwisko..." (czesto
-// linia nizej) - bez tego wpisu w stop-liscie "kod pocztowy" bylo lapane
-// jako (bledna) wartosc imienia i nazwiska.
+// zbiera do Excela), ale musza byc rozpoznawane jako stop-granica dla
+// collectValueWords - inaczej wartosc SASIEDNIEGO pola "przeciekaloby" w ich
+// strone. Formularz Kotly/Solary (woj. lodzkie, dodany 2026-07-22) ma DWA
+// takie przypadki, oba zlapane na realnych plikach: "rodzaj kotła:" to
+// KONTYNUACJA etykiety "2. Istniejące źródło ciepła moc: ... kW rodzaj
+// kotła: ..." (drugi blank w tym samym punkcie, ktorego nie wyciagamy do
+// Excela) - bez tego wpisu kotlyMocIstniejacegoZrodla zbiera "185 kW rodzaj
+// kotła" zamiast samego "185". Naglowek sekcji 8 (SECTION_HEADERS'
+// solaryZasobnikSection) NIE wchodzi automatycznie do ALL_LABEL_PATTERNS
+// (tylko SIMPLE_FIELDS/SECTION_SUBFIELDS wchodza), wiec solaryPokrycieDachu
+// (punkt 7, tuz nad punktem 8) przeciekalo w "montażu zasobnika solarnego".
 const UNTRACKED_LABEL_PATTERNS = [
-  [/ADRES/, /MIEJSCA/, /INSTALACJI/]
+  [/RODZAJ/, /KOT[LŁ]A/],
+  [/PLANOWANE/, /MIEJSCE/, /MONTA[ZŻ]U/, /ZASOBNIKA/],
+  // "(podać jakie)" - parentetyczna instrukcja PO wolnym miejscu na
+  // odpowiedz przy solaryPokrycieDachu (punkt 7) - bez tego jako granicy,
+  // odpowiedz przeciekala az do tych slow.
+  [/PODA[CĆ]/, /JAKIE/],
+  // "1. Moc kotła:" (naglowek sekcji z checkboxami 10-30 kW) - bez tego jako
+  // granicy, "Liczba osob mieszkajacych w budynku" (linia tuz nad tym
+  // naglowkiem na tym formularzu) potrafila zebrac fragment tej linii
+  // checkboxow ("30 kW") jako wlasna wartosc.
+  [/^MOC$/, /KOT[LŁ]A/]
 ];
 
 const ALL_LABEL_PATTERNS = [
@@ -1085,7 +1327,11 @@ function extractCheckboxField(words, def, rangeStart = 0, rangeEnd) {
   if (!checked.option) return { value: '', confidence: null, found: true };
   return {
     value: checked.option.label,
-    confidence: wordConfidence(checked.words),
+    // Wnioskowanie przez eliminacje (patrz findCheckedOption) to NIE jest
+    // bezposrednia obserwacja checkboxa - zawsze cap ponizej progu, zeby
+    // uzytkownik i tak potwierdzil, nawet gdy slowa same w sobie mialy
+    // wysoka pewnosc OCR.
+    confidence: checked.inferredByElimination ? Math.min(wordConfidence(checked.words) ?? 1, COMPOSITE_CONFIDENCE_CAP) : wordConfidence(checked.words),
     found: true,
     labelBBox: unionBBox(checked.words),
     valueBBox: unionBBox(checked.words)
@@ -1313,7 +1559,15 @@ function looksPlausible(text, valueKind) {
   const trimmed = (text || '').trim();
   if (!trimmed) return true; // puste to inna sprawa - needsReview i tak zadziala
   if (valueKind === 'numeric') {
-    if (!/\d/.test(trimmed)) return false;
+    // Wymaga cyfry NIEPRZYKLEJONEJ do litery przed nia - odrzuca
+    // niewypelniona kropkowana linie formularza zlepiona z drukowana
+    // jednostka jako jeden token OCR (np. "..m2" dla pustego pola
+    // "powierzchnia okien: ....m2") - jedyna "cyfra" to '2' z "m2", ktora
+    // nie jest prawdziwa odpowiedzia. Realny przypadek zlapany 2026-07-22
+    // przy dodawaniu pol elewacji A-D (strona "OBRYS BUDYNKU"). Prawdziwe
+    // wartosci jak "8cm"/"40°"/"100%" nadal przechodza, bo tam cyfra jest
+    // na POCZATKU (albo po spacji/nawiasie), nie po literze.
+    if (!/(^|[^\p{L}])\d/u.test(trimmed)) return false;
     // Dwie osobne, "gole" liczby (np. "40 0") to zwykle dwa niezalezne,
     // kolidujace odczyty (np. prawdziwa liczba + osobno zmyslony token z
     // odrecznego znaku stopnia), NIE jedna prawdziwa wartosc - prawdziwe

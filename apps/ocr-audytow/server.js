@@ -498,7 +498,7 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
             const rowValues = { adres: addressLabel };
             for (const [key, field] of Object.entries(b.fields)) rowValues[key] = field.value || '';
             try {
-              appendRow(excelPath, COLUMN_ORDER, COLUMN_LABELS, rowValues);
+              appendRow(excelPath, 'Audyty', COLUMN_ORDER, COLUMN_LABELS, rowValues);
             } catch (excelErr) {
               results.push({ ok: false, originalName: fileEntry.originalName, error: `Zapisano PDF, ale nie udało się dopisać wiersza do Excela: ${excelErr.message}` });
               return;
