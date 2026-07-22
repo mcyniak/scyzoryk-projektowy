@@ -71,6 +71,9 @@ wybranej przez użytkownika.
 Najprościej: dwuklik na `STARTUJ-SCYZORYK.cmd` — zabija osierocone procesy `node.exe`,
 instaluje brakujące zależności, uruchamia sprawdzian składni i startuje serwer.
 
+Instalacja od zera na nowym komputerze (pobranie z GitHuba, wymagania, zrzuty ekranu
+każdego narzędzia): [`docs/INSTRUKCJA-INSTALACJI.md`](docs/INSTRUKCJA-INSTALACJI.md).
+
 Ręcznie, z katalogu głównego repo:
 
 ```powershell
