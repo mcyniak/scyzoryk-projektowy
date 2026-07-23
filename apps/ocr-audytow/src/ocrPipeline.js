@@ -234,6 +234,31 @@ async function buildFieldPreview({ pageImagePath, labelBBox, valueBBox, outPath,
   return outPath;
 }
 
+// Wycina obszar strony wokol bbox (BEZ czerwonej ramki - to nie podglad dla
+// czlowieka, tylko wejscie do ponownego OCR - patrz retryFieldWithCrop w
+// server.js) i zapisuje jako osobny plik JPEG. Uzywane, gdy pierwszy przebieg
+// OCR dal niepewny/pusty wynik dla pola - proba ponownego rozpoznania
+// TYLKO tego fragmentu strony, licząc na to, ze mniejszy, izolowany kadr
+// (bez calej reszty gestego formularza dookola) da Document AI czystszy
+// wynik. Hojny margines (wiekszy niz w buildFieldPreview) bo tu NIE chodzi o
+// czytelnosc dla oka, tylko o to, zeby caly kontekst etykiety+odpowiedzi (i
+// ewentualnie sasiedniego checkboxa) zmiescil sie w kadrze.
+async function cropPageRegion({ pageImagePath, bbox, outPath, sourceImage = null, padX = 300, padY = 220 }) {
+  if (!isValidBBox(bbox)) return null;
+  const image = sourceImage ? sourceImage.clone() : await Jimp.read(pageImagePath);
+  const width = image.bitmap.width;
+  const height = image.bitmap.height;
+  const cropX = Math.max(0, Math.round(bbox.minX - padX));
+  const cropY = Math.max(0, Math.round(bbox.minY - padY));
+  const cropRight = Math.min(width, Math.round(bbox.maxX + padX));
+  const cropBottom = Math.min(height, Math.round(bbox.maxY + padY));
+  const cropW = Math.max(1, cropRight - cropX);
+  const cropH = Math.max(1, cropBottom - cropY);
+  image.crop({ x: cropX, y: cropY, w: cropW, h: cropH });
+  await image.write(outPath, { quality: 92 });
+  return outPath;
+}
+
 // Buduje JEDEN wielostronicowy PDF (tylko dla stron z obrazem) z niewidoczna
 // warstwa tekstu - odpowiednik dawnego trybu "pdf" Tesseracta, ktorego Vision
 // nie ma wbudowanego. Kazde slowo rysowane jest z opacity:0 dokladnie nad
@@ -518,4 +543,4 @@ async function finalizeSplit({ sourcePdfPath, ocrPdfPath, pages, blocks, outPath
   }
 }
 
-module.exports = { analyzeDocument, finalizeSplit, assemblePdfRange, buildThumbnails, buildFieldPreview };
+module.exports = { analyzeDocument, finalizeSplit, assemblePdfRange, buildThumbnails, buildFieldPreview, cropPageRegion };

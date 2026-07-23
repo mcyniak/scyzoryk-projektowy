@@ -401,4 +401,15 @@ function extractFields(pages, block) {
   return result;
 }
 
-module.exports = { extractFields, COLUMN_ORDER, COLUMN_LABELS, LOW_CONFIDENCE_THRESHOLD };
+// Ponownie wyciaga JEDNO, konkretne pole (po kluczu) z JUZ przetworzonej
+// "strony" (moze to byc prawdziwa strona z analyzeDocument, albo mini-strona
+// zbudowana z ponownego OCR wycietego fragmentu - patrz retryFieldWithCrop w
+// server.js). Zwraca ten sam ksztalt co pola w wyniku extractFields.
+function extractSingleField(page, key) {
+  const def = FIELD_DEFS.find((f) => f.key === key);
+  if (!def) return null;
+  const extracted = extractField(page, def);
+  return toFieldResult(extracted, page.pageIndex ?? null, def.valueKind);
+}
+
+module.exports = { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS, LOW_CONFIDENCE_THRESHOLD };

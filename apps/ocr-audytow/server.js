@@ -9,9 +9,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { Jimp } = require('jimp');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
-const { analyzeDocument, finalizeSplit, buildFieldPreview } = require('./src/ocrPipeline');
-const { isConfigured: isOcrConfigured } = require('./src/documentAiEngine');
-const { extractFields, COLUMN_ORDER, COLUMN_LABELS } = require('./src/fieldExtraction');
+const { analyzeDocument, finalizeSplit, buildFieldPreview, cropPageRegion } = require('./src/ocrPipeline');
+const { isConfigured: isOcrConfigured, ocrImage: docAiOcrImage } = require('./src/documentAiEngine');
+const { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS } = require('./src/fieldExtraction');
 const { appendRow, validatePath: validateExcelPath } = require('./src/excelExport');
 
 const app = express();
@@ -261,6 +261,50 @@ function trivialFields() {
   return fields;
 }
 
+// Druga proba OCR dla pol, ktore po pierwszym przebiegu wymagaja recznego
+// przegladu (puste/niepewne) - wycina TYLKO obszar wokol tego pola (patrz
+// cropPageRegion) i ponownie woła Document AI na tym mniejszym, izolowanym
+// fragmencie, licząc na czystszy wynik bez szumu z reszty gestego
+// formularza. Dziala dla CZESCI przypadkow (male, izolowane checkboxy typu
+// "Moc kotla") - NIE naprawia przypadkow, gdzie kilka pol jest fizycznie
+// zlepionych blisko siebie (maly kadr wokol nich nadal zawiera WSZYSTKIE, wiec
+// to samo zlepienie) - swiadoma decyzja wlasciciela 2026-07-22 mimo tego
+// ograniczenia, bo koszt (kolejne zapytanie Document AI) jest akceptowalny
+// przy realnej skali, a czesciowa poprawa nadal zmniejsza liczbe pol do
+// recznego uzupelnienia. Modyfikuje `field` W MIEJSCU (value/confidence/
+// needsReview/resolved) TYLKO gdy nowy wynik jest lepszy - NIE zmienia
+// labelBBox/valueBBox (te zostaja z pierwszego przebiegu, we wspolrzednych
+// oryginalnej strony - wspolrzedne z przycietego fragmentu byłyby bledne po
+// przeliczeniu na oryginalny obraz, a to i tak tylko przyblizony wskaznik
+// "gdzie patrzec" dla podgladu, nie potrzebuje pelnej precyzji).
+async function retryFieldWithCrop({ field, key, page, refBBox, sourceImage, previewDir, blockIndex }) {
+  const cropPath = path.join(previewDir, `_retry-block${blockIndex}-${key}.jpg`);
+  try {
+    const built = await cropPageRegion({ pageImagePath: page.imagePath, bbox: refBBox, outPath: cropPath, sourceImage });
+    if (!built) return;
+    const { text, words, formFields, tables, visualElements } = await docAiOcrImage(cropPath);
+    const miniPage = { pageIndex: field.pageIndex, ocrText: text, ocrWords: words, formFields: formFields || [], tables: tables || [], visualElements: visualElements || [] };
+    const retried = extractSingleField(miniPage, key);
+    if (!retried) return;
+    // "Lepszy" = ma wartosc, ktorej wczesniej nie bylo, ALBO ta sama/inna
+    // wartosc z WYZSZA pewnoscia niz oryginal - nigdy nie podmieniamy na
+    // gorszy/mniej pewny wynik.
+    const better = retried.value && (!field.value || (retried.confidence ?? 0) > (field.confidence ?? 0));
+    if (better) {
+      field.value = retried.value;
+      field.confidence = retried.confidence;
+      field.needsReview = retried.needsReview;
+      field.resolved = retried.resolved;
+    }
+  } catch (_) {
+    // Druga proba jest czysto "best effort" - jej blad (np. przejsciowy
+    // problem z Document AI) nigdy nie moze zepsuc calego przegladu pol,
+    // pole po prostu zostaje przy wyniku z pierwszego przebiegu.
+  } finally {
+    await fsp.unlink(cropPath).catch(() => {});
+  }
+}
+
 // Krok 3: dla kazdego ZATWIERDZONEGO bloku wyciaga pola formularza (patrz
 // src/fieldExtraction.js) i generuje podglady z zaznaczeniem dla tych, ktore
 // wymagaja recznego przegladu (puste ALBO niska pewnosc). Wynik zapisywany w
@@ -315,8 +359,11 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
             if (!refBBox || field.pageIndex === null) continue;
             const page = fileEntry.pages.find((p) => p.pageIndex === field.pageIndex);
             if (!page?.imagePath) continue;
-            const previewFile = `block${blockIndex}-${key}.jpg`;
+
             const sourceImage = await loadPageImage(page.imagePath);
+            await retryFieldWithCrop({ field, key, page, refBBox, sourceImage, previewDir, blockIndex });
+
+            const previewFile = `block${blockIndex}-${key}.jpg`;
             const builtPath = await buildFieldPreview({
               pageImagePath: page.imagePath,
               labelBBox: field.labelBBox,
