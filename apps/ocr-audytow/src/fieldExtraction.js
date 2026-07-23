@@ -117,11 +117,27 @@ function stripHeaderPrefix(value) {
   return value.replace(/^[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[\p{L}\s]+:\s*/u, '').trim();
 }
 
+// "Liczba osob mieszkajacych w budynku:" bierze wartosc SASIEDNIEGO pola
+// "Telefon:" jako wlasna - zweryfikowane na DWOCH realnych plikach (Kotly,
+// Solary): oba mialy identyczny wzorzec "661-465-353\nE" / "730-269323\n
+// Telefon:" (numer telefonu + resztki). Document AI czasem pomyli granice
+// wartosci miedzy sasiednimi polami na gestym naglowku formularza - usuwamy
+// wzorzec numeru telefonu (i slowo "Telefon:" jesli zostalo), zeby nie
+// pokazywac go jako (bledna) podpowiedz. Uzywane TYLKO dla pol, ktore z
+// natury NIE moga byc numerem telefonu (np. liczbaOsob), nie globalnie.
+function stripPhoneBleed(value) {
+  return value
+    .replace(/\d{3}[-.\s]?\d{3}[-.\s]?\d{3}/g, '')
+    .replace(/TELEFON:?/gi, '')
+    .trim();
+}
+
 function extractTextField(page, def) {
   if (def.formFieldPattern) {
     const ff = findFormField(page.formFields, def.formFieldPattern, def.valuePattern);
     if (ff && ff.value) {
-      const value = def.stripHeaderPrefix ? stripHeaderPrefix(ff.value) : ff.value;
+      let value = def.stripHeaderPrefix ? stripHeaderPrefix(ff.value) : ff.value;
+      if (def.stripPhoneBleed) value = stripPhoneBleed(value);
       return { value, confidence: ff.confidence, found: true, labelBBox: ff.labelBBox, valueBBox: ff.valueBBox };
     }
     if (ff) return { value: '', confidence: ff.confidence, found: true, labelBBox: ff.labelBBox, valueBBox: ff.valueBBox };
@@ -198,7 +214,7 @@ const FIELD_DEFS = [
   { key: 'adresInstalacji', columnLabel: 'Adres miejsca instalacji', kind: 'text', formFieldPattern: /ADRES/ },
   { key: 'telefon', columnLabel: 'Telefon', kind: 'text', valueKind: 'numeric', formFieldPattern: /TELEFON/ },
   { key: 'rokBudowy', columnLabel: 'Rok budowy budynku', kind: 'text', valueKind: 'numeric', formFieldPattern: /ROK.*BUDOWY/, stripHeaderPrefix: true },
-  { key: 'liczbaOsob', columnLabel: 'Liczba osób w gospodarstwie', kind: 'text', valueKind: 'numeric', formFieldPattern: /LICZBA.*OS[OÓ]B/ },
+  { key: 'liczbaOsob', columnLabel: 'Liczba osób w gospodarstwie', kind: 'text', valueKind: 'numeric', formFieldPattern: /LICZBA.*OS[OÓ]B/, stripPhoneBleed: true },
   { key: 'powierzchnia', columnLabel: 'Powierzchnia ogrzewana', kind: 'text', valueKind: 'numeric', formFieldPattern: /POWIERZCHNIA.*OGRZEWAN/ },
   { key: 'powierzchniaDzialki', columnLabel: 'Powierzchnia działki (dolne źródło)', kind: 'text', valueKind: 'numeric', formFieldPattern: /POWIERZCHNIA.*DZIA[LŁ]KI/ },
   // Etykieta "Przybliżona data montażu:" powtarza sie 3x na stronie
