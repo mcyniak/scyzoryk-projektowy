@@ -132,12 +132,34 @@ function stripPhoneBleed(value) {
     .trim();
 }
 
+// Zweryfikowane na realnych plikach (Kazimierz Biskupi, bloki 1-2, w
+// odroznieniu od bloku 0 gdzie to samo pole wyszlo czysto) - Document AI
+// czasem laczy CALY, gesty naglowek strony (imie i nazwisko + adres +
+// telefon + e-mail) w JEDNA wartosc formField, z etykietami INNYCH pol
+// wtracone w srodku tekstu (np. "...62-630 Imię i nazwisko Uczestnika
+// projektu/ Właściciela: Skendelski Golińska 34..."). Obcina wartosc na
+// PIERWSZYM wystapieniu ktoregokolwiek z tych znanych, "obcych" markerow -
+// pomaga w wiekszosci przypadkow (gdzie prawdziwa tresc jest PRZED
+// wtraceniem), choc NIE naprawia przypadkow gdzie prawdziwa tresc jest PO
+// wtraceniu (tam i tak trafia do recznego przegladu, wiec nie jest to
+// pogorszenie, tylko czesciowa, nie pelna poprawa).
+const OTHER_LABEL_MARKERS = [/TELEFON:?/i, /E-?MAIL:?/i, /ADRES\s+MIEJSCA\s+INSTALACJI/i, /IMI[ĘE]\s+I\s+NAZWISKO/i, /POCZTOWY\)?:?/i];
+function truncateAtOtherLabel(value) {
+  let cut = value.length;
+  for (const marker of OTHER_LABEL_MARKERS) {
+    const m = value.match(marker);
+    if (m && m.index < cut) cut = m.index;
+  }
+  return value.slice(0, cut).trim();
+}
+
 function extractTextField(page, def) {
   if (def.formFieldPattern) {
     const ff = findFormField(page.formFields, def.formFieldPattern, def.valuePattern);
     if (ff && ff.value) {
       let value = def.stripHeaderPrefix ? stripHeaderPrefix(ff.value) : ff.value;
       if (def.stripPhoneBleed) value = stripPhoneBleed(value);
+      if (def.truncateAtOtherLabel) value = truncateAtOtherLabel(value);
       return { value, confidence: ff.confidence, found: true, labelBBox: ff.labelBBox, valueBBox: ff.valueBBox };
     }
     if (ff) return { value: '', confidence: ff.confidence, found: true, labelBBox: ff.labelBBox, valueBBox: ff.valueBBox };
@@ -210,8 +232,8 @@ function extractField(page, def) {
 
 const FIELD_DEFS = [
   // --- Pompa ciepla (powietrzna) - lista OZC ---
-  { key: 'imieNazwisko', columnLabel: 'Imię i nazwisko', kind: 'text', formFieldPattern: /IMI.*NAZWISKO/ },
-  { key: 'adresInstalacji', columnLabel: 'Adres miejsca instalacji', kind: 'text', formFieldPattern: /ADRES/ },
+  { key: 'imieNazwisko', columnLabel: 'Imię i nazwisko', kind: 'text', formFieldPattern: /IMI.*NAZWISKO/, truncateAtOtherLabel: true },
+  { key: 'adresInstalacji', columnLabel: 'Adres miejsca instalacji', kind: 'text', formFieldPattern: /ADRES/, truncateAtOtherLabel: true },
   { key: 'telefon', columnLabel: 'Telefon', kind: 'text', valueKind: 'numeric', formFieldPattern: /TELEFON/ },
   { key: 'rokBudowy', columnLabel: 'Rok budowy budynku', kind: 'text', valueKind: 'numeric', formFieldPattern: /ROK.*BUDOWY/, stripHeaderPrefix: true },
   { key: 'liczbaOsob', columnLabel: 'Liczba osób w gospodarstwie', kind: 'text', valueKind: 'numeric', formFieldPattern: /LICZBA.*OS[OÓ]B/, stripPhoneBleed: true },
