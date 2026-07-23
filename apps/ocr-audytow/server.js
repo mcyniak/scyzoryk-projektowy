@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const { Jimp } = require('jimp');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
 const { analyzeDocument, finalizeSplit, buildFieldPreview } = require('./src/ocrPipeline');
-const { isConfigured: isVisionConfigured } = require('./src/visionEngine');
+const { isConfigured: isOcrConfigured } = require('./src/documentAiEngine');
 const { extractFields, COLUMN_ORDER, COLUMN_LABELS } = require('./src/fieldExtraction');
 const { appendRow, validatePath: validateExcelPath } = require('./src/excelExport');
 
@@ -53,7 +53,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '2mb' }));
 
-app.get('/api/health', (req, res) => res.json({ ok: true, name: 'ocr-audytow', visionConfigured: isVisionConfigured() }));
+app.get('/api/health', (req, res) => res.json({ ok: true, name: 'ocr-audytow', ocrConfigured: isOcrConfigured() }));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -162,8 +162,8 @@ setInterval(() => cleanupOldAnalyses().catch(err => console.error('[ocr-analysis
 // trafia do pobrania - to robi dopiero /api/ocr/finalize po zatwierdzeniu
 // (ewentualnie recznie poprawionego) podzialu przez uzytkownika.
 app.post('/api/ocr/analyze', heavyJobLimiter, upload.array('files', MAX_FILES), async (req, res) => {
-  if (!isVisionConfigured()) {
-    return res.status(500).json({ ok: false, message: 'Brak klucza API Google Cloud Vision na tym serwerze (zmienna środowiskowa OCR_VISION_API_KEY). Skontaktuj się z administratorem.' });
+  if (!isOcrConfigured()) {
+    return res.status(500).json({ ok: false, message: 'Brak konfiguracji Google Document AI na tym serwerze (zmienne środowiskowe OCR_DOCAI_KEY_FILE/OCR_DOCAI_PROJECT_ID/OCR_DOCAI_LOCATION/OCR_DOCAI_PROCESSOR_ID). Skontaktuj się z administratorem.' });
   }
 
   const analysisId = crypto.randomUUID();

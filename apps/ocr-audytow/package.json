@@ -8,6 +8,7 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "@google-cloud/documentai": "^9.6.2",
     "@pdf-lib/fontkit": "^1.1.1",
     "express": "^4.19.2",
     "express-rate-limit": "^7.5.0",

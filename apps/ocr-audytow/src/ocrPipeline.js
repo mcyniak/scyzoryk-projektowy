@@ -27,7 +27,11 @@ const { PDFDocument } = require('pdf-lib');
 const { Jimp } = require('jimp');
 const { checkTextLayer } = require('./textLayerCheck');
 const { extractPageImages } = require('./pdfImageExtractor');
-const { ocrImage, isConfigured } = require('./visionEngine');
+// Silnik OCR podmieniony 2026-07-22: Google Vision -> Google Document AI
+// (Form Parser) - ten sam interfejs {ocrImage, isConfigured}, patrz
+// documentAiEngine.js dla uzasadnienia migracji. visionEngine.js pozostaje w
+// repo jako bezpieczny punkt powrotu (git), nie jest juz uzywany.
+const { ocrImage, isConfigured } = require('./documentAiEngine');
 const { detectRotationFromWords, rotatePoint } = require('./rotationDetect');
 const { detectBlockBoundaries, boundariesToBlocks } = require('./bundleSplit');
 const { embedUnicodeFont } = require('./textFont');
@@ -59,10 +63,10 @@ async function mapWithConcurrency(items, limit, fn) {
 // analyzeDocument), reszta dokumentu przetwarza sie normalnie dalej.
 async function ocrPage(page) {
   try {
-    const { text, words } = await ocrImage(page.imagePath);
-    return { ...page, ocrText: text, ocrWords: words };
+    const { text, words, formFields, tables, visualElements } = await ocrImage(page.imagePath);
+    return { ...page, ocrText: text, ocrWords: words, formFields: formFields || [], tables: tables || [], visualElements: visualElements || [] };
   } catch (err) {
-    return { ...page, ocrText: '', ocrWords: [], ocrError: err.message || 'Rozpoznawanie tekstu nie powiodlo sie' };
+    return { ...page, ocrText: '', ocrWords: [], formFields: [], tables: [], visualElements: [], ocrError: err.message || 'Rozpoznawanie tekstu nie powiodlo sie' };
   }
 }
 
@@ -361,12 +365,13 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
   // Rozpoznawanie tekstu KAZDEJ strony z obrazem, rownolegle (patrz
   // mapWithConcurrency) - jedno zadanie do Vision na strone, wynik zawiera
   // juz cala tresc + wspolrzedne slow potrzebne pozniej do wykrywania obrotu
-  // i budowy warstwy tekstowej PDF-a. Limit 15 (nie 5) - to czysto sieciowe
-  // wywolania do Google Cloud Vision, nasz proces czeka na odpowiedz, nie
-  // liczy nic same - podniesienie limitu nie obciaza naszego CPU, tylko
-  // krocej czekamy (2026-07-22, na prosbe wlasciciela o przyspieszenie).
+  // i budowy warstwy tekstowej PDF-a. Limit obnizony z 15 (Vision) do 5 przy
+  // migracji na Document AI (2026-07-22) - Document AI's synchroniczne
+  // processDocument ma zazwyczaj nizszy domyslny limit zapytan/min niz
+  // Vision; jesli w praktyce (wieksze partie skanow) pojawia sie bledy
+  // quota/429, obnizyc dalej.
   const imagedExtracted = extractedPages.filter((p) => p.imagePath);
-  const ocrResults = await mapWithConcurrency(imagedExtracted, 15, ocrPage);
+  const ocrResults = await mapWithConcurrency(imagedExtracted, 5, ocrPage);
   const ocrByIndex = new Map(ocrResults.map((p) => [p.pageIndex, p]));
   let pages = extractedPages.map((p) => ocrByIndex.get(p.pageIndex) || p);
   for (const p of pages) {
@@ -417,11 +422,32 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
       ...w,
       vertices: (w.vertices || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate))
     }));
+    // formFields (Document AI) maja WLASNE bboxy (fieldNameBBox/valueBBox),
+    // niezalezne od ocrWords - musza przejsc PRZEZ TA SAMA korekte obrotu,
+    // inaczej po fizycznym obroceniu strony wskazywalyby na stare, nieobrocone
+    // miejsce podczas gdy ocrWords bylyby juz poprawne.
+    const rotatedFormFields = (p.formFields || []).map((f) => ({
+      ...f,
+      fieldNameBBox: (f.fieldNameBBox || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate)),
+      valueBBox: (f.valueBBox || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate))
+    }));
+    // tables/visualElements (Document AI) - te same bboxy, ta sama korekta -
+    // patrz komentarz przy formFields powyzej.
+    const rotatedTables = (p.tables || []).map((t) => ({
+      rows: (t.rows || []).map((r) => ({ ...r, bbox: (r.bbox || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate)) }))
+    }));
+    const rotatedVisualElements = (p.visualElements || []).map((el) => ({
+      ...el,
+      bbox: (el.bbox || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate))
+    }));
     correctedPages.push({
       ...p,
       width: swapped ? p.height : p.width,
       height: swapped ? p.width : p.height,
       ocrWords: rotatedWords,
+      formFields: rotatedFormFields,
+      tables: rotatedTables,
+      visualElements: rotatedVisualElements,
       detectedRotation: rotate,
       rotationInferredFromBatch: inferred
     });
