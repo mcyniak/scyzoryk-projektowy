@@ -122,60 +122,33 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       }
     }
 
-    let templateSourceMode = 'upload';
-    function setTemplateSourceMode(mode) {
-      templateSourceMode = mode;
-      $('templateSourceUpload').classList.toggle('hidden', mode !== 'upload');
-      $('templateSourceInvestment').classList.toggle('hidden', mode !== 'investment');
-      $('templateSourceUploadBtn').classList.toggle('ghost', mode !== 'upload');
-      $('templateSourceInvestmentBtn').classList.toggle('ghost', mode !== 'investment');
-    }
-    $('templateSourceUploadBtn')?.addEventListener('click', () => setTemplateSourceMode('upload'));
-    $('templateSourceInvestmentBtn')?.addEventListener('click', () => setTemplateSourceMode('investment'));
-    setTemplateSourceMode('upload');
-
-    async function uploadFiles(wzoryFolderChoice) {
+    async function uploadFiles() {
       hide($('uploadStatus')); hide($('recordsPanel')); hide($('resultPanel')); hide($('progressPanel')); hide($('logPanel'));
-      hide($('wzoryChoiceBox'));
       stopPolling();
       const excel = $('excelFile').files[0];
       if (!excel) return status($('uploadStatus'), 'Dodaj plik Excel.', 'err');
       const fd = new FormData();
       fd.append('excel', excel);
 
-      if (templateSourceMode === 'investment') {
-        const investmentPath = $('investmentPath').value.trim();
-        if (!investmentPath) return status($('uploadStatus'), 'Podaj ścieżkę folderu inwestycji.', 'err');
-        fd.append('investmentPath', investmentPath);
-        if (wzoryFolderChoice) fd.append('wzoryFolderChoice', wzoryFolderChoice);
-      } else {
-        const templateFiles = [...$('templateFile').files].filter(f => /\.docx$/i.test(f.name));
-        if (!templateFiles.length) return status($('uploadStatus'), 'Dodaj najpierw folder z szablonami Word.', 'err');
-        // Podfolder bezposrednio nad plikiem (np. "VARMERO VPM 9020") - dla
-        // szablonow lezacych wprost w wybranym folderze (jak dzis Kolektory)
-        // zostaje pusty, bo tam wariant siedzi w samej nazwie pliku (sufiks
-        // _250/_300/_400), nie w strukturze folderow.
-        const templateRelFolders = templateFiles.map(f => {
-          const rel = f.webkitRelativePath || '';
-          const parts = rel.split('/').filter(Boolean);
-          return parts.length >= 3 ? parts[parts.length - 2] : '';
-        });
-        for (const f of templateFiles) fd.append('templates', f);
-        fd.append('templateRelFolders', JSON.stringify(templateRelFolders));
-      }
+      const templateFiles = [...$('templateFile').files].filter(f => /\.docx$/i.test(f.name));
+      if (!templateFiles.length) return status($('uploadStatus'), 'Dodaj najpierw folder z szablonami Word.', 'err');
+      // Podfolder bezposrednio nad plikiem (np. "VARMERO VPM 9020") - dla
+      // szablonow lezacych wprost w wybranym folderze (jak dzis Kolektory)
+      // zostaje pusty, bo tam wariant siedzi w samej nazwie pliku (sufiks
+      // _250/_300/_400), nie w strukturze folderow.
+      const templateRelFolders = templateFiles.map(f => {
+        const rel = f.webkitRelativePath || '';
+        const parts = rel.split('/').filter(Boolean);
+        return parts.length >= 3 ? parts[parts.length - 2] : '';
+      });
+      for (const f of templateFiles) fd.append('templates', f);
+      fd.append('templateRelFolders', JSON.stringify(templateRelFolders));
+
       setBusy(true); status($('uploadStatus'), 'Wczytuję pliki i sprawdzam tabelę...', 'warn');
       try {
         const res = await fetch('/api/upload', { method: 'POST', headers, body: fd });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wczytać plików.');
-
-        if (data.needsWzoryChoice) {
-          const options = data.wzoryFolderOptions || [];
-          $('wzoryChoiceSelect').innerHTML = options.map(o => `<option value="${esc(o.path)}">${esc(o.label)}</option>`).join('');
-          show($('wzoryChoiceBox'));
-          status($('uploadStatus'), 'Znaleziono kilka folderów ze wzorami w tej inwestycji — wybierz właściwy powyżej.', 'warn');
-          return;
-        }
 
         currentJob = data.jobId; currentWorkbook = data.workbook; detectedTemplatePower = data.detectedTemplatePower || '';
         $('filePrefix').value = '';
@@ -374,7 +347,6 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     }
 
     $('uploadBtn')?.addEventListener('click', () => uploadFiles());
-    $('wzoryChoiceConfirmBtn')?.addEventListener('click', () => uploadFiles($('wzoryChoiceSelect').value));
     $('generateBtn')?.addEventListener('click', generate);
     $('cancelBtn')?.addEventListener('click', cancelJob);
     $('selectAllBtn')?.addEventListener('click', () => { document.querySelectorAll('.row-check').forEach(ch => ch.checked = true); updateSelectedMetric(); });

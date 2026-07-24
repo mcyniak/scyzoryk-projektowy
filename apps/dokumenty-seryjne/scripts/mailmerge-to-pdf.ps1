@@ -389,9 +389,14 @@ $script:LabelFieldCandidates = @{
   # bardziej oczywistego "dzialka_ewid_nr"), JAK I kandydatow nazw kolumn
   # (ponizej "Dzia_ka" obok "Dzialka") - Get-RecordValue normalizuje obie
   # strony porownania tym samym mechanizmem.
-  'dzialka_ewid_nr'   = @('Numer dzialki','Dzialka','Dzia_ka','Nr dzialki')
-  'nr_dzialki'        = @('Numer dzialki','Dzialka','Dzia_ka','Nr dzialki')
-  'dzia_ka_ewid_nr'   = @('Numer dzialki','Dzialka','Dzia_ka','Nr dzialki')
+  # "Numer dzia_ki"/"Dzia_ki" (forma mnoga, jak w prawdziwych tabelach typu
+  # "Numer działki") dopisane obok wczesniejszych form "dzialki"/"Dzialka" -
+  # bez tego dopasowanie do prawdziwej kolumny "Numer działki" nigdy sie nie
+  # udawalo, bo hand-pisany ASCII kandydat "Numer dzialki" normalizuje sie
+  # inaczej niz prawdziwe polskie "działki" (patrz komentarz o "l" powyzej).
+  'dzialka_ewid_nr'   = @('Numer dzialki','Numer dzia_ki','Dzialka','Dzia_ka','Nr dzialki')
+  'nr_dzialki'        = @('Numer dzialki','Numer dzia_ki','Dzialka','Dzia_ka','Nr dzialki')
+  'dzia_ka_ewid_nr'   = @('Numer dzialki','Numer dzia_ki','Dzialka','Dzia_ka','Nr dzialki')
   'obreb_ewid_nr'     = @('Numer obrebu','Obreb','Nr obrebu')
   'nr_obrebu'         = @('Numer obrebu','Obreb','Nr obrebu')
   'gmina'             = @('Gmina')

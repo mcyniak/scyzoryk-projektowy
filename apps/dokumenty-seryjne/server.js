@@ -12,8 +12,6 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
-const investmentScan = require('./src/investmentScan');
-const ozcMatch = require('./src/ozcMatch');
 const { detectMailMergeSheetBinding } = require('./src/mailMergeSheetBinding');
 
 
@@ -443,44 +441,121 @@ function groupTemplatesByType(templates) {
   return { groups: groupList, ambiguous };
 }
 
+
+// RESET 2026-07-24: aplikacja ma dzialac TYLKO dla prawdziwych dokumentow
+// korespondencji seryjnej Worda (wzorzec: inwestycja "Rychwal" - folder
+// "Wzor" z podfolderami per MOC, kazdy z kompletem kilku typow dokumentow
+// jako *_korespondencja.docx), nie dla dowolnych plikow .docx wrzuconych do
+// tego samego folderu. Zamiast zgadywac typ/wariant po nazwie pliku albo
+// folderu (jak groupTemplatesByType wyzej - zostawione nietkniete na
+// pozniej, gdyby trzeba bylo wrocic do trybu Kolektory/PC), uzywamy
+// PRAWDZIWEGO powiazania z arkuszem Excela zapisanego przez Worda w
+// word/settings.xml (detectMailMergeSheetBinding) - plik BEZ takiego
+// powiazania to zwykla robocza kopia do recznej edycji, nie szablon do
+// generowania, i jest po cichu pomijany (to jest cala odpowiedz na "ma
+// dzialac tylko dla korespondencji seryjnej, a nie dla losowych plikow").
+
+// Buduje wyrazenie regularne usuwajace z nazwy pliku token danego arkusza
+// (np. "6kW"), tolerancyjne na spacje miedzy liczba a jednostka - w
+// prawdziwych nazwach plikow bywa "6KW" (bez spacji) i "6 kW" (ze spacja),
+// oba musza zniknac zeby ten sam dokument dla roznych mocy zgrupowal sie
+// pod jednym wspolnym "typem".
+function buildSheetTokenRegex(sheetName) {
+  const escaped = s => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const m = String(sheetName || '').trim().match(/^(\d+)\s*(\S+)$/);
+  if (m) return new RegExp(`${escaped(m[1])}\\s*${escaped(m[2])}`, 'ig');
+  return new RegExp(escaped(sheetName), 'ig');
+}
+
+// Z nazwy pliku usuwa token mocy (arkusza) i slowo "korespondencja", zeby
+// zostal sam "typ" dokumentu wspolny dla wszystkich mocy (np.
+// "OT_ZIN_6KW_V1 _korespondencja.docx" i "OT_ZIN_8KW_V1_korespondencja.docx"
+// oba daja "OT_ZIN_V1").
+function deriveMailMergeKind(originalName, sheetName) {
+  let base = String(originalName || '').replace(/\.docx$/i, '');
+  base = base.replace(buildSheetTokenRegex(sheetName), ' ');
+  base = base.replace(/[\s_-]*korespondencj\w*[\s_-]*/ig, ' ');
+  base = base.replace(/[_\s-]{2,}/g, ' ').trim().replace(/^[_-]+|[_-]+$/g, '').trim();
+  return base || String(originalName || '').replace(/\.docx$/i, '');
+}
+
+// Zamiast grupowac po nazwie/folderze, kazdy plik .docx pytamy WPROST czy
+// ma prawdziwe powiazanie mail merge (Word "Wybierz odbiorcow"). Ci co maja
+// - grupujemy po "typie" (deriveMailMergeKind), warianty to MOC/arkusz
+// (sheetName z samego powiazania, nie zgadywany). Ci co nie maja takiego
+// powiazania - to zwykle kopie robocze, pomijamy je calkowicie.
+function groupMailMergeTemplates(templateInfos) {
+  const groups = new Map();
+  const ambiguous = [];
+  const skipped = [];
+  for (const t of templateInfos) {
+    if (path.extname(t.originalName).toLowerCase() !== '.docx') {
+      skipped.push({ file: t.originalName, reason: 'nie jest plikiem .docx' });
+      continue;
+    }
+    const binding = detectMailMergeSheetBinding(t.path);
+    if (!binding || !binding.sheetName) {
+      skipped.push({ file: t.originalName, reason: 'brak prawdziwego powiazania korespondencji seryjnej z arkuszem Excela' });
+      continue;
+    }
+    const kind = deriveMailMergeKind(t.originalName, binding.sheetName);
+    if (!groups.has(kind)) groups.set(kind, { name: kind, variants: {} });
+    const g = groups.get(kind);
+    if (g.variants[binding.sheetName]) {
+      ambiguous.push({ kind, sheetName: binding.sheetName, relFolder: `${kind} (${binding.sheetName})`, files: [g.variants[binding.sheetName].originalName, t.originalName] });
+      continue;
+    }
+    g.variants[binding.sheetName] = t;
+  }
+  // hasVariants zawsze false w tym co idzie do frontendu - wybor "wariantu"
+  // (mocy) juz jest dokonany przez wybor arkusza Excela (sheetSelect), nie
+  // trzeba wiec dodatkowo pytac uzytkownika o kolumne UID per wiersz jak w
+  // starym trybie Kolektory/PC.
+  const groupList = Array.from(groups.values()).map(g => ({ name: g.name, hasVariants: false, variants: g.variants, single: null }));
+  return { groups: groupList, ambiguous, skipped };
+}
+
+// Tabela Excela musi "wygladac jak wzorcowa" (patrz tabela.xlsx z Rychwalu)
+// - zamiast po cichu zgadywac dowolne kolumny, wymagamy zeby te
+// najwazniejsze (uzywane przez sama aplikacje do nazywania plikow/folderow,
+// nie tylko do wypelniania MERGEFIELD) na pewno istnialy, dokladnym
+// dopasowaniem (bez diakrytykow/wielkosci liter), zeby "Numer telefonu" nie
+// zaliczylo sie przypadkiem jako "Numer".
+const REQUIRED_REFERENCE_COLUMNS = ['ID', 'Adres', 'Beneficjent'];
+function findExactColumn(columns, name) {
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '').trim();
+  const target = norm(name);
+  return (columns || []).find(c => norm(c) === target) || null;
+}
+function validateReferenceColumns(columns) {
+  return REQUIRED_REFERENCE_COLUMNS.filter(name => !findExactColumn(columns, name));
+}
+
 // Dla kazdej zaznaczonej "logicznej" pozycji buduje liste konkretnych zadan
 // generowania: {templatePath, templateOriginalName, rowRecords}. Jesli
 // pozycja ma warianty (250/300/400), dzieli wybrane wiersze wg rozmiaru
 // odczytanego z kolumny UID kazdego wiersza - kazdy wariant staje sie
 // osobnym zadaniem z pasujaca do niego podgrupa wierszy.
-function buildGenerationTasks(job, selectedGroupNames, uidColumn, selectedSheet, selectedRowRecords) {
+function buildGenerationTasks(job, selectedGroupNames, sheetName, selectedSheet, selectedRowRecords) {
   const tasks = [];
-  const skippedRows = [];
-  const allRows = selectedSheet.rows || [];
-  const rowsForMerge = selectedRowRecords.length ? allRows.filter(r => selectedRowRecords.includes(Number(r._record))) : allRows;
+  const skippedGroups = [];
+  const rowRecords = selectedRowRecords.length ? selectedRowRecords : (selectedSheet.rows || []).map(r => Number(r._record));
+  const wantedSheet = String(sheetName || '').trim().toLowerCase();
 
   for (const groupName of selectedGroupNames) {
     const group = (job.templateGroups || []).find(g => g.name === groupName);
     if (!group) continue;
-    if (!group.hasVariants) {
-      const t = group.single || Object.values(group.variants)[0];
-      if (!t) continue;
-      tasks.push({ groupName, templatePath: t.path, templateOriginalName: t.originalName, rowRecords: rowsForMerge.map(r => Number(r._record)) });
-    } else {
-      const variantKeys = Object.keys(group.variants);
-      const byVariant = new Map();
-      for (const row of rowsForMerge) {
-        const cellValue = uidColumn ? row[uidColumn] : '';
-        const variant = resolveVariantKey(cellValue, variantKeys);
-        if (!variant) {
-          skippedRows.push({ record: Number(row._record), reason: `Nierozpoznany wariant ("${cellValue}") dla "${groupName}".` });
-          continue;
-        }
-        if (!byVariant.has(variant)) byVariant.set(variant, []);
-        byVariant.get(variant).push(Number(row._record));
-      }
-      for (const [variant, records] of byVariant) {
-        const t = group.variants[variant];
-        tasks.push({ groupName, templatePath: t.path, templateOriginalName: t.originalName, rowRecords: records });
-      }
+    const variantKeys = Object.keys(group.variants || {});
+    const exactKey = variantKeys.find(k => k === sheetName);
+    const looseKey = exactKey || variantKeys.find(k => k.trim().toLowerCase() === wantedSheet);
+    const t = looseKey ? group.variants[looseKey] : null;
+    if (!t) {
+      skippedGroups.push({ groupName, reason: `Brak szablonu "${groupName}" dla arkusza/mocy "${sheetName}".` });
+      continue;
     }
+    tasks.push({ groupName, templatePath: t.path, templateOriginalName: t.originalName, rowRecords });
   }
-  return { tasks, skippedRows };
+  return { tasks, skippedGroups };
 }
 
 async function loadExcelWorkbook(filePath) {
@@ -634,49 +709,6 @@ function parseJsonLines(job, chunk, state) {
   }
 }
 
-// Dla wierszy z pasujacym dokumentem OZC/audytu dokleja wyciagniete z niego
-// pary etykieta->wartosc jako DODATKOWE wlasciwosci rekordu - TYLKO tam,
-// gdzie dana kolumna jeszcze nie istnieje w wierszu Excela, wiec dane z
-// Excela zawsze wygrywaja. Get-RecordValue w mailmerge-to-pdf.ps1 dziala juz
-// dzis na dowolnych wlasciwosciach rekordu, wiec to nie wymaga zadnych zmian
-// po stronie PowerShell. Wyniki dopasowania sa cache'owane w ramach zadania,
-// zeby przy kilku grupach szablonow (ST/BIOZ/Opis techniczny) nie czytac i
-// nie parsowac tego samego pliku OZC po kilka razy.
-async function withOzcFallbackData(job, rows, addressColumn) {
-  const ozcFolders = job.ozcFolders || [];
-  if (!ozcFolders.length) return rows;
-  if (!job._ozcDataCache) job._ozcDataCache = new Map();
-
-  const result = [];
-  for (const row of rows) {
-    const record = Number(row._record);
-    if (!job._ozcDataCache.has(record)) {
-      const address = row[addressColumn];
-      const idCandidate = row.ID ?? row['ID projektu'] ?? row['LP gmina'] ?? row.F ?? null;
-      let ozcData = null;
-      try { ozcData = await ozcMatch.getOzcDataForRow(ozcFolders, { id: idCandidate, address }); } catch (_) { ozcData = null; }
-      job._ozcDataCache.set(record, ozcData);
-    }
-    const ozcData = job._ozcDataCache.get(record);
-    if (!ozcData) { result.push(row); continue; }
-    const merged = { ...row };
-    // PowerShellowe ConvertFrom-Json buduje slownik BEZ rozroznienia wielkosci
-    // liter w kluczach - "gmina" (z Excela) i "Gmina" (etykieta z OZC) to dla
-    // niego ta sama, zduplikowana wartosc i cale parsowanie danych rzuca
-    // wyjatkiem. W JS te dwa klucze sa rozne, wiec samo sprawdzenie
-    // `merged[k] === undefined` tego nie wylapie - trzeba porownywac po
-    // znormalizowanej (malymi literami) nazwie klucza.
-    const existingKeysLower = new Set(Object.keys(merged).map(key => key.toLowerCase()));
-    for (const [k, v] of Object.entries(ozcData)) {
-      if (existingKeysLower.has(k.toLowerCase())) continue;
-      merged[k] = v;
-      existingKeysLower.add(k.toLowerCase());
-    }
-    result.push(merged);
-  }
-  return result;
-}
-
 async function startGeneration(job, options) {
   const sheetName = String(options.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
   const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
@@ -688,9 +720,8 @@ async function startGeneration(job, options) {
   const filePrefix = cleanFilePrefix(options.filePrefix || '');
 
   const allRows = selectedSheet.rows || [];
-  let rowsForMerge = selectedRows.length ? allRows.filter(row => selectedRows.includes(Number(row._record))) : allRows;
+  const rowsForMerge = selectedRows.length ? allRows.filter(row => selectedRows.includes(Number(row._record))) : allRows;
   if (!rowsForMerge.length) throw new Error('Nie wybrano żadnych rekordów do wygenerowania.');
-  rowsForMerge = await withOzcFallbackData(job, rowsForMerge, addressColumn);
 
   const dataJsonPath = path.join(job.outputDir, 'merge-data.json');
   const debugJsonPath = path.join(job.outputDir, 'debug-events.jsonl');
@@ -811,7 +842,7 @@ async function startGeneration(job, options) {
 // ew. rozbity na warianty 250/300/400) i skleja wyniki wszystkich w jeden
 // koncowy raport. Word i tak robi jeden dokument na raz (wordQueue), wiec
 // zadania robimy po kolei, nie rownolegle.
-async function runMultiTemplateGeneration(job, tasks, options, skippedRows) {
+async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
   const allCreated = [];
   const allErrors = [];
   const originalTemplate = job.template;
@@ -832,8 +863,8 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedRows) {
     }
     first = false;
   }
-  for (const skipped of (skippedRows || [])) {
-    allErrors.push({ file: `rekord ${skipped.record}`, message: skipped.reason });
+  for (const skipped of (skippedGroups || [])) {
+    allErrors.push({ file: skipped.groupName, message: skipped.reason });
   }
   job.template = originalTemplate;
   const message = `Wygenerowano ${allCreated.length} plik(ów) z ${tasks.length} szablon(ów).` + (allErrors.length ? ` Błędów: ${allErrors.length}.` : '');
@@ -860,55 +891,22 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     if (!excel) return res.status(400).json({ ok: false, message: 'Dodaj tabelę Excel XLSX.' });
     validateOfficeFile(excel, ['.xlsx']);
 
-    const investmentPath = String(req.body?.investmentPath || '').trim();
-    let templateInfos;
-    let ozcFolders = [];
+    const templateFiles = [...(req.files?.template || []), ...(req.files?.templates || [])];
+    if (!templateFiles.length) return res.status(400).json({ ok: false, message: 'Dodaj co najmniej jeden szablon Word DOCX.' });
+    for (const t of templateFiles) validateOfficeFile(t, ['.docx']);
 
-    if (investmentPath) {
-      // Tryb "folder inwestycji": uzytkownik podaje tylko sciezke, program
-      // sam znajduje w niej folder ze wzorami (moze byc kilka - wtedy trzeba
-      // wybrac) oraz folder(y) z danymi OZC/audytow do uzupelnienia
-      // dodatkowych pol przy generowaniu.
-      let stat;
-      try { stat = fs.statSync(investmentPath); } catch (_) { stat = null; }
-      if (!stat || !stat.isDirectory()) return res.status(400).json({ ok: false, message: 'Nie znaleziono folderu: ' + investmentPath });
-
-      const wzoryFolderChoice = String(req.body?.wzoryFolderChoice || '').trim();
-      let chosenWzoryFolder = wzoryFolderChoice;
-      if (!chosenWzoryFolder) {
-        const wzoryFolders = investmentScan.findWzoryFolders(investmentPath);
-        if (!wzoryFolders.length) return res.status(400).json({ ok: false, message: 'Nie znaleziono w tym folderze podfolderu ze wzorami (nazwa zawierająca "wzór"/"wzory").' });
-        if (wzoryFolders.length > 1) {
-          return res.json({
-            ok: true,
-            needsWzoryChoice: true,
-            wzoryFolderOptions: wzoryFolders.map(f => ({ path: f, label: path.relative(investmentPath, f) }))
-          });
-        }
-        chosenWzoryFolder = wzoryFolders[0];
-      }
-
-      templateInfos = investmentScan.collectTemplateFilesFromDisk(chosenWzoryFolder);
-      if (!templateInfos.length) return res.status(400).json({ ok: false, message: 'Nie znaleziono plików DOCX w folderze wzorów: ' + chosenWzoryFolder });
-      ozcFolders = ozcMatch.findCandidateOzcFolders(investmentPath);
-    } else {
-      const templateFiles = [...(req.files?.template || []), ...(req.files?.templates || [])];
-      if (!templateFiles.length) return res.status(400).json({ ok: false, message: 'Dodaj co najmniej jeden szablon Word DOCX.' });
-      for (const t of templateFiles) validateOfficeFile(t, ['.docx']);
-
-      // Podfolder bezposrednio nad kazdym plikiem (np. "VARMERO VPM 9020"),
-      // wysylany przez klienta jako JSON tablica rownolegla do pola 'templates'
-      // (kolejnosc plikow w tym polu jest zachowana przez multer). Pole
-      // 'template' (pojedynczy, starszy sposob uploadu) nie ma podfolderow.
-      let relFoldersByTemplatesField = [];
-      try { relFoldersByTemplatesField = JSON.parse(req.body?.templateRelFolders || '[]'); } catch (_) { relFoldersByTemplatesField = []; }
-      const singleTemplateFiles = req.files?.template || [];
-      const multiTemplateFiles = req.files?.templates || [];
-      templateInfos = [
-        ...singleTemplateFiles.map(t => ({ path: t.path, originalName: decodeOriginalName(t.originalname), relFolder: '' })),
-        ...multiTemplateFiles.map((t, i) => ({ path: t.path, originalName: decodeOriginalName(t.originalname), relFolder: String(relFoldersByTemplatesField[i] || '') }))
-      ];
-    }
+    // Podfolder bezposrednio nad kazdym plikiem (np. "VARMERO VPM 9020"),
+    // wysylany przez klienta jako JSON tablica rownolegla do pola 'templates'
+    // (kolejnosc plikow w tym polu jest zachowana przez multer). Pole
+    // 'template' (pojedynczy, starszy sposob uploadu) nie ma podfolderow.
+    let relFoldersByTemplatesField = [];
+    try { relFoldersByTemplatesField = JSON.parse(req.body?.templateRelFolders || '[]'); } catch (_) { relFoldersByTemplatesField = []; }
+    const singleTemplateFiles = req.files?.template || [];
+    const multiTemplateFiles = req.files?.templates || [];
+    const templateInfos = [
+      ...singleTemplateFiles.map(t => ({ path: t.path, originalName: decodeOriginalName(t.originalname), relFolder: '' })),
+      ...multiTemplateFiles.map((t, i) => ({ path: t.path, originalName: decodeOriginalName(t.originalname), relFolder: String(relFoldersByTemplatesField[i] || '') }))
+    ];
 
     const sheetNames = (await loadExcelWorkbook(excel.path)).worksheets.map(sheet => sheet.name);
     // Niektore szablony (np. Slesin) maja na stale podpiety przez Word
@@ -920,11 +918,29 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       : null;
     const defaultSheet = boundSheetName || pickDefaultSheet(sheetNames, templateInfos[0].originalName);
     const workbook = await parseWorkbook(excel.path, defaultSheet);
+
+    // Tabela musi "wygladac jak wzorcowa" - patrz mem:conventions / komentarz
+    // przy REQUIRED_REFERENCE_COLUMNS. Sprawdzamy to od razu, zamiast po
+    // cichu generowac dokumenty z pustymi polami dla zle dobranej tabeli.
+    const missingColumns = validateReferenceColumns(workbook.columns);
+    if (missingColumns.length) {
+      return res.status(400).json({
+        ok: false,
+        message: `Tabela Excel nie ma kolumn wymaganych dla korespondencji seryjnej: ${missingColumns.join(', ')}. Sprawdź, czy arkusz „${workbook.sheetName}” ma taką samą strukturę kolumn jak wzorcowa tabela (ID, Adres, Beneficjent...).`
+      });
+    }
+
     const jobId = crypto.randomUUID();
     const outDir = path.join(OUTPUT_DIR, jobId);
     await fsp.mkdir(outDir, { recursive: true });
 
-    const { groups: templateGroups, ambiguous: ambiguousTemplates } = groupTemplatesByType(templateInfos);
+    const { groups: templateGroups, ambiguous: ambiguousTemplates, skipped: skippedTemplates } = groupMailMergeTemplates(templateInfos);
+    if (!templateGroups.length) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Żaden z wgranych plików .docx nie jest prawdziwym dokumentem korespondencji seryjnej (brak powiązania z arkuszem Excela przez "Wybierz odbiorców" w Wordzie). Ta aplikacja generuje dokumenty tylko z takich plików.'
+      });
+    }
 
     const job = {
       id: jobId,
@@ -934,7 +950,6 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       endedAt: null,
       template: templateInfos[0],
       templateGroups,
-      ozcFolders,
       excel: { path: excel.path, originalName: decodeOriginalName(excel.originalname) },
       workbook,
       outputDir: outDir,
@@ -948,7 +963,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     };
     jobs.set(jobId, job);
     persistJobsIndex();
-    appendLog(job, 'info', 'Wczytano pliki.', { templates: templateInfos.map(t => t.originalName), excel: job.excel.originalName, rows: workbook.totalRows, sheet: workbook.sheetName, sheets: workbook.summaries, ozcFolders });
+    appendLog(job, 'info', 'Wczytano pliki.', { templates: templateInfos.map(t => t.originalName), excel: job.excel.originalName, rows: workbook.totalRows, sheet: workbook.sheetName, sheets: workbook.summaries });
     res.json({
       ok: true,
       jobId,
@@ -957,7 +972,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       suggestedUidColumn: guessUidColumn(workbook.columns),
       templateGroups: templateGroups.map(g => ({ name: g.name, hasVariants: g.hasVariants, variants: Object.keys(g.variants) })),
       ambiguousTemplates,
-      ozcFoldersFound: ozcFolders.length,
+      skippedTemplatesCount: skippedTemplates.length,
       detectedTemplatePower: boundSheetName || detectPowerFromText(templateInfos[0].originalName)
     });
   } catch (err) {
@@ -987,14 +1002,13 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
     const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
     const selectedRowRecords = Array.isArray(body.selectedRows) ? body.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
     const selectedGroups = Array.isArray(body.selectedGroups) ? body.selectedGroups.filter(Boolean) : null;
-    const uidColumn = String(body.uidColumn || '').trim();
 
-    let tasks, skippedRows = [];
+    let tasks, skippedGroups = [];
     if (selectedGroups && selectedGroups.length && job.templateGroups && job.templateGroups.length) {
-      const built = buildGenerationTasks(job, selectedGroups, uidColumn, selectedSheet, selectedRowRecords);
+      const built = buildGenerationTasks(job, selectedGroups, sheetName, selectedSheet, selectedRowRecords);
       tasks = built.tasks;
-      skippedRows = built.skippedRows;
-      if (!tasks.length) return res.status(400).json({ ok: false, message: 'Nie znaleziono żadnych pasujących dokumentów do wygenerowania - sprawdź kolumnę UID i wybrane typy dokumentów.' });
+      skippedGroups = built.skippedGroups;
+      if (!tasks.length) return res.status(400).json({ ok: false, message: `Nie znaleziono żadnych szablonów korespondencji seryjnej dla arkusza „${sheetName}” wśród wybranych typów dokumentów.` });
     } else {
       tasks = [{ templatePath: job.template.path, templateOriginalName: job.template.originalName, rowRecords: selectedRowRecords.length ? selectedRowRecords : (selectedSheet.rows || []).map(r => Number(r._record)) }];
     }
@@ -1002,7 +1016,7 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
     job.status = 'queued';
     persistJobsIndex();
     setProgress(job, { phase: 'queued', message: 'Zadanie czeka w kolejce Word. Word robi tylko jeden dokument naraz.', queue: wordQueue.getState() });
-    wordQueue.run(() => runMultiTemplateGeneration(job, tasks, body, skippedRows)).catch(err => {
+    wordQueue.run(() => runMultiTemplateGeneration(job, tasks, body, skippedGroups)).catch(err => {
       job.status = 'error';
       job.result = { ok: false, message: err.message || 'Nie udało się uruchomić generowania.', created: [], errors: [] };
       persistJobsIndex();
