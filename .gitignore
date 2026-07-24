@@ -54,3 +54,6 @@ desktop.ini
 
 # Artefakty narzedzia playwright-cli (snapshoty/logi z testowania UI)
 .playwright-cli/
+
+# Zbudowane paczki do rozeslania (scripts/build-package.js) - wynik, nie zrodlo
+release/

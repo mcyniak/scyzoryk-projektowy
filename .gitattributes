@@ -1,0 +1,6 @@
+# Pliki/foldery narzedzi deweloperskich (AI, sesje Claude Code/Serena) - trzymane w
+# repo dla przyszlych sesji, ale pomijane w paczce dla koncowego uzytkownika
+# budowanej przez scripts/build-package.js (git archive).
+.claude/ export-ignore
+.serena/ export-ignore
+.gitattributes export-ignore

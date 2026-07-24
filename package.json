@@ -10,7 +10,8 @@
     "install-all": "node scripts/install-all.js",
     "check": "node scripts/check-project.js",
     "security-smoke": "node scripts/security-smoke-test.js",
-    "audit": "node scripts/check-project.js"
+    "audit": "node scripts/check-project.js",
+    "package": "node scripts/build-package.js"
   },
   "engines": {
     "node": ">=18"

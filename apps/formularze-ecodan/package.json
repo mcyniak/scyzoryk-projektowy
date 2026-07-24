@@ -20,5 +20,8 @@
     "pdf-lib": "^1.17.1",
     "express-rate-limit": "^7.5.0",
     "read-excel-file": "^9.2.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

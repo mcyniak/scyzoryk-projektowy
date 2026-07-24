@@ -14,5 +14,8 @@
     "multer": "^2.0.2",
     "read-excel-file": "^9.2.0",
     "sanitize-filename": "^1.6.3"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
