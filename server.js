@@ -6,6 +6,17 @@ const { createRequire } = require('module');
 const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog } = require('./lib/hardening');
 
 const ROOT = __dirname;
+// Realny blad zlapany 2026-07-24: sprawdzenie Chromium w appHasDependencies() (nizej)
+// czyta process.env.PLAYWRIGHT_BROWSERS_PATH, zeby wiedziec, GDZIE playwright trzyma
+// swoja przegladarke (wspolna z tym, co child-procesy dostaja przy starcie - patrz
+// startChild). Jesli ktos uruchomi `node server.js` bezposrednio, bez wczesniejszego
+// `set PLAYWRIGHT_BROWSERS_PATH=0` w powloce (jak robia to STARTUJ-SCYZORYK*.cmd),
+// zmienna byla pusta - sprawdzenie patrzylo w zly (globalny, ~/.cache) folder, uznawalo
+// realnie zainstalowanego Chromium za "brakujacego" i wywolywalo zbedna, wieloninutowa
+// reinstalacje/ponowne pobranie przy KAZDYM starcie. Ustawiane tu wprost (ten sam wzorzec
+// obronny co install-all.js), zeby caly proces (sprawdzenie ORAZ dzieci) mial spojna,
+// gwarantowana wartosc niezaleznie od tego, jak server.js zostal uruchomiony.
+process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '0';
 const diagnostics = setupProcessDiagnostics('panel-glowny', ROOT);
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const PORT = Number(process.env.PORT || 3000);
@@ -35,7 +46,7 @@ const apps = [
 const dependencyChecks = [
   { slug: 'drukarka', dir: path.join(ROOT, 'apps', 'drukarka'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib'] },
   { slug: 'pieczatki', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), deps: ['express', 'multer', 'pdf-lib', 'archiver', '@pdf-lib/fontkit', 'pdfjs-dist', 'express-rate-limit'] },
-  { slug: 'formularze', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), deps: ['express', 'playwright', 'read-excel-file', 'pdf-parse', 'pdf-lib', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
+  { slug: 'formularze', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), deps: ['express', 'playwright', 'read-excel-file', 'pdf-parse', 'pdf-lib', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'], playwright: true },
   { slug: 'dokumenty-seryjne', dir: path.join(ROOT, 'apps', 'dokumenty-seryjne'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
   { slug: 'wnioski-powykonawcze', dir: path.join(ROOT, 'apps', 'wnioski-powykonawcze'), deps: ['express', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
   { slug: 'karty-katalogowe', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'express-rate-limit'] },
@@ -54,6 +65,23 @@ function appHasDependencies(app) {
   for (const dep of app.deps) {
     const depDir = path.join(app.dir, 'node_modules', ...dep.split('/'));
     if (!fs.existsSync(depDir)) return false;
+  }
+  // Realny problem zlapany 2026-07-24 (pytanie wlasciciela przy testowaniu autostartu):
+  // folder node_modules/playwright moze istniec (npm install sie udal), a mimo to sam
+  // BINARNY Chromium moze nie byc pobrany (osobny krok, `npm run install-browsers` w
+  // scripts/install-all.js) - np. jesli ten krok kiedys zawiodl/zostal przerwany, albo
+  // Chromium zostal recznie usuniety. Bez tego sprawdzenia formularze-ecodan wygladaloby
+  // na "zainstalowane" i auto-instalacja NIGDY by go nie naprawila - krytyczne przy
+  // cichym autostarcie (STARTUJ-SCYZORYK-CICHO.cmd), gdzie nikt nie zobaczy bledu na
+  // zywo, zeby recznie uruchomic NAPRAW-ZALEZNOSCI.cmd.
+  if (app.playwright) {
+    try {
+      const requireFromApp = createRequire(path.join(app.dir, 'server.js'));
+      const { chromium } = requireFromApp('playwright');
+      if (!fs.existsSync(chromium.executablePath())) return false;
+    } catch (_) {
+      return false;
+    }
   }
   return true;
 }
