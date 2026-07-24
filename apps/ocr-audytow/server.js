@@ -9,10 +9,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { Jimp } = require('jimp');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
-const { analyzeDocument, finalizeSplit, buildFieldPreview, cropPageRegion } = require('./src/ocrPipeline');
+const { analyzeDocument, finalizeSplit, buildFieldPreview, cropPageRegion, withTimeout, OCR_PAGE_TIMEOUT_MS } = require('./src/ocrPipeline');
 const { isConfigured: isOcrConfigured, ocrImage: docAiOcrImage } = require('./src/documentAiEngine');
 const { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS } = require('./src/fieldExtraction');
-const { writeFreshRows, validatePath: validateExcelPath } = require('./src/excelExport');
+const { writeFreshRows, writeFamilyTemplateRows, validatePath: validateExcelPath } = require('./src/excelExport');
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
 const { loadTemplates, matchTemplate, extractFieldsFromTemplate, buildTemplateFromReview, harvestTemplateFields } = require('./src/templateEngine');
 
@@ -384,7 +384,16 @@ async function retryFieldWithCrop({ field, key, page, refBBox, sourceImage, prev
   try {
     const built = await cropPageRegion({ pageImagePath: page.imagePath, bbox: refBBox, outPath: cropPath, sourceImage });
     if (!built) return;
-    const { text, words, formFields, tables, visualElements } = await docAiOcrImage(cropPath);
+    // Ta sama ochrona co ocrPage() w ocrPipeline.js (2026-07-24): Document AI nie ma
+    // wlasnego timeoutu, wiec martwe/zresetowane polaczenie sieciowe potrafi wisiec
+    // wiecznie - bez tego jedna zawieszona druga proba blokowalaby caly request
+    // /api/ocr/extract-fields (lub recalibrate-remaining) na zawsze, mimo ze catch(_)
+    // nizej juz poprawnie obsluguje zwykle ODRZUCONE obietnice.
+    const { text, words, formFields, tables, visualElements } = await withTimeout(
+      docAiOcrImage(cropPath),
+      OCR_PAGE_TIMEOUT_MS,
+      `Pole "${key}": ponowne rozpoznawanie fragmentu`
+    );
     const miniPage = { pageIndex: field.pageIndex, ocrText: text, ocrWords: words, formFields: formFields || [], tables: tables || [], visualElements: visualElements || [] };
     const retried = extractSingleField(miniPage, key);
     if (!retried) return;
@@ -945,9 +954,14 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     if (excelPath && excelRows.length) {
       try {
         if (family) {
-          const { sheetName, columns } = TABELA_FAMILIES[family];
-          const identityLabels = Object.fromEntries(columns.map((c) => [c.label, c.label]));
-          writeFreshRows(excelPath, sheetName, columns.map((c) => c.label), identityLabels, excelRows);
+          // Klonujemy prawdziwy firmowy wzor (assets/templates/*.xlsx), zeby wygenerowany
+          // plik wygladal wizualnie jak wzor (czcionki/kolory/obramowania + zywe formuly
+          // typu "Udzial ogrzew. podlog.") - patrz komentarz przy writeFamilyTemplateRows
+          // w excelExport.js. Do 2026-07-24 ta galaz cichutko wolala writeFreshRows (goly
+          // arkusz z samymi naglowkami), mimo ze cala klonujaca-wzor sciezka byla juz
+          // zbudowana i przetestowana - nigdy nie zostala tu podpieta.
+          const { templateFile, sheetName } = TABELA_FAMILIES[family];
+          await writeFamilyTemplateRows(templateFile, excelPath, sheetName, excelRows);
         } else {
           writeFreshRows(excelPath, 'Audyty', COLUMN_ORDER, COLUMN_LABELS, excelRows);
         }

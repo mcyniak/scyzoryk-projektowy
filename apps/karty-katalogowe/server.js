@@ -99,6 +99,13 @@ function nazwaZasobnika(rozmiar) { return `Zasobnik SGW(S)B ${rozmiar}.pdf`; }
 // przetwarzamy je rownolegle z ograniczeniem (nie bez ograniczenia - zbyt
 // duzo naraz zadan do dysku sieciowego mogloby zaczac dostawac bledy).
 const KK_CONCURRENCY = Math.max(1, Number(process.env.KK_CONCURRENCY || 8));
+// Jeden, wspoldzielony semafor dla calego procesu - byl tworzony od nowa przy
+// kazdym wywolaniu przetworzArkusz(), wiec dwa rownolegle requesty (dwie karty/
+// uploady) dostawaly kazdy swoj wlasny limit KK_CONCURRENCY zamiast dzielic
+// jeden, co pozwalalo na 2x (lub wiecej, dla >2 rownoleglych requestow) tyle
+// jednoczesnych zadan do dysku sieciowego niz zamierzone - dokladnie ten
+// limit, ktory ten mechanizm mial wymuszac.
+const semaforKopiowania = createSemaphore(KK_CONCURRENCY);
 
 function normalizujTekst(value) {
   return String(value ?? '').trim();
@@ -328,8 +335,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   // FAZA 2 (rownolegla, z ograniczeniem KK_CONCURRENCY): listowanie folderu
   // klienta i ewentualne kopiowanie - to jest czesc, ktora realnie czeka na
   // dysk sieciowy, wiec robimy wiele adresow naraz zamiast jednego po drugim.
-  const semafor = createSemaphore(KK_CONCURRENCY);
-  await Promise.all(zadania.map(zadanie => semafor.run(async () => {
+  await Promise.all(zadania.map(zadanie => semaforKopiowania.run(async () => {
     const { idx, wiersz, id, adres, uid, folderNazwa, rozmiar } = zadanie;
     const wymaganePliki = [...ZAWSZE_KARTY, nazwaZasobnika(rozmiar)];
     const folderKlienta = path.join(projektyDir, folderNazwa);

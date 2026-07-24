@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import sanitize from 'sanitize-filename';
+import { createSemaphore } from '../../../lib/hardening.js';
 import {
   DEBUG_MODE,
   TRACE_MODE,
@@ -10,7 +11,10 @@ import {
   BATCH_CONCURRENCY_MAX,
   MAX_CLOSED_SESSION_STREAK,
   MAX_JOB_CLOSED_SESSION_STREAK,
-  RECORD_TIMEOUT_MS
+  RECORD_TIMEOUT_MS,
+  MAX_ECODAN_JOBS,
+  JOB_TTL_MS,
+  JOB_MAX_TERMINAL
 } from './config.js';
 import { calculate } from './rules.js';
 import { saveDebug, cleanupDebugArtifact, getOutputRoot } from './debug.js';
@@ -36,6 +40,36 @@ const jobSessions = new Map();
 function terminalStatus(status) {
   return ['finished', 'finished-with-errors', 'fatal-error', 'cancelled'].includes(status);
 }
+
+// Jeden, wspoldzielony limit na WSZYSTKIE ciezkie (Playwright/Chromium) zadania w
+// tym procesie - patrz komentarz przy MAX_ECODAN_JOBS w config.js. Nowe zadanie
+// ponad limit NIE dostaje bledu - czeka w kolejce (job.status zostaje "queued",
+// UI juz to poprawnie pokazuje) i rusza samo, gdy zwolni sie miejsce.
+const heavyJobQueue = createSemaphore(MAX_ECODAN_JOBS);
+
+// Sprzatanie mapy `jobs` - dotad rosla w nieskonczonosc (zero TTL/limitu), realny
+// wyciek pamieci dla apki majacej dzialac tygodniami (patrz JOB_TTL_MS/
+// JOB_MAX_TERMINAL w config.js). Dotyka WYLACZNIE zadan w stanie koncowym -
+// queued/running/cancelling nigdy nie sa usuwane, niezaleznie od wieku.
+function cleanupOldJobs() {
+  const now = Date.now();
+  const terminal = [];
+  for (const [id, job] of jobs) {
+    if (!terminalStatus(job.status)) continue;
+    const finishedAtMs = job.finishedAt ? Date.parse(job.finishedAt) : NaN;
+    if (Number.isFinite(finishedAtMs) && now - finishedAtMs > JOB_TTL_MS) {
+      jobs.delete(id);
+      continue;
+    }
+    terminal.push([id, job]);
+  }
+  if (terminal.length > JOB_MAX_TERMINAL) {
+    terminal.sort((a, b) => Date.parse(a[1].finishedAt || a[1].createdAt) - Date.parse(b[1].finishedAt || b[1].createdAt));
+    const excess = terminal.length - JOB_MAX_TERMINAL;
+    for (let i = 0; i < excess; i++) jobs.delete(terminal[i][0]);
+  }
+}
+setInterval(cleanupOldJobs, 60 * 60 * 1000).unref();
 
 function getJobSessionSet(jobId) {
   if (!jobSessions.has(jobId)) jobSessions.set(jobId, new Set());
@@ -470,6 +504,10 @@ async function processRecordWithWorker(record, recordIndex, worker, job, pdfDir,
 }
 
 export async function runBatchJob(job, filePath, options = {}) {
+  return heavyJobQueue.run(() => runBatchJobInner(job, filePath, options));
+}
+
+async function runBatchJobInner(job, filePath, options = {}) {
   job.status = 'reading-excel';
   job.startedAt = new Date().toISOString();
   const outputBase = getOutputRoot();
@@ -597,6 +635,10 @@ export async function runBatchJob(job, filePath, options = {}) {
 }
 
 export async function runAutomation(input) {
+  return heavyJobQueue.run(() => runAutomationInner(input));
+}
+
+async function runAutomationInner(input) {
   const result = calculate(input);
   const outputRoot = getOutputRoot();
   const tmpDir = path.join(outputRoot, 'tmp', 'single');

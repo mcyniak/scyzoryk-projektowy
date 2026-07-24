@@ -29,3 +29,21 @@ export const BATCH_CONCURRENCY_MAX = Math.max(1, Math.min(4, Number(process.env.
 export const MAX_CLOSED_SESSION_STREAK = Math.max(1, Number(process.env.MAX_CLOSED_SESSION_STREAK || 3));
 export const MAX_JOB_CLOSED_SESSION_STREAK = Math.max(1, Number(process.env.MAX_JOB_CLOSED_SESSION_STREAK || 8));
 export const RECORD_TIMEOUT_MS = Math.max(60000, Number(process.env.RECORD_TIMEOUT_MS || 8 * 60 * 1000));
+
+// Ile "ciezkich" (Playwright/Chromium) zadan - pojedynczych /api/run ORAZ calych
+// paczek /api/batch/start - moze realnie dzialac naraz w tym procesie. Wczesniej
+// nie bylo tu ZADNEGO limitu (heavyJobLimiter w server.js ogranicza tylko CZESTOSC
+// requestow, nie ich rownolegle wykonanie) - druga karta/zakladka albo odswiezona
+// strona mogla odpalic kolejna paczke rownolegle z juz trwajaca, mnozac liczbe
+// jednoczesnych procesow Chromium. Nowe zadania NIE dostaja bledu gdy limit jest
+// osiagniety - czekaja w kolejce (status zadania zostaje "queued", UI juz to
+// pokazuje) i ruszaja same, gdy zwolni sie miejsce - jesli nic innego nie dziala,
+// zadanie startuje od razu, tak jak dzis.
+export const MAX_ECODAN_JOBS = Math.max(1, Number(process.env.MAX_ECODAN_JOBS || 1));
+
+// Sprzatanie mapy `jobs` (server.js/jobs.js) - dotad rosla w nieskonczonosc (zero
+// TTL/limitu), a ta apka ma dzialac tygodniami. Sprzatamy WYLACZNIE zadania w
+// stanie koncowym (finished/finished-with-errors/fatal-error/cancelled) - nigdy
+// queued/running/cancelling, zeby nie dotknac czegokolwiek aktywnego.
+export const JOB_TTL_MS = Math.max(3600000, Number(process.env.ECODAN_JOB_TTL_MS || 24 * 60 * 60 * 1000));
+export const JOB_MAX_TERMINAL = Math.max(10, Number(process.env.ECODAN_JOB_MAX_TERMINAL || 200));

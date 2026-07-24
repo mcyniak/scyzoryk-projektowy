@@ -489,4 +489,4 @@ async function finalizeSplit({ sourcePdfPath, ocrPdfPath, pages, blocks, outPath
   }
 }
 
-module.exports = { analyzeDocument, finalizeSplit, assemblePdfRange, buildThumbnails, buildFieldPreview, cropPageRegion, computeFieldCropRect };
+module.exports = { analyzeDocument, finalizeSplit, assemblePdfRange, buildThumbnails, buildFieldPreview, cropPageRegion, computeFieldCropRect, withTimeout, OCR_PAGE_TIMEOUT_MS };

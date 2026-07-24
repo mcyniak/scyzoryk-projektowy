@@ -483,6 +483,13 @@ app.post("/api/print", async (req, res) => {
     try {
       const { built, missing } = await buildQueueFromGroups(req, groups);
       if (!built.length) return res.status(400).json({ ok: false, message: "Nie utworzono żadnych pozycji w kolejce. Brak plików do dodania.", missing });
+      // Ten sam limit co /api/queue/set i /api/queue/set-merged (patrz MAX_QUEUE
+      // wyzej) - ta trzecia sciezka budowania kolejki (druk "od razu" z grup, bez
+      // wczesniejszego zatwierdzenia w /api/queue/*) go pomijala, mimo ze dodana
+      // pozniej (WM) i moze zwrocic 100+ pozycji z jednego realnego folderu.
+      if (built.length > MAX_QUEUE) {
+        return res.status(400).json({ ok: false, message: `Za duzo pozycji w kolejce (${built.length}). Limit: ${MAX_QUEUE}. Podziel na mniejsze paczki.` });
+      }
       session.queue = built;
     } catch (err) {
       return res.status(400).json({ ok: false, message: "Nie udalo sie utworzyc kolejki przed drukiem: " + (err.message || err) });
