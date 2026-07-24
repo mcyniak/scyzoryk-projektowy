@@ -75,6 +75,21 @@
         </div>
       </div>
       <div id="reviewFiles"></div>
+      <div class="option-field" style="margin-top:18px">
+        <span>Rodzina protokołu - zawęża listę pól do uzupełnienia do tych, które faktycznie trafiają do tabelki adresowej tej rodziny</span>
+        <select id="familySelect">
+          <option value="">— nie zawężaj (wszystkie pola) —</option>
+          <option value="pc">Pompy ciepła</option>
+          <option value="solary">Solary</option>
+          <option value="kotly">Kotły</option>
+        </select>
+      </div>
+      <div class="option-field" style="margin-top:12px">
+        <span>Wzór gminy - domyślnie program sam rozpoznaje wzór po nagłówku protokołu; tu możesz go wymusić ręcznie (np. jeśli automatyczne rozpoznanie zawiedzie)</span>
+        <select id="templateSelect">
+          <option value="">— rozpoznaj automatycznie —</option>
+        </select>
+      </div>
       <div class="hero-actions">
         <button type="button" id="confirmBtn">Zatwierdź podział</button>
         <button type="button" id="cancelReviewBtn" class="ghost">Anuluj</button>
@@ -94,7 +109,24 @@
         <div class="field-review-card">
           <div class="field-preview-box">
             <img id="fieldPreviewImg" alt="Podgląd miejsca na skanie">
-            <p id="fieldPreviewMissing" class="help-note" hidden>Nie udało się zlokalizować tego pola na skanie - sprawdź je samodzielnie w oryginalnym dokumencie.</p>
+            <button type="button" id="fieldRemarkBtn" class="ghost" hidden>Popraw zaznaczenie</button>
+            <div id="fieldPreviewMissingBox" hidden>
+              <p id="fieldPreviewMissing" class="help-note">Nie udało się zlokalizować tego pola na skanie. Jeśli pole faktycznie jest puste w oryginale, od razu kliknij "Brak w oryginale" niżej - nie trzeba nic zaznaczać. Jeśli wartość tam jest, sprawdź w oryginalnym dokumencie i wpisz ją, albo zaznacz miejsce ręcznie poniżej.</p>
+              <button type="button" id="fieldMarkBtn" class="ghost">Zaznacz ręcznie na skanie</button>
+            </div>
+          </div>
+          <div id="fieldMarkBox" hidden>
+            <div class="mark-wrap" id="markWrap">
+              <img id="markPageImg" alt="Cała strona - zaznacz obszar pola przeciągając myszą">
+              <div id="markOverlay"></div>
+            </div>
+            <p class="help-note">Przeciągnij prostokąt wokół pola na skanie. Jeśli to nie ta strona, przełącz się przyciskami niżej.</p>
+            <p class="help-note" id="markError" hidden></p>
+            <div class="hero-actions">
+              <button type="button" id="markPrevPageBtn" class="ghost">◀ Poprzednia strona</button>
+              <button type="button" id="markNextPageBtn" class="ghost">Następna strona ▶</button>
+              <button type="button" id="markCancelBtn" class="ghost">Anuluj</button>
+            </div>
           </div>
           <div class="field-input-box">
             <div class="field-doc-name" id="fieldDocName"></div>
@@ -102,6 +134,7 @@
             <form id="fieldForm">
               <input type="text" id="fieldValueInput" autocomplete="off" placeholder="Wpisz odczytaną wartość...">
               <div class="hero-actions">
+                <button type="button" id="fieldBackBtn" class="ghost">◀ Poprzednie pole</button>
                 <button type="submit">Zapisz i dalej (Enter)</button>
                 <button type="button" id="fieldSkipBtn" class="ghost">Brak w oryginale</button>
               </div>
@@ -111,14 +144,17 @@
       </div>
 
       <div id="excelStep" hidden>
+        <p class="help-note" id="familyChosenNote"></p>
         <div class="option-field" style="margin-top:18px">
-          <span>Ścieżka do tabelki Excela (.xlsx) - dopisze wiersz, tworzy plik jeśli nie istnieje</span>
+          <span>Ścieżka do tabelki Excela (.xlsx) - stworzy NOWY plik z wierszami wszystkich przetworzonych adresów (nadpisze, jeśli coś już tam jest)</span>
           <input type="text" id="excelPathInput" placeholder="G:\Dyski współdzielone\...\tabela-audytow.xlsx">
         </div>
-        <p class="help-note">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y.</p>
+        <p class="help-note">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 2) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru.</p>
         <div class="hero-actions">
           <button type="button" id="finalizeBtn">Zapisz i pobierz</button>
+          <button type="button" id="saveTemplateBtn" class="ghost">Zapisz układ jako wzór</button>
         </div>
+        <p class="help-note" id="saveTemplateNote" hidden></p>
       </div>
     </section>
 
@@ -129,6 +165,7 @@
           <p class="panel-desc">Pobierz rozpoznane PDF-y - oryginalny plik źródłowy nie został zmieniony.</p>
         </div>
       </div>
+      <p class="help-note" id="excelResultNote" hidden></p>
       <div class="result-list" id="resultList"></div>
     </section>
   </main>

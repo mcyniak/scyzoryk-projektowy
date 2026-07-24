@@ -12,37 +12,7 @@
 // pytaniami w jednym wierszu) - to jedno z KILKU probowanych zrodel
 // (fieldExtraction.js probuje tabele -> formFields -> tokeny po kolei), nie
 // uniwersalne rozwiazanie samo w sobie.
-const { CHECKBOX_CHECKED, CHECKBOX_UNCHECKED } = require('./textMatch');
-
-function verticesToRect(vertices) {
-  if (!vertices || !vertices.length) return null;
-  const xs = vertices.map((v) => v.x);
-  const ys = vertices.map((v) => v.y);
-  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
-}
-
-// Szuka PIERWSZEGO wiersza (w dowolnej tabeli na stronie), ktorego polaczony
-// tekst pasuje do `rowPattern` (jeden regex na CALY wiersz, nie sekwencja
-// slow) - zwraca { rowText, checked, numericValue, bbox } albo null.
-// `numericValue`: pierwsza "gola" liczba (z przecinkiem/kropka dziesietna)
-// w wierszu, NIEPRZYKLEJONA do litery przed nia (ten sam heurystyka co
-// looksPlausible w fieldExtraction.js - unika np. wyciagniecia "2" z "m2").
-function findTableRow(tables, rowPattern) {
-  for (const table of tables || []) {
-    for (const row of table.rows || []) {
-      if (!rowPattern.test(row.text.toUpperCase())) continue;
-      const checked = CHECKBOX_CHECKED.test(row.text);
-      const numMatch = row.text.match(/(^|[^\p{L}])(\d+[.,]?\d*)/u);
-      return {
-        rowText: row.text,
-        checked,
-        numericValue: numMatch ? numMatch[2] : null,
-        bbox: verticesToRect(row.bbox)
-      };
-    }
-  }
-  return null;
-}
+const { CHECKBOX_CHECKED, CHECKBOX_UNCHECKED, verticesToRect } = require('./textMatch');
 
 // Odpowiednik dla grup opcji material/checkbox rozlozonych na WIELE wierszy
 // jednej tabeli (np. "material sciany zewnetrznej: Cegla/Bloczki/Pustak/...").
@@ -87,4 +57,4 @@ function findCheckedTableRow(tables, options) {
   return anyOptionTextFound ? { option: null } : null;
 }
 
-module.exports = { findTableRow, findCheckedTableRow };
+module.exports = { findCheckedTableRow };

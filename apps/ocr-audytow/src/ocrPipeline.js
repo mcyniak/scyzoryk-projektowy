@@ -7,14 +7,17 @@
 //   1. jesli PDF juz ma prawdziwa warstwe tekstu (rodzina "FLEXIPOWER") - kopiujemy
 //      bez zmian, OCR pominiety, jeden blok (caly plik = jeden adres);
 //   2. w przeciwnym razie wyciagamy osadzone obrazy stron, wysylamy KAZDA
-//      strone do Google Cloud Vision (`visionEngine.ocrImage`, rownolegle,
-//      patrz mapWithConcurrency), wykrywamy i (jesli trzeba) korygujemy
-//      fizyczny obrot pikseli na podstawie geometrii zwroconych slow (patrz
-//      rotationDetect.js - zero dodatkowego wywolania OSD/silnika), a
-//      nastepnie sami skladamy PDF z niewidoczna warstwa tekstu (patrz
-//      buildOcrPdf) - Vision, w odroznieniu od Tesseracta, nie ma
-//      wbudowanego trybu "searchable pdf", wiec te warstwe budujemy recznie
-//      przez pdf-lib na podstawie wspolrzednych slow;
+//      strone do OCR-u (rownolegle, patrz mapWithConcurrency), a nastepnie
+//      sami skladamy PDF z niewidoczna warstwa tekstu (patrz buildOcrPdf) -
+//      silnik OCR nie ma wbudowanego trybu "searchable pdf", wiec te warstwe
+//      budujemy recznie przez pdf-lib na podstawie wspolrzednych slow.
+//      Uwaga (2026-07-24): automatyczne wykrywanie/korygowanie fizycznego
+//      obrotu strony zostalo swiadomie USUNIETE (bylo ~40% calkowitego czasu
+//      przetwarzania na realnym 20-stronicowym pliku, ~54s z ~134s) - wlasciciel
+//      ocenil, ze rownie latwo poprawic orientacje skanu recznie przed
+//      wgraniem, wiec program nie musi tego zgadywac. Skany wgrywane fizycznie
+//      "do gory nogami" beda miec bledne podglady/zaznaczenia pol - to
+//      swiadomy kompromis, nie przeoczenie.
 //   3. na podstawie juz rozpoznanego tekstu proponujemy podzial na bloki
 //      (adresy) - patrz bundleSplit.js - ale NIGDY nie dzielimy automatycznie:
 //      wywolujacy (server.js) pokazuje ekran potwierdzenia z miniaturami stron,
@@ -32,7 +35,6 @@ const { extractPageImages } = require('./pdfImageExtractor');
 // documentAiEngine.js dla uzasadnienia migracji. visionEngine.js pozostaje w
 // repo jako bezpieczny punkt powrotu (git), nie jest juz uzywany.
 const { ocrImage, isConfigured } = require('./documentAiEngine');
-const { detectRotationFromWords, rotatePoint } = require('./rotationDetect');
 const { detectBlockBoundaries, boundariesToBlocks } = require('./bundleSplit');
 const { embedUnicodeFont } = require('./textFont');
 
@@ -61,9 +63,34 @@ async function mapWithConcurrency(items, limit, fn) {
 // nieudanym OCR-em jest traktowana jak strona bez osadzonego obrazu wcale -
 // kopiowana bez OCR, z ostrzezeniem dla uzytkownika (patrz warnings w
 // analyzeDocument), reszta dokumentu przetwarza sie normalnie dalej.
+//
+// Realny problem zlapany 2026-07-24: powyzszy try/catch chroni tylko przed
+// ocrImage(), ktore ODRZUCA obietnice - nie chroni przed ocrImage(), ktore
+// PO PROSTU NIGDY SIE NIE ROZSTRZYGA (klient Document AI nie ma skonfigurowanego
+// zadnego timeoutu - martwe/zresetowane po cichu polaczenie sieciowe czeka
+// wiecznie na odpowiedz, ktora nigdy nie nadejdzie). Poniewaz OCR wszystkich
+// stron idzie przez mapWithConcurrency (limit 5, jeden Promise.all na cala
+// partie), JEDNA zawieszona strona blokuje NA ZAWSZE caly plik, nie tylko
+// siebie - obserwowane na zywo jako proces bez wzrostu CPU i bez otwartych
+// polaczen sieciowych, trwajacy nieskonczenie dlugo. withTimeout zamienia
+// "wiecznie wisi" na normalny, juz obslugiwany ocrError po rozsadnym czasie.
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} - przekroczono limit czasu (${Math.round(ms / 1000)}s), prawdopodobnie martwe polaczenie sieciowe`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+const OCR_PAGE_TIMEOUT_MS = 90000;
+
 async function ocrPage(page) {
   try {
-    const { text, words, formFields, tables, visualElements } = await ocrImage(page.imagePath);
+    const { text, words, formFields, tables, visualElements } = await withTimeout(
+      ocrImage(page.imagePath),
+      OCR_PAGE_TIMEOUT_MS,
+      `Strona ${page.pageIndex + 1}: rozpoznawanie tekstu`
+    );
     return { ...page, ocrText: text, ocrWords: words, formFields: formFields || [], tables: tables || [], visualElements: visualElements || [] };
   } catch (err) {
     return { ...page, ocrText: '', ocrWords: [], formFields: [], tables: [], visualElements: [], ocrError: err.message || 'Rozpoznawanie tekstu nie powiodlo sie' };
@@ -185,7 +212,12 @@ function isValidBBox(b) {
 // strony, przy 4 adresach x ~20 pol to bylo dziesiatki powtorzonych
 // dekodowan tego samego pliku). `.clone()` bo `image.crop()` mutuje w
 // miejscu - nie mozna reuzywac tej samej instancji miedzy polami.
-async function buildFieldPreview({ pageImagePath, labelBBox, valueBBox, outPath, maxWidth = 1100, sourceImage = null }) {
+// Wspolna geometria kadru pola: unia labelBBox+valueBBox + asymetryczny margines w prawo
+// (wartosc na tych formularzach ZAWSZE lezy na prawo od etykiety). Uzywana zarowno przez
+// buildFieldPreview (podglad dla czlowieka) jak i przez kalibracje wzorow (templateEngine.js) -
+// oba potrzebuja DOKLADNIE tego samego, juz przetestowanego marginesu, zeby wzor kalibrowany
+// z jednego adresu pochlaniał roznice w dlugosci odrecznego pisma na innych adresach tej samej gminy.
+function computeFieldCropRect(labelBBox, valueBBox, { pageWidth, pageHeight, padXLeft = 140, padXRight = 900, padYTop = 90, padYBottom = 170 } = {}) {
   const safeLabelBBox = isValidBBox(labelBBox) ? labelBBox : null;
   const safeValueBBox = isValidBBox(valueBBox) ? valueBBox : null;
   const refBBox = safeLabelBBox && safeValueBBox
@@ -198,27 +230,26 @@ async function buildFieldPreview({ pageImagePath, labelBBox, valueBBox, outPath,
     : (safeLabelBBox || safeValueBBox);
   if (!refBBox) return null;
 
+  const minX = Math.max(0, Math.round(refBBox.minX - padXLeft));
+  const minY = Math.max(0, Math.round(refBBox.minY - padYTop));
+  const maxX = Number.isFinite(pageWidth) ? Math.min(pageWidth, Math.round(refBBox.maxX + padXRight)) : Math.round(refBBox.maxX + padXRight);
+  const maxY = Number.isFinite(pageHeight) ? Math.min(pageHeight, Math.round(refBBox.maxY + padYBottom)) : Math.round(refBBox.maxY + padYBottom);
+  return { minX, minY, maxX, maxY };
+}
+
+async function buildFieldPreview({ pageImagePath, labelBBox, valueBBox, outPath, maxWidth = 1100, sourceImage = null }) {
+  const safeValueBBox = isValidBBox(valueBBox) ? valueBBox : null;
+
   const image = sourceImage ? sourceImage.clone() : await Jimp.read(pageImagePath);
   const width = image.bitmap.width;
   const height = image.bitmap.height;
-  // Asymetrycznie w prawo - wartosc na tych formularzach ZAWSZE lezy na
-  // prawo od etykiety (nigdy na lewo), a gdy pole nie zostalo w ogole
-  // znalezione (brak valueBBox, tylko labelBBox), symetryczny margines
-  // ucinal kadr zanim dotarl do rzeczywiscie zapisanej wartosci - user
-  // report 2026-07-21: "szkoda ze nie widze dalej w bok". Prawy margines
-  // siega niemal do krawedzi strony, zeby dlugie odreczne odpowiedzi
-  // zawsze zmiescily sie w kadrze.
-  const padXLeft = 140;
-  const padXRight = 900;
-  const padYTop = 90;
-  const padYBottom = 170;
 
-  const cropX = Math.max(0, Math.round(refBBox.minX - padXLeft));
-  const cropY = Math.max(0, Math.round(refBBox.minY - padYTop));
-  const cropRight = Math.min(width, Math.round(refBBox.maxX + padXRight));
-  const cropBottom = Math.min(height, Math.round(refBBox.maxY + padYBottom));
-  const cropW = Math.max(1, cropRight - cropX);
-  const cropH = Math.max(1, cropBottom - cropY);
+  const cropRect = computeFieldCropRect(labelBBox, valueBBox, { pageWidth: width, pageHeight: height });
+  if (!cropRect) return null;
+  const cropX = cropRect.minX;
+  const cropY = cropRect.minY;
+  const cropW = Math.max(1, cropRect.maxX - cropRect.minX);
+  const cropH = Math.max(1, cropRect.maxY - cropRect.minY);
   image.crop({ x: cropX, y: cropY, w: cropW, h: cropH });
 
   if (safeValueBBox) {
@@ -373,7 +404,7 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
   }
 
   if (!isConfigured()) {
-    throw new Error('Brak klucza API Google Cloud Vision. Ustaw zmienna srodowiskowa OCR_VISION_API_KEY i uruchom ponownie.');
+    throw new Error('Brak konfiguracji Google Document AI (OCR_DOCAI_KEY_FILE/OCR_DOCAI_PROJECT_ID/OCR_DOCAI_LOCATION/OCR_DOCAI_PROCESSOR_ID). Ustaw zmienne srodowiskowe i uruchom ponownie.');
   }
 
   const { pageCount, pages: extractedPages } = await extractPageImages(sourcePdfPath, workDir);
@@ -383,18 +414,12 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
   for (const p of skippedPages) {
     warnings.push(`Strona ${p.pageIndex + 1}: brak rozpoznanego obrazu (${p.unsupportedFilter ? 'nieobslugiwany format: ' + p.unsupportedFilter : 'brak osadzonego obrazu'}) - skopiowana bez OCR.`);
   }
-  for (const p of extractedPages) {
-    if (p.rotate) warnings.push(`Strona ${p.pageIndex + 1}: PDF deklaruje obrot strony (/Rotate=${p.rotate}) niezalezny od wykrywania orientacji obrazu.`);
-  }
-
   // Rozpoznawanie tekstu KAZDEJ strony z obrazem, rownolegle (patrz
-  // mapWithConcurrency) - jedno zadanie do Vision na strone, wynik zawiera
-  // juz cala tresc + wspolrzedne slow potrzebne pozniej do wykrywania obrotu
-  // i budowy warstwy tekstowej PDF-a. Limit obnizony z 15 (Vision) do 5 przy
-  // migracji na Document AI (2026-07-22) - Document AI's synchroniczne
-  // processDocument ma zazwyczaj nizszy domyslny limit zapytan/min niz
-  // Vision; jesli w praktyce (wieksze partie skanow) pojawia sie bledy
-  // quota/429, obnizyc dalej.
+  // mapWithConcurrency) - jedno zadanie na strone. Limit obnizony z 15
+  // (Vision) do 5 przy migracji na Document AI (2026-07-22) - Document AI's
+  // synchroniczne processDocument ma zazwyczaj nizszy domyslny limit
+  // zapytan/min niz Vision; jesli w praktyce (wieksze partie skanow) pojawia
+  // sie bledy quota/429, obnizyc dalej.
   const imagedExtracted = extractedPages.filter((p) => p.imagePath);
   const ocrResults = await mapWithConcurrency(imagedExtracted, 5, ocrPage);
   const ocrByIndex = new Map(ocrResults.map((p) => [p.pageIndex, p]));
@@ -402,85 +427,6 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
   for (const p of pages) {
     if (p.ocrError) warnings.push(`Strona ${p.pageIndex + 1}: rozpoznawanie tekstu nie powiodlo sie (${p.ocrError}) - strona skopiowana bez OCR.`);
   }
-
-  // Wykrywanie fizycznego obrotu KAZDEJ strony z obrazem na podstawie
-  // geometrii slow zwroconych przez Vision (patrz rotationDetect.js) - bez
-  // dodatkowego wywolania API/silnika. Realne partie skanow sa obracane jako
-  // CALOSC (caly plik podany do skanera "do gory nogami"), nie strona po
-  // stronie - zweryfikowane na prawdziwym pliku (Kazimierz Biskupi, 19/20
-  // stron zgodnie wykrylo ten sam obrot, jedna strona ze szkicem odrecznym -
-  // za malo tekstu do pewnego wykrycia). Jesli wyrazna wiekszosc stron z
-  // pewnym wykryciem zgadza sie co do jednego obrotu, strony bez pewnego
-  // wykrycia dostosowuja sie do reszty partii zamiast zostac bledne.
-  const CONFIDENT_SIGNAL = 0.5;
-  const detections = pages.map((p) => (p.imagePath ? detectRotationFromWords(p.ocrWords || []) : null));
-  const imagedCount = pages.filter((p) => p.imagePath).length;
-  const confidentRotations = detections
-    .filter((d) => d && d.rotate && d.total > 0 && d.votes / d.total >= CONFIDENT_SIGNAL)
-    .map((d) => d.rotate);
-  let majorityRotation = null;
-  if (confidentRotations.length) {
-    const counts = confidentRotations.reduce((acc, r) => { acc[r] = (acc[r] || 0) + 1; return acc; }, {});
-    const [rot, count] = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
-    if (count / imagedCount >= 0.5) majorityRotation = Number(rot);
-  }
-
-  const correctedPages = [];
-  for (let i = 0; i < pages.length; i++) {
-    const p = pages[i];
-    if (!p.imagePath) { correctedPages.push(p); continue; }
-    const d = detections[i];
-    const hasConfidentDetection = d.rotate && d.total > 0 && d.votes / d.total >= CONFIDENT_SIGNAL;
-    let rotate = hasConfidentDetection ? d.rotate : 0;
-    let inferred = false;
-    if (!hasConfidentDetection && majorityRotation) {
-      rotate = majorityRotation;
-      inferred = true;
-    }
-    if (!rotate) { correctedPages.push({ ...p, detectedRotation: 0 }); continue; }
-
-    const image = await Jimp.read(p.imagePath);
-    image.rotate((360 - rotate) % 360);
-    await image.write(p.imagePath);
-    const swapped = rotate === 90 || rotate === 270;
-    const rotatedWords = (p.ocrWords || []).map((w) => ({
-      ...w,
-      vertices: (w.vertices || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate))
-    }));
-    // formFields (Document AI) maja WLASNE bboxy (fieldNameBBox/valueBBox),
-    // niezalezne od ocrWords - musza przejsc PRZEZ TA SAMA korekte obrotu,
-    // inaczej po fizycznym obroceniu strony wskazywalyby na stare, nieobrocone
-    // miejsce podczas gdy ocrWords bylyby juz poprawne.
-    const rotatedFormFields = (p.formFields || []).map((f) => ({
-      ...f,
-      fieldNameBBox: (f.fieldNameBBox || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate)),
-      valueBBox: (f.valueBBox || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate))
-    }));
-    // tables/visualElements (Document AI) - te same bboxy, ta sama korekta -
-    // patrz komentarz przy formFields powyzej.
-    const rotatedTables = (p.tables || []).map((t) => ({
-      rows: (t.rows || []).map((r) => ({ ...r, bbox: (r.bbox || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate)) }))
-    }));
-    const rotatedVisualElements = (p.visualElements || []).map((el) => ({
-      ...el,
-      bbox: (el.bbox || []).map((v) => rotatePoint(v.x, v.y, p.width, p.height, rotate))
-    }));
-    correctedPages.push({
-      ...p,
-      width: swapped ? p.height : p.width,
-      height: swapped ? p.width : p.height,
-      ocrWords: rotatedWords,
-      formFields: rotatedFormFields,
-      tables: rotatedTables,
-      visualElements: rotatedVisualElements,
-      detectedRotation: rotate,
-      rotationInferredFromBatch: inferred
-    });
-    warnings.push(inferred
-      ? `Strona ${p.pageIndex + 1}: automatyczne wykrywanie obrotu nie dalo pewnego wyniku (za malo tekstu) - obrocono o ${rotate} stopni na podstawie reszty partii skanow. Warto sprawdzic wzrokowo.`
-      : `Strona ${p.pageIndex + 1}: wykryto i skorygowano obrot o ${rotate} stopni.`);
-  }
-  pages = correctedPages;
 
   const imagedPages = pages.filter((p) => p.imagePath);
   if (!imagedPages.length) {
@@ -543,4 +489,4 @@ async function finalizeSplit({ sourcePdfPath, ocrPdfPath, pages, blocks, outPath
   }
 }
 
-module.exports = { analyzeDocument, finalizeSplit, assemblePdfRange, buildThumbnails, buildFieldPreview, cropPageRegion };
+module.exports = { analyzeDocument, finalizeSplit, assemblePdfRange, buildThumbnails, buildFieldPreview, cropPageRegion, computeFieldCropRect };

@@ -4,7 +4,7 @@
 // pierwszej strony kazdego bloku ("PROTOKOL UZGODNIEN MONTAZOWYCH" /
 // "SPORZADZONY DNIA"). Dziala na tekscie JUZ rozpoznanym przez silnik OCR
 // (kazda strona ma juz `ocrWords` - liste slow w kolejnosci odczytu, patrz
-// visionEngine.js) - zero dodatkowego przebiegu OCR.
+// documentAiEngine.js) - zero dodatkowego przebiegu OCR.
 //
 // To tylko PROPOZYCJA podzialu. Wlasciciel byl stanowczy: nigdy nie dzielic
 // w pelni automatycznie bez przegladu ("czasami trudno odczytac tekst z
@@ -61,4 +61,4 @@ function boundariesToBlocks(boundaries, pageCount) {
   }));
 }
 
-module.exports = { detectBlockBoundaries, boundariesToBlocks, looksLikeBlockHeader };
+module.exports = { detectBlockBoundaries, boundariesToBlocks };

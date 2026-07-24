@@ -15,7 +15,7 @@
 //      NIE wyszly jako tabela.
 //   3. tokeny (ocrWords) - NIE sa tu juz uzywane do dopasowywania (patrz
 //      textMatch.js) - zostaja tylko jako dane dla
-//      rotationDetect.js/bundleSplit.js/buildOcrPdf, ktore i tak potrzebuja
+//      bundleSplit.js/buildOcrPdf, ktore i tak potrzebuja
 //      plaskiej listy slow niezaleznie od tego modulu.
 //
 // Zakres pol swiadomie ZAWEZONY (2026-07-22, na wyrazna prosbe wlasciciela)
@@ -46,16 +46,37 @@ const POLISH_VOWELS = /[aeiouyąęó]/gi;
 function looksPlausible(text, valueKind) {
   const trimmed = (text || '').trim();
   if (!trimmed) return true; // puste to inna sprawa - needsReview i tak zadziala
-  if (valueKind === 'numeric') {
+  if (valueKind === 'numeric' || valueKind === 'percent') {
     if (!/(^|[^\p{L}])\d/u.test(trimmed)) return false;
     const bareNumberTokens = trimmed.split(/\s+/).filter((t) => /^\d+$/.test(t));
     if (bareNumberTokens.length >= 2) return false;
     return true;
   }
+  // Imiona/nazwiska - realny artefakt zlapany 2026-07-24: OCR czasem dokleja
+  // przypadkowa cyfre z sasiedztwa (numer domu, rok) do imienia/nazwiska -
+  // w odroznieniu od zwyklego pola tekstowego, tu cyfra ZAWSZE jest bledem,
+  // nigdy legalna czescia wartosci.
+  if (valueKind === 'name' && /\d/.test(trimmed)) return false;
   const letters = trimmed.replace(/[^a-ząćęłńóśźżA-ZĄĆĘŁŃÓŚŹŻ]/g, '');
   if (letters.length < 3) return true; // zbyt krotkie by ocenic sensownie, nie blokuj
   const vowelCount = (letters.match(POLISH_VOWELS) || []).length;
   return vowelCount / letters.length >= 0.15;
+}
+
+// Procent (0-100) czasem przychodzi z OCR z doczepionym znakiem "%" albo
+// przypadkowa kropka na brzegu (np. "70%", ".70", "70.") - wyciaga SAMA
+// liczbe zamiast oddawac caly zlepiony tekst jako wartosc. Zwraca '' (nie
+// oryginalny tekst), jesli nie da sie jednoznacznie wydzielic liczby 0-100 -
+// needsReview zadziala normalnie zamiast zapisywac cos w rodzaju "70%" wprost
+// do tabelki.
+function cleanPercentValue(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  const m = trimmed.match(/(\d{1,3})(?:[.,](\d+))?/);
+  if (!m) return '';
+  const num = Number(m[2] ? `${m[1]}.${m[2]}` : m[1]);
+  if (!Number.isFinite(num) || num < 0 || num > 100) return '';
+  return m[2] ? `${m[1]},${m[2]}` : m[1];
 }
 
 // found:false = etykieta/checkbox NIE wystapila w ogole w tym dokumencie -
@@ -103,8 +124,12 @@ function toFieldResult(extracted, pageIndex, valueKind) {
 // (dopasowalaby tylko gdyby te 4 litery byly doslownie CALA zawartoscia
 // strony). Usuwamy kotwice brzegowe przed tym testem - tu chodzi tylko o
 // "czy ten ciag znakow WYSTEPUJE gdziekolwiek", nie o dokladne dopasowanie.
+function flattenText(text) {
+  return (text || '').replace(/\s+/g, ' ').toUpperCase();
+}
+
 function existsInPageText(page, pattern) {
-  const flat = (page.ocrText || '').replace(/\s+/g, ' ').toUpperCase();
+  const flat = flattenText(page.ocrText);
   const source = pattern.source.replace(/^\^/, '').replace(/\$$/, '');
   return new RegExp(source, pattern.flags).test(flat);
 }
@@ -114,7 +139,11 @@ function existsInPageText(page, pattern) {
 // na realnym pliku (Kazimierz Biskupi) - usuwa taki prefiks "X. Slowa:" na
 // poczatku wartosci, jesli wystapi.
 function stripHeaderPrefix(value) {
-  return value.replace(/^[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[\p{L}\s]+:\s*/u, '').trim();
+  // Sekcje formularza sa numerowane albo literami ("I. Drzwi zewnętrzne:"), albo
+  // cyframi ("2. Ogólna charakterystyka budynku:") - realny blad zlapany 2026-07-23
+  // (rokBudowy bledzil "2. Ogólna charakterystyka budynku: 2006" zamiast "2006"),
+  // bo poprzedni wzorzec akceptowal TYLKO litere przed kropka.
+  return value.replace(/^[A-ZĄĆĘŁŃÓŚŹŻ0-9]+\.\s*[\p{L}\s]+:\s*/u, '').trim();
 }
 
 // "Liczba osob mieszkajacych w budynku:" bierze wartosc SASIEDNIEGO pola
@@ -153,13 +182,33 @@ function truncateAtOtherLabel(value) {
   return value.slice(0, cut).trim();
 }
 
+// Niektore sekcje formularza maja WLASNA, wewnetrzna etykiete WEWNATRZ wartosci
+// SZERSZEGO, ogolniejszego pola - np. "4. Planowane miejsce na bufor:" na realnym
+// pliku PC ma jedna, zlepiona wartosc obejmujaca zarowno opis miejsca (odrecznie
+// "Kotlownia") JAK I "Wysokość pomieszczenia: 2,70m" w tym samym tekscie (Document AI
+// nie wydzielilo drugiej etykiety jako osobnego formField). `extractAfterLabel` wycina
+// TYLKO to, co jest PO takiej wewnetrznej etykiecie, zamiast oddawac caly zlepiony
+// tekst jako wartosc. Zwraca null (nie pusty string), jesli etykieta w ogole nie
+// wystapila w wartosci - odrozniane od "wystapila, ale nic po niej nie ma".
+function extractAfterLabel(value, labelPattern) {
+  const m = String(value || '').match(labelPattern);
+  return m && m[1] ? m[1].trim() : null;
+}
+
 function extractTextField(page, def) {
   if (def.formFieldPattern) {
     const ff = findFormField(page.formFields, def.formFieldPattern, def.valuePattern);
     if (ff && ff.value) {
-      let value = def.stripHeaderPrefix ? stripHeaderPrefix(ff.value) : ff.value;
+      let value = ff.value;
+      if (def.extractAfterLabel) value = extractAfterLabel(value, def.extractAfterLabel) || '';
+      if (def.stripHeaderPrefix) value = stripHeaderPrefix(value);
       if (def.stripPhoneBleed) value = stripPhoneBleed(value);
       if (def.truncateAtOtherLabel) value = truncateAtOtherLabel(value);
+      if (def.valueKind === 'percent') value = cleanPercentValue(value);
+      // Etykieta ZOSTALA znaleziona (ff istnieje) - jesli extractAfterLabel nie zdolal
+      // wyciac nic sensownego z zlepionej wartosci (np. odreczna liczba nieczytelna dla
+      // OCR), to nadal found:true+puste (do recznego przegladu), NIE found:false (co
+      // znikneloby z kolejki, mimo ze pole realnie istnieje na tym dokumencie).
       return { value, confidence: ff.confidence, found: true, labelBBox: ff.labelBBox, valueBBox: ff.valueBBox };
     }
     if (ff) return { value: '', confidence: ff.confidence, found: true, labelBBox: ff.labelBBox, valueBBox: ff.valueBBox };
@@ -219,9 +268,41 @@ function extractMaterialField(page, def) {
   return { value: '', confidence: null, found: false };
 }
 
+// Pola wywnioskowane z NAGLOWKA/TYTULU strony (np. "PROTOKOL... GRUNTOWA POMPA
+// CIEPLA" vs "...POWIETRZNA POMPA CIEPLA") - nie sa to formFields (Document AI
+// nie paruje tytulu strony z zadna "wartoscia"), tylko zwykly tekst strony -
+// stad osobne dopasowanie na splaszczonym `page.ocrText`, nie przez
+// findFormField/findCheckedFormFieldOption.
+//
+// UWAGA (poprawiono 2026-07-24, realny problem zlapany na zywym pliku): tu
+// wysoka, PRAWDZIWA pewnosc (nie null jak przy polach z tabel/checkboxow) -
+// to DRUKOWANY tytul strony (nie pismo odreczne, nie gesty checkbox obok
+// innych podobnych), OCR czyta go niezawodnie, a dopasowanie jest
+// jednoznaczne (GRUNTOWA vs POWIETRZNA to rozlaczne, latwe do odroznienia
+// slowa). confidence:null (zawsze needsReview) tutaj oznaczalo, ze to samo,
+// oczywiste pytanie ("Gruntowa") trzeba bylo potwierdzac w KAZDYM adresie tej
+// samej paczki z osobna - wlasciciel: "dalej musze po kilka razy zaznaczac
+// np. rodzaj pompy". Skoro w calym pliku to i tak zawsze ten sam protokol
+// (nikt nie miesza rodzajow pompy w jednej paczce), wysoka pewnosc pozwala
+// na automatyczne rozwiazanie bez pytania za kazdym razem.
+function extractTitleDerivedField(page, def) {
+  const flat = flattenText(page.ocrText);
+  for (const option of def.options) {
+    if (option.formFieldPattern.test(flat)) return { value: option.label, confidence: 0.99, found: true };
+  }
+  return { value: '', confidence: null, found: false };
+}
+
 function extractField(page, def) {
   if (def.kind === 'checkbox') return extractCheckboxField(page, def);
   if (def.kind === 'material') return extractMaterialField(page, def);
+  // Pole celowo BEZ zadnej automatycznej ekstrakcji - zawsze trafia do reczengo
+  // przegladu (patrz komentarz przy kluczu 'demontaz' nizej: Document AI nie
+  // rozroznia niezawodnie ktory z ~10 identycznych checkboxow Tak/Nie na stronie
+  // do niego nalezy, wiec zamiast cicho zgadywac zla odpowiedz, uzytkownik
+  // wpisuje ja sam - trafia do tabelki dokladnie jak kazde inne pole).
+  if (def.kind === 'manual') return { value: '', confidence: null, found: true };
+  if (def.kind === 'titleDerived') return extractTitleDerivedField(page, def);
   return extractTextField(page, def);
 }
 
@@ -232,8 +313,26 @@ function extractField(page, def) {
 
 const FIELD_DEFS = [
   // --- Pompa ciepla (powietrzna) - lista OZC ---
-  { key: 'imieNazwisko', columnLabel: 'Imię i nazwisko', kind: 'text', formFieldPattern: /IMI.*NAZWISKO/, truncateAtOtherLabel: true },
+  { key: 'imieNazwisko', columnLabel: 'Imię i nazwisko', kind: 'text', valueKind: 'name', formFieldPattern: /IMI.*NAZWISKO/, truncateAtOtherLabel: true },
   { key: 'adresInstalacji', columnLabel: 'Adres miejsca instalacji', kind: 'text', formFieldPattern: /ADRES/, truncateAtOtherLabel: true },
+  // Tytul protokolu rozroznia odmiane pompy (np. "...GRUNTOWA POMPA CIEPLA" na
+  // realnym pliku Kazimierz Biskupi) - zweryfikowane tylko dla wariantu
+  // gruntowa; wzorzec dla "powietrzna" symetryczny, ale bez realnego pliku do
+  // potwierdzenia dokladnego brzmienia - jesli sie nie zlapie, po prostu
+  // trafi do recznego przegladu jak kazde inne niedopasowane pole.
+  { key: 'rodzajPompy', columnLabel: 'Rodzaj pompy', kind: 'titleDerived', options: [
+    { label: 'Gruntowa', formFieldPattern: /GRUNTOWA\s*POMPA\s*CIEP[LŁ]A/ },
+    { label: 'Powietrzna', formFieldPattern: /POWIETRZNA\s*POMPA\s*CIEP[LŁ]A/ }
+  ] },
+  // Sekcja 13 "Demontaz istniejacego zrodla ciepla: Tak/Nie" - NIE da sie tego
+  // niezawodnie dopasowac automatycznie (zweryfikowane 2026-07-24: goly
+  // checkbox bez wlasnego tekstu etykiety w danych Document AI, ten sam
+  // wzorzec Tak/Nie powtarza sie ~10x na stronie w sekcjach 14-21 - dopasowanie
+  // po tekscie zlapaloby przypadkowa odpowiedz z innego pytania). `kind:
+  // 'manual'` = pole ZAWSZE trafia do recznego przegladu (nigdy nie probuje
+  // automatycznie zgadywac) - uzytkownik wpisuje "tak"/"nie" sam podczas
+  // przegladu, wartosc trafia do tabelki dokladnie jak kazde inne pole.
+  { key: 'demontaz', columnLabel: 'Demontaż', kind: 'manual' },
   { key: 'telefon', columnLabel: 'Telefon', kind: 'text', valueKind: 'numeric', formFieldPattern: /TELEFON/ },
   { key: 'rokBudowy', columnLabel: 'Rok budowy budynku', kind: 'text', valueKind: 'numeric', formFieldPattern: /ROK.*BUDOWY/, stripHeaderPrefix: true },
   { key: 'liczbaOsob', columnLabel: 'Liczba osób w gospodarstwie', kind: 'text', valueKind: 'numeric', formFieldPattern: /LICZBA.*OS[OÓ]B/, stripPhoneBleed: true },
@@ -246,10 +345,49 @@ const FIELD_DEFS = [
   // z tych 3 wartosci zawiera wlasny naglowek sekcji jako prefiks (np.
   // "I. Drzwi zewnętrzne:\n2025"), ktory potem usuwamy (stripHeaderPrefix).
   { key: 'dataMontażuDrzwiZewn', columnLabel: 'Data montażu drzwi zewnętrznych', kind: 'text', valueKind: 'numeric', formFieldPattern: /PRZYBLI[ZŻ]ONA.*DATA.*MONTA[ZŻ]U/, valuePattern: /DRZWI.*ZEWN/, stripHeaderPrefix: true },
-  { key: 'udzialGrzejnikowy', columnLabel: 'Udział ogrzewania grzejnikowego (%)', kind: 'text', valueKind: 'numeric', formFieldPattern: /UDZIA[LŁ].*OGRZEWANIA.*GRZEJNIKOWEGO/ },
-  { key: 'udzialPlaszczyznowy', columnLabel: 'Udział ogrzewania płaszczyznowego (%)', kind: 'text', valueKind: 'numeric', formFieldPattern: /UDZIA[LŁ].*OGRZEWANIA.*P[LŁ]ASZCZYZNOWEGO/ },
+  { key: 'udzialGrzejnikowy', columnLabel: 'Udział ogrzewania grzejnikowego (%)', kind: 'text', valueKind: 'percent', formFieldPattern: /UDZIA[LŁ].*OGRZEWANIA.*GRZEJNIKOWEGO/ },
+  { key: 'udzialPlaszczyznowy', columnLabel: 'Udział ogrzewania płaszczyznowego (%)', kind: 'text', valueKind: 'percent', formFieldPattern: /UDZIA[LŁ].*OGRZEWANIA.*P[LŁ]ASZCZYZNOWEGO/ },
   { key: 'temperaturaPomieszczenia', columnLabel: 'Żądana temperatura w pomieszczeniach', kind: 'text', valueKind: 'numeric', formFieldPattern: /TEMPERATURA.*POMIESZCZENIACH/ },
   { key: 'temperaturaCwu', columnLabel: 'Żądana temperatura c.w.u.', kind: 'text', valueKind: 'numeric', formFieldPattern: /TEMPERATURA.*C\.?W\.?U/ },
+
+  // Sekcja "4. Planowane miejsce na bufor:" - wartosc na realnym pliku (Kazimierz
+  // Biskupi) zawiera zlepiony opis miejsca + "Wysokość pomieszczenia: Nm" w jednym
+  // tekscie (patrz extractAfterLabel powyzej). To INNE pytanie niz solaryWysokoscKotlowni
+  // (rozny formularz/rozna sekcja) - stad osobny klucz z sufiksem PC, zgodnie z
+  // konwencja pliku (zobacz komentarz na gorze o prefiksach kotly*/solary*).
+  { key: 'wysokoscKotlowniPC', columnLabel: 'Wysokość kotłowni (m)', kind: 'text', valueKind: 'numeric', formFieldPattern: /PLANOWANE\s*MIEJSCE\s*NA\s*BUFOR/, extractAfterLabel: /WYSOKO[SŚ][CĆ]\s*POMIESZCZENIA:?\s*\.{0,3}\s*([\d.,]+)/i },
+
+  // Sekcja 1 "Dobrane urzadzenie wg. umowy uczestnictwa:" - 6 mozliwych mocy (kW),
+  // kazda to WLASNY, odrebny formField na realnym pliku (zweryfikowane 2026-07-24) -
+  // bez ryzyka niejednoznacznosci (w odroznieniu od zrodloCiepla nizej), bo kazda opcja
+  // ma unikalna liczbe w etykiecie.
+  { key: 'mocPompyZGminy', columnLabel: 'Moc pompy z gminy', kind: 'checkbox', valueKind: 'numeric', options: [
+    { label: '7', formFieldPattern: /MOCY\s*MIN\.?\s*7[,.]?0?\s*KW/ },
+    { label: '8', formFieldPattern: /MOCY\s*MIN\.?\s*8[,.]?0?\s*KW/ },
+    { label: '9', formFieldPattern: /MOCY\s*MIN\.?\s*9[,.]?0?\s*KW/ },
+    { label: '10', formFieldPattern: /MOCY\s*MIN\.?\s*10[,.]?0?\s*KW/ },
+    { label: '12', formFieldPattern: /MOCY\s*MIN\.?\s*12[,.]?0?\s*KW/ },
+    { label: '13', formFieldPattern: /MOCY\s*MIN\.?\s*13[,.]?0?\s*KW/ }
+  ] },
+
+  // Sekcja 10 "Dotychczasowy sposob podgrzewania c.w.u.:" - UWAGA, znany limit
+  // (zweryfikowany na realnym pliku 2026-07-24): sekcja 11 ("...c.o.:") ma DOKLADNIE
+  // TAKA SAMA liste opcji, a Document AI nie rozroznia niezawodnie ktora checkboxa
+  // nalezy do ktorej sekcji (formFields nie niosa informacji o sekcji, tylko o tresci
+  // etykiety) - jesli gospodarstwo ma RozNE zrodla dla c.w.u. i c.o., to pole moze
+  // czasem zlapac odpowiedz z sekcji 11 zamiast 10. W praktyce oba pytania niemal
+  // zawsze maja te sama odpowiedz (jedno istniejace zrodlo obsluguje oba), wiec ryzyko
+  // jest niskie, ale nie zerowe - nie traktowac tego pola jako w 100% pewnego bez
+  // dodatkowej weryfikacji, gdyby kiedys trzeba bylo to podniesc.
+  { key: 'zrodloCiepla', columnLabel: 'Źródło ciepła', kind: 'checkbox', options: [
+    { label: 'Kocioł na paliwo stałe', formFieldPattern: /KOCIO[LŁ]\s*NA\s*PALIWO\s*STA[LŁ]E/ },
+    { label: 'Kocioł na biomasę', formFieldPattern: /KOCIO[LŁ]\s*NA\s*BIOMAS[EĘ]/ },
+    { label: 'Kocioł na gaz/olej – jednofunkcyjny', formFieldPattern: /KOCIO[LŁ]\s*NA\s*GAZ.*JEDNOFUNKCYJNY/ },
+    { label: 'Kocioł na gaz/olej – dwufunkcyjny', formFieldPattern: /KOCIO[LŁ]\s*NA\s*GAZ.*DWUFUNKCYJNY/ },
+    { label: 'Podgrzewacz elektryczny/gazowy', formFieldPattern: /PODGRZEWACZ\s*ELEKTRYCZNY/ },
+    { label: 'Inny', formFieldPattern: /^INNY\b/ },
+    { label: 'Brak instalacji c.w.u.', formFieldPattern: /BRAK\s*INSTALACJI\s*C\.?\s*W\.?\s*U/ }
+  ] },
 
   { key: 'wentylacja', columnLabel: 'Wentylacja', kind: 'checkbox', options: [
     { label: 'Grawitacyjna', formFieldPattern: /GRAWITACYJNA/ },
@@ -322,6 +460,25 @@ const FIELD_DEFS = [
     { label: 'Strop gęsto żebrowy', tablePattern: /STROP.*G[EĘ]STO.*[ZŻ]EBROWY/ },
     { label: 'Strop drewniany', tablePattern: /STROP.*DREWNIANY/ }
   ] },
+  // Dodane dla kolumn "Ociepl. fund."/"Ociepl. dach/strop" tabelki adresowej PC
+  // (2026-07-23) - na formularzu to proste "Izolacja: [ ] Tak, grubość: __cm
+  // [ ] Nie" bezposrednio pod sekcja E (Sciana fundamentowa) wzgl. "Izolacja
+  // dachu: [ ] Tak, pomiedzy krokwiami/na zewnatrz, grubosc: __cm [ ] Nie" pod
+  // sekcja G (Dach) - ta sama, juz sprawdzona struktura co inne pola typu
+  // 'material' (opcja+liczba w tym samym wierszu/kontekscie). Ryzyko: obie
+  // sekcje maja niemal identyczny uklad "Izolacja: Tak/Nie + grubosc" (strop
+  // ma swoja WLASNA, podobna sekcje tuz obok) - jesli Document AI zgrupuje je
+  // niejednoznacznie, pole trafi do recznego przegladu (needsReview) zamiast
+  // po cichu pomylic wartosci - akceptowalne, ten sam kompromis co reszta
+  // pol typu 'material' w tym pliku.
+  { key: 'izolacjaScianyFundamentowej', columnLabel: 'Izolacja ściany fundamentowej (grubość)', kind: 'material', options: [
+    { label: 'Tak', tablePattern: /^TAK\b/ },
+    { label: 'Nie', tablePattern: /^NIE$/ }
+  ] },
+  { key: 'izolacjaDachu', columnLabel: 'Izolacja dachu (grubość)', kind: 'material', options: [
+    { label: 'Tak', tablePattern: /^TAK\b/ },
+    { label: 'Nie', tablePattern: /^NIE$/ }
+  ] },
 
   // Ksztalt budynku / elewacje (strona "OBRYS BUDYNKU") - formField, best-effort.
   { key: 'dlugoscBudynku', columnLabel: 'Długość budynku (regularny)', kind: 'text', valueKind: 'numeric', formFieldPattern: /^D[LŁ]UGO[SŚ][CĆ]$/ },
@@ -383,11 +540,12 @@ for (const f of FIELD_DEFS) COLUMN_LABELS[f.key] = f.columnLabel;
 // Laczy strony bloku - probuje kazda strone po kolei, zwraca pierwszy
 // znaleziony ("found") wynik z niepustej wartosci, w przeciwnym razie
 // pierwszy "found" wynik (nawet pusty), albo not-found jesli zaden.
-function extractFields(pages, block) {
+function extractFields(pages, block, allowedKeys = null) {
   const blockPages = pages.slice(block.startPage, block.endPage + 1).filter((p) => p.imagePath);
   const result = {};
 
   for (const def of FIELD_DEFS) {
+    if (allowedKeys && !allowedKeys.has(def.key)) continue;
     let best = { value: '', confidence: null, found: false };
     let bestPageIndex = null;
     for (const page of blockPages) {
@@ -412,4 +570,4 @@ function extractSingleField(page, key) {
   return toFieldResult(extracted, page.pageIndex ?? null, def.valueKind);
 }
 
-module.exports = { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS, LOW_CONFIDENCE_THRESHOLD };
+module.exports = { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS, FIELD_DEFS, extractField, toFieldResult };

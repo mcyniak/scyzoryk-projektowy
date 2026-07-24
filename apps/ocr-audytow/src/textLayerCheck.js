@@ -22,4 +22,4 @@ async function checkTextLayer(pdfPath) {
   return { hasText: trimmedLength >= MIN_TEXT_LENGTH, textLength: trimmedLength };
 }
 
-module.exports = { checkTextLayer, MIN_TEXT_LENGTH };
+module.exports = { checkTextLayer };

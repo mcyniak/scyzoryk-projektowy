@@ -106,21 +106,30 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
   into per-client folders.
 - `ocr-audytow` — OCR for scanned audit PDFs (incl. Polish handwriting): outputs a PDF with an invisible,
   selectable/searchable text layer, splitting multi-address bundled files into one PDF per address after
-  a user-reviewed confirmation screen (never auto-splits silently). Uses **Google Cloud Vision**
-  (`DOCUMENT_TEXT_DETECTION`) for text recognition — requires the `OCR_VISION_API_KEY` env var (a Google
-  Cloud API key restricted to Cloud Vision API); optionally `OCR_VISION_REGION=eu` to route through the
-  EU endpoint. This was a deliberate swap from an earlier Tesseract-based version after real-file testing
-  (13 investments' worth of real audits) showed Tesseract essentially cannot read the handwritten
-  field-values on these forms while Vision reads most of them correctly, at a fraction of the runtime —
-  see `apps/ocr-audytow/src/visionEngine.js`. Page-rotation detection (`src/rotationDetect.js`) is derived
-  purely from the geometry of word bounding-boxes Vision already returns (no separate OCR/OSD engine
-  needed) — real scan batches can be fed to the scanner "upside down" as a whole batch, without a `/Rotate`
-  flag in the PDF. Since Vision has no built-in "searchable PDF" output mode (unlike Tesseract), the
-  invisible text layer is assembled by hand via `pdf-lib` + `@pdf-lib/fontkit` (`src/ocrPipeline.js`'s
-  `buildOcrPdf` — needs a Unicode-capable font for Polish diacritics, read live from
-  `C:\Windows\Fonts\arial.ttf`, same pattern as `pieczatki-pdf`, not vendored in the repo). This is also
-  the only child app in the repo that makes outbound network calls — every other app is deliberately
-  offline/`127.0.0.1`-only end-to-end.
+  a user-reviewed confirmation screen (never auto-splits silently). Uses **Google Cloud Document AI**
+  (a Form Parser processor, `src/documentAiEngine.js`) for text recognition — requires 4 env vars:
+  `OCR_DOCAI_KEY_FILE` (path to a GCP service-account JSON key — never commit this file, reference it
+  only via the env var), `OCR_DOCAI_PROJECT_ID`, `OCR_DOCAI_LOCATION` (e.g. `eu`), `OCR_DOCAI_PROCESSOR_ID`.
+  This replaced an earlier Google Cloud Vision version (2026-07-22; `src/visionEngine.js` was kept as a
+  rollback reference for a while but was fully unused by 2026-07-24 — deleted, retrievable from git
+  history if ever needed) after real-file testing showed Document AI recognizes
+  checkboxes as their own structured entity type (auto-paired with their label) instead of Vision's raw
+  Unicode glyph requiring manual geometric matching — eliminates a whole class of field-matching bugs, at
+  ~20x the cost ($30 vs $1.50/1000 pages). Document AI returns word/formField/table/visualElement
+  coordinates already in its own internally-corrected ("logical") frame, not the raw physical-image frame
+  Vision used. **No automatic page-rotation detection/correction** — this was deliberately removed
+  2026-07-24 (was ~40% of total pipeline time on a real 20-page file, ~54s of ~134s, from physically
+  re-rotating each page image via Jimp) after the owner judged it not worth the cost: a physically
+  upside-down/sideways scan is trivial for a person to fix before upload, so the tool no longer tries to
+  guess/correct it — pages must be uploaded already right-side-up, or field previews/manual marks on that
+  page will be wrong. Since Document AI has no built-in "searchable PDF" output mode, the invisible
+  text layer is assembled by hand via `pdf-lib` + `@pdf-lib/fontkit` (`src/ocrPipeline.js`'s `buildOcrPdf`
+  — needs a Unicode-capable font for Polish diacritics, read live from `C:\Windows\Fonts\arial.ttf`, same
+  pattern as `pieczatki-pdf`, not vendored in the repo). A single page's Document AI call has a 90s timeout
+  (`OCR_PAGE_TIMEOUT_MS` in `ocrPipeline.js`) — without it, one network-stuck page among a batch processed
+  concurrently would hang the entire file's analysis forever, since the client library has no timeout of
+  its own. This is also the only child app in the repo that makes outbound network calls — every other
+  app is deliberately offline/`127.0.0.1`-only end-to-end.
 
 Each app's `data/`, `logs/`, `uploads/`, `output/`, `tmp/` directories are runtime state (uploads, job
 data, generated output), not source — they're excluded from `scripts/check-project.js` and should not be

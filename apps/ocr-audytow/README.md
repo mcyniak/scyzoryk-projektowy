@@ -6,28 +6,36 @@ notatki) zostaje bez zmian. Jeśli w jednym pliku jest kilka adresów (zbundlowa
 proponuje podział na osobne pliki - ale nigdy nie dzieli automatycznie bez przeglądu: zawsze
 pokazuje ekran potwierdzenia z miniaturami stron.
 
-## Wymagany klucz API (Google Cloud Vision)
+## Wymagana konfiguracja (Google Cloud Document AI)
 
 To jedyna aplikacja w Scyzoryku, która łączy się z internetem - wysyła zawartość strony do
-rozpoznania przez [Google Cloud Vision](https://cloud.google.com/vision) (`DOCUMENT_TEXT_DETECTION`).
-Powód: lokalne silniki OCR (Tesseract, PaddleOCR) testowane na realnych audytach praktycznie nie
-czytały odręcznych wpisów w tych formularzach - Vision czyta większość poprawnie, przy okazji
-znacznie szybciej.
+rozpoznania przez [Google Cloud Document AI](https://cloud.google.com/document-ai) (procesor typu
+Form Parser). Powód: lokalne silniki OCR (Tesseract, PaddleOCR) i nawet Google Cloud Vision,
+testowane na realnych audytach, słabo radziły sobie z odręcznymi wpisami i checkboxami w tych
+formularzach - Document AI rozpoznaje checkbox jako własny typ bytu i sam paruje go z etykietą,
+zamiast zwracać losowy znak Unicode do ręcznego dopasowania.
 
-**Zanim uruchomisz tę aplikację, ustaw zmienną środowiskową `OCR_VISION_API_KEY`** (klucz API
-Google Cloud, ograniczony wyłącznie do "Cloud Vision API" w konsoli Google Cloud - patrz
-`console.cloud.google.com` → API i usługi → Dane logowania). Bez tego klucza analiza plików zwróci
-czytelny błąd zamiast się wywalić.
+**Zanim uruchomisz tę aplikację, ustaw 4 zmienne środowiskowe:**
 
-Opcjonalnie: `OCR_VISION_REGION=eu`, żeby żądania szły przez europejski endpoint
-(`eu-vision.googleapis.com`) zamiast domyślnego.
+- `OCR_DOCAI_KEY_FILE` - ścieżka do pliku JSON konta serwisowego GCP (uprawnienia: Document AI API
+  User na projekt z utworzonym procesorem). **Nigdy nie kopiować tego pliku do repo** - trzymać go
+  poza katalogiem projektu i wskazywać ścieżką.
+- `OCR_DOCAI_PROJECT_ID` - id projektu GCP (np. `scyzoryk-ocr-test`).
+- `OCR_DOCAI_LOCATION` - region procesora (np. `eu`).
+- `OCR_DOCAI_PROCESSOR_ID` - id utworzonego procesora typu Form Parser (Google Cloud Console →
+  Document AI → Processors → utwórz procesor, skopiuj jego ID).
+
+Bez tych zmiennych analiza plików, które faktycznie wymagają OCR-u, zwróci czytelny błąd zamiast
+się wywalić - pliki, które już mają warstwę tekstu (np. eksporty z aplikacji), działają bez
+żadnej z tych zmiennych, bo OCR jest wtedy pomijany całkowicie.
 
 **Dane osobowe z audytów (imię, nazwisko, adres, telefon, e-mail) opuszczają komputer** przy
 każdym rozpoznawaniu tekstu - to świadoma decyzja (patrz notatka w `CLAUDE.md`), ale warto o tym
 pamiętać przy udostępnianiu tego narzędzia dalej.
 
-Koszt przy typowej skali (dziesiątki-niskie setki stron/miesiąc) jest praktycznie zerowy - Google
-Cloud Vision ma darmowy limit 1000 jednostek/miesiąc, cena powyżej limitu to $1,50/1000 stron.
+Koszt jest znacząco wyższy niż przy poprzednio używanym Google Cloud Vision - ok. $30/1000 stron
+(Vision: $1,50/1000 stron) - świadoma decyzja właściciela po realnym porównaniu jakości
+rozpoznawania na trudnych formularzach (patrz `src/documentAiEngine.js`).
 
 ## Start
 
@@ -35,6 +43,9 @@ Uruchamiane jak każda inna aplikacja w Scyzoryku - przez główny `server.js`/`
 (port domyślnie 3011, `OCR_AUDYTOW_PORT` żeby zmienić), albo samodzielnie:
 
 ```powershell
-$env:OCR_VISION_API_KEY = "twoj-klucz"
+$env:OCR_DOCAI_KEY_FILE = "C:\sciezka\do\klucza-konta-serwisowego.json"
+$env:OCR_DOCAI_PROJECT_ID = "twoj-projekt-gcp"
+$env:OCR_DOCAI_LOCATION = "eu"
+$env:OCR_DOCAI_PROCESSOR_ID = "id-procesora"
 node apps/ocr-audytow/server.js
 ```

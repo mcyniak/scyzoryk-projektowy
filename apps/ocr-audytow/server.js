@@ -12,7 +12,9 @@ const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require(
 const { analyzeDocument, finalizeSplit, buildFieldPreview, cropPageRegion } = require('./src/ocrPipeline');
 const { isConfigured: isOcrConfigured, ocrImage: docAiOcrImage } = require('./src/documentAiEngine');
 const { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS } = require('./src/fieldExtraction');
-const { appendRow, validatePath: validateExcelPath } = require('./src/excelExport');
+const { writeFreshRows, validatePath: validateExcelPath } = require('./src/excelExport');
+const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
+const { loadTemplates, matchTemplate, extractFieldsFromTemplate, buildTemplateFromReview, harvestTemplateFields } = require('./src/templateEngine');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -34,6 +36,12 @@ const ANALYSIS_TTL_MS = Number(process.env.OCR_ANALYSIS_TTL_MS || 2 * 60 * 60 * 
 
 for (const dir of [DATA_DIR, UPLOAD_DIR, OUTPUT_DIR, ANALYSIS_DIR]) fs.mkdirSync(dir, { recursive: true });
 scheduleCleanup([UPLOAD_DIR, OUTPUT_DIR], JOB_TTL_MS, 60 * 60 * 1000);
+// cleanupOldAnalyses() nizej sprzata sesje tylko przez w-pamieci mape `analyses` - po restarcie
+// procesu ta mapa jest pusta, wiec kazdy folder analizy otwarty w momencie restartu zostawalby
+// osierocony na zawsze (potwierdzone: ~60 takich folderow ze zwyklej dzisiejszej pracy). Ten
+// dodatkowy, oparty na dacie modyfikacji folderu sweep (ten sam mechanizm co UPLOAD_DIR/OUTPUT_DIR
+// wyzej) dziala niezaleznie od stanu w pamieci i sprzata kazdy porzucony folder w ANALYSIS_DIR.
+scheduleCleanup([ANALYSIS_DIR], ANALYSIS_TTL_MS, 15 * 60 * 1000);
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -53,11 +61,21 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '2mb' }));
 
-app.get('/api/health', (req, res) => res.json({ ok: true, name: 'ocr-audytow', ocrConfigured: isOcrConfigured() }));
+app.get('/api/health', async (req, res) => {
+  const templates = await loadTemplates();
+  res.json({ ok: true, name: 'ocr-audytow', ocrConfigured: isOcrConfigured(), templatesLoaded: templates.length });
+});
 
+// Domyslnie 60/15min (typowy dla innych aplikacji Scyzoryka) jest za niskie dla TEGO
+// przeplywu - krok 3 (recenzja pol) generuje min. 2 zadania na kazde pole wymagajace
+// przegladu (obraz podgladu + "Zapisz i dalej"/"Zaznacz recznie"), a jeden gesty
+// dokument potrafi miec >100 takich pol (zweryfikowane realnie: 147 na pierwszym
+// przebiegu bez wzoru) - realna sesja przegladu latwo przekracza 60 zadan. To
+// narzedzie jest lokalne (127.0.0.1, patrz CLAUDE.md) - granica izolacji to dostep
+// sieciowy, nie liczba zadan, wiec dużo wyzszy limit jest tu bezpieczny.
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.OCR_API_RATE_LIMIT || 60),
+  max: Number(process.env.OCR_API_RATE_LIMIT || 2000),
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, message: 'Za dużo żądań w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.' }
@@ -161,14 +179,21 @@ setInterval(() => cleanupOldAnalyses().catch(err => console.error('[ocr-analysis
 // podzial na bloki adresowe + miniatury stron do przegladu. NIC tu jeszcze nie
 // trafia do pobrania - to robi dopiero /api/ocr/finalize po zatwierdzeniu
 // (ewentualnie recznie poprawionego) podzialu przez uzytkownika.
+// Uwaga (2026-07-24): celowo NIE ma tu gornego "if (!isOcrConfigured()) return 500" blokujacego
+// caly batch - analyzeDocument() (ocrPipeline.js) juz ma swoj wlasny, poprawnie zawezony check,
+// ktory rzuca TYLKO gdy dany plik faktycznie potrzebuje OCR-u (plik z juz istniejaca warstwa
+// tekstu - np. eksport z aplikacji rodziny FLEXIPOWER - w ogole pomija OCR i nie dotyka
+// isConfigured()). Gorna blokada psula wlasnie ten przypadek: caly upload odrzucany, mimo ze
+// zaden z plikow nie potrzebowal skonfigurowanego Document AI. Per-plikowy try/catch ponizej i tak
+// surowo przekazuje ten sam czytelny komunikat blad-per-plik, gdy OCR jest faktycznie wymagany.
 app.post('/api/ocr/analyze', heavyJobLimiter, upload.array('files', MAX_FILES), async (req, res) => {
-  if (!isOcrConfigured()) {
-    return res.status(500).json({ ok: false, message: 'Brak konfiguracji Google Document AI na tym serwerze (zmienne środowiskowe OCR_DOCAI_KEY_FILE/OCR_DOCAI_PROJECT_ID/OCR_DOCAI_LOCATION/OCR_DOCAI_PROCESSOR_ID). Skontaktuj się z administratorem.' });
-  }
-
   const analysisId = crypto.randomUUID();
   const analysisDir = path.join(ANALYSIS_DIR, analysisId);
-  const analysis = { id: analysisId, createdAt: Date.now(), dir: analysisDir, files: new Map() };
+  // templateState kumuluje sie MIEDZY kolejnymi wywolaniami recalibrate-remaining (patrz
+  // nizej, mergeHarvestedIntoTemplate) - NIE jest zastepowany za kazdym razem swiezym
+  // wzorem z tylko-co-skonczonego bloku, zeby wiedza z WCZESNIEJSZYCH adresow (zwlaszcza
+  // reczne zaznaczenia uzytkownika) nie ginela, gdy kolejny adres dostarczy nowy wzor.
+  const analysis = { id: analysisId, createdAt: Date.now(), dir: analysisDir, files: new Map(), templateState: { textFields: [], groupFields: [] } };
 
   try {
     const files = req.files || [];
@@ -246,6 +271,21 @@ app.get('/api/analysis/:analysisId/files/:fileId/field-preview/:file', (req, res
   res.sendFile(filePath);
 });
 
+// Pelny obraz jednej strony (nie miniatura 220px z /thumb/) - uzywany przez UI recznego
+// zaznaczania pola (patrz /api/ocr/mark-field-region), gdzie potrzebna jest rozdzielczosc
+// wystarczajaca do precyzyjnego zaznaczenia myszem. To TEN SAM plik, ktory pipeline juz
+// zapisal w workDir (page-XXX.jpg) - zadnego nowego przetwarzania obrazu.
+app.get('/api/analysis/:analysisId/files/:fileId/page/:pageIndex', (req, res) => {
+  const fileEntry = analyses.get(req.params.analysisId)?.files.get(req.params.fileId);
+  if (!fileEntry) return res.status(404).send('Nie znaleziono strony.');
+  const pageIndex = Number(req.params.pageIndex);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) return res.status(400).send('Nieprawidlowy numer strony.');
+  const fileName = `page-${String(pageIndex + 1).padStart(3, '0')}.jpg`;
+  const filePath = path.join(fileEntry.workDir, safeName(fileName, 'page.jpg'));
+  if (!filePath.startsWith(fileEntry.workDir) || !fs.existsSync(filePath)) return res.status(404).send('Nie znaleziono strony.');
+  res.sendFile(filePath);
+});
+
 // Pola bez zadnej geometrii (etykieta tez nie znaleziona) dostaja "trywialny"
 // wynik - puste, ale JUZ rozstrzygniete jako niewymagajace przegladu tylko
 // dla plikow spoza rodziny szablonow, na ktorej opiera sie fieldExtraction.js
@@ -277,6 +317,68 @@ function trivialFields() {
 // oryginalnej strony - wspolrzedne z przycietego fragmentu byłyby bledne po
 // przeliczeniu na oryginalny obraz, a to i tak tylko przyblizony wskaznik
 // "gdzie patrzec" dla podgladu, nie potrzebuje pelnej precyzji).
+// Jimp.read() tego samego duzego JPEG-a od zera dla kazdego pola bylo najdrozsza czescia
+// generowania podgladow - jeden cache per zadanie, dzielony miedzy wszystkie pola tej samej
+// strony (patrz komentarz przy uzyciu w extract-fields/recalibrate-remaining).
+function makePageImageLoader() {
+  const pageImageCache = new Map();
+  return async function loadPageImage(imagePath) {
+    if (!pageImageCache.has(imagePath)) {
+      pageImageCache.set(imagePath, await Jimp.read(imagePath));
+    }
+    return pageImageCache.get(imagePath);
+  };
+}
+
+// Realny, powazny blad zlapany 2026-07-24 (na zywej sesji wlasciciela): zarowno
+// /api/ocr/extract-fields (dopasowany zapisany wzor gminy) jak i /api/ocr/recalibrate-
+// remaining (wzor zebrany w pamieci) uzywaly wyniku `extractFieldsFromTemplate` WPROST
+// jako calego `block.fields` - a ten wynik zawiera WYLACZNIE klucze, ktore akurat
+// pokrywa dany wzor. Kazde pole SPOZA wzoru (np. nowo dodany klucz FIELD_DEFS, ktorego
+// zapisany wzor jeszcze nie zna, albo pole ktore po prostu nigdy nie mialo bboxa w
+// zadnym wczesniej sprawdzonym adresie) znikalo CALKOWICIE - nie "wymagalo ponownego
+// zaznaczenia", tylko bylo nieobecne w kolejce przegladu I w koncowym eksporcie, po
+// cichu. Brakujace klucze musza dostac normalna (pelnostronicowa) ekstrakcje jako
+// uzupelnienie - wspolne dla obu miejsc, zeby nie powtorzyc tego samego bledu gdziekolwiek
+// indziej w przyszlosci.
+function fillMissingFieldsFromTemplate(pages, block, templateFields, allowedKeys) {
+  const expectedKeys = allowedKeys || new Set(COLUMN_ORDER.filter((k) => k !== 'adres'));
+  const missingKeys = new Set([...expectedKeys].filter((k) => !(k in templateFields)));
+  if (!missingKeys.size) return templateFields;
+  const fallbackFields = extractFields(pages, block, missingKeys);
+  return { ...fallbackFields, ...templateFields };
+}
+
+// Buduje podglady (+ retry-with-crop dla pol NIE z wzoru) dla wszystkich pol needsReview
+// jednego bloku - wydzielone z /api/ocr/extract-fields (2026-07-23), zeby ta sama logika
+// dala sie reuzyc w /api/ocr/recalibrate-remaining bez duplikowania.
+async function buildPreviewsForBlock({ fields, fileEntry, blockIndex, previewDir, analysisId, loadPageImage }) {
+  for (const [key, field] of Object.entries(fields)) {
+    if (!field.needsReview) continue;
+    const refBBox = field.valueBBox || field.labelBBox;
+    if (!refBBox || field.pageIndex === null) continue;
+    const page = fileEntry.pages.find((p) => p.pageIndex === field.pageIndex);
+    if (!page?.imagePath) continue;
+
+    const sourceImage = await loadPageImage(page.imagePath);
+    if (!field.fromTemplate) {
+      await retryFieldWithCrop({ field, key, page, refBBox, sourceImage, previewDir, blockIndex });
+    }
+
+    const previewFile = `block${blockIndex}-${key}.jpg`;
+    const builtPath = await buildFieldPreview({
+      pageImagePath: page.imagePath,
+      labelBBox: field.labelBBox,
+      valueBBox: field.valueBBox,
+      outPath: path.join(previewDir, previewFile),
+      sourceImage
+    });
+    if (builtPath) {
+      field.previewUrl = `/api/analysis/${analysisId}/files/${fileEntry.fileId}/field-preview/${encodeURIComponent(previewFile)}`;
+    }
+  }
+}
+
 async function retryFieldWithCrop({ field, key, page, refBBox, sourceImage, previewDir, blockIndex }) {
   const cropPath = path.join(previewDir, `_retry-block${blockIndex}-${key}.jpg`);
   try {
@@ -311,13 +413,46 @@ async function retryFieldWithCrop({ field, key, page, refBBox, sourceImage, prev
 // sesji analizy (fileEntry.resolvedBlocks) - finalize pozniej korzysta z
 // TYCH danych, nie z surowego body zadania, zeby wymusic ze tabelka faktycznie
 // jest kompletna (patrz walidacja w /api/ocr/finalize).
+// Lista zapisanych wzorow gmin (data/templates/*.json) - dotad NIGDZIE nie byla widoczna
+// dla uzytkownika (dopasowanie po naglowku dzialo w pelni automatycznie/po cichu, bez
+// zadnego potwierdzenia czy w ogole cos sie dopasowalo) - wlasciciel: "czemu jak sobie
+// zapisalem wczesniej szablon dla gminy to nigdzie nie moge go wybrac". Uzywane przez UI
+// do pokazania listy + pozwolenia na RECZNE wymuszenie konkretnego wzoru (patrz
+// templateId nizej w /api/ocr/extract-fields), zamiast polegac wylacznie na automatycznym
+// dopasowaniu po tekscie naglowka.
+app.get('/api/ocr/templates', async (req, res) => {
+  try {
+    const templates = await loadTemplates();
+    res.json({
+      ok: true,
+      templates: templates.map((t) => ({
+        id: t.id,
+        label: t.label,
+        textFieldsCount: (t.textFields || []).length,
+        groupFieldsCount: (t.groupFields || []).length
+      }))
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err.message || 'Nie udało się wczytać listy wzorów.' });
+  }
+});
+
 app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
-  const { analysisId, files: requestedFiles } = req.body || {};
+  const { analysisId, files: requestedFiles, family, templateId } = req.body || {};
   const analysis = analyses.get(analysisId);
   if (!analysis) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła lub nie istnieje - wgraj pliki ponownie.' });
   if (!Array.isArray(requestedFiles) || !requestedFiles.length) {
     return res.status(400).json({ ok: false, message: 'Brak plików do przetworzenia.' });
   }
+  if (family && !TABELA_FAMILIES[family]) {
+    return res.status(400).json({ ok: false, message: 'Nieznana rodzina protokołu.' });
+  }
+  // Zawezenie ekstrakcji/przegladu TYLKO do pol potrzebnych tabelce adresowej
+  // wybranej rodziny (2026-07-23, na wyrazna prosbe wlasciciela - dawniej
+  // przegladano WSZYSTKIE ~44 pola FIELD_DEFS niezaleznie od tego, czy trafiaja
+  // gdziekolwiek dalej) - null (brak wybranej rodziny) zachowuje stare, pelne
+  // zachowanie bez zmian.
+  const allowedKeys = family ? allowedKeysForFamily(family) : null;
 
   try {
     const results = [];
@@ -332,58 +467,41 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
         );
         const previewDir = path.join(fileEntry.workDir, 'fields');
         await fsp.mkdir(previewDir, { recursive: true });
+        const loadPageImage = makePageImageLoader();
 
-        // Kazda strona bywa uzywana przez dziesiatki pol (wiele
-        // brakujacych/niepewnych pol trafia na te sama strone formularza) -
-        // dekodowanie tego samego duzego JPEG-a od zera dla kazdego z nich
-        // bylo najdrozsza czescia calego generowania podgladow (Jimp jest
-        // czystym JS, bez natywnego kodu) - dekodujemy raz per strona i
-        // podajemy juz-zdekodowany obraz do buildFieldPreview (patrz
-        // sourceImage w ocrPipeline.js), zamiast raz na kazde pole.
-        const pageImageCache = new Map();
-        async function loadPageImage(imagePath) {
-          if (!pageImageCache.has(imagePath)) {
-            pageImageCache.set(imagePath, await Jimp.read(imagePath));
-          }
-          return pageImageCache.get(imagePath);
-        }
+        // Rozpoznanie znanego wzoru gminy (patrz src/templateEngine.js) - jesli dopasuje,
+        // pola tego bloku leca przez szybsza, kalibrowana sciezke (wyciecie z gory znanego
+        // miejsca zamiast pelnego przebiegu Document AI na calej stronie). Wczytywane na
+        // swiezo przy kazdym zadaniu (nie cache'owane w pamieci procesu), zeby wzor
+        // zapisany chwile wczesniej przez "Zapisz uklad jako wzor" byl od razu widoczny bez
+        // restartu serwera - biblioteka jest mala (kilkanascie plikow), wiec koszt odczytu
+        // jest pomijalny.
+        const knownTemplates = fileEntry.status === 'ocr-done' && fileEntry.pages ? await loadTemplates() : [];
+        // Uzytkownik moze RECZNIE wymusic konkretny, zapisany wzor (patrz GET
+        // /api/ocr/templates + selektor w UI, 2026-07-24 - wczesniej dopasowanie po
+        // naglowku dzialo w 100% automatycznie/po cichu, bez zadnego sposobu na
+        // podejrzenie listy wzorow albo wybranie innego niz automat by wybral). Jesli
+        // podany templateId nie istnieje (np. wzor skasowany miedzyczasie), po cichu
+        // wraca do automatycznego dopasowania zamiast twardego bledu.
+        const forcedTemplate = templateId ? knownTemplates.find((t) => t.id === templateId) : null;
 
         const resolvedBlocks = [];
         for (let blockIndex = 0; blockIndex < blocks.length; blockIndex++) {
           const block = blocks[blockIndex];
-          const fields = fileEntry.status === 'ocr-done' && fileEntry.pages ? extractFields(fileEntry.pages, block) : trivialFields();
-
-          for (const [key, field] of Object.entries(fields)) {
-            if (!field.needsReview) continue;
-            const refBBox = field.valueBBox || field.labelBBox;
-            if (!refBBox || field.pageIndex === null) continue;
-            const page = fileEntry.pages.find((p) => p.pageIndex === field.pageIndex);
-            if (!page?.imagePath) continue;
-
-            const sourceImage = await loadPageImage(page.imagePath);
-            await retryFieldWithCrop({ field, key, page, refBBox, sourceImage, previewDir, blockIndex });
-
-            const previewFile = `block${blockIndex}-${key}.jpg`;
-            const builtPath = await buildFieldPreview({
-              pageImagePath: page.imagePath,
-              labelBBox: field.labelBBox,
-              valueBBox: field.valueBBox,
-              outPath: path.join(previewDir, previewFile),
-              sourceImage
-            });
-            // buildFieldPreview zwraca null, jesli nie udalo sie wygenerowac
-            // podgladu (patrz jej wlasny komentarz) - poprzednio previewUrl
-            // bylo ustawiane BEZWARUNKOWO, wiec przeglądarka probowala
-            // wczytac obrazek, ktory nigdy nie zostal zapisany na dysk =
-            // zepsuta ikonka zamiast czytelnego komunikatu "nie udalo sie
-            // zlokalizowac" (realny bug zgloszony przez wlasciciela
-            // 2026-07-22 - "większość tych podglądów było popsute").
-            if (builtPath) {
-              field.previewUrl = `/api/analysis/${analysisId}/files/${fileEntry.fileId}/field-preview/${encodeURIComponent(previewFile)}`;
-            }
+          let fields;
+          let usedTemplate = null;
+          if (fileEntry.status === 'ocr-done' && fileEntry.pages) {
+            usedTemplate = forcedTemplate || matchTemplate(fileEntry.pages, block, knownTemplates);
+            fields = usedTemplate
+              ? fillMissingFieldsFromTemplate(fileEntry.pages, block, await extractFieldsFromTemplate(fileEntry.pages, block, usedTemplate, { workDir: previewDir, allowedKeys }), allowedKeys)
+              : extractFields(fileEntry.pages, block, allowedKeys);
+          } else {
+            fields = trivialFields();
           }
 
-          resolvedBlocks.push({ ...block, blockIndex, fields });
+          await buildPreviewsForBlock({ fields, fileEntry, blockIndex, previewDir, analysisId, loadPageImage });
+
+          resolvedBlocks.push({ ...block, blockIndex, fields, matchedTemplateLabel: usedTemplate?.label || null });
         }
 
         fileEntry.resolvedBlocks = resolvedBlocks;
@@ -397,12 +515,14 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
             startPage: b.startPage,
             endPage: b.endPage,
             label: b.label,
+            matchedTemplateLabel: b.matchedTemplateLabel,
             fields: Object.fromEntries(Object.entries(b.fields).map(([key, f]) => [key, {
               value: f.value,
               confidence: f.confidence,
               needsReview: f.needsReview,
               resolved: f.resolved,
               previewUrl: f.previewUrl || null,
+              pageIndex: f.pageIndex,
               columnLabel: COLUMN_LABELS[key] || key
             }]))
           }))
@@ -416,6 +536,137 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
   }
+});
+
+// Laczy nowo zharwestowany wzor z JEDNEGO wlasnie skonczonego adresu z JUZ zgromadzonym
+// stanem CALEJ sesji (analysis.templateState) - stan ROSNIE (nie jest zastepowany) w miare
+// kolejnych adresow, zeby wiedza z WCZESNIEJSZYCH adresow nie ginela, gdy kolejny adres
+// dostarczy nowy (czesciowy) wzor. Realny problem zlapany 2026-07-24 (wlasciciel: "jak juz
+// raz zaznacze to [pole] to sie po prostu nie zapisuje... jak uzytkownik to zaznaczyl, to
+// powinien uzywac tego w pierwszej kolejnosci") - reczne zaznaczenie (textFields entry z
+// manual:true, patrz harvestTemplateFields w templateEngine.js) ZAWSZE wygrywa: raz
+// zapisane reczne NIGDY nie jest nadpisywane przez pozniejszy automat, a nowy reczny
+// PODMIENIA wczesniejszy automat dla tego samego klucza. Automatyczne (niereczne) wpisy
+// trzymaja sie prostej zasady "kto pierwszy sie uda" - nie ma sensu zamieniac jednego
+// zgadywania na inne rownie niepewne.
+function mergeHarvestedIntoTemplate(templateState, harvested) {
+  const textByKey = new Map(templateState.textFields.map((e) => [e.key, e]));
+  for (const entry of harvested.textFields) {
+    const already = textByKey.get(entry.key);
+    if (already?.manual) continue;
+    if (!already || entry.manual) {
+      textByKey.set(entry.key, entry);
+      templateState.groupFields = templateState.groupFields
+        .map((g) => ({ ...g, keys: g.keys.filter((k) => k !== entry.key) }))
+        .filter((g) => g.keys.length);
+    }
+  }
+  templateState.textFields = Array.from(textByKey.values());
+
+  const coveredKeys = new Set([...textByKey.keys(), ...templateState.groupFields.flatMap((g) => g.keys)]);
+  for (const group of harvested.groupFields) {
+    const newKeys = group.keys.filter((k) => !coveredKeys.has(k));
+    if (newKeys.length) {
+      templateState.groupFields.push({ ...group, keys: newKeys });
+      newKeys.forEach((k) => coveredKeys.add(k));
+    }
+  }
+  return templateState;
+}
+
+// Wykorzystuje JUZ zrecenzowany (przez czlowieka) blok jako wzor dla POZOSTALYCH blokow tej
+// samej paczki (wszystkie pliki/adresy tej sesji analizy, bez wzgledu na to, w ktorym pliku
+// siedza) - patrz plan z 2026-07-23 (wlasciciel: "wykorzystaj jeden sprawdzony adres jako
+// wzor dla pozostalych w TYM SAMYM pliku, to tez zmniejszy ile trzeba zaznaczac recznie").
+// W odroznieniu od "Zapisz uklad jako wzor" (POST /api/ocr/save-template) - NIC nie zapisuje
+// do data/templates/ (harvestTemplateFields uzyty tu w pamieci, patrz komentarz w
+// templateEngine.js) - stosowany wprost do pozostalych blokow, bez przechodzenia przez
+// matchTemplate/naglowek. Wywolywane przez klienta PO KAZDYM skonczonym bloku (nie tylko
+// pierwszym - patrz app.js), zeby kolejne adresy mogly nadgonic to, czego wczesniejszy
+// adres nie zdolal zlokalizowac.
+app.post('/api/ocr/recalibrate-remaining', heavyJobLimiter, async (req, res) => {
+  const { analysisId, sourceFileId, sourceBlockIndex, family } = req.body || {};
+  const analysis = analyses.get(analysisId);
+  if (!analysis) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła lub nie istnieje.' });
+  const sourceFileEntry = analysis.files.get(sourceFileId);
+  const sourceBlock = sourceFileEntry?.resolvedBlocks?.[sourceBlockIndex];
+  if (!sourceFileEntry || !sourceBlock) return res.status(400).json({ ok: false, message: 'Nie znaleziono bloku źródłowego.' });
+  if (family && !TABELA_FAMILIES[family]) return res.status(400).json({ ok: false, message: 'Nieznana rodzina protokołu.' });
+  const allowedKeys = family ? allowedKeysForFamily(family) : null;
+
+  let harvested;
+  try {
+    harvested = harvestTemplateFields({ pages: sourceFileEntry.pages, block: sourceBlock, fields: sourceBlock.fields });
+  } catch (err) {
+    return res.status(500).json({ ok: false, message: err.message || 'Nie udało się skalibrować z tego adresu.' });
+  }
+  if (!analysis.templateState) analysis.templateState = { textFields: [], groupFields: [] };
+  mergeHarvestedIntoTemplate(analysis.templateState, harvested);
+  if (!analysis.templateState.textFields.length && !analysis.templateState.groupFields.length) {
+    return res.json({ ok: true, updatedBlocks: [] });
+  }
+  const inMemoryTemplate = { textFields: analysis.templateState.textFields, groupFields: analysis.templateState.groupFields };
+  const loadPageImage = makePageImageLoader();
+
+  const updatedBlocks = [];
+  for (const fileEntry of analysis.files.values()) {
+    if (!fileEntry.resolvedBlocks?.length || !fileEntry.pages) continue;
+    for (let blockIndex = 0; blockIndex < fileEntry.resolvedBlocks.length; blockIndex++) {
+      if (fileEntry.fileId === sourceFileId && blockIndex === sourceBlockIndex) continue;
+      const block = fileEntry.resolvedBlocks[blockIndex];
+      // Realny problem zlapany 2026-07-24: to wywolanie teraz odpala sie PO KAZDYM
+      // bloku (nie tylko raz po pierwszym - patrz app.js), zeby pole, ktorego adres 1
+      // nie zdolal zlokalizowac (uzytkownik po prostu wpisal wartosc recznie, bez
+      // zaznaczania), moglo zostac zlapane z KOLEJNEGO adresu, ktory akurat sie udal -
+      // zamiast zeby uzytkownik musial poprawiac to samo pole w kazdym pozostalym
+      // adresie z osobna. Ale to oznacza, ze blok moze byc JUZ CZESCIOWO/CALKOWICIE
+      // przejrzany przez uzytkownika w momencie kolejnego wywolania - nie wolno
+      // nadpisywac takiego bloku (zgubilibysmy juz wpisane odpowiedzi).
+      //
+      // Realny blad #2 zlapany 2026-07-24 (na zywej sesji wlasciciela): pierwsza wersja
+      // tego sprawdzenia patrzyla na `field.resolved` w KTORYMKOLWIEK polu bloku - ale
+      // pola z wysoka pewnoscia dostaja resolved:true JUZ przy pierwszej automatycznej
+      // ekstrakcji (extract-fields), ZANIM uzytkownik w ogole zobaczy ten blok. To
+      // znaczylo, ze `alreadyTouched` wychodzil `true` dla prawie kazdego bloku od razu
+      // po starcie calej analizy - rekalibracja NIGDY nie mialismy szans zadzialac,
+      // dokladnie objaw zgloszony przez wlasciciela ("dalej trzeba zaznaczac podglady").
+      // Naprawka: osobna flaga NA POZIOMIE BLOKU (`block.userReviewed`), ustawiana
+      // wylacznie przez /api/ocr/resolve-field i /api/ocr/mark-field-region - czyli
+      // faktyczna interakcje uzytkownika z TYM blokiem, nie stan pojedynczych pol.
+      if (block.userReviewed) continue;
+      const previewDir = path.join(fileEntry.workDir, 'fields');
+      await fsp.mkdir(previewDir, { recursive: true });
+
+      let fields;
+      try {
+        fields = fillMissingFieldsFromTemplate(
+          fileEntry.pages, block,
+          await extractFieldsFromTemplate(fileEntry.pages, block, inMemoryTemplate, { workDir: previewDir, allowedKeys }),
+          allowedKeys
+        );
+      } catch (err) {
+        continue; // best-effort - ten blok zostaje przy poprzedniej (mniej skalibrowanej) ekstrakcji
+      }
+      await buildPreviewsForBlock({ fields, fileEntry, blockIndex, previewDir, analysisId, loadPageImage });
+
+      block.fields = fields;
+      updatedBlocks.push({
+        fileId: fileEntry.fileId,
+        blockIndex,
+        fields: Object.fromEntries(Object.entries(fields).map(([key, f]) => [key, {
+          value: f.value,
+          confidence: f.confidence,
+          needsReview: f.needsReview,
+          resolved: f.resolved,
+          previewUrl: f.previewUrl || null,
+          pageIndex: f.pageIndex,
+          columnLabel: COLUMN_LABELS[key] || key
+        }]))
+      });
+    }
+  }
+
+  res.json({ ok: true, updatedBlocks });
 });
 
 // Zapisuje reczna poprawke JEDNEGO pola (albo jawne "brak w oryginale" -
@@ -434,7 +685,114 @@ app.post('/api/ocr/resolve-field', async (req, res) => {
     needsReview: false,
     resolved: true
   };
+  // Odroznia "uzytkownik faktycznie przejrzal ten blok" od "pole akurat wyszlo
+  // resolved:true z automatycznej ekstrakcji" (patrz komentarz przy alreadyTouched
+  // w /api/ocr/recalibrate-remaining) - flaga na poziomie BLOKU, nie pola.
+  block.userReviewed = true;
   res.json({ ok: true });
+});
+
+// Reczne zaznaczenie miejsca pola na skanie, gdy automatyczna ekstrakcja nie znalazla ani
+// labelBBox ani valueBBox ("Nie udalo sie zlokalizowac tego pola na skanie" w UI) - patrz
+// plan "Reczne zaznaczanie pola na skanie". Zapisuje prostokat jako valueBBox TEGO pola w
+// dokladnie tym samym miejscu (`fileEntry.resolvedBlocks[...].fields[...]`), z ktorego
+// buildTemplateFromReview juz dzis czyta przy "Zapisz uklad jako wzor" - zero dodatkowych
+// zmian potrzebnych, zeby reczne zaznaczenie trafilo do wzoru gminy.
+app.post('/api/ocr/mark-field-region', async (req, res) => {
+  const { analysisId, fileId, blockIndex, fieldKey, pageIndex, region } = req.body || {};
+  const fileEntry = analyses.get(analysisId)?.files.get(fileId);
+  if (!fileEntry) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła lub nie istnieje.' });
+  const block = fileEntry.resolvedBlocks?.[blockIndex];
+  if (!block || !block.fields[fieldKey]) return res.status(400).json({ ok: false, message: 'Nie znaleziono wskazanego pola.' });
+
+  const pIdx = Number(pageIndex);
+  const page = fileEntry.pages?.find((p) => p.pageIndex === pIdx);
+  if (!page?.imagePath) return res.status(400).json({ ok: false, message: 'Nie znaleziono wskazanej strony.' });
+
+  const { minX, minY, maxX, maxY } = region || {};
+  const valid = [minX, minY, maxX, maxY].every((n) => typeof n === 'number' && Number.isFinite(n))
+    && minX >= 0 && minY >= 0 && minX < maxX && minY < maxY && maxX <= page.width && maxY <= page.height;
+  if (!valid) return res.status(400).json({ ok: false, message: 'Nieprawidłowy zaznaczony obszar.' });
+
+  block.fields[fieldKey] = {
+    ...block.fields[fieldKey],
+    pageIndex: pIdx,
+    labelBBox: null,
+    valueBBox: { minX, minY, maxX, maxY },
+    // Uzytkownik SAM wskazal to miejsce - przy harwestowaniu wzoru (recalibrate-remaining)
+    // taki region ZAWSZE wygrywa z automatycznym zgadywaniem dla innych adresow, nawet
+    // jesli automat "cos" znalazl gdzie indziej (patrz mergeHarvestedIntoTemplate).
+    manuallyMarked: true
+  };
+  block.userReviewed = true;
+
+  try {
+    const previewDir = path.join(fileEntry.workDir, 'fields');
+    await fsp.mkdir(previewDir, { recursive: true });
+    const previewFile = `block${blockIndex}-${fieldKey}.jpg`;
+    const builtPath = await buildFieldPreview({
+      pageImagePath: page.imagePath,
+      labelBBox: null,
+      valueBBox: { minX, minY, maxX, maxY },
+      outPath: path.join(previewDir, previewFile)
+    });
+    if (!builtPath) return res.status(500).json({ ok: false, message: 'Nie udało się wygenerować podglądu zaznaczonego obszaru.' });
+    block.fields[fieldKey].previewUrl = `/api/analysis/${analysisId}/files/${fileEntry.fileId}/field-preview/${encodeURIComponent(previewFile)}`;
+    res.json({ ok: true, previewUrl: block.fields[fieldKey].previewUrl });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err.message || 'Nie udało się zapisać zaznaczenia.' });
+  }
+});
+
+// Regex-escape'owana etykieta uzytkownika, ze spacjami zamienionymi na "dowolna
+// ilosc bialych znakow" - naglowek protokolu bywa lamany na kilka linii/spacji
+// inaczej niz w tym, co uzytkownik wpisal.
+// Kazde slowo dluzsze niz 4 znaki jest obcinane do ~75% swojej dlugosci + "\S*"
+// na koncu - realny blad zlapany 2026-07-23: Document AI czasem myli sie na
+// OSTATNICH znakach dlugiego slowa w naglowku (np. "Biskupi" odczytane jako
+// "BiskupŁ™"), co z ISCISLYM dopasowaniem calego slowa powodowalo, ze
+// dopasowanie wzoru CALKOWICIE zawodzilo (matchTemplate zwracal null), a caly
+// blok cichutko spadal na starsza, mniej dokladna sciezke ekstrakcji zamiast
+// tylko tego jednego pola. Tolerowanie literowki na koncu slowa (nie na
+// poczatku - tam bledy sa rzadsze, OCR zwykle traci pewnosc pod koniec
+// dlugiego tokenu) znaczaco zmniejsza ryzyko takiego calkowitego niedopasowania.
+function buildHeaderPattern(label) {
+  const words = String(label || '').trim().toUpperCase().split(/\s+/).filter(Boolean);
+  const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = words.map((w) => {
+    if (w.length <= 4) return escapeRegex(w);
+    const keep = Math.max(4, Math.ceil(w.length * 0.75));
+    return `${escapeRegex(w.slice(0, keep))}\\S*`;
+  });
+  return parts.join('\\s+');
+}
+
+// Kalibracja nowego "wzoru gminy" (patrz src/templateEngine.js) z JUZ zrecenzowanego przez
+// czlowieka bloku - harvestuje labelBBox/valueBBox kazdego pola jako uamki strony. Uzytkownik
+// podaje jedna etykiete, uzywana jednoczesnie jako nazwa wyswietlana I jako wzorzec
+// rozpoznawania naglowka (musi wiec byc charakterystycznym fragmentem naglowka protokolu,
+// np. nazwa gminy - nie dowolnym opisem).
+app.post('/api/ocr/save-template', async (req, res) => {
+  const { analysisId, fileId, blockIndex, label } = req.body || {};
+  const fileEntry = analyses.get(analysisId)?.files.get(fileId);
+  if (!fileEntry) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła lub nie istnieje.' });
+  const block = fileEntry.resolvedBlocks?.[blockIndex];
+  if (!block) return res.status(400).json({ ok: false, message: 'Nie znaleziono wskazanego bloku - najpierw uzupełnij dane.' });
+  const cleanLabel = typeof label === 'string' ? label.trim().slice(0, 120) : '';
+  if (!cleanLabel) return res.status(400).json({ ok: false, message: 'Podaj nazwę wzoru (np. nazwę gminy z nagłówka protokołu).' });
+
+  try {
+    const template = await buildTemplateFromReview({
+      pages: fileEntry.pages,
+      block,
+      fields: block.fields,
+      label: cleanLabel,
+      headerPattern: buildHeaderPattern(cleanLabel)
+    });
+    res.json({ ok: true, templateId: template.id, textFieldsCount: template.textFields.length, groupFieldsCount: template.groupFields.length });
+  } catch (err) {
+    res.status(500).json({ ok: false, message: err.message || 'Nie udało się zapisać wzoru.' });
+  }
 });
 
 // Ostrzezenia z analyzeDocument dotycza calego (jeszcze niepodzielonego) pliku -
@@ -484,7 +842,7 @@ function validateBlocks(blocks, pageCount) {
 // jesli dla ktoregos bloku zostaly nierozstrzygniete pola do przegladu,
 // finalizacja jest BLOKOWANA (wymaga tego kompletnosc tabelki, patrz plan).
 app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
-  const { analysisId, files: requestedFiles, excelPath } = req.body || {};
+  const { analysisId, files: requestedFiles, excelPath, family } = req.body || {};
   const analysis = analyses.get(analysisId);
   if (!analysis) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła lub nie istnieje - wgraj pliki ponownie.' });
   if (!Array.isArray(requestedFiles) || !requestedFiles.length) {
@@ -493,6 +851,9 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
   if (excelPath) {
     try { validateExcelPath(excelPath); } catch (err) {
       return res.status(400).json({ ok: false, message: err.message });
+    }
+    if (family && !TABELA_FAMILIES[family]) {
+      return res.status(400).json({ ok: false, message: 'Nieznana rodzina protokołu.' });
     }
   }
 
@@ -504,6 +865,10 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
   try {
     await fsp.mkdir(jobDir, { recursive: true });
     const results = [];
+    // Wiersze zbierane z CALEJ paczki (wszystkie wgrane pliki x wszystkie ich bloki-adresy)
+    // i zapisywane JEDNYM writeFreshRows PO petli, zamiast po jednym appendRow na blok - patrz
+    // komentarz w excelExport.js (nigdy nie doklejac do istniejacego pliku pod ta sciezka).
+    const excelRows = [];
 
     for (const requested of requestedFiles) {
       const fileEntry = analysis.files.get(requested?.fileId);
@@ -542,13 +907,13 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
           const addressLabel = b.label || (blocks.length > 1 ? `Adres ${i + 1}` : fileEntry.originalName);
 
           if (excelPath) {
-            const rowValues = { adres: addressLabel };
-            for (const [key, field] of Object.entries(b.fields)) rowValues[key] = field.value || '';
-            try {
-              appendRow(excelPath, 'Audyty', COLUMN_ORDER, COLUMN_LABELS, rowValues);
-            } catch (excelErr) {
-              results.push({ ok: false, originalName: fileEntry.originalName, error: `Zapisano PDF, ale nie udało się dopisać wiersza do Excela: ${excelErr.message}` });
-              return;
+            if (family) {
+              const addressRow = buildRowValues(family, b.fields, addressLabel);
+              excelRows.push(addressRow);
+            } else {
+              const addressRow = { adres: addressLabel };
+              for (const [key, field] of Object.entries(b.fields)) addressRow[key] = field.value || '';
+              excelRows.push(addressRow);
             }
           }
 
@@ -571,10 +936,33 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
       }
     }
 
-    await purgeAnalysis(analysis);
-    analyses.delete(analysisId);
+    // Jeden swiezy plik Excela dla CALEJ paczki (wszystkie wgrane pliki x wszystkie ich
+    // bloki-adresy) - patrz komentarz w excelExport.js (2026-07-23, wlasciciel: "nie
+    // powinno dopisywac do istniejacej tabelki tylko tworzyc nowa i jedna dla wszystkich
+    // wyslanych adresow"). Zapisywane PO petli (nie per-blok), zeby jedno wywolanie
+    // writeFreshRows objelo caly zestaw wierszy tej paczki naraz.
+    let excelError = null;
+    if (excelPath && excelRows.length) {
+      try {
+        if (family) {
+          const { sheetName, columns } = TABELA_FAMILIES[family];
+          const identityLabels = Object.fromEntries(columns.map((c) => [c.label, c.label]));
+          writeFreshRows(excelPath, sheetName, columns.map((c) => c.label), identityLabels, excelRows);
+        } else {
+          writeFreshRows(excelPath, 'Audyty', COLUMN_ORDER, COLUMN_LABELS, excelRows);
+        }
+      } catch (err) {
+        excelError = err.message || 'Nie udało się zapisać pliku Excel.';
+      }
+    }
 
-    res.json({ ok: true, jobId, results });
+    // Sesja analizy NIE jest tu usuwana (dawniej: purgeAnalysis+analyses.delete zaraz po
+    // finalizacji) - wlasciciel zglosil (2026-07-23), ze chce moc kliknac "Zapisz uklad
+    // jako wzor" PO pobraniu gotowych plikow, nie tylko przed - natychmiastowe kasowanie
+    // odcinalo to calkowicie (endpoint /api/ocr/save-template dostawal "sesja wygasla").
+    // Sesja i tak zniknie sama przez istniejacy TTL (cleanupOldAnalyses, ANALYSIS_TTL_MS
+    // = 2h domyslnie) - wystarczajaco duzo czasu, zeby po fakcie zdecydowac o wzorze.
+    res.json({ ok: true, jobId, results, excelPath: excelPath || null, excelRowCount: excelRows.length, excelError });
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
   }

@@ -6,6 +6,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const { PDFDocument, PDFName, PDFArray, PDFRawStream } = require('pdf-lib');
+const { Jimp } = require('jimp');
 
 const FILTER_EXTENSIONS = {
   DCTDecode: 'jpg',
@@ -78,10 +79,32 @@ async function extractPageImages(pdfPath, outDir) {
     // Efektywne DPI = piksele obrazu / rzeczywisty rozmiar strony (w calach, 72pt=1cal).
     // Realne skany audytow wahaly sie miedzy ~200 a ~300 DPI - lepiej policzyc niz
     // zakladac stala wartosc, Tesseract dziala zauwazalnie gorzej przy zlym --dpi.
+    // Liczone PRZED ewentualnym obrotem nizej: page.getSize() (pdf-lib) zwraca surowy
+    // MediaBox, NIE uwzgledniajac /Rotate, wiec musi byc sparowany z ROWNIEZ-nieobroconymi
+    // wymiarami obrazu, zeby os X parowala sie z osia X.
     const dpiX = pageWidthPt > 0 ? Math.round(image.width / (pageWidthPt / 72)) : 300;
     const dpiY = pageHeightPt > 0 ? Math.round(image.height / (pageHeightPt / 72)) : 300;
     const dpi = Math.round((dpiX + dpiY) / 2) || 300;
-    results.push({ pageIndex: i, imagePath, width: image.width, height: image.height, rotate, dpi });
+    let width = image.width;
+    let height = image.height;
+    // PDF's /Rotate to DEKLARATYWNA, autorytatywna flaga strony (liczba stopni W PRAWO,
+    // wg specyfikacji PDF) - w odroznieniu od usunietego (2026-07-24) zgadywania obrotu
+    // z geometrii/Document AI, tu nie ma nic do wykrywania: PDF sam mowi jak ma byc
+    // pokazywany. Typowe narzedzia do "obracania PDF-a" (Adobe, przegladarki) tylko
+    // USTAWIAJA te flage, NIE przekodowuja osadzonego obrazu - realny przypadek zlapany
+    // 2026-07-24: uzytkownik "obrocil normalnie" caly plik takim narzedziem, PDF wygladal
+    // dobrze w kazdej przegladarce, ale wyciagniety tu surowy obraz byl dalej w STAREJ
+    // orientacji, bo poprzednio (przed ta poprawka) w ogole nie stosowalismy /Rotate przy
+    // ekstrakcji. Skoro to jedyna pozostala flaga rotacji w pipeline (2026-07-24 usunieto
+    // cala reszte), stosujemy ja raz, tutaj, przy ekstrakcji - zero kosztu dla
+    // przewazajacej wiekszosci stron, ktore w ogole nie maja tej flagi ustawionej.
+    if (rotate === 90 || rotate === 180 || rotate === 270) {
+      const img = await Jimp.read(imagePath);
+      img.rotate((360 - rotate) % 360);
+      await img.write(imagePath);
+      if (rotate === 90 || rotate === 270) { [width, height] = [height, width]; }
+    }
+    results.push({ pageIndex: i, imagePath, width, height, rotate, dpi });
   }
 
   return { pageCount: pages.length, pages: results };

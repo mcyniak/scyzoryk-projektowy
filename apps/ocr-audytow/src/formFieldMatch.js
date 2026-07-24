@@ -4,14 +4,7 @@
 // wystarczy JEDEN regex testowany na calym stringu - prostsze i bardziej
 // niezawodne niz poprzednia wersja (tokenizacja + matchSequenceFrom, portowana
 // z modelu myslenia zaprojektowanego pod plaska liste slow).
-const { CHECKBOX_CHECKED, CHECKBOX_UNCHECKED } = require('./textMatch');
-
-function verticesToRect(vertices) {
-  if (!vertices || !vertices.length) return null;
-  const xs = vertices.map((v) => v.x);
-  const ys = vertices.map((v) => v.y);
-  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
-}
+const { CHECKBOX_CHECKED, CHECKBOX_UNCHECKED, verticesToRect } = require('./textMatch');
 
 // Document AI's fieldValue bywa "surowym" stringiem z kropkami niewypelnionej
 // linii formularza (np. "....120." dla odpowiedzi "120") i/albo z wieloma
@@ -124,4 +117,4 @@ function findCheckedFormFieldOption(formFields, options, visualElements) {
   return anyOptionTextFound ? { option: null } : null;
 }
 
-module.exports = { findFormField, findCheckedFormFieldOption, findNearbyVisualElement, verticesToRect, cleanFieldValue };
+module.exports = { findFormField, findCheckedFormFieldOption };

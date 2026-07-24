@@ -1,17 +1,23 @@
-// Dopisywanie wierszy (jeden audyt = jeden adres) do jednej wspolnej tabelki
-// Excela, wskazywanej przez uzytkownika sciezka lokalna (patrz plan z
-// 2026-07-21) - GENUINELE NOWA ZDOLNOSC w tym repo: `xlsx` (SheetJS) jest juz
-// zaleznoscia w apps/drukarka-projekty (src/excelInvestment.js), ale TYLKO do
-// odczytu (XLSX.read/sheet_to_json) - nikt dotad nigdzie w repo nie
-// zapisywal/dopisywal .xlsx.
+// Zapisuje tabelke Excela dla JEDNEJ paczki (finalizacji) - GENUINELE NOWA
+// ZDOLNOSC w tym repo: `xlsx` (SheetJS) jest juz zaleznoscia w
+// apps/drukarka-projekty (src/excelInvestment.js), ale TYLKO do odczytu
+// (XLSX.read/sheet_to_json) - nikt dotad nigdzie w repo nie zapisywal.
 //
-// SheetJS nie ma prawdziwego "append" - kazde wywolanie to read-modify-write
-// calego pliku (odczyt istniejacego arkusza -> dopisanie wiersza w pamieci ->
-// zapis calosci z powrotem). Akceptowalne przy realnych rozmiarach tych
-// tabelek (dziesiatki/setki wierszy, nie tysiace).
+// Poprawiono 2026-07-23 (wlasciciel: "nie powinno dopisywac do istniejacej
+// tabelki tylko tworzyc nowa i jedna dla wszystkich wyslanych adresow") -
+// WCZESNIEJSZA wersja (appendRow) doczytywala istniejacy plik pod wskazana
+// sciezka i DOPISYWALA wiersz, wiec przy ponownym uzyciu TEJ SAMEJ sciezki
+// (a excelPathInput.value jest zapamietywane w localStorage miedzy sesjami!)
+// kolejne, zupelnie niezwiazane partie adresow cicho lecialy do JEDNEGO,
+// wiecznie rosnacego pliku. Teraz: KAZDE wywolanie tworzy plik OD ZERA
+// (nadpisujac cokolwiek tam bylo), z JEDNYM arkuszem zawierajacym WSZYSTKIE
+// adresy z TEJ JEDNEJ paczki (moze obejmowac wiele wgranych plikow i/albo
+// wiele blokow-adresow w kazdym z nich - server.js zbiera wszystkie wiersze
+// PRZED zapisem, zamiast zapisywac po jednym na blok).
 const fs = require('fs');
 const path = require('path');
 const XLSX = require('xlsx');
+const ExcelJS = require('exceljs');
 
 function validatePath(filePath) {
   if (!filePath || typeof filePath !== 'string') throw new Error('Nie podano ścieżki do pliku Excel.');
@@ -20,56 +26,78 @@ function validatePath(filePath) {
   if (!fs.existsSync(dir)) throw new Error(`Folder nie istnieje: ${dir}`);
 }
 
-// Dopisuje JEDEN wiersz do arkusza `sheetName` w pliku pod `filePath`. `columns`
-// to uporzadkowana lista kluczy kolumn, `columnLabels` mapuje klucz na naglowek,
-// `rowValues` to obiekt { [columnKey]: wartosc }.
-//
-// Realne pliki wlasciciela to JEDEN workbook z KILKOMA arkuszami (Pompy ciepła/
-// Solary/Kotly) - poprzednia wersja tej funkcji zawsze budowala CALKOWICIE NOWY
-// workbook z jednym arkuszem "Audyty" i nadpisywala nim caly plik, co
-// SKASOWALOBY pozostale arkusze przy dopisywaniu do ktoregokolwiek z nich.
-// Teraz: gdy plik istnieje, wczytujemy caly workbook i modyfikujemy/dodajemy
-// TYLKO wskazany arkusz, zapisujac z powrotem WSZYSTKIE arkusze.
-function appendRow(filePath, sheetName, columns, columnLabels, rowValues) {
+// Tworzy NOWY plik .xlsx (nadpisuje, jesli juz istnieje) z JEDNYM arkuszem
+// `sheetName`, zawierajacym naglowek + jeden wiersz na kazdy element
+// `rowValuesList` (kazdy to obiekt { [columnKey]: wartosc }). `columns` to
+// uporzadkowana lista kluczy kolumn, `columnLabels` mapuje klucz na naglowek.
+function writeFreshRows(filePath, sheetName, columns, columnLabels, rowValuesList) {
   validatePath(filePath);
-  if (!sheetName) throw new Error('Nie podano nazwy arkusza do dopisania wiersza.');
+  if (!sheetName) throw new Error('Nie podano nazwy arkusza.');
   const headerRow = columns.map((key) => columnLabels[key] || key);
-  const dataRow = columns.map((key) => rowValues[key] ?? '');
+  const dataRows = rowValuesList.map((rowValues) => columns.map((key) => rowValues[key] ?? ''));
 
-  let wb;
-  let targetSheetName;
-  if (fs.existsSync(filePath)) {
-    wb = XLSX.readFile(filePath);
-    targetSheetName = wb.SheetNames.find((n) => n.toLowerCase() === sheetName.toLowerCase());
-  } else {
-    wb = XLSX.utils.book_new();
-  }
-
-  let rows;
-  if (targetSheetName) {
-    const sheet = wb.Sheets[targetSheetName];
-    rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
-    if (!rows.length) {
-      rows = [headerRow];
-    } else {
-      const existingHeader = rows[0].map((c) => String(c ?? '').trim());
-      const expectedHeader = headerRow.map((c) => String(c).trim());
-      const matches = existingHeader.length === expectedHeader.length && existingHeader.every((c, i) => c === expectedHeader[i]);
-      if (!matches) {
-        throw new Error(`Arkusz "${sheetName}" we wskazanym pliku ma inny układ kolumn niż oczekiwany - wybierz inny plik/arkusz.`);
-      }
-    }
-    rows.push(dataRow);
-    wb.Sheets[targetSheetName] = XLSX.utils.aoa_to_sheet(rows);
-  } else {
-    // Arkusz o tej nazwie jeszcze nie istnieje w pliku - dodajemy go, nie
-    // ruszajac zadnego z istniejacych arkuszy.
-    rows = [headerRow, dataRow];
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), sheetName);
-  }
-
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]), sheetName);
   XLSX.writeFile(wb, filePath);
-  return { rowNumber: rows.length - 1 };
+  return { rowCount: dataRows.length };
 }
 
-module.exports = { appendRow, validatePath };
+// Jak writeFreshRows, ale dla rodzin z wlasnym, prawdziwym firmowym wzorem
+// (patrz assets/templates/ + TABELA_FAMILIES w tabelaAdresowaColumns.js) -
+// KLONUJE ten wzor zamiast budowac goly arkusz od zera, zeby wygenerowany
+// plik wygladal WIZUALNIE identycznie jak wzor (czcionki/kolory naglowka/
+// obramowania), nie tylko mial te same naglowki kolumn w plaskim tekscie.
+//
+// Uzywa `exceljs`, NIE `xlsx` (SheetJS) - zweryfikowane bezposrednio
+// (2026-07-24), ze `xlsx` (community edition, jedyna darmowa wersja) przy
+// odczyt-modyfikuj-zapisz ROZBIJA oryginalne indeksy stylow (rozne kolumny
+// naglowka z osobnym formatowaniem w oryginale koncza jako 1-2 wspolne,
+// gole style po zapisie) - realny test na prawdziwym wzorze pokazal to
+// czarno na bialym w surowym XML (`xl/worksheets/sheet1.xml`). `exceljs`
+// przy tym samym tescie poprawnie zachowal pogrubienie/kolor
+// wypelnienia/obramowanie naglowka.
+//
+// `rowValuesList` to TA SAMA struktura co w writeFreshRows (klucz = ETYKIETA
+// kolumny, nie fieldKey - patrz buildRowValues w tabelaAdresowaColumns.js).
+// Kolejnosc kolumn brana jest z WLASNEGO naglowka wzoru (wiersz 1), nie z
+// listy `columns` przekazanej przez wywolujacego - odpornosc na drobne
+// niezgodnosci kolejnosci miedzy kodem a plikiem wzoru.
+async function writeFamilyTemplateRows(templatePath, outputPath, sheetName, rowValuesList) {
+  validatePath(outputPath);
+  if (!fs.existsSync(templatePath)) throw new Error(`Nie znaleziono pliku wzoru: ${templatePath}`);
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(templatePath);
+  const worksheet = workbook.getWorksheet(sheetName);
+  if (!worksheet) throw new Error(`Arkusz "${sheetName}" nie istnieje we wzorze ${templatePath}.`);
+
+  const headerRow = worksheet.getRow(1);
+  const columnLabels = [];
+  headerRow.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+    columnLabels[colNumber] = String(cell.value ?? '').trim();
+  });
+
+  rowValuesList.forEach((rowValues, i) => {
+    const row = worksheet.getRow(i + 2);
+    for (let col = 1; col < columnLabels.length; col++) {
+      const label = columnLabels[col];
+      if (!label) continue;
+      const cell = row.getCell(col);
+      // Realny blad zlapany 2026-07-24 na prawdziwym wzorze PC: kolumna "Udzial
+      // ogrzew. podlog." to ZYWA formula Excela (=100-P{wiersz}, w dodatku
+      // "shared formula" rozciagnieta na wiele wierszy) - nadpisanie jej goła
+      // wartoscia psulo zapis (exceljs rzucal "Shared Formula master must exist
+      // above..."). Kazda komorka wzoru, ktora JUZ ma formule, zostaje
+      // NIETKNIETA - to sam wzor ja policzy przy otwarciu w Excelu, nie musimy
+      // (i nie powinnismy) pisac do niej wprost.
+      if (cell.formula) continue;
+      cell.value = rowValues[label] ?? '';
+    }
+    row.commit();
+  });
+
+  await workbook.xlsx.writeFile(outputPath);
+  return { rowCount: rowValuesList.length };
+}
+
+module.exports = { writeFreshRows, writeFamilyTemplateRows, validatePath };

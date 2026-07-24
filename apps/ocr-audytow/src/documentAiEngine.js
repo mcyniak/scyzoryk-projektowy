@@ -53,9 +53,11 @@ function resolveTextAnchor(textAnchor, fullText) {
 }
 
 // Konwertuje wierzcholki znormalizowane (0-1, wzgledem wymiarow strony) albo
-// juz-w-pikselach na ta sama konwencje co Vision's word.vertices - 4 punkty
-// w pikselach ORYGINALNEGO (jeszcze nieobroconego) obrazu wejsciowego, zeby
-// rotationDetect.js/rotatePoint dzialaly bez zadnych zmian.
+// juz-w-pikselach na ta sama konwencje co Vision's word.vertices (4 punkty w
+// pikselach). Uwaga: te wspolrzedne sa w WLASNEJ, wewnetrznie skorygowanej
+// ("logicznej") ramce Document AI, nie w ramce surowego, fizycznie obroconego
+// obrazu wejsciowego - patrz notatka w ocrPipeline.js (2026-07-24) o swiadomym
+// usunieciu automatycznego wykrywania/korygowania fizycznego obrotu strony.
 function toPixelVertices(boundingPoly, pageWidth, pageHeight) {
   if (boundingPoly?.vertices?.length) {
     return boundingPoly.vertices.map((v) => ({ x: v.x || 0, y: v.y || 0 }));
@@ -70,7 +72,7 @@ function toPixelVertices(boundingPoly, pageWidth, pageHeight) {
 //  - text: pelny tekst strony,
 //  - words: lista {text, confidence, vertices} w kolejnosci tokenow Document
 //    AI, DOKLADNIE w takim samym ksztalcie jak visionEngine.js's ocrImage,
-//    zeby rotationDetect.js/bundleSplit.js/buildOcrPdf/buildThumbnails i
+//    zeby bundleSplit.js/buildOcrPdf/buildThumbnails i
 //    cala dotychczasowa logika dopasowywania w fieldExtraction.js dzialaly
 //    bez zadnych zmian (uzywane jako FALLBACK gdy formFields nie pomoga),
 //  - formFields: lista {fieldName, fieldNameBBox, fieldValue, valueConfidence,
