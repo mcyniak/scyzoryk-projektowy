@@ -77,21 +77,40 @@ async function writeFamilyTemplateRows(templatePath, outputPath, sheetName, rowV
     columnLabels[colNumber] = String(cell.value ?? '').trim();
   });
 
+  // Realny blad zlapany 2026-07-24 na prawdziwym wzorze PC: kolumna "Udzial ogrzew.
+  // podlog." to ZYWA "shared formula" Excela (jedna komorka-mistrz z tekstem formuly +
+  // wiele komorek-klonow bez wlasnego tekstu, tylko odwolanie do mistrza) - nadpisanie
+  // SAMEGO mistrza gola wartoscia, zostawiajac klony z odwolaniem do juz-nieistniejacej
+  // formuly, psulo zapis ("Shared Formula master must exist above and/or left of clone").
+  // Zanim wpiszemy cokolwiek, "rozdzielamy" KAZDA shared-formule w calym arkuszu na
+  // niezalezne, samodzielne formuly (ta sama tresc per komorka - `cell.formula` juz
+  // zwraca poprawnie przetlumaczony tekst nawet dla klonow, np. wiersz 4 dostaje
+  // "100-P4" mimo ze w pliku trzyma tylko odwolanie do mistrza w wierszu 3) - dzieki
+  // temu kazda komorka jest juz samodzielna i mozna ja pozniej bezpiecznie nadpisac
+  // (albo zostawic z dzialajaca formula) bez ryzyka zepsucia jakiejkolwiek INNEJ komorki.
+  for (let col = 1; col < columnLabels.length; col++) {
+    for (let r = 2; r <= worksheet.rowCount; r++) {
+      const cell = worksheet.getRow(r).getCell(col);
+      const v = cell.value;
+      if (v && typeof v === 'object' && (v.sharedFormula || v.shareType === 'shared')) {
+        cell.value = { formula: cell.formula, result: v.result };
+      }
+    }
+  }
+
   rowValuesList.forEach((rowValues, i) => {
     const row = worksheet.getRow(i + 2);
     for (let col = 1; col < columnLabels.length; col++) {
       const label = columnLabels[col];
       if (!label) continue;
       const cell = row.getCell(col);
-      // Realny blad zlapany 2026-07-24 na prawdziwym wzorze PC: kolumna "Udzial
-      // ogrzew. podlog." to ZYWA formula Excela (=100-P{wiersz}, w dodatku
-      // "shared formula" rozciagnieta na wiele wierszy) - nadpisanie jej goła
-      // wartoscia psulo zapis (exceljs rzucal "Shared Formula master must exist
-      // above..."). Kazda komorka wzoru, ktora JUZ ma formule, zostaje
-      // NIETKNIETA - to sam wzor ja policzy przy otwarciu w Excelu, nie musimy
-      // (i nie powinnismy) pisac do niej wprost.
-      if (cell.formula) continue;
-      cell.value = rowValues[label] ?? '';
+      const value = rowValues[label];
+      // Formula (juz odsprzeglana z shared, patrz wyzej) zostaje NIETKNIETA, chyba ze
+      // faktycznie MAMY dla niej wyliczona wartosc do wstawienia (kolumny `complementOf`
+      // w tabelaAdresowaColumns.js) - wtedy nadpisujemy gola wartoscia, bo to bardziej
+      // niezawodne niz poleganie na przeliczeniu formuly przy otwarciu pliku.
+      if (cell.formula && (value === undefined || value === '')) continue;
+      cell.value = value ?? '';
     }
     row.commit();
   });

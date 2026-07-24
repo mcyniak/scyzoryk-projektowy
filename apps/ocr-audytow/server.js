@@ -908,7 +908,7 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
 
           if (excelPath) {
             if (family) {
-              const addressRow = buildRowValues(family, b.fields, addressLabel);
+              const addressRow = buildRowValues(family, b.fields);
               excelRows.push(addressRow);
             } else {
               const addressRow = { adres: addressLabel };

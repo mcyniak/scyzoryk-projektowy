@@ -20,10 +20,21 @@
 // Zostawione null celowo (bezpieczniej recznie, niz cicho zle) - do naprawy dopiero przez
 // dopasowanie pozycyjne (najblizszy checkbox geometrycznie do slowa "Demontaz"), nie
 // zrobione jeszcze.
-// `fieldKey: '__adres'` = specjalny klucz rozwiazywany przez wolajacego (server.js) na
-// etykiete bloku (ta sama wartosc co kolumna "adres" w dotychczasowym, ogolnym eksporcie),
-// NIE na OCR'owane `adresInstalacji` - etykieta bloku jest kontrolowana przez uzytkownika
-// (krok 2 przegladu), wiec bardziej niezawodna niz czesto "zlepione" pole z formularza.
+// `fieldKey: 'adresInstalacji'` = kolumna "Adres" bierze wartosc z OCR'owanego pola
+// "Adres miejsca instalacji" na formularzu, dokladnie jak kazde inne pole - przechodzi
+// przez normalny przeglad (needsReview/reczne zaznaczenie), jesli OCR nie zdola go
+// zlokalizowac/odczytac. Etykieta bloku wpisywana w kroku 2 przegladu ("Adres 1/2/3...")
+// zostaje UZYWANA WYLACZNIE do nazywania plikow wynikowych i nawigacji w UI - NIE trafia
+// juz do tej kolumny (do 2026-07-24 bylo odwrotnie - patrz git blame, wlasciciel poprosil
+// o zmiane po tym jak zauwazyl, ze prawdziwe audyty zwykle MAJA wpisany adres na formularzu).
+//
+// `complementOf: 'X'` = kolumna liczona jako 100 - wartosc pola X (patrz "Udział ogrzew.
+// podłog." nizej) - w prawdziwym wzorze ta kolumna to zywa "shared formula" Excela
+// (=100-P{wiersz}), ktora praktyce nie zawsze przelicza sie widocznie dla uzytkownika
+// (np. gdy plik jest otwierany bez wymuszenia przeliczenia) - zamiast na to liczyc,
+// writeFamilyTemplateRows (excelExport.js) najpierw "rozdziela" kazda shared-formule w
+// arkuszu na niezalezne formuly per-komorka, a potem nadpisuje TA KONKRETNA kolumne
+// gotowa, juz wyliczona wartoscia (nie formula) - tak samo pewne jak kazde inne pole.
 
 const path = require('path');
 const TEMPLATES_DIR = path.join(__dirname, '..', 'assets', 'templates');
@@ -36,7 +47,7 @@ const TABELA_FAMILIES = {
       { label: 'LP', fieldKey: null },
       { label: 'REZYGNACJA', fieldKey: null },
       { label: 'Imię i Nazwisko', fieldKey: 'imieNazwisko' },
-      { label: 'Adres', fieldKey: '__adres' },
+      { label: 'Adres', fieldKey: 'adresInstalacji' },
       { label: 'Numer telefonu', fieldKey: 'telefon' },
       { label: 'Obręb', fieldKey: null },
       { label: 'Numer działki', fieldKey: null },
@@ -49,10 +60,7 @@ const TABELA_FAMILIES = {
       { label: 'Źródło ciepła', fieldKey: 'zrodloCiepla' },
       { label: 'Demontaż', fieldKey: 'demontaz' },
       { label: 'Udział ogrzew. grzejnik.', fieldKey: 'udzialGrzejnikowy' },
-      // Zywa formula w prawdziwym wzorze (=100-P{wiersz}, patrz excelExport.js) -
-      // Excel sam to policzy z kolumny obok, nie pytamy o to osobno (i tak
-      // zostalby zignorowane przy zapisie, zeby nie zepsuc formuly).
-      { label: 'Udział ogrzew. podłog.', fieldKey: null },
+      { label: 'Udział ogrzew. podłog.', fieldKey: null, complementOf: 'udzialGrzejnikowy' },
       { label: 'Rok budowy', fieldKey: 'rokBudowy' },
       { label: 'Powierzchnia', fieldKey: 'powierzchnia' },
       { label: 'Ociepl. fund.', fieldKey: 'izolacjaScianyFundamentowej' },
@@ -77,7 +85,7 @@ const TABELA_FAMILIES = {
       { label: 'REZYGNACJA', fieldKey: null },
       { label: 'Nr prot. uzgod. montaż.', fieldKey: null },
       { label: 'Imię i Nazwisko', fieldKey: 'imieNazwisko' },
-      { label: 'Adres', fieldKey: '__adres' },
+      { label: 'Adres', fieldKey: 'adresInstalacji' },
       { label: 'Numer telefonu', fieldKey: 'telefon' },
       { label: 'Numer działki', fieldKey: null },
       { label: 'Rodzaj zestawu', fieldKey: 'solaryRodzajZestawu' },
@@ -105,7 +113,7 @@ const TABELA_FAMILIES = {
       { label: 'REZYGNACJA', fieldKey: null },
       { label: 'Nr prot. uzgod. montaż.', fieldKey: null },
       { label: 'Imię i Nazwisko', fieldKey: 'imieNazwisko' },
-      { label: 'Adres', fieldKey: '__adres' },
+      { label: 'Adres', fieldKey: 'adresInstalacji' },
       { label: 'Numer telefonu', fieldKey: 'telefon' },
       { label: 'Numer działki', fieldKey: null },
       { label: 'Moc istniejącego kotła', fieldKey: 'kotlyMocIstniejacegoZrodla' },
@@ -125,28 +133,36 @@ const TABELA_FAMILIES = {
   }
 };
 
-function buildRowValues(family, fields, addressLabel) {
+function buildRowValues(family, fields) {
   const def = TABELA_FAMILIES[family];
   if (!def) throw new Error(`Nieznana rodzina protokołu: ${family}`);
   const rowValues = {};
   for (const col of def.columns) {
-    if (col.fieldKey === null) rowValues[col.label] = '';
-    else if (col.fieldKey === '__adres') rowValues[col.label] = addressLabel || '';
-    else rowValues[col.label] = fields[col.fieldKey]?.value || '';
+    if (col.complementOf) {
+      const raw = fields[col.complementOf]?.value;
+      const num = raw === '' || raw == null ? NaN : Number(raw);
+      rowValues[col.label] = Number.isFinite(num) ? String(100 - num) : '';
+    } else if (col.fieldKey === null) {
+      rowValues[col.label] = '';
+    } else {
+      rowValues[col.label] = fields[col.fieldKey]?.value || '';
+    }
   }
   return rowValues;
 }
 
-// Zbior kluczy FIELD_DEFS faktycznie potrzebnych tej rodzinie (bez '__adres' -
-// to nie klucz FIELD_DEFS, rozwiazywany osobno przez buildRowValues) - uzywane
-// do zawezenia ekstrakcji/przegladu TYLKO do pol, ktore realnie trafiaja do
-// tabelki adresowej tej rodziny (patrz plan "wybor rodziny przed ekstrakcja",
-// 2026-07-23 - wlasciciel: "np. ladowalismy takie rzeczy jak rodzaj dachu"
-// [pole spoza zakresu tabelki adresowej PC, zbedne przy tym celu]).
+// Zbior kluczy FIELD_DEFS faktycznie potrzebnych tej rodzinie - uzywane do zawezenia
+// ekstrakcji/przegladu TYLKO do pol, ktore realnie trafiaja do tabelki adresowej tej
+// rodziny (patrz plan "wybor rodziny przed ekstrakcja", 2026-07-23 - wlasciciel: "np.
+// ladowalismy takie rzeczy jak rodzaj dachu" [pole spoza zakresu tabelki adresowej PC,
+// zbedne przy tym celu]). `complementOf` kolumny nie maja wlasnego fieldKey (liczone,
+// nie ekstrahowane) - pomijane tu, ale ich `complementOf`-owy klucz (np.
+// udzialGrzejnikowy) juz jest w zbiorze jako zwykla kolumna, wiec i tak trafi do
+// przegladu.
 function allowedKeysForFamily(family) {
   const def = TABELA_FAMILIES[family];
   if (!def) return null;
-  return new Set(def.columns.map((c) => c.fieldKey).filter((k) => k && k !== '__adres'));
+  return new Set(def.columns.map((c) => c.fieldKey).filter(Boolean));
 }
 
 module.exports = { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily };

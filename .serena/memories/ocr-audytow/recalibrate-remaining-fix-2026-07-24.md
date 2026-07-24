@@ -49,5 +49,17 @@ element woła `setPointerCapture`) — to artefakt CDP/Playwrighta, nie prawdziw
 albo wysyłać `new PointerEvent(...)` bezpośrednio przez `page.evaluate`, albo wywoływać docelowy
 endpoint wprost przez `fetch()` z poziomu strony.
 
-Stan gita: NIE scommitowane w chwili pisania tej notatki (patrz `mem:core` / czekaj na dalsze kroki
-tej samej sesji).
+## Stan gita (zaktualizowane po fakcie)
+
+Scommitowane jako `2cff4f2` na `main` (razem z wzorami per gmina, generowaniem tabelki adresowej
+wprost do oryginalnego wzoru Excela, walidacją wartości, dodaniem do panelu głównego, usunięciem
+martwego kodu). Przy pushu wystąpił jeden realny konflikt z `origin/main` (zdalny commit `5908d95`
+przebudował README.md na wersję nietechniczną + dodał `docs/TECHNICZNE_DZIALANIE.md` - kolidowało
+z lokalnym `48d1b4a`, który dopisał sekcję instrukcji instalacji do STAREJ struktury README).
+Rozwiązane merge-commitem `5c370b3`: zachowano uproszczoną strukturę zdalnego README, dopisano
+odnośnik do `docs/INSTRUKCJA-INSTALACJI.md`, i PRZY OKAZJI poprawiono nieaktualne wzmianki o
+"Google Cloud Vision"/`OCR_VISION_API_KEY` w README.md i TECHNICZNE_DZIALANIE.md (te dokumenty
+powstały 2026-07-23, dzień przed migracją na Document AI, więc były już nieaktualne w chwili
+mergowania). Wypchnięte na `origin/main`. `apps/dokumenty-seryjne/*` (cudza, nieprzejrzana praca
+z innej sesji) i `chkAA/X/Y/Z.yml` w korzeniu repo pozostały nietknięte/niescommitowane, tak jak
+przy poprzednich commitach tej aplikacji.
