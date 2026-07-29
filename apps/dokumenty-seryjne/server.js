@@ -4,8 +4,24 @@ const express = require('express');
 const multer = require('multer');
 const readExcelFile = require('read-excel-file/node').default;
 const sanitize = require('sanitize-filename');
-const archiverModule = require('archiver');
-const archiver = typeof archiverModule === 'function' ? archiverModule : (archiverModule.default || archiverModule.create || archiverModule.archiver);
+// archiver 8.x jest czystym ESM i eksportuje klase ZipArchive, nie stara
+// funkcje-fabryke archiver('zip', opts) uzywana ponizej wczesniej - ten kod
+// nigdy nie dzialal z archiver 8 (typeof archiverModule !== 'function', wiec
+// `archiver` konczyl jako undefined, zlapane dopiero przez assertArchiverAvailable
+// przy realnym pobraniu ZIP-a). Do tego synchroniczne require() ESM-owego
+// pakietu dziala TYLKO na Node >=20.19/22.12 ("require(esm)") - na starszych,
+// wciaz oficjalnie wspieranych wersjach (w tym Node 18.x, deklarowany jako
+// minimum w package.json/README) rzuca ERR_REQUIRE_ESM i wywala cala
+// aplikacje na starcie. Oba zlapane realnym testem instalacji na Node 20.18.1
+// w GitHub Actions. Poprawka: leniwy dynamiczny import() + poprawna klasa
+// ZipArchive, ten sam wzorzec co pieczatki-pdf/wnioski-powykonawcze.
+let ZipArchiveClass = null;
+async function loadZipArchive() {
+  if (!ZipArchiveClass) {
+    ({ ZipArchive: ZipArchiveClass } = await import('archiver'));
+  }
+  return ZipArchiveClass;
+}
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -15,11 +31,6 @@ const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom,
 const { detectMailMergeSheetBinding } = require('./src/mailMergeSheetBinding');
 
 
-function assertArchiverAvailable() {
-  if (typeof archiver !== 'function') {
-    throw new Error('Nie udało się przygotować paczki ZIP. Uruchom ponownie instalację zależności.');
-  }
-}
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -880,7 +891,15 @@ const { registerFolderRoutes } = require('./src/folderRoutes');
 registerFolderRoutes(app, {
   multer, storage, MAX_FILE_MB, heavyJobLimiter, jobs, OUTPUT_DIR, ROOT, PS_SCRIPT, SCAN_SCRIPT, wordQueue,
   decodeOriginalName, validateOfficeFile, loadExcelWorkbook, parseWorkbook, getWorkbookSheet,
-  getJob, persistJobsIndex, setProgress, nowIso, writeJsonFileNoBom, stripBom, archiver, contentDispositionHeader
+  getJob, persistJobsIndex, setProgress, nowIso, writeJsonFileNoBom, stripBom,
+  // folder.html/folderRoutes.js jest martwym, nieosiagalnym z UI kodem (patrz CLAUDE.md) -
+  // jego ZIP-owanie juz wczesniej nie dzialalo pod archiver v8 (ta sama stara fabryka
+  // archiver('zip',...), ktorej v8 nie eksportuje) i deps.archiver bylo faktycznie
+  // undefined rowniez PRZED tym committem, tylko przez inna sciezke (nieudana probaw
+  // wykrycia callable factory). Zachowujemy to samo zachowanie (istniejacy guard w
+  // folderRoutes.js zwraca czytelny blad 500) zamiast odwolywac sie do usunietej zmiennej.
+  archiver: undefined,
+  contentDispositionHeader
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true, app: 'dokumenty-seryjne', queue: wordQueue.getState() }));
@@ -1116,11 +1135,11 @@ function ensureLogFile(job) {
   }
 }
 
-function streamZip(res, zipName, files) {
-  assertArchiverAvailable();
+async function streamZip(res, zipName, files) {
+  const ZipArchive = await loadZipArchive();
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', contentDispositionHeader('attachment', zipName));
-  const archive = archiver('zip', { zlib: { level: 9 } });
+  const archive = new ZipArchive({ zlib: { level: 9 } });
   archive.on('error', err => {
     if (!res.headersSent) res.status(500).send('Nie udało się przygotować ZIP-a.');
     else res.destroy(err);
@@ -1130,14 +1149,14 @@ function streamZip(res, zipName, files) {
   archive.finalize();
 }
 
-app.get('/api/download/:jobId/zip', (req, res) => {
+app.get('/api/download/:jobId/zip', async (req, res) => {
   try {
     const job = getJob(req.params.jobId);
     if (!job || !fs.existsSync(job.outputDir)) return res.status(404).send('Nie znaleziono wyników.');
     const pdfFiles = listJobPdfFiles(job);
     if (!pdfFiles.length) return res.status(404).send('Nie ma żadnych gotowych PDF-ów do pobrania. Najpierw utwórz minimum jeden PDF.');
     const zipName = safeName(`dokumenty seryjne ${job.id}.zip`, 'dokumenty-seryjne.zip');
-    streamZip(res, zipName, pdfFiles);
+    await streamZip(res, zipName, pdfFiles);
   } catch (err) {
     console.error('[ser-download-zip]', err?.message || err);
     if (!res.headersSent) res.status(500).send('Nie udało się przygotować paczki ZIP z PDF-ami.');

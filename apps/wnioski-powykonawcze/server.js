@@ -2,10 +2,20 @@ const rateLimitLib = require('express-rate-limit');
 const rateLimit = rateLimitLib.rateLimit || rateLimitLib.default || rateLimitLib;
 const express = require('express');
 const multer = require('multer');
-// archiver 8.x jest czystym ESM i eksportuje klasy (ZipArchive) zamiast
-// starej funkcji-fabryki archiver('zip', opts) - bez tej zmiany kazde
-// pobranie ZIP-a konczylo sie realnym bledem "Nie udalo sie przygotowac paczki ZIP".
-const { ZipArchive } = require('archiver');
+// archiver 8.x jest czystym ESM. Synchroniczne require() ESM-owego pakietu
+// dziala TYLKO na Node >=20.19/22.12 ("require(esm)") - na starszych, wciaz
+// oficjalnie wspieranych wersjach (w tym Node 18.x, deklarowany jako minimum
+// w package.json/README) rzuca ERR_REQUIRE_ESM i wywala cala aplikacje na
+// starcie. Zlapane realnym testem instalacji na Node 20.18.1 w GitHub Actions.
+// Poprawka: leniwy dynamiczny import() zamiast require() - dziala na kazdej
+// wspieranej wersji Node.
+let ZipArchiveClass = null;
+async function loadZipArchive() {
+  if (!ZipArchiveClass) {
+    ({ ZipArchive: ZipArchiveClass } = await import('archiver'));
+  }
+  return ZipArchiveClass;
+}
 const sanitize = require('sanitize-filename');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -235,6 +245,7 @@ async function runConvertScript(inputJson, outputJson) {
 }
 
 async function zipDirectory(sourceDir, zipPath) {
+  const ZipArchive = await loadZipArchive();
   await new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath);
     const archive = new ZipArchive({ zlib: { level: 9 } });

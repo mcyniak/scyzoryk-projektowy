@@ -5,12 +5,23 @@ const multer = require('multer');
 const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
 const fontkit = require('@pdf-lib/fontkit');
 // archiver 8.x jest czystym ESM i eksportuje klasy (ZipArchive) zamiast
-// starej funkcji-fabryki archiver('zip', opts) - node'owy require() potrafi
-// zaladowac to synchronicznie i zwraca obiekt z named exports jako
-// wlasciwosci, wiec destrukturyzacja dziala mimo ze to CJS plik. Bez tej
-// zmiany kazde pobranie ZIP-a konczylo sie realnym bledem 500 "Nie udalo sie
-// przygotowac paczki ZIP".
-const { ZipArchive } = require('archiver');
+// starej funkcji-fabryki archiver('zip', opts). Node'owe synchroniczne
+// require() ESM-owego pakietu dziala TYLKO na Node >=20.19/22.12 (nowsza,
+// domyslnie wlaczona funkcja "require(esm)") - na starszych, wciaz oficjalnie
+// wspieranych wersjach (w tym calym Node 18.x, ktory ten projekt deklaruje
+// jako minimum w package.json/README) rzuca ERR_REQUIRE_ESM i WYWALA CALA
+// APLIKACJE na starcie. Zlapane realnym testem instalacji na Node 20.18.1 w
+// GitHub Actions (dzialalo lokalnie tylko dzieki nowszemu Node na maszynie
+// deweloperskiej). Poprawka: leniwy dynamiczny import() zamiast require() -
+// dziala na kazdej wspieranej wersji Node, dokladnie jak podpowiada wlasny
+// komunikat bledu Node'a.
+let ZipArchiveClass = null;
+async function loadZipArchive() {
+  if (!ZipArchiveClass) {
+    ({ ZipArchive: ZipArchiveClass } = await import('archiver'));
+  }
+  return ZipArchiveClass;
+}
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -416,6 +427,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
 }
 
 async function zipFiles(files, zipPath) {
+  const ZipArchive = await loadZipArchive();
   await new Promise((resolve, reject) => {
     const out = fs.createWriteStream(zipPath);
     const archive = new ZipArchive({ zlib: { level: 9 } });
