@@ -11,7 +11,8 @@
     "check": "node scripts/check-project.js",
     "security-smoke": "node scripts/security-smoke-test.js",
     "audit": "node scripts/check-project.js",
-    "package": "node scripts/build-package.js"
+    "package": "node scripts/build-package.js",
+    "build-installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1"
   },
   "engines": {
     "node": ">=18"

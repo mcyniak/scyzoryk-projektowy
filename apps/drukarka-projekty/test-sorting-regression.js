@@ -17,7 +17,34 @@
 
 const assert = require('assert');
 const path = require('path');
+const fs = require('fs');
 const fm = require('./src/folderMatch.js');
+
+// test/fixtures/ jest w .gitignore (patrz komentarz nizej i CLAUDE.md - dane klienta
+// nigdy nie traifaja do repo), wiec ten folder NIE istnieje na swiezym checkout/CI -
+// odtwarzamy go tutaj programowo z listy samych nazw plikow (wszystkie puste, zero
+// tresci klienta) zamiast zakladac, ze ktos go recznie skopiowal z dysku G:\.
+function ensureZarnowFixture(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const names = [
+    'ST_S_P_Ż_250.docx',
+    'OT_S_P_Ż_250.docx',
+    '41_S_Krzywkowski_Żarnów, ul. Spacerowa.pdf',
+    '41_S_Krzywkowski_Żarnów, ul. Spacerowa.dwg',
+    '41_S_Krzywkowski_Żarnów, ul. Spacerowa.bak',
+    'BIOZ_S_P_Ż.pdf',
+    'Symulacja solarna Żarnów_2_250.pdf',
+    'Żarnów Spacerowa.pdf',
+    'Kolektor KSG 21GT.pdf',
+    'Zasobnik SGW(S)B 250.pdf',
+    'Grupa pompowa.pdf',
+    '~$_S_P_Ż_250.docx'
+  ];
+  for (const name of names) {
+    const filePath = path.join(dir, name);
+    if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, '');
+  }
+}
 
 let failed = 0;
 function check(label, fn) {
@@ -76,6 +103,7 @@ const ZARNOW_EXPECTED_ORDER = [
 ];
 
 async function testZarnow41() {
+  ensureZarnowFixture(ZARNOW_DIR);
   const classifiedRaw = fm.classifyFiles(ZARNOW_DIR);
 
   await checkAsync('Żarnów 41: rozpoznaje strone tytulowa (ST_*.docx)', async () => {
@@ -135,7 +163,6 @@ function testMissingRequiredFile() {
 function testDuplicateBaseNamePrefersPdf() {
   // classifyFiles czyta prawdziwy folder z dysku (scanFilesRecursive), wiec
   // budujemy minimalny fixture w locie zamiast mockowac fs.
-  const fs = require('fs');
   const dir = path.join(__dirname, 'test', 'fixtures', '__tmp_duplicate_basename__');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'dokument.docx'), '');

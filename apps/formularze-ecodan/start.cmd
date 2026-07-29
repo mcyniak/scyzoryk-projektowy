@@ -6,8 +6,10 @@ REM Ecodan Generator - safe Windows starter without PowerShell execution policy.
 REM It always verifies local project dependencies before installing Playwright browsers.
 REM It also forces the public npm registry, so it will not use build-machine registry URLs.
 
-if exist "C:\Users\Piotr.Cyniak\node-v26.4.0-win-x64\node.exe" (
-  set "PATH=C:\Users\Piotr.Cyniak\node-v26.4.0-win-x64;%PATH%"
+REM Opcjonalny portable Node - ustaw zmienna SCYZORYK_PORTABLE_NODE na folder z node.exe,
+REM jesli nie chcesz/nie mozesz zainstalowac Node.js globalnie na tym komputerze.
+if defined SCYZORYK_PORTABLE_NODE if exist "%SCYZORYK_PORTABLE_NODE%\node.exe" (
+  set "PATH=%SCYZORYK_PORTABLE_NODE%;%PATH%"
 )
 
 if not defined HEADLESS set "HEADLESS=true"

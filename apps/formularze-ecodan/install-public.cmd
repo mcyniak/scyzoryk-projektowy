@@ -2,8 +2,8 @@
 setlocal
 cd /d "%~dp0"
 
-if exist "C:\Users\Piotr.Cyniak\node-v26.4.0-win-x64\node.exe" (
-  set "PATH=C:\Users\Piotr.Cyniak\node-v26.4.0-win-x64;%PATH%"
+if defined SCYZORYK_PORTABLE_NODE if exist "%SCYZORYK_PORTABLE_NODE%\node.exe" (
+  set "PATH=%SCYZORYK_PORTABLE_NODE%;%PATH%"
 )
 
 set "npm_config_registry=https://registry.npmjs.org/"

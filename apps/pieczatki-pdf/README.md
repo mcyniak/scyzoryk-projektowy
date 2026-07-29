@@ -16,19 +16,17 @@ Niezalezne narzedzie do stemplowania PDF-ow.
 
 ## Start z portable Node
 
-W PowerShell:
+W PowerShell (podmien sciezke na swoja):
 
 ```powershell
-$env:Path="C:\Users\Piotr.Cyniak\node-v26.4.0-win-x64;$env:Path"
-cd "C:\Users\Piotr.Cyniak\Downloads\pdf-stamper-standalone-v4-bundled\pdf-stamper-standalone"
+$env:Path="<sciezka-do-portable-node>;$env:Path"
+cd "<sciezka-do-tego-folderu>"
 node server.js
 ```
 
-Albo kliknij `start-portable.cmd`, jezeli portable Node jest w:
-
-```text
-C:\Users\Piotr.Cyniak\node-v26.4.0-win-x64
-```
+Albo ustaw zmienna srodowiskowa `SCYZORYK_PORTABLE_NODE` na folder z portable Node
+(np. `setx SCYZORYK_PORTABLE_NODE "D:\Narzedzia\node-v20-win-x64"`) i kliknij
+`start-portable.cmd` - odczyta ta zmienna automatycznie.
 
 Potem otworz:
 
