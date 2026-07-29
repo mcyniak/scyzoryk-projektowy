@@ -1,0 +1,71 @@
+name: Zbuduj wewnetrzny instalator z OCR
+
+# Ten workflow buduje poufny instalator zawierajacy konfiguracje Google Document AI.
+# Artefaktu nie nalezy przekazywac poza zaufany zespol, poniewaz zawiera dane
+# konta serwisowego potrzebne do dzialania OCR na nowym komputerze.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  OCR_DOCAI_PROJECT_ID: scyzoryk-ocr-test
+  OCR_DOCAI_LOCATION: eu
+  OCR_DOCAI_PROCESSOR_ID: c8cea9ff6f6430c3
+
+jobs:
+  build:
+    name: Zbuduj poufny instalator
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Pobierz kod repozytorium
+        uses: actions/checkout@v4
+
+      - name: Sprawdz dane logowania OCR w GitHub Actions Secrets
+        shell: pwsh
+        env:
+          OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:OCR_DOCAI_CREDENTIALS_B64)) {
+            throw 'Brakuje GitHub Actions Secret: OCR_DOCAI_CREDENTIALS_B64.'
+          }
+          Write-Host 'Dane logowania OCR sa dostepne.'
+          Write-Host "Projekt: $env:OCR_DOCAI_PROJECT_ID"
+          Write-Host "Lokalizacja: $env:OCR_DOCAI_LOCATION"
+          Write-Host "Procesor: $env:OCR_DOCAI_PROCESSOR_ID"
+
+      - name: Node.js do budowania instalatora
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Upewnij sie, ze Inno Setup jest dostepny
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) { choco install innosetup --no-progress -y }
+
+      - name: Zbuduj instalator z konfiguracja Google Document AI
+        shell: pwsh
+        env:
+          OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run build-installer
+
+      - name: Przeslij poufny instalator
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalator-windows-z-ocr
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 3

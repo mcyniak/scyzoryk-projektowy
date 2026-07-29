@@ -8,37 +8,121 @@
 // fieldExtraction.js. Koszt: ~20x wyzszy niz Vision ($30 vs $1,50/1000
 // stron) - swiadoma decyzja wlasciciela, patrz plan migracji.
 //
-// W odroznieniu od Vision (prosty klucz API), Document AI wymaga
-// uwierzytelnienia przez konto serwisowe (OAuth2) - stad uzycie oficjalnej
-// biblioteki klienta (@google-cloud/documentai), nie surowego HTTPS jak w
-// visionEngine.js.
+// Konfiguracja jest czytana w tej kolejnosci:
+//   1. zmienne srodowiskowe OCR_DOCAI_*,
+//   2. plik dolaczony do wewnetrznego instalatora:
+//      apps/ocr-audytow/config/document-ai.json,
+//   3. plik uzytkownika:
+//      %LOCALAPPDATA%/Scyzoryk/ocr-document-ai.json.
 //
-// Wymaga 4 zmiennych srodowiskowych:
-//   OCR_DOCAI_KEY_FILE    - sciezka do pliku JSON konta serwisowego (NIGDY
-//                           nie kopiowac tego pliku do repo)
-//   OCR_DOCAI_PROJECT_ID  - id projektu GCP (np. "scyzoryk-ocr-test")
-//   OCR_DOCAI_LOCATION    - region procesora (np. "eu")
-//   OCR_DOCAI_PROCESSOR_ID - id utworzonego procesora typu Form Parser
+// Plik konfiguracyjny ma postac:
+// {
+//   "projectId": "...",
+//   "location": "eu",
+//   "processorId": "...",
+//   "keyFile": "service-account.json"
+// }
+// Sciezka keyFile wzgledna jest rozwiazywana wzgledem katalogu konfiguracji.
+// Sam plik konta serwisowego NIGDY nie powinien trafic do zwyklego commita.
 const fs = require('fs/promises');
+const fsSync = require('fs');
+const path = require('path');
+const os = require('os');
 const { DocumentProcessorServiceClient } = require('@google-cloud/documentai').v1;
 
+const EMBEDDED_CONFIG_PATH = path.join(__dirname, '..', 'config', 'document-ai.json');
+const USER_CONFIG_PATH = path.join(
+  process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+  'Scyzoryk',
+  'ocr-document-ai.json'
+);
+
 let cachedClient = null;
-function getClient() {
-  if (cachedClient) return cachedClient;
-  cachedClient = new DocumentProcessorServiceClient({
-    keyFilename: process.env.OCR_DOCAI_KEY_FILE,
-    apiEndpoint: `${process.env.OCR_DOCAI_LOCATION}-documentai.googleapis.com`
-  });
-  return cachedClient;
+let cachedClientSignature = null;
+
+function readJsonFile(filePath) {
+  try {
+    return JSON.parse(fsSync.readFileSync(filePath, 'utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeFileConfig(configPath, value) {
+  if (!value || typeof value !== 'object') return null;
+  const configDir = path.dirname(configPath);
+  const rawKeyFile = String(value.keyFile || '').trim();
+  const keyFile = rawKeyFile
+    ? (path.isAbsolute(rawKeyFile) ? rawKeyFile : path.resolve(configDir, rawKeyFile))
+    : '';
+
+  return {
+    source: configPath,
+    keyFile,
+    projectId: String(value.projectId || '').trim(),
+    location: String(value.location || '').trim(),
+    processorId: String(value.processorId || '').trim()
+  };
+}
+
+function getEnvironmentConfig() {
+  return {
+    source: 'environment',
+    keyFile: String(process.env.OCR_DOCAI_KEY_FILE || '').trim(),
+    projectId: String(process.env.OCR_DOCAI_PROJECT_ID || '').trim(),
+    location: String(process.env.OCR_DOCAI_LOCATION || '').trim(),
+    processorId: String(process.env.OCR_DOCAI_PROCESSOR_ID || '').trim()
+  };
+}
+
+function isComplete(config) {
+  return Boolean(
+    config?.keyFile &&
+    config?.projectId &&
+    config?.location &&
+    config?.processorId &&
+    fsSync.existsSync(config.keyFile)
+  );
+}
+
+function getConfiguration() {
+  const envConfig = getEnvironmentConfig();
+  if (isComplete(envConfig)) return envConfig;
+
+  for (const configPath of [EMBEDDED_CONFIG_PATH, USER_CONFIG_PATH]) {
+    const fileConfig = normalizeFileConfig(configPath, readJsonFile(configPath));
+    if (isComplete(fileConfig)) return fileConfig;
+  }
+
+  return null;
 }
 
 function isConfigured() {
-  return Boolean(
-    process.env.OCR_DOCAI_KEY_FILE &&
-    process.env.OCR_DOCAI_PROJECT_ID &&
-    process.env.OCR_DOCAI_LOCATION &&
-    process.env.OCR_DOCAI_PROCESSOR_ID
-  );
+  return Boolean(getConfiguration());
+}
+
+function getConfigurationStatus() {
+  const config = getConfiguration();
+  return {
+    configured: Boolean(config),
+    source: config?.source || null,
+    projectId: config?.projectId || null,
+    location: config?.location || null,
+    processorId: config?.processorId || null,
+    keyFileExists: Boolean(config?.keyFile && fsSync.existsSync(config.keyFile))
+  };
+}
+
+function getClient(config) {
+  const signature = `${config.keyFile}|${config.location}`;
+  if (cachedClient && cachedClientSignature === signature) return cachedClient;
+
+  cachedClient = new DocumentProcessorServiceClient({
+    keyFilename: config.keyFile,
+    apiEndpoint: `${config.location}-documentai.googleapis.com`
+  });
+  cachedClientSignature = signature;
+  return cachedClient;
 }
 
 // Document AI's textAnchor.content bywa PUSTY nawet gdy textSegments maja
@@ -80,9 +164,13 @@ function toPixelVertices(boundingPoly, pageWidth, pageHeight) {
 //    para pole-wartosc z gotowym parowaniem checkboxow, konsumowana przez
 //    formFieldMatch.js jako preferowana sciezka ekstrakcji.
 async function ocrImage(imagePath) {
-  if (!isConfigured()) throw new Error('Brak konfiguracji Google Document AI (OCR_DOCAI_KEY_FILE/OCR_DOCAI_PROJECT_ID/OCR_DOCAI_LOCATION/OCR_DOCAI_PROCESSOR_ID).');
-  const client = getClient();
-  const name = `projects/${process.env.OCR_DOCAI_PROJECT_ID}/locations/${process.env.OCR_DOCAI_LOCATION}/processors/${process.env.OCR_DOCAI_PROCESSOR_ID}`;
+  const config = getConfiguration();
+  if (!config) {
+    throw new Error('Brak konfiguracji Google Document AI. Zainstaluj wewnetrzny instalator z konfiguracja OCR albo ustaw plik %LOCALAPPDATA%\\Scyzoryk\\ocr-document-ai.json.');
+  }
+
+  const client = getClient(config);
+  const name = `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`;
   const content = (await fs.readFile(imagePath)).toString('base64');
 
   const [result] = await client.processDocument({
@@ -120,15 +208,6 @@ async function ocrImage(imagePath) {
     });
   }
 
-  // Tabele - Document AI rozpoznaje niektore sekcje formularza (listy opcji
-  // checkboxowych typu "material sciany zewnetrznej: Cegla/Bloczki/Pustak...")
-  // jako PRAWDZIWA tabele z wierszami/komorkami - zweryfikowane na realnym
-  // pliku (Kazimierz Biskupi): kazdy wiersz to JEDEN, poprawnie zgrupowany
-  // string (checkbox+etykieta+wartosc razem, we wlasciwej kolejnosci) - zero
-  // przemieszania, w odroznieniu od plaskiej listy tokenow. NIE kazda sekcja
-  // formularza wychodzi jako tabela (zweryfikowane: dziala dobrze dla
-  // Kazimierz Biskupi, NIE dla Kotly'ego "Moc kotla") - dlatego to jedno z
-  // KILKU zrodel probowanych po kolei (patrz tableMatch.js), nie jedyne.
   const tables = [];
   for (const table of page?.tables || []) {
     const rows = [];
@@ -140,13 +219,6 @@ async function ocrImage(imagePath) {
     tables.push({ rows });
   }
 
-  // visualElements - Document AI klasyfikuje kazdy checkbox jako osobny,
-  // ustrukturyzowany byt (typ filled_checkbox/unfilled_checkbox) z wlasnym
-  // bbox+confidence, NIEZALEZNIE od tego czy w tekscie tokenow/formFields
-  // pojawil sie glif Unicode - zweryfikowane na realnym pliku (Galewice
-  // kociol): checkbox przy "25 kW" byl obecny tu (confidence 0.51) mimo ze
-  // formFields go nie sparowalo z wartoscia w ogole. Uzywane jako ostatnia
-  // deska ratunku, gdy ani tabela ani formFields nie dalo checked/unchecked.
   const visualElements = [];
   for (const el of page?.visualElements || []) {
     if (el.type !== 'filled_checkbox' && el.type !== 'unfilled_checkbox') continue;
@@ -158,4 +230,4 @@ async function ocrImage(imagePath) {
   return { text: fullText, words, formFields, tables, visualElements };
 }
 
-module.exports = { isConfigured, ocrImage };
+module.exports = { isConfigured, getConfigurationStatus, ocrImage };
