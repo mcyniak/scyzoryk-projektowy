@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+env:
+  OCR_DOCAI_PROJECT_ID: scyzoryk-ocr-test
+  OCR_DOCAI_LOCATION: eu
+  OCR_DOCAI_PROCESSOR_ID: c8cea9ff6f6430c3
+
 jobs:
   build:
     name: Zbuduj poufny instalator
@@ -19,26 +24,19 @@ jobs:
       - name: Pobierz kod repozytorium
         uses: actions/checkout@v4
 
-      - name: Sprawdz konfiguracje OCR w GitHub Actions Secrets
+      - name: Sprawdz dane logowania OCR w GitHub Actions Secrets
         shell: pwsh
         env:
           OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
-          OCR_DOCAI_PROJECT_ID: ${{ secrets.OCR_DOCAI_PROJECT_ID }}
-          OCR_DOCAI_LOCATION: ${{ secrets.OCR_DOCAI_LOCATION }}
-          OCR_DOCAI_PROCESSOR_ID: ${{ secrets.OCR_DOCAI_PROCESSOR_ID }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $required = @(
-            'OCR_DOCAI_CREDENTIALS_B64',
-            'OCR_DOCAI_PROJECT_ID',
-            'OCR_DOCAI_LOCATION',
-            'OCR_DOCAI_PROCESSOR_ID'
-          )
-          $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
-          if ($missing.Count -gt 0) {
-            throw "Brakuje GitHub Actions Secrets: $($missing -join ', ')."
+          if ([string]::IsNullOrWhiteSpace($env:OCR_DOCAI_CREDENTIALS_B64)) {
+            throw 'Brakuje GitHub Actions Secret: OCR_DOCAI_CREDENTIALS_B64.'
           }
-          Write-Host 'Wszystkie sekrety OCR sa dostepne.'
+          Write-Host 'Dane logowania OCR sa dostepne.'
+          Write-Host "Projekt: $env:OCR_DOCAI_PROJECT_ID"
+          Write-Host "Lokalizacja: $env:OCR_DOCAI_LOCATION"
+          Write-Host "Procesor: $env:OCR_DOCAI_PROCESSOR_ID"
 
       - name: Node.js do budowania instalatora
         uses: actions/setup-node@v4
@@ -60,9 +58,6 @@ jobs:
         shell: pwsh
         env:
           OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
-          OCR_DOCAI_PROJECT_ID: ${{ secrets.OCR_DOCAI_PROJECT_ID }}
-          OCR_DOCAI_LOCATION: ${{ secrets.OCR_DOCAI_LOCATION }}
-          OCR_DOCAI_PROCESSOR_ID: ${{ secrets.OCR_DOCAI_PROCESSOR_ID }}
         run: |
           $ErrorActionPreference = 'Stop'
           npm run build-installer
