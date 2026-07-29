@@ -99,7 +99,9 @@ function Add-OcrConfigurationToStaging {
     processorId = $values.OCR_DOCAI_PROCESSOR_ID.Trim()
     keyFile     = 'service-account.json'
   }
-  $config | ConvertTo-Json | Set-Content -Path (Join-Path $configDir 'document-ai.json') -Encoding UTF8
+  $configJson = $config | ConvertTo-Json
+  $configPath = Join-Path $configDir 'document-ai.json'
+  [IO.File]::WriteAllText($configPath, $configJson, [Text.UTF8Encoding]::new($false))
 
   Write-Host 'Dolaczono konfiguracje Google Document AI do wewnetrznego instalatora.'
   Write-Warning 'Gotowy instalator zawiera dane konta serwisowego. Traktuj plik EXE jak poufny i nie publikuj go publicznie.'
