@@ -1,14 +1,25 @@
-name: Zbuduj wewnetrzny instalator z OCR
+name: Zbuduj i przetestuj instalator Windows
 
-# Ten workflow buduje poufny instalator zawierajacy konfiguracje Google Document AI.
-# Artefaktu nie nalezy przekazywac poza zaufany zespol, poniewaz zawiera dane
-# konta serwisowego potrzebne do dzialania OCR na nowym komputerze.
+# Ten workflow buduje jeden poufny instalator z konfiguracja Google Document AI,
+# instaluje go na osobnej, swiezej maszynie Windows i publikuje dopiero po testach.
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'public/**'
+      - 'lib/**'
+      - 'server.js'
+      - 'package.json'
+      - 'scripts/**'
+      - 'installer/**'
+      - '.github/workflows/build-internal-installer.yml'
 
 permissions:
   contents: read
+  actions: write
 
 env:
   OCR_DOCAI_PROJECT_ID: scyzoryk-ocr-test
@@ -17,14 +28,14 @@ env:
 
 jobs:
   build:
-    name: Zbuduj poufny instalator
+    name: Zbuduj instalator z OCR
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - name: Pobierz kod repozytorium
         uses: actions/checkout@v4
 
-      - name: Sprawdz dane logowania OCR w GitHub Actions Secrets
+      - name: Sprawdz sekret OCR
         shell: pwsh
         env:
           OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
@@ -33,12 +44,9 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:OCR_DOCAI_CREDENTIALS_B64)) {
             throw 'Brakuje GitHub Actions Secret: OCR_DOCAI_CREDENTIALS_B64.'
           }
-          Write-Host 'Dane logowania OCR sa dostepne.'
-          Write-Host "Projekt: $env:OCR_DOCAI_PROJECT_ID"
-          Write-Host "Lokalizacja: $env:OCR_DOCAI_LOCATION"
-          Write-Host "Procesor: $env:OCR_DOCAI_PROCESSOR_ID"
+          Write-Host 'Sekret OCR jest dostepny.'
 
-      - name: Node.js do budowania instalatora
+      - name: Przygotuj Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -54,18 +62,86 @@ jobs:
           $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $found) { choco install innosetup --no-progress -y }
 
-      - name: Zbuduj instalator z konfiguracja Google Document AI
+      - name: Zbuduj produkcyjny instalator
         shell: pwsh
         env:
           OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
         run: |
           $ErrorActionPreference = 'Stop'
           npm run build-installer
+          Get-ChildItem release | Format-Table Name, Length
 
-      - name: Przeslij poufny instalator
+      - name: Przekaz instalator do testu
         uses: actions/upload-artifact@v4
         with:
-          name: instalator-windows-z-ocr
+          name: techniczny-instalator-do-testu-${{ github.run_id }}
           path: release/*.exe
           if-no-files-found: error
+          retention-days: 1
+
+  test:
+    name: Swieza instalacja i pelne testy
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - name: Pobierz skrypty testowe
+        uses: actions/checkout@v4
+
+      - name: Pobierz instalator z poprzedniego joba
+        uses: actions/download-artifact@v4
+        with:
+          name: techniczny-instalator-do-testu-${{ github.run_id }}
+          path: artifact
+
+      - name: Przygotuj sciezki
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem 'artifact\*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'Nie znaleziono instalatora.' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test swieza instalacja'
+          $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-logs'
+          New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+          "INSTALLER_FILE=$($installer.FullName)" >> $env:GITHUB_ENV
+          "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
+          "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
+
+      - name: Zainstaluj i przetestuj caly Scyzoryk
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & '.\scripts\ci\test-installed-scyzoryk.ps1' `
+            -InstallerPath $env:INSTALLER_FILE `
+            -InstallDir $env:INSTALL_DIR `
+            -LogsDir $env:LOGS_DIR
+
+      - name: Przeslij raporty i zrzuty ekranow
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raport-testow-instalatora
+          path: ${{ env.LOGS_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Udostepnij jeden przetestowany instalator
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalator-windows
+          path: artifact/*.exe
+          if-no-files-found: error
           retention-days: 3
+
+      - name: Usun techniczny artefakt posredni
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = 'techniczny-instalator-do-testu-${{ github.run_id }}'
+          $response = gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" | ConvertFrom-Json
+          $artifact = $response.artifacts | Where-Object { $_.name -eq $name } | Select-Object -First 1
+          if ($artifact) {
+            gh api --method DELETE "/repos/${{ github.repository }}/actions/artifacts/$($artifact.id)"
+          }
