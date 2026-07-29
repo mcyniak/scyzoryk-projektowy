@@ -1,0 +1,76 @@
+name: Zbuduj wewnetrzny instalator z OCR
+
+# Ten workflow buduje poufny instalator zawierajacy konfiguracje Google Document AI.
+# Artefaktu nie nalezy przekazywac poza zaufany zespol, poniewaz zawiera dane
+# konta serwisowego potrzebne do dzialania OCR na nowym komputerze.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Zbuduj poufny instalator
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Pobierz kod repozytorium
+        uses: actions/checkout@v4
+
+      - name: Sprawdz konfiguracje OCR w GitHub Actions Secrets
+        shell: pwsh
+        env:
+          OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
+          OCR_DOCAI_PROJECT_ID: ${{ secrets.OCR_DOCAI_PROJECT_ID }}
+          OCR_DOCAI_LOCATION: ${{ secrets.OCR_DOCAI_LOCATION }}
+          OCR_DOCAI_PROCESSOR_ID: ${{ secrets.OCR_DOCAI_PROCESSOR_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'OCR_DOCAI_CREDENTIALS_B64',
+            'OCR_DOCAI_PROJECT_ID',
+            'OCR_DOCAI_LOCATION',
+            'OCR_DOCAI_PROCESSOR_ID'
+          )
+          $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+          if ($missing.Count -gt 0) {
+            throw "Brakuje GitHub Actions Secrets: $($missing -join ', ')."
+          }
+          Write-Host 'Wszystkie sekrety OCR sa dostepne.'
+
+      - name: Node.js do budowania instalatora
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Upewnij sie, ze Inno Setup jest dostepny
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) { choco install innosetup --no-progress -y }
+
+      - name: Zbuduj instalator z konfiguracja Google Document AI
+        shell: pwsh
+        env:
+          OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
+          OCR_DOCAI_PROJECT_ID: ${{ secrets.OCR_DOCAI_PROJECT_ID }}
+          OCR_DOCAI_LOCATION: ${{ secrets.OCR_DOCAI_LOCATION }}
+          OCR_DOCAI_PROCESSOR_ID: ${{ secrets.OCR_DOCAI_PROCESSOR_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run build-installer
+
+      - name: Przeslij poufny instalator
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalator-windows-z-ocr
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 3
