@@ -1,7 +1,7 @@
 name: Zbuduj i przetestuj instalator Windows
 
-# Jeden workflow buduje dokladnie ten sam instalator, ktory pozniej pobiera uzytkownik.
-# Instalator zawiera konfiguracje Google Document AI, dlatego artefakt jest poufny.
+# Ten workflow buduje jeden poufny instalator z konfiguracja Google Document AI,
+# instaluje go na osobnej, swiezej maszynie Windows i publikuje dopiero po testach.
 
 on:
   workflow_dispatch: {}
@@ -62,7 +62,7 @@ jobs:
           $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $found) { choco install innosetup --no-progress -y }
 
-      - name: Zbuduj jeden produkcyjny instalator z OCR
+      - name: Zbuduj produkcyjny instalator
         shell: pwsh
         env:
           OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
@@ -71,7 +71,7 @@ jobs:
           npm run build-installer
           Get-ChildItem release | Format-Table Name, Length
 
-      - name: Przekaz instalator do testu na swiezym Windowsie
+      - name: Przekaz instalator do testu
         uses: actions/upload-artifact@v4
         with:
           name: techniczny-instalator-do-testu-${{ github.run_id }}
@@ -83,9 +83,9 @@ jobs:
     name: Swieza instalacja i pelne testy
     needs: build
     runs-on: windows-latest
-    timeout-minutes: 50
+    timeout-minutes: 55
     steps:
-      - name: Pobierz pomocnicze skrypty testowe
+      - name: Pobierz skrypty testowe
         uses: actions/checkout@v4
 
       - name: Pobierz instalator z poprzedniego joba
@@ -94,287 +94,27 @@ jobs:
           name: techniczny-instalator-do-testu-${{ github.run_id }}
           path: artifact
 
-      - name: Przygotuj sciezki testowe
-        id: paths
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test swieza instalacja'
-          $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-logs'
-          foreach ($sub in 'install','app-logs','reports','input','screenshots') {
-            New-Item -ItemType Directory -Force -Path (Join-Path $logsDir $sub) | Out-Null
-          }
-          "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
-          "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
-
-      - name: Zainstaluj aplikacje przygotowanym instalatorem
-        id: install
-        continue-on-error: true
+      - name: Przygotuj sciezki
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $installer = Get-ChildItem 'artifact\*.exe' | Select-Object -First 1
           if (-not $installer) { throw 'Nie znaleziono instalatora.' }
-          "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
-          $log = Join-Path $env:LOGS_DIR 'install\install.log'
-          $args = @('/VERYSILENT','/SUPPRESSMSG','/NORESTART','/CURRENTUSER','/MERGETASKS=!autostart',"/DIR=`"$env:INSTALL_DIR`"","/LOG=`"$log`"")
-          $proc = Start-Process -FilePath $installer.FullName -ArgumentList $args -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { throw "Instalator zakonczyl sie kodem $($proc.ExitCode)." }
+          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test swieza instalacja'
+          $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-logs'
+          New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+          "INSTALLER_FILE=$($installer.FullName)" >> $env:GITHUB_ENV
+          "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
+          "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
 
-      - name: Sprawdz komplet plikow i konfiguracje OCR
-        id: verify
-        continue-on-error: true
+      - name: Zainstaluj i przetestuj caly Scyzoryk
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $required = @(
-            'server.js','package.json','public\index.html','node-runtime\node.exe','unins000.exe',
-            'apps\drukarka\node_modules\express',
-            'apps\pieczatki-pdf\node_modules\express',
-            'apps\formularze-ecodan\node_modules\playwright',
-            'apps\dokumenty-seryjne\node_modules\express',
-            'apps\wnioski-powykonawcze\node_modules\express',
-            'apps\karty-katalogowe\node_modules\express',
-            'apps\drukarka-projekty\node_modules\express',
-            'apps\ocr-audytow\node_modules\express',
-            'apps\ocr-audytow\config\document-ai.json',
-            'apps\ocr-audytow\config\service-account.json'
-          )
-          $missing = $required | Where-Object { -not (Test-Path (Join-Path $env:INSTALL_DIR $_)) }
-          if ($missing) { throw "Brakuje elementow instalacji: $($missing -join ', ')" }
-
-          $cfgPath = Join-Path $env:INSTALL_DIR 'apps\ocr-audytow\config\document-ai.json'
-          $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-          if ($cfg.projectId -ne 'scyzoryk-ocr-test') { throw 'Nieprawidlowy projekt OCR.' }
-          if ($cfg.location -ne 'eu') { throw 'Nieprawidlowa lokalizacja OCR.' }
-          if ($cfg.processorId -ne 'c8cea9ff6f6430c3') { throw 'Nieprawidlowy processor ID OCR.' }
-          Write-Host 'Struktura instalacji i konfiguracja OCR sa poprawne.'
-
-      - name: Sprawdz, czy instalator zawiera nowe opisy narzedzi
-        id: descriptions
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $html = Get-Content (Join-Path $env:INSTALL_DIR 'public\index.html') -Raw
-          $requiredTexts = @(
-            'Tworzy komplet dokumentów seryjnych dla każdego adresu',
-            'Przygotowuje paczkę plików do zwykłego drukowania',
-            'Przygotowuje do druku pełną dokumentację projektową',
-            'Odczytuje dane ze skanów audytów'
-          )
-          $missing = $requiredTexts | Where-Object { -not $html.Contains($_) }
-          if ($missing) { throw "Instalator nie zawiera nowych opisow: $($missing -join ' | ')" }
-          Write-Host 'Nowe opisy narzedzi sa obecne w zainstalowanej aplikacji.'
-
-      - name: Test regresyjny sortowania dokumentow projektowych
-        id: sorting
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $node = Join-Path $env:INSTALL_DIR 'node-runtime\node.exe'
-          Push-Location (Join-Path $env:INSTALL_DIR 'apps\drukarka-projekty')
-          try {
-            & $node test-sorting-regression.js
-            if ($LASTEXITCODE -ne 0) { throw 'Test sortowania nie przeszedl.' }
-          } finally { Pop-Location }
-
-      - name: Wygeneruj testowy plik PDF
-        id: sample_pdf
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $node = Join-Path $env:INSTALL_DIR 'node-runtime\node.exe'
-          $pdf = Join-Path $env:LOGS_DIR 'input\testowy dokument.pdf'
-          & $node 'scripts\ci\create-sample-pdf.js' $pdf
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $pdf)) { throw 'Nie utworzono testowego PDF.' }
-
-      - name: Uruchom zainstalowany Scyzoryk
-        id: launch
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $nodeExe = Join-Path $env:INSTALL_DIR 'node-runtime\node.exe'
-          $outLog = Join-Path $env:LOGS_DIR 'app-logs\panel-stdout.log'
-          $errLog = Join-Path $env:LOGS_DIR 'app-logs\panel-stderr.log'
-          $launcher = Join-Path $env:LOGS_DIR 'start-scyzoryk.ps1'
-          $restrictedPath = "$env:INSTALL_DIR\node-runtime;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
-          $lines = @(
-            "`$env:PATH = '$restrictedPath'",
-            "`$env:PLAYWRIGHT_BROWSERS_PATH = '0'",
-            "Set-Location -LiteralPath '$env:INSTALL_DIR'",
-            "& '$nodeExe' server.js 1> '$outLog' 2> '$errLog'"
-          )
-          [IO.File]::WriteAllText($launcher, ($lines -join "`r`n"), [Text.UTF8Encoding]::new($true))
-          $task = 'Scyzoryk CI test instalatora'
-          "SCYZORYK_TASK_NAME=$task" >> $env:GITHUB_ENV
-          $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$launcher`""
-          $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-          $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
-          Register-ScheduledTask -TaskName $task -Action $action -Principal $principal -Settings $settings | Out-Null
-          Start-ScheduledTask -TaskName $task
-          Start-Sleep -Seconds 12
-
-      - name: Sprawdz wszystkie aplikacje i stan OCR
-        id: health
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $checks = @(
-            @{ name='panel'; port=3000; path='/api/apps' },
-            @{ name='drukarka'; port=3001; path='/api/status' },
-            @{ name='pieczatki'; port=3002; path='/api/health' },
-            @{ name='formularze'; port=3003; path='/api/version' },
-            @{ name='dokumenty-seryjne'; port=3004; path='/api/health' },
-            @{ name='wnioski-powykonawcze'; port=3005; path='/api/health' },
-            @{ name='karty-katalogowe'; port=3006; path='/api/health' },
-            @{ name='drukarka-projekty'; port=3010; path='/api/status' },
-            @{ name='ocr-audytow'; port=3011; path='/api/health' }
-          )
-          foreach ($c in $checks) {
-            $deadline = (Get-Date).AddSeconds(90)
-            $ok = $false
-            while ((Get-Date) -lt $deadline) {
-              try {
-                $r = Invoke-WebRequest -Uri "http://127.0.0.1:$($c.port)$($c.path)" -UseBasicParsing -TimeoutSec 3
-                if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { $ok = $true; break }
-              } catch {}
-              Start-Sleep -Seconds 2
-            }
-            if (-not $ok) { throw "Nie odpowiada: $($c.name)" }
-          }
-          $ocr = Invoke-RestMethod 'http://127.0.0.1:3011/api/health' -TimeoutSec 10
-          $ocr | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $env:LOGS_DIR 'reports\ocr-health.json') -Encoding utf8
-          if (-not $ocr.ocrConfigured) { throw 'OCR odpowiada, ale ocrConfigured=false.' }
-          Write-Host 'Wszystkie aplikacje odpowiadaja, OCR ma konfiguracje.'
-
-      - name: Prawdziwy test polaczenia z Google Document AI
-        id: ocr_api
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Add-Type -AssemblyName System.Drawing
-          $jpg = Join-Path $env:LOGS_DIR 'input\ocr-test.jpg'
-          $bmp = New-Object Drawing.Bitmap 1000,300
-          $g = [Drawing.Graphics]::FromImage($bmp)
-          try {
-            $g.Clear([Drawing.Color]::White)
-            $font = New-Object Drawing.Font('Arial',32)
-            $g.DrawString('TEST OCR SCYZORYK 123', $font, [Drawing.Brushes]::Black, 40, 100)
-            $bmp.Save($jpg, [Drawing.Imaging.ImageFormat]::Jpeg)
-          } finally {
-            $g.Dispose(); $bmp.Dispose()
-          }
-          $testJs = Join-Path $env:LOGS_DIR 'ocr-api-test.js'
-          @'
-const { ocrImage } = require(process.argv[2]);
-ocrImage(process.argv[3]).then((result) => {
-  const text = String(result && result.text || '').trim();
-  console.log('Document AI odpowiedzial. Tekst:', text);
-  if (!text) process.exit(2);
-}).catch((error) => {
-  console.error(error && error.stack || error);
-  process.exit(1);
-});
-'@ | Set-Content $testJs -Encoding utf8
-          $node = Join-Path $env:INSTALL_DIR 'node-runtime\node.exe'
-          $engine = Join-Path $env:INSTALL_DIR 'apps\ocr-audytow\src\documentAiEngine.js'
-          & $node $testJs $engine $jpg
-          if ($LASTEXITCODE -ne 0) { throw 'Prawdziwe wywolanie Google Document AI nie powiodlo sie.' }
-
-      - name: Zrob zrzuty ekranow wszystkich narzedzi
-        id: screenshots
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $targets = Join-Path $env:LOGS_DIR 'screenshot-targets.json'
-          @(
-            @{slug='01-panel'; url='http://127.0.0.1:3000/'},
-            @{slug='02-drukarka'; url='http://127.0.0.1:3001/'},
-            @{slug='03-pieczatki'; url='http://127.0.0.1:3002/'},
-            @{slug='04-formularze'; url='http://127.0.0.1:3003/'},
-            @{slug='05-dokumenty-seryjne'; url='http://127.0.0.1:3004/'},
-            @{slug='06-wnioski'; url='http://127.0.0.1:3005/'},
-            @{slug='07-karty'; url='http://127.0.0.1:3006/'},
-            @{slug='08-drukarka-projekty'; url='http://127.0.0.1:3010/'},
-            @{slug='09-ocr'; url='http://127.0.0.1:3011/'}
-          ) | ConvertTo-Json | Set-Content $targets -Encoding utf8
-          $env:NODE_PATH = Join-Path $env:INSTALL_DIR 'apps\formularze-ecodan\node_modules'
-          $env:PLAYWRIGHT_BROWSERS_PATH = '0'
-          $node = Join-Path $env:INSTALL_DIR 'node-runtime\node.exe'
-          & $node 'scripts\ci\screenshot-all.js' (Join-Path $env:LOGS_DIR 'screenshots') $targets
-          if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie wykonac wszystkich zrzutow ekranow.' }
-
-      - name: Smoke test Pieczatek PDF
-        id: pieczatki
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $pdf = Join-Path $env:LOGS_DIR 'input\testowy dokument.pdf'
-          $out = Join-Path $env:LOGS_DIR 'reports\pieczatki-wynik.pdf'
-          $form = @{ pdfs = Get-Item $pdf; stampText='TEST CI'; xPct='10'; yPct='10'; widthPct='40'; heightPct='15'; rotation='0'; opacity='1'; pageMode='all'; fontSize='20' }
-          $resp = Invoke-WebRequest 'http://127.0.0.1:3002/api/stamp' -Method Post -Form $form -Headers @{ 'X-Scyzoryk-Request'='1' } -TimeoutSec 30 -UseBasicParsing
-          [IO.File]::WriteAllBytes($out, $resp.Content)
-          if (-not (Test-Path $out) -or (Get-Item $out).Length -lt 10) { throw 'Pieczatki PDF nie utworzyly wyniku.' }
-
-      - name: Smoke test Drukarki dokumentow
-        id: drukarka
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $pdf = Join-Path $env:LOGS_DIR 'input\testowy dokument.pdf'
-          $form = @{ files = Get-Item $pdf }
-          $resp = Invoke-RestMethod 'http://127.0.0.1:3001/api/upload' -Method Post -Form $form -Headers @{ 'X-Scyzoryk-Request'='1' } -TimeoutSec 30
-          if (-not $resp.ok) { throw 'Upload do Drukarki nie powiodl sie.' }
-          $queue = Invoke-RestMethod 'http://127.0.0.1:3001/api/queue' -TimeoutSec 10
-          if (-not $queue.queue -or $queue.queue.Count -lt 1) { throw 'Kolejka Drukarki jest pusta.' }
-          Invoke-RestMethod 'http://127.0.0.1:3001/api/clear' -Method Post -Headers @{ 'X-Scyzoryk-Request'='1' } | Out-Null
-
-      - name: Zatrzymaj aplikacje
-        id: stop_app
-        if: always()
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          if (Test-Path (Join-Path $env:INSTALL_DIR 'scripts\stop-scyzoryk.ps1')) {
-            powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:INSTALL_DIR 'scripts\stop-scyzoryk.ps1')
-          }
-          if ($env:SCYZORYK_TASK_NAME -and (Get-ScheduledTask -TaskName $env:SCYZORYK_TASK_NAME -ErrorAction SilentlyContinue)) {
-            Unregister-ScheduledTask -TaskName $env:SCYZORYK_TASK_NAME -Confirm:$false
-          }
-          Start-Sleep -Seconds 2
-
-      - name: Sprawdz ponowna instalacje
-        id: reinstall
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $log = Join-Path $env:LOGS_DIR 'install\reinstall.log'
-          $args = @('/VERYSILENT','/SUPPRESSMSG','/NORESTART','/CURRENTUSER','/MERGETASKS=!autostart',"/DIR=`"$env:INSTALL_DIR`"","/LOG=`"$log`"")
-          $proc = Start-Process -FilePath $env:INSTALLER_PATH -ArgumentList $args -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { throw "Ponowna instalacja zakonczyla sie kodem $($proc.ExitCode)." }
-          if (-not (Test-Path (Join-Path $env:INSTALL_DIR 'apps\ocr-audytow\config\document-ai.json'))) { throw 'Po reinstalacji brakuje konfiguracji OCR.' }
-
-      - name: Sprawdz odinstalowanie
-        id: uninstall
-        continue-on-error: true
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $uninstaller = Join-Path $env:INSTALL_DIR 'unins000.exe'
-          if (-not (Test-Path $uninstaller)) { throw 'Brak deinstalatora.' }
-          $log = Join-Path $env:LOGS_DIR 'install\uninstall.log'
-          $proc = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT','/SUPPRESSMSG','/NORESTART',"/LOG=`"$log`"") -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { throw "Deinstalacja zakonczyla sie kodem $($proc.ExitCode)." }
+          & '.\scripts\ci\test-installed-scyzoryk.ps1' `
+            -InstallerPath $env:INSTALLER_FILE `
+            -InstallDir $env:INSTALL_DIR `
+            -LogsDir $env:LOGS_DIR
 
       - name: Przeslij raporty i zrzuty ekranow
         if: always()
@@ -384,33 +124,6 @@ ocrImage(process.argv[3]).then((result) => {
           path: ${{ env.LOGS_DIR }}
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Zakoncz bledem, gdy dowolny test nie przeszedl
-        id: summary
-        shell: pwsh
-        run: |
-          $results = [ordered]@{
-            install='${{ steps.install.outcome }}'
-            verify='${{ steps.verify.outcome }}'
-            descriptions='${{ steps.descriptions.outcome }}'
-            sorting='${{ steps.sorting.outcome }}'
-            sample_pdf='${{ steps.sample_pdf.outcome }}'
-            launch='${{ steps.launch.outcome }}'
-            health='${{ steps.health.outcome }}'
-            ocr_api='${{ steps.ocr_api.outcome }}'
-            screenshots='${{ steps.screenshots.outcome }}'
-            pieczatki='${{ steps.pieczatki.outcome }}'
-            drukarka='${{ steps.drukarka.outcome }}'
-            reinstall='${{ steps.reinstall.outcome }}'
-            uninstall='${{ steps.uninstall.outcome }}'
-          }
-          $failed = @()
-          foreach ($name in $results.Keys) {
-            Write-Host ("{0,-20} {1}" -f $name, $results[$name])
-            if ($results[$name] -ne 'success') { $failed += $name }
-          }
-          if ($failed.Count -gt 0) { throw "Nie przeszly testy: $($failed -join ', ')" }
-          Write-Host 'Wszystkie testy instalatora przeszly.'
 
       - name: Udostepnij jeden przetestowany instalator
         uses: actions/upload-artifact@v4
@@ -429,4 +142,6 @@ ocrImage(process.argv[3]).then((result) => {
           $name = 'techniczny-instalator-do-testu-${{ github.run_id }}'
           $response = gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" | ConvertFrom-Json
           $artifact = $response.artifacts | Where-Object { $_.name -eq $name } | Select-Object -First 1
-          if ($artifact) { gh api --method DELETE "/repos/${{ github.repository }}/actions/artifacts/$($artifact.id)" }
+          if ($artifact) {
+            gh api --method DELETE "/repos/${{ github.repository }}/actions/artifacts/$($artifact.id)"
+          }
