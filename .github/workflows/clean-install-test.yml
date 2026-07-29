@@ -142,7 +142,14 @@ jobs:
           # cichutko obcina sie na pierwszej spacji, Inno Setup dostaje tylko fragment
           # sciezki). INSTALL_DIR celowo zawiera spacje/polskie znaki, wiec kazda
           # wartosc MUSI byc opakowana w wewnetrzny literal cudzyslow.
-          $args = @('/VERYSILENT','/SUPPRESSMSG','/NORESTART','/CURRENTUSER',"/DIR=""$env:INSTALL_DIR""","/LOG=""$installLog""")
+          # /MERGETASKS="!autostart": instalator ma domyslnie ZAZNACZONE zadanie
+          # "uruchamiaj przy logowaniu" (zalecane dla realnych uzytkownikow), ktore
+          # rejestruje Zaplanowane zadanie Windows i wymaga jednorazowego okna UAC -
+          # na hostowanym runnerze nie ma nikogo, kto mogby je zatwierdzic, wiec
+          # jawnie je tu odznaczamy, zeby cicha instalacja nigdy nie czekala w
+          # nieskonczonosc na potwierdzenie. Autostart jako taki nie jest w zakresie
+          # tego testu (wymaga realnej interaktywnej sesji z UAC).
+          $args = @('/VERYSILENT','/SUPPRESSMSG','/NORESTART','/CURRENTUSER','/MERGETASKS=!autostart',"/DIR=""$env:INSTALL_DIR""","/LOG=""$installLog""")
           $proc = Start-Process -FilePath $installer.FullName -ArgumentList $args -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Instalator zakonczyl sie kodem $($proc.ExitCode) - zobacz install.log w artefaktach." }
           Write-Host "Instalacja OK (kod wyjscia 0), instalator NIE zadal podniesienia uprawnien (PrivilegesRequired=lowest, /CURRENTUSER)."
@@ -411,7 +418,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installer = Get-ChildItem "artifact\*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           $installLog = Join-Path $env:LOGS_DIR 'install\reinstall.log'
-          $args = @('/VERYSILENT','/SUPPRESSMSG','/NORESTART','/CURRENTUSER',"/DIR=""$env:INSTALL_DIR""","/LOG=""$installLog""")
+          # /MERGETASKS="!autostart": instalator ma domyslnie ZAZNACZONE zadanie
+          # "uruchamiaj przy logowaniu" (zalecane dla realnych uzytkownikow), ktore
+          # rejestruje Zaplanowane zadanie Windows i wymaga jednorazowego okna UAC -
+          # na hostowanym runnerze nie ma nikogo, kto mogby je zatwierdzic, wiec
+          # jawnie je tu odznaczamy, zeby cicha instalacja nigdy nie czekala w
+          # nieskonczonosc na potwierdzenie. Autostart jako taki nie jest w zakresie
+          # tego testu (wymaga realnej interaktywnej sesji z UAC).
+          $args = @('/VERYSILENT','/SUPPRESSMSG','/NORESTART','/CURRENTUSER','/MERGETASKS=!autostart',"/DIR=""$env:INSTALL_DIR""","/LOG=""$installLog""")
           $proc = Start-Process -FilePath $installer.FullName -ArgumentList $args -Wait -PassThru
           if ($proc.ExitCode -ne 0) { throw "Ponowna instalacja zakonczyla sie kodem $($proc.ExitCode)." }
           if (-not (Test-Path (Join-Path $env:INSTALL_DIR 'node-runtime\node.exe'))) { throw "Po ponownej instalacji brakuje bundlowanego node-runtime." }

@@ -1,6 +1,12 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+rem Instalacje z instalatora (installer\scyzoryk.iss) maja bundlowany, przenosny
+rem Node.js obok siebie i NIE modyfikuja globalnego PATH - preferuj go, jesli
+rem istnieje, zamiast zakladac ze "node" jest globalnie dostepny w PATH.
+if exist "%~dp0node-runtime\node.exe" (
+  set "PATH=%~dp0node-runtime;%PATH%"
+)
 set "PLAYWRIGHT_BROWSERS_PATH=0"
 
 echo Zamykam stare procesy Node, jesli istnieja...

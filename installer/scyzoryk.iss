@@ -53,6 +53,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Utworz ikone na pulpicie"; GroupDescription: "Dodatkowe ikony:"
+; Zaznaczone domyslnie - to docelowy, zalecany sposob uruchamiania Scyzoryka (patrz
+; scyzoryk_final_deployment_plan w pamieci projektu: Zaplanowane zadanie Windows przy
+; logowaniu KONKRETNEGO uzytkownika, NIE usluga LocalSystem - zachowuje dostep do
+; zmapowanego dysku i domyslnej drukarki przypietych do sesji uzytkownika). Wymaga
+; jednorazowego podniesienia uprawnien (UAC) WYLACZNIE do wpisu w pliku hosts - sama
+; instalacja aplikacji pozostaje bez-adminowa niezaleznie od wyboru tego zadania.
+Name: "autostart"; Description: "Uruchamiaj Scyzoryka automatycznie przy logowaniu (zalecane, wymaga jednorazowego okna UAC)"; GroupDescription: "Uruchamianie:"
 
 [Files]
 Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -69,9 +76,20 @@ Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\Uruchom-Scyzoryk.cmd"; Work
 
 [Run]
 Filename: "{app}\instaluj-zaleznosci.cmd"; WorkingDir: "{app}"; StatusMsg: "Instalowanie skladnikow Scyzoryka (wymaga internetu, moze potrwac kilka minut)..."; Flags: runhidden waituntilterminated
+; install-autostart.ps1 sam podnosi uprawnienia (jedno okno UAC) tylko dla siebie -
+; ten krok uruchamia go BEZ elewacji, skrypt zajmie sie tym sam. -Wait wewnatrz
+; skryptu (patrz jego komentarz) gwarantuje ze faktycznie skonczy prace zanim
+; instalator pokaze "gotowe". Pomijany calkowicie jesli uzytkownik odznaczyl zadanie
+; (Tasks: autostart) - w tym rowniez przy /VERYSILENT bez jawnego /MERGETASKS=autostart.
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-autostart.ps1"""; WorkingDir: "{app}"; StatusMsg: "Rejestrowanie autostartu przy logowaniu..."; Tasks: autostart; Flags: runhidden waituntilterminated
 Filename: "{app}\Uruchom-Scyzoryk.cmd"; Description: "Uruchom Scyzoryka teraz"; Flags: postinstall skipifsilent nowait
 
 [UninstallRun]
+; Wyrejestrowuje zadanie w Harmonogramie i wpis w hosts, JESLI byly zarejestrowane
+; (skrypt sam sprawdza i nie robi nic jesli nie) - bez tego odinstalowanie
+; zostawialoby osierocone zadanie wskazujace na usuniety folder. Musi isc PRZED
+; usunieciem plikow (UninstallRun z definicji wykonuje sie przed [UninstallDelete]).
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-autostart.ps1"""; Flags: runhidden; RunOnceId: "UninstallAutostart"
 ; Zatrzymuje TYLKO node.exe nalezacy do tej instalacji (patrz scripts\stop-scyzoryk.ps1),
 ; zeby proces nie blokowal plikow podczas usuwania i zeby nie ubijac cudzych node.exe.
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-scyzoryk.ps1"""; Flags: runhidden; RunOnceId: "StopScyzoryk"

@@ -7,7 +7,9 @@ $ErrorActionPreference = 'Stop'
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Wymagane uprawnienia administratora - potwierdz w oknie UAC..."
-    Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    # -Wait: patrz komentarz w install-autostart.ps1 - bez tego wywolujacy (np.
+    # deinstalator Inno Setup) nie doczekalby sie faktycznego usuniecia zadania.
+    Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     exit
 }
 

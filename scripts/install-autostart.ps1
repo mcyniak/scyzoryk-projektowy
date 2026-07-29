@@ -18,7 +18,11 @@ $ErrorActionPreference = 'Stop'
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "Wymagane uprawnienia administratora (jednorazowo, do wpisu w pliku hosts) - potwierdz w oknie UAC..."
-    Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    # -Wait: bez tego ten (nie-podniesiony) proces konczylby sie natychmiast po
+    # wystartowaniu podniesionej kopii, wiec wywolujacy (np. instalator Inno Setup,
+    # ktory czeka na zakonczenie tego kroku przed pokazaniem "gotowe") nie
+    # doczekalby sie faktycznego zarejestrowania zadania/wpisu w hosts.
+    Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     exit
 }
 
@@ -26,6 +30,14 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $TaskName = "Scyzoryk Projektowy - autostart"
 $Hostname = "scyzoryk.projektowy"
 $Port = 3000
+
+# Instalacje z instalatora (installer\scyzoryk.iss) maja bundlowany, przenosny
+# Node.js obok siebie i NIE modyfikuja globalnego PATH - preferuj go, jesli
+# istnieje, zamiast zakladac ze "node" jest globalnie dostepny w PATH.
+$portableNode = Join-Path $RepoRoot 'node-runtime'
+if (Test-Path (Join-Path $portableNode 'node.exe')) {
+    $env:Path = "$portableNode;$env:Path"
+}
 
 Write-Host "=== Instalacja/sprawdzenie zaleznosci ==="
 Push-Location $RepoRoot
