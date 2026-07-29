@@ -179,6 +179,13 @@ jobs:
           $node = Join-Path $env:INSTALL_DIR 'node-runtime\node.exe'
           Push-Location (Join-Path $env:INSTALL_DIR 'apps\formularze-ecodan')
           try {
+            # BEZ tego Playwright sprawdza domyslny GLOBALNY cache przegladarek
+            # (%LOCALAPPDATA%\ms-playwright), nie lokalny w node_modules, w ktorym
+            # instalator/install-all.js faktycznie go umiescil (ten sam
+            # PLAYWRIGHT_BROWSERS_PATH=0, ktorego uzywaja server.js/install-all.js/
+            # STARTUJ-SCYZORYK*.cmd) - bez tego ten check falszywie zglaszal "brak
+            # Chromium", mimo ze byl poprawnie zainstalowany.
+            $env:PLAYWRIGHT_BROWSERS_PATH = '0'
             $script = "const fs=require('fs');const {chromium}=require('playwright');const p=chromium.executablePath();if(!fs.existsSync(p)){console.error('Brak Chromium: '+p);process.exit(1);}console.log('Chromium OK: '+p);"
             & $node -e $script
             if ($LASTEXITCODE -ne 0) { throw "Chromium dla Playwright nie zostal poprawnie zainstalowany przez instalator." }
@@ -229,7 +236,7 @@ jobs:
           & $node "scripts\ci\create-sample-pdf.js" (Join-Path $inputDir 'przykładowy plik ążę.pdf')
           if ($LASTEXITCODE -ne 0) { throw "Nie udalo sie wygenerowac przykladowego PDF testowego." }
 
-      - name: "Uruchom zainstalowaną aplikację (PATH ograniczony do Windows + własnego node-runtime - bez globalnego Node/npm/Python)"
+      - name: "Uruchom zainstalowaną aplikację przez Zaplanowane Zadanie Windows (PATH ograniczony do Windows + własnego node-runtime - bez globalnego Node/npm/Python)"
         id: launch
         continue-on-error: true
         shell: pwsh
@@ -240,18 +247,60 @@ jobs:
           Write-Host "PATH ograniczony dla tego procesu do:"
           Write-Host "  $restrictedPath"
           Write-Host "(brak jakiegokolwiek folderu preinstalowanego Node.js/npm/Python z obrazu windows-latest)"
-          $originalPath = $env:PATH
-          $env:PATH = $restrictedPath
+
+          $nodeExe = Join-Path $env:INSTALL_DIR 'node-runtime\node.exe'
           $outLog = Join-Path $env:LOGS_DIR 'app-logs\panel-stdout.log'
           $errLog = Join-Path $env:LOGS_DIR 'app-logs\panel-stderr.log'
-          $proc = Start-Process -FilePath (Join-Path $env:INSTALL_DIR 'node-runtime\node.exe') -ArgumentList 'server.js' -WorkingDirectory $env:INSTALL_DIR -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru -WindowStyle Hidden
-          $env:PATH = $originalPath
-          "SCYZORYK_PID=$($proc.Id)" >> $env:GITHUB_ENV
-          Start-Sleep -Seconds 3
-          if ($proc.HasExited) {
-            throw "Proces panelu zakonczyl sie natychmiast (kod $($proc.ExitCode)) - zobacz app-logs\panel-stderr.log w artefaktach."
+
+          # CELOWO NIE Start-Process: proces odpalony przez Start-Process w tym
+          # kroku dziedziczy Job Object TEGO kroku workflow, a hostowany runner
+          # GitHuba ma na nim JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE - kazdy potomny
+          # proces ginie razem z zakonczeniem kroku, ktory go uruchomil.
+          # Potwierdzone empirycznie w 3/3 dotychczasowych runach tego workflow:
+          # panel + wszystkie 8 apek stawaly sie kompletnie nieosiagalne na
+          # WSZYSTKICH portach (3000-3011) dokladnie w momencie przejscia z tego
+          # kroku do kroku health-check, mimo ze kazda apka zdazyla wypisac wlasny
+          # banner startowy do panel-stdout.log tuz wczesniej. Zaplanowane Zadanie
+          # Windows uruchamia proces pod Task Scheduler Service, w OSOBNYM Job
+          # Objekcie spoza drzewa procesow Runner.Workera - przezywa zakonczenie
+          # tego kroku. To dokladnie ten sam mechanizm co realny autostart
+          # uzytkownika (scripts/install-autostart.ps1).
+          $TaskName = 'Scyzoryk CI - test czystej instalacji'
+          "SCYZORYK_TASK_NAME=$TaskName" >> $env:GITHUB_ENV
+
+          # Wrapper .ps1 (NIE .cmd) zeby uniknac niespojnosci stron kodowych
+          # cmd.exe (OEM) przy INSTALL_DIR zawierajacym polskie znaki - PowerShell
+          # czyta/pisze Unicode bezposrednio, bez posredniej konwersji przez
+          # systemowa strone kodowa. Zapisywany z jawnym BOM UTF-8, zeby Windows
+          # PowerShell 5.1 (ktorego moze uzyc Harmonogram Zadan) na pewno odczytal
+          # go jako UTF-8, a nie systemowa strone kodowa - ten sam problem juz
+          # opisany przy buildPowerShellCommand w lib/hardening.js.
+          $launcherPath = Join-Path $env:LOGS_DIR 'ci-launch-panel.ps1'
+          $launcherLines = @(
+            "`$env:PATH = '$restrictedPath'"
+            "`$env:PLAYWRIGHT_BROWSERS_PATH = '0'"
+            "Set-Location -LiteralPath '$env:INSTALL_DIR'"
+            "& '$nodeExe' server.js 1> '$outLog' 2> '$errLog'"
+          )
+          [System.IO.File]::WriteAllText($launcherPath, ($launcherLines -join "`r`n"), [System.Text.UTF8Encoding]::new($true))
+
+          $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$launcherPath`""
+          $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+          $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
+          if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
+          Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings | Out-Null
+          Start-ScheduledTask -TaskName $TaskName
+
+          $nodeProc = $null
+          $deadline = (Get-Date).AddSeconds(20)
+          while (-not $nodeProc -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 1
+            $nodeProc = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+              Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $nodeExe) } | Select-Object -First 1
           }
-          Write-Host "Uruchomiono panel (PID $($proc.Id)) z ograniczonym PATH."
+          if (-not $nodeProc) { throw "Proces panelu nie wystartowal przez Zaplanowane Zadanie '$TaskName' w 20s - zobacz app-logs\panel-stderr.log w artefaktach." }
+          "SCYZORYK_PID=$($nodeProc.ProcessId)" >> $env:GITHUB_ENV
+          Write-Host "Uruchomiono panel (PID $($nodeProc.ProcessId)) przez Zaplanowane Zadanie '$TaskName', z ograniczonym PATH."
 
       - name: Poczekaj aż wszystkie 8 aplikacji + panel odpowiadają (health-check)
         id: health
@@ -406,6 +455,9 @@ jobs:
           $ErrorActionPreference = 'Continue'
           if (Test-Path (Join-Path $env:INSTALL_DIR 'scripts\stop-scyzoryk.ps1')) {
             powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $env:INSTALL_DIR 'scripts\stop-scyzoryk.ps1')
+          }
+          if ($env:SCYZORYK_TASK_NAME -and (Get-ScheduledTask -TaskName $env:SCYZORYK_TASK_NAME -ErrorAction SilentlyContinue)) {
+            Unregister-ScheduledTask -TaskName $env:SCYZORYK_TASK_NAME -Confirm:$false
           }
           Start-Sleep -Seconds 2
           Write-Host "Zatrzymano (jesli byly uruchomione)."

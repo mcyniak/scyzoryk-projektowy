@@ -1,5 +1,4 @@
-// Biblioteka "znanych wzorow" (per gmina/inwestycja) - patrz plan
-// C:\Users\Piotr.Cyniak\.claude\plans\partitioned-exploring-pebble.md. Realny check na
+// Biblioteka "znanych wzorow" (per gmina/inwestycja). Realny check na
 // prawdziwych plikach (2026-07-23) pokazal, ze uklad strony jest piksel w piksel identyczny
 // miedzy roznymi adresami TEJ SAMEJ gminy (skany biurowe, nie zdjecia telefonem), ale RoZNE
 // gminy uzywaja realnie roznych fizycznych wzorow (inna liczba kolumn/punktow) nawet w tej
