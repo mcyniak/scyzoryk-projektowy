@@ -35,17 +35,25 @@ test('build instalatora bierze sekret OCR tylko ze środowiska i dodaje go do st
   assert.match(gitignore, /apps\/ocr-audytow\/config\/service-account\.json/);
 });
 
-test('workflow gotowego instalatora wymaga sekretu, testuje OCR i aktualizuje zrzuty instrukcji', async () => {
+test('workflow wykonuje jeden kontrolowany przebieg z czterema jobami i nie odpala się przy zwykłych commitach', async () => {
   const workflow = await read('.github/workflows/build-ready-installer.yml');
   assert.match(workflow, /name: Zbuduj gotowy instalator Windows z OCR/);
-  assert.match(workflow, /name: Zbuduj instalator/);
-  assert.match(workflow, /contents: write/);
+  assert.match(workflow, /workflow_dispatch/);
+  assert.match(workflow, /\.github\/run-ready-installer/);
+  assert.doesNotMatch(workflow, /branches: \[ui-redesign-v1\][\s\S]*- 'public\/\*\*'/);
+  assert.doesNotMatch(workflow, /git push|gh workflow run|\[instruction-screenshots\]/);
+  assert.match(workflow, /build_preview:/);
+  assert.match(workflow, /capture_and_test:/);
+  assert.match(workflow, /build_final:/);
+  assert.match(workflow, /verify_final:/);
+  assert.match(workflow, /name: 1\. Zbuduj instalator probny/);
+  assert.match(workflow, /name: 2\. Swieza instalacja, testy i zrzuty/);
+  assert.match(workflow, /name: 3\. Zbuduj finalny instalator z instrukcja/);
+  assert.match(workflow, /name: 4\. Zweryfikuj finalny instalator/);
   assert.match(workflow, /OCR_DOCAI_CREDENTIALS_B64: \$\{\{ secrets\.OCR_DOCAI_CREDENTIALS_B64 \}\}/);
+  assert.match(workflow, /public\/instrukcja-images/);
   assert.match(workflow, /-ExpectBundledOcr/);
   assert.match(workflow, /-TestLiveOcr/);
-  assert.match(workflow, /name: Zapisz aktualne zrzuty w instrukcji/);
-  assert.match(workflow, /public\\instrukcja-images/);
-  assert.match(workflow, /\[instruction-screenshots\]/);
   assert.match(workflow, /name: Scyzoryk-Projektowy-gotowy-Windows-z-OCR/);
 });
 
