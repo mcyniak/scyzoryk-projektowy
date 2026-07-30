@@ -20,7 +20,7 @@ on:
       - '.github/workflows/build-ready-installer.yml'
 
 permissions:
-  contents: read
+  contents: write
   actions: write
 
 concurrency:
@@ -124,6 +124,7 @@ jobs:
           "INSTALLER_FILE=$($installer.FullName)" >> $env:GITHUB_ENV
           "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
           "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
+          "SCREENSHOTS_ALREADY_CURRENT=0" >> $env:GITHUB_ENV
 
       - name: Zainstaluj i przetestuj caly Scyzoryk
         shell: pwsh
@@ -136,6 +137,45 @@ jobs:
             -ExpectBundledOcr `
             -TestLiveOcr
 
+      - name: Zapisz aktualne zrzuty w instrukcji
+        if: ${{ success() && github.event_name == 'push' && !contains(github.event.head_commit.message, '[instruction-screenshots]') }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:LOGS_DIR 'screenshots'
+          $target = Join-Path $PWD 'public\instrukcja-images'
+          $required = @(
+            '01-panel.png',
+            '02-drukarka.png',
+            '03-pieczatki.png',
+            '04-formularze.png',
+            '05-dokumenty-seryjne.png',
+            '06-wnioski.png',
+            '07-karty.png',
+            '08-drukarka-projekty.png',
+            '09-ocr.png'
+          )
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          foreach ($name in $required) {
+            $file = Join-Path $source $name
+            if (-not (Test-Path -LiteralPath $file)) { throw "Brakuje zrzutu instrukcji: $name" }
+            Copy-Item -LiteralPath $file -Destination (Join-Path $target $name) -Force
+          }
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- 'public/instrukcja-images/*.png'
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host 'Zrzuty instrukcji sa juz aktualne.'
+            "SCREENSHOTS_ALREADY_CURRENT=1" >> $env:GITHUB_ENV
+            exit 0
+          }
+
+          git commit -m 'Aktualizuj zrzuty instrukcji [instruction-screenshots]'
+          git push origin "HEAD:${{ github.ref_name }}"
+          Write-Host 'Zapisano nowe zrzuty. Kolejny automatyczny run zbuduje finalny instalator.'
+
       - name: Przeslij raporty i zrzuty ekranow
         if: always()
         uses: actions/upload-artifact@v4
@@ -146,6 +186,7 @@ jobs:
           retention-days: 14
 
       - name: Udostepnij przetestowany instalator
+        if: ${{ success() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[instruction-screenshots]') || env.SCREENSHOTS_ALREADY_CURRENT == '1') }}
         uses: actions/upload-artifact@v4
         with:
           name: Scyzoryk-Projektowy-gotowy-Windows-z-OCR
