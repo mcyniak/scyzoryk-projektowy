@@ -1,56 +1,94 @@
 # OCR audytów
 
-Rozpoznaje tekst (w tym pismo ręczne) na zeskanowanych PDF-ach audytów i zwraca ten sam dokument
-z niewidoczną, przeszukiwalną/zaznaczalną warstwą tekstu - oryginalny wygląd (w tym odręczne
-notatki) zostaje bez zmian. Jeśli w jednym pliku jest kilka adresów (zbundlowany skan), narzędzie
-proponuje podział na osobne pliki - ale nigdy nie dzieli automatycznie bez przeglądu: zawsze
-pokazuje ekran potwierdzenia z miniaturami stron.
+Rozpoznaje tekst, w tym pismo ręczne, na zeskanowanych PDF-ach audytów i zwraca dokument z niewidoczną, przeszukiwalną warstwą tekstu. Oryginalny wygląd, pieczątki i odręczne notatki pozostają bez zmian.
 
-## Wymagana konfiguracja (Google Cloud Document AI)
+Jeżeli jeden PDF zawiera kilka adresów, narzędzie proponuje podział na osobne pliki, ale zawsze pokazuje użytkownikowi miniatury i wymaga potwierdzenia podziału.
 
-To jedyna aplikacja w Scyzoryku, która łączy się z internetem - wysyła zawartość strony do
-rozpoznania przez [Google Cloud Document AI](https://cloud.google.com/document-ai) (procesor typu
-Form Parser). Powód: lokalne silniki OCR (Tesseract, PaddleOCR) i nawet Google Cloud Vision,
-testowane na realnych audytach, słabo radziły sobie z odręcznymi wpisami i checkboxami w tych
-formularzach - Document AI rozpoznaje checkbox jako własny typ bytu i sam paruje go z etykietą,
-zamiast zwracać losowy znak Unicode do ręcznego dopasowania.
+## Google Cloud Document AI
 
-Instalator celowo nie zawiera klucza konta serwisowego. Skopiuj
-`docs/ocr-document-ai.example.json` jako
-`%LOCALAPPDATA%\Scyzoryk\ocr-document-ai.json`, uzupełnij wartości i ustaw
-`keyFile` na bezpieczną lokalizację klucza poza katalogiem programu.
+OCR korzysta z procesora Google Cloud Document AI typu Form Parser. To jedyna aplikacja Scyzoryka, która wysyła zawartość stron do zewnętrznej usługi w celu rozpoznania tekstu i pól formularza.
 
-Alternatywnie ustaw 4 zmienne środowiskowe:
+Document AI został wybrany po testach na rzeczywistych audytach, ponieważ lepiej niż lokalne silniki i Google Cloud Vision rozpoznaje odręczne wpisy, checkboxy i układ formularzy.
 
-- `OCR_DOCAI_KEY_FILE` - ścieżka do pliku JSON konta serwisowego GCP (uprawnienia: Document AI API
-  User na projekt z utworzonym procesorem). **Nigdy nie kopiować tego pliku do repo** - trzymać go
-  poza katalogiem projektu i wskazywać ścieżką.
-- `OCR_DOCAI_PROJECT_ID` - id projektu GCP (np. `scyzoryk-ocr-test`).
-- `OCR_DOCAI_LOCATION` - region procesora (np. `eu`).
-- `OCR_DOCAI_PROCESSOR_ID` - id utworzonego procesora typu Form Parser (Google Cloud Console →
-  Document AI → Processors → utwórz procesor, skopiuj jego ID).
+## Gotowy instalator wewnętrzny
 
-Bez tych zmiennych analiza plików, które faktycznie wymagają OCR-u, zwróci czytelny błąd zamiast
-się wywalić - pliki, które już mają warstwę tekstu (np. eksporty z aplikacji), działają bez
-żadnej z tych zmiennych, bo OCR jest wtedy pomijany całkowicie.
+Workflow GitHub Actions:
 
-**Dane osobowe z audytów (imię, nazwisko, adres, telefon, e-mail) opuszczają komputer** przy
-każdym rozpoznawaniu tekstu - to świadoma decyzja (patrz notatka w `CLAUDE.md`), ale warto o tym
-pamiętać przy udostępnianiu tego narzędzia dalej.
+```text
+Zbuduj gotowy instalator Windows z OCR
+```
 
-Koszt jest znacząco wyższy niż przy poprzednio używanym Google Cloud Vision - ok. $30/1000 stron
-(Vision: $1,50/1000 stron) - świadoma decyzja właściciela po realnym porównaniu jakości
-rozpoznawania na trudnych formularzach (patrz `src/documentAiEngine.js`).
+buduje poufny instalator, który zawiera gotową konfigurację Document AI. Odbiorca instalatora:
+
+- nie kopiuje klucza,
+- nie ustawia zmiennych środowiskowych,
+- nie tworzy pliku konfiguracyjnego,
+- po instalacji może od razu używać OCR.
+
+Konfiguracja jest dodawana do katalogu staging wyłącznie podczas workflow z GitHub Actions Secret `OCR_DOCAI_CREDENTIALS_B64`. Nie znajduje się w repozytorium ani w zwykłym `git archive`.
+
+Gotowy instalator zawiera dane konta serwisowego, dlatego jest przeznaczony wyłącznie do użytku wewnętrznego i nie może być publikowany publicznie.
+
+## Kolejność odczytu konfiguracji
+
+`src/documentAiEngine.js` sprawdza konfigurację w następującej kolejności:
+
+1. zmienne środowiskowe `OCR_DOCAI_*`,
+2. plik użytkownika `%LOCALAPPDATA%\Scyzoryk\ocr-document-ai.json`,
+3. konfigurację wbudowaną w instalator: `apps\ocr-audytow\config\document-ai.json`.
+
+Dzięki temu deweloper może nadpisać ustawienia lokalnie, a zwykły użytkownik gotowego instalatora korzysta z konfiguracji wbudowanej.
+
+## Konfiguracja deweloperska
+
+Przy uruchamianiu projektu ze źródeł można utworzyć plik:
+
+```text
+%LOCALAPPDATA%\Scyzoryk\ocr-document-ai.json
+```
+
+Przykład:
+
+```json
+{
+  "projectId": "scyzoryk-ocr-test",
+  "location": "eu",
+  "processorId": "id-procesora",
+  "keyFile": "C:\\bezpieczna-sciezka\\service-account.json"
+}
+```
+
+Alternatywnie można ustawić:
+
+- `OCR_DOCAI_KEY_FILE`,
+- `OCR_DOCAI_PROJECT_ID`,
+- `OCR_DOCAI_LOCATION`,
+- `OCR_DOCAI_PROCESSOR_ID`.
+
+Pliku konta serwisowego nie wolno commitować do repozytorium.
+
+## Prywatność i koszt
+
+Dane widoczne na stronach audytów, w tym imię, nazwisko, adres, telefon lub e-mail, mogą zostać przesłane do Google Document AI podczas rozpoznawania.
+
+Nie należy uruchamiać ponownie tej samej dużej paczki bez potrzeby. Każda strona faktycznie wymagająca OCR zużywa limit i może generować koszt usługi.
+
+Strony, które mają już użyteczną warstwę tekstową, są rozpoznawane osobno i nie powinny być ponownie wysyłane do OCR.
 
 ## Start
 
-Uruchamiane jak każda inna aplikacja w Scyzoryku - przez główny `server.js`/`STARTUJ-SCYZORYK.cmd`
-(port domyślnie 3011, `OCR_AUDYTOW_PORT` żeby zmienić), albo samodzielnie:
+W normalnej pracy aplikacja jest uruchamiana przez główny panel Scyzoryka na porcie 3011.
+
+Uruchomienie samodzielne ze źródeł:
 
 ```powershell
-$env:OCR_DOCAI_KEY_FILE = "C:\sciezka\do\klucza-konta-serwisowego.json"
-$env:OCR_DOCAI_PROJECT_ID = "twoj-projekt-gcp"
-$env:OCR_DOCAI_LOCATION = "eu"
-$env:OCR_DOCAI_PROCESSOR_ID = "id-procesora"
 node apps/ocr-audytow/server.js
 ```
+
+Health check:
+
+```text
+http://127.0.0.1:3011/api/health
+```
+
+Dla gotowego instalatora pole `ocrConfigured` powinno mieć wartość `true` bez wykonywania dodatkowych czynności po instalacji.
