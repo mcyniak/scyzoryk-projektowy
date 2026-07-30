@@ -5,19 +5,22 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require("../../lib/hardening");
+const { getAppDataDir } = require("../../lib/appPaths");
 const printService = require("../../lib/printing");
+const { withPrintLease, PrintLeaseBusyError } = require("../../lib/printCoordinator");
 const pdfMerge = require("./src/pdfMerge");
 
 const app = express();
-setupProcessDiagnostics("drukarka", __dirname);
+const APP_DATA_ROOT = getAppDataDir("drukarka");
+setupProcessDiagnostics("drukarka", APP_DATA_ROOT);
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.SCYZORYK_HOST || "127.0.0.1";
 const MAX_FILE_MB = Number(process.env.DRUKARKA_MAX_FILE_MB || 50);
 const MAX_FILES = Number(process.env.DRUKARKA_MAX_FILES || 80);
 const MAX_QUEUE = Number(process.env.DRUKARKA_MAX_QUEUE || 200);
 
-const DATA_DIR = path.join(__dirname, "data");
-const UPLOAD_DIR = path.join(DATA_DIR, "uploads");
+const DATA_DIR = path.join(APP_DATA_ROOT, "data");
+const UPLOAD_DIR = path.join(APP_DATA_ROOT, "uploads");
 const MERGED_DIR = path.join(DATA_DIR, "merged");
 for (const dir of [DATA_DIR, UPLOAD_DIR, MERGED_DIR]) if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 scheduleCleanup([UPLOAD_DIR, MERGED_DIR], 24 * 60 * 60 * 1000, 60 * 60 * 1000);
@@ -311,6 +314,10 @@ app.get("/api/printers", async (req, res) => {
   }
 });
 
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, name: "drukarka", version: require("./package.json").version });
+});
+
 app.get("/api/status", (req, res) => {
   res.json(status);
 });
@@ -335,7 +342,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
 
   const sideMode = req.body.sideMode === "two-sided" ? "two-sided" : "one-sided";
   const copyMode = req.body.copyMode === "set" ? "set" : "file";
-
+  const printerName = String(req.body.printerName || "").trim();
   const order = Array.isArray(req.body.order) ? req.body.order : [];
 
   if (order.length) {
@@ -349,124 +356,127 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
       }
     }
 
-    for (const item of byId.values()) {
-      ordered.push(item);
-    }
-
+    for (const item of byId.values()) ordered.push(item);
     queue = ordered;
   }
 
   if (!queue.length) {
-    return res.status(400).json({
-      ok: false,
-      message: "Brak plikow"
-    });
+    return res.status(400).json({ ok: false, message: "Brak plikow" });
   }
 
-  printing = true;
-
-  const originalItems = [...queue];
-  const sidesLabel = sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
-  const copyLabel = copyMode === "set"
-    ? "najpierw komplet, potem kolejna kopia kompletu"
-    : "kopia przy kazdym pliku";
-
-  status = {
-    printing: true,
-    message: `Start drukowania: ${copies} kop. / ${sidesLabel} / ${copyLabel}`,
-    current: 0,
-    total: originalItems.length,
-    percent: 0,
-    done: false,
-    error: null,
-    warning: null
-  };
-
-  res.json({ ok: true });
-
-  let itemsToPrint = originalItems;
   try {
-    // Laczenie PDF-ow ZMIENIA znaczenie "kopia przy kazdym pliku" (A,A,B,B) w
-    // "najpierw caly komplet" (A,B,A,B), bo po polaczeniu jest juz tylko jeden
-    // "plik" do powielenia - wiec laczymy tylko gdy to nie zmienia wyboru
-    // uzytkownika: albo jest tylko 1 kopia (kolejnosc kopii wtedy bez
-    // znaczenia), albo uzytkownik i tak wybral "najpierw komplet" (copyMode
-    // "set"), gdzie laczenie daje dokladnie to samo zachowanie co bez laczenia.
-    const mergeChangesCopySemantics = copies > 1 && copyMode === "file";
-    if (!mergeChangesCopySemantics && originalItems.filter(it => it.ext === ".pdf").length >= 2) {
-      status.message = "Łączę sąsiadujące PDF-y w jeden plik, żeby drukować szybciej...";
+    await withPrintLease({ app: "drukarka", sessionId: req.sessionID || null, printerName }, async () => {
+      printing = true;
+
+      const originalItems = [...queue];
+      const sidesLabel = sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
+      const copyLabel = copyMode === "set"
+        ? "najpierw komplet, potem kolejna kopia kompletu"
+        : "kopia przy kazdym pliku";
+
+      status = {
+        printing: true,
+        message: `Start drukowania: ${copies} kop. / ${sidesLabel} / ${copyLabel}`,
+        current: 0,
+        total: originalItems.length,
+        percent: 0,
+        done: false,
+        error: null,
+        warning: null
+      };
+
+      let itemsToPrint = originalItems;
       try {
-        itemsToPrint = await buildMergedPrintItems(originalItems);
-      } catch (mergeErr) {
-        itemsToPrint = originalItems;
-        status.warning = "Nie udało się połączyć PDF-ów w jeden plik - drukuję pojedynczo.";
+        res.json({ ok: true });
+
+        // Laczenie PDF-ow ZMIENIA znaczenie "kopia przy kazdym pliku" (A,A,B,B) w
+        // "najpierw caly komplet" (A,B,A,B), bo po polaczeniu jest juz tylko jeden
+        // "plik" do powielenia - wiec laczymy tylko gdy to nie zmienia wyboru
+        // uzytkownika: albo jest tylko 1 kopia (kolejnosc kopii wtedy bez
+        // znaczenia), albo uzytkownik i tak wybral "najpierw komplet" (copyMode
+        // "set"), gdzie laczenie daje dokladnie to samo zachowanie co bez laczenia.
+        const mergeChangesCopySemantics = copies > 1 && copyMode === "file";
+        if (!mergeChangesCopySemantics && originalItems.filter(it => it.ext === ".pdf").length >= 2) {
+          status.message = "Łączę sąsiadujące PDF-y w jeden plik, żeby drukować szybciej...";
+          try {
+            itemsToPrint = await buildMergedPrintItems(originalItems);
+          } catch (mergeErr) {
+            itemsToPrint = originalItems;
+            status.warning = "Nie udało się połączyć PDF-ów w jeden plik - drukuję pojedynczo.";
+          }
+        }
+
+        const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
+        status.total = printJobs.length;
+
+        await printService.withPrinterSides(sideMode, printerName, async printerSetup => {
+          status.warning = printerSetup.ok ? status.warning : printerSetup.message;
+          status.message = printerSetup.message;
+          if (printerSetup.ok) await printService.wait(800);
+
+          for (let i = 0; i < printJobs.length; i++) {
+            const job = printJobs[i];
+            const item = job.item;
+            const copyInfo = copies > 1 ? `, kopia ${job.copy}/${copies}` : "";
+
+            status.current = i + 1;
+            status.total = printJobs.length;
+            status.percent = Math.round((i / printJobs.length) * 100);
+            status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
+
+            await printService.printFileWindows(item.path, printerName, {
+              cwd: __dirname,
+              logDir: DATA_DIR,
+              timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000)
+            });
+
+            status.percent = Math.round(((i + 1) / printJobs.length) * 100);
+            status.message = `Dodano do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
+
+            // Nie czeka na fizyczne wydrukowanie.
+            // Daje Windowsowi / Acrobatowi / Wordowi czas na przyjecie zadania.
+            await printService.wait(delaySeconds * 1000);
+          }
+        });
+
+        status.message = `✅ Wszystkie zadania wyslane do kolejki drukowania (${printJobs.length})`;
+        status.percent = 100;
+        status.done = true;
+      } catch (err) {
+        status.error = String(err.message || err);
+        status.message = "❌ Blad drukowania: " + status.error;
+      } finally {
+        // Kolejka i sprzatanie plikow ida TUTAJ (nie tylko na sciezce sukcesu) -
+        // bez tego blad w polowie serii zostawial stara kolejke w pamieci, wiec
+        // ponowne kliknieccie "drukuj" potrafilo wyslac do druku po raz drugi
+        // pliki, ktore juz sie realnie wydrukowaly przed bledem.
+        queue = [];
+        // Nie usuwamy plikow natychmiast po wyslaniu do druku.
+        // Acrobat/Windows potrafi jeszcze doczytywac duze PDF-y po dodaniu zadania do kolejki.
+        // Natychmiastowe kasowanie uploadow moglo powodowac znikanie/anulowanie duzych zadan.
+        const cleanupDelayMs = 30 * 60 * 1000;
+        setTimeout(() => {
+          cleanupFiles(originalItems);
+          cleanupFiles(itemsToPrint.filter(it => it.merged));
+        }, cleanupDelayMs).unref?.();
+        printing = false;
+        status.printing = false;
       }
-    }
-
-    const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
-    status.total = printJobs.length;
-
-    const printerName = String(req.body.printerName || "").trim();
-    const printerSetup = await printService.applyPrinterSides(sideMode, printerName);
-    status.warning = printerSetup.ok ? status.warning : printerSetup.message;
-    status.message = printerSetup.ok
-      ? printerSetup.message
-      : printerSetup.message;
-
-    if (printerSetup.ok) {
-      await printService.wait(800);
-    }
-
-    for (let i = 0; i < printJobs.length; i++) {
-      const job = printJobs[i];
-      const item = job.item;
-      const copyInfo = copies > 1 ? `, kopia ${job.copy}/${copies}` : "";
-
-      status.current = i + 1;
-      status.total = printJobs.length;
-      status.percent = Math.round((i / printJobs.length) * 100);
-      status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
-
-      await printService.printFileWindows(item.path, printerName, {
-        cwd: __dirname,
-        logDir: DATA_DIR,
-        timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000)
-      });
-
-      status.percent = Math.round(((i + 1) / printJobs.length) * 100);
-      status.message = `Dodano do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
-
-      // Nie czeka na fizyczne wydrukowanie.
-      // Daje Windowsowi / Acrobatowi / Wordowi czas na przyjecie zadania.
-      await printService.wait(delaySeconds * 1000);
-    }
-
-    status.message = `✅ Wszystkie zadania wyslane do kolejki drukowania (${printJobs.length})`;
-    status.percent = 100;
-    status.done = true;
-
-    // Acrobat nie jest zamykany przy kazdym pliku, bo to psulo buforowanie duzych PDF-ow.
-    // Zamykamy go dopiero po calej serii i z opoznieniem, bez Stop-Process -Force.
-    printService.closePdfAppsAfterBatch(__dirname, Number(process.env.DRUKARKA_CLOSE_ACROBAT_AFTER_SECONDS || 30));
+    });
   } catch (err) {
+    if (err instanceof PrintLeaseBusyError) {
+      return res.status(409).json({
+        ok: false,
+        code: "PRINT_LOCK_BUSY",
+        message: err.message,
+        owner: err.ownerMeta
+      });
+    }
+    if (!res.headersSent) {
+      return res.status(500).json({ ok: false, message: err.message || "Nie udalo sie rozpoczac drukowania." });
+    }
     status.error = String(err.message || err);
     status.message = "❌ Blad drukowania: " + status.error;
-  } finally {
-    // Kolejka i sprzatanie plikow ida TUTAJ (nie tylko na sciezce sukcesu) -
-    // bez tego blad w polowie serii zostawial stara kolejke w pamieci, wiec
-    // ponowne kliknieccie "drukuj" potrafilo wyslac do druku po raz drugi
-    // pliki, ktore juz sie realnie wydrukowaly przed bledem.
-    queue = [];
-    // Nie usuwamy plikow natychmiast po wyslaniu do druku.
-    // Acrobat/Windows potrafi jeszcze doczytywac duze PDF-y po dodaniu zadania do kolejki.
-    // Natychmiastowe kasowanie uploadow moglo powodowac znikanie/anulowanie duzych zadan.
-    const cleanupDelayMs = 30 * 60 * 1000;
-    setTimeout(() => {
-      cleanupFiles(originalItems);
-      cleanupFiles(itemsToPrint.filter(it => it.merged));
-    }, cleanupDelayMs).unref?.();
-    printing = false;
-    status.printing = false;
   }
 });
 

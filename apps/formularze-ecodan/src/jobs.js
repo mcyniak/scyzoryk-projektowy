@@ -1,6 +1,9 @@
 import fs from 'fs/promises';
+import fsSync from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import sanitize from 'sanitize-filename';
+import appPaths from '../../../lib/appPaths.js';
 import {
   DEBUG_MODE,
   TRACE_MODE,
@@ -28,10 +31,55 @@ import {
 import { chooseProduct } from './automation/product.js';
 import { validatePdfProduct, quarantineInvalidPdf } from './pdfValidation.js';
 import { keepFirstPdfPages } from './pdfTrim.js';
-import { appendJobEvent, ensureJobWorkspace, writeResultsCsv, writeSummary } from './telemetry.js';
+import { appendJobEvent as appendTelemetryJobEvent, ensureJobWorkspace, writeResultsCsv, writeSummary } from './telemetry.js';
 
+const { getAppDataDir } = appPaths;
+const jobsIndexPath = path.join(getAppDataDir('formularze-ecodan'), 'data', 'jobs-index.json');
 export const jobs = new Map();
 const jobSessions = new Map();
+
+function persistedJob(job) {
+  return { ...job, current: null, activeWorkers: {} };
+}
+
+export async function persistJobsIndex() {
+  await fs.mkdir(path.dirname(jobsIndexPath), { recursive: true });
+  const tempPath = `${jobsIndexPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  const payload = Object.fromEntries(Array.from(jobs, ([id, job]) => [id, persistedJob(job)]));
+  await fs.writeFile(tempPath, JSON.stringify(payload, null, 2), 'utf8');
+  await fs.rename(tempPath, jobsIndexPath).catch(async () => {
+    await fs.copyFile(tempPath, jobsIndexPath);
+    await fs.unlink(tempPath).catch(() => {});
+  });
+}
+
+export function restoreJobsFromDisk() {
+  let persisted = {};
+  try {
+    persisted = JSON.parse(fsSync.readFileSync(jobsIndexPath, 'utf8').replace(/^\uFEFF/, ''));
+  } catch (_) {
+    persisted = {};
+  }
+  for (const [id, saved] of Object.entries(persisted)) {
+    const interrupted = ['running', 'queued', 'reading-excel', 'cancelling'].includes(saved.status);
+    jobs.set(id, {
+      ...saved,
+      status: interrupted ? 'interrupted' : saved.status,
+      interruptedReason: interrupted ? 'process-restarted' : saved.interruptedReason,
+      resultFolderMissing: Boolean(saved.outputDir && !fsSync.existsSync(saved.outputDir)),
+      current: null,
+      activeWorkers: {}
+    });
+  }
+  return jobs;
+}
+
+async function appendJobEvent(job, event, data = {}) {
+  await appendTelemetryJobEvent(job, event, data);
+  await persistJobsIndex();
+}
+
+restoreJobsFromDisk();
 
 function terminalStatus(status) {
   return ['finished', 'finished-with-errors', 'fatal-error', 'cancelled'].includes(status);
@@ -203,6 +251,7 @@ export function createJob(initial = {}) {
     ...initial
   };
   jobs.set(id, job);
+  persistJobsIndex().catch(() => {});
   return job;
 }
 
@@ -253,7 +302,7 @@ export async function runAutomationInSession(input, session, pdfDir, options = {
   if (options.skipExisting && await pathExists(desiredPath)) {
     const pdfTrim = await keepFirstPdfPages(desiredPath).catch(error => ({ ok: false, error: String(error?.message || error) }));
     if (!pdfTrim.ok) throw new Error(`Nie udało się skrócić istniejącego PDF do pierwszych 3 stron: ${pdfTrim.error}`);
-    return { ok: true, skippedExisting: true, result, pdf: desiredPath, pdfTrim, durationMs: Date.now() - startedAt };
+    return { ok: true, skippedExisting: true, trimmedExisting: pdfTrim.trimmed, result, pdf: desiredPath, pdfTrim, durationMs: Date.now() - startedAt };
   }
 
   try {

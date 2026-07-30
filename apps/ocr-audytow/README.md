@@ -15,7 +15,12 @@ testowane na realnych audytach, słabo radziły sobie z odręcznymi wpisami i ch
 formularzach - Document AI rozpoznaje checkbox jako własny typ bytu i sam paruje go z etykietą,
 zamiast zwracać losowy znak Unicode do ręcznego dopasowania.
 
-**Zanim uruchomisz tę aplikację, ustaw 4 zmienne środowiskowe:**
+Instalator celowo nie zawiera klucza konta serwisowego. Skopiuj
+`docs/ocr-document-ai.example.json` jako
+`%LOCALAPPDATA%\Scyzoryk\ocr-document-ai.json`, uzupełnij wartości i ustaw
+`keyFile` na bezpieczną lokalizację klucza poza katalogiem programu.
+
+Alternatywnie ustaw 4 zmienne środowiskowe:
 
 - `OCR_DOCAI_KEY_FILE` - ścieżka do pliku JSON konta serwisowego GCP (uprawnienia: Document AI API
   User na projekt z utworzonym procesorem). **Nigdy nie kopiować tego pliku do repo** - trzymać go

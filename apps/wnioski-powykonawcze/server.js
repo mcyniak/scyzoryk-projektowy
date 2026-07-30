@@ -22,18 +22,20 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
-const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, runPowerShell, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
+const { getAppDataDir } = require('../../lib/appPaths');
 const wmFolderScan = require('./src/wmFolderScan');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3005);
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 const ROOT = __dirname;
-setupProcessDiagnostics('wnioski-powykonawcze', ROOT);
+const APP_DATA_ROOT = getAppDataDir('wnioski-powykonawcze');
+setupProcessDiagnostics('wnioski-powykonawcze', APP_DATA_ROOT);
 const wordQueue = createSerialQueue('wnioski-word');
-const DATA_DIR = path.join(ROOT, 'data');
-const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-const OUTPUT_DIR = path.join(DATA_DIR, 'output');
+const DATA_DIR = path.join(APP_DATA_ROOT, 'data');
+const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
+const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
 const PS_SCRIPT = path.join(ROOT, 'scripts', 'convert-wm.ps1');
 const MAX_FILE_MB = Number(process.env.WM_MAX_FILE_MB || 50);
 const MAX_FILES = Number(process.env.WM_MAX_FILES || 100);
@@ -96,7 +98,9 @@ function persistJobsIndex() {
       failed: job.failed || [],
       error: job.error || null,
       dateText: job.dateText || null,
-      prefix: job.prefix || null
+      prefix: job.prefix || null,
+      total: job.total || 0,
+      done: job.done || 0
     }));
     writeJsonFileNoBom(JOBS_INDEX, { savedAt: new Date().toISOString(), jobs: items });
   } catch (err) {
@@ -112,10 +116,12 @@ function restoreJobsIndex() {
       if (!item?.id || !item.pdfDir) continue;
       const jobDir = path.dirname(item.pdfDir);
       if (!fs.existsSync(jobDir)) continue;
+      const interrupted = ['queued', 'running', 'cancelling'].includes(item.status);
       jobs.set(item.id, {
         id: item.id,
         createdAt: Number(item.createdAt || Date.now()),
-        status: item.status || 'restored',
+        status: interrupted ? 'interrupted' : (item.status || 'restored'),
+        interruptedReason: interrupted ? 'process-restarted' : item.interruptedReason,
         pdfDir: item.pdfDir,
         debugDir: item.debugDir || path.join(jobDir, 'docx'),
         zipPath: item.zipPath || null,
@@ -124,7 +130,10 @@ function restoreJobsIndex() {
         uploadPaths: [],
         error: item.error || null,
         dateText: item.dateText || null,
-        prefix: item.prefix || null
+        prefix: item.prefix || null,
+        total: item.total || 0,
+        done: item.done || 0,
+        child: null
       });
     }
   } catch (err) {
@@ -235,14 +244,31 @@ async function cleanupOldJobs() {
 }
 setInterval(() => cleanupOldJobs().catch(err => console.error('[wm-cleanup]', err?.message || err)), 60 * 60 * 1000).unref();
 
-async function runConvertScript(inputJson, outputJson) {
+async function runConvertScript(inputJson, outputJson, job = null) {
   const timeoutMs = Number(process.env.WM_TIMEOUT_MS || 60 * 60 * 1000);
-  try {
-    return await runPowerShell(PS_SCRIPT, ['-InputJson', inputJson, '-OutputJson', outputJson], { cwd: ROOT, timeoutMs, windowsHide: true });
-  } catch (err) {
-    if (fs.existsSync(outputJson)) return { code: err.code || 1, stdout: err.stdout || '', stderr: err.stderr || '', recoveredFromOutputJson: true };
-    throw err;
-  }
+  return new Promise((resolve, reject) => {
+    const child = spawn('powershell.exe', [
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_SCRIPT,
+      '-InputJson', inputJson, '-OutputJson', outputJson
+    ], { cwd: ROOT, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (job) job.child = child;
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      reject(new Error(`Przekroczono limit czasu konwersji (${Math.round(timeoutMs / 60000)} min).`));
+    }, timeoutMs);
+    timer.unref();
+    child.on('error', error => { clearTimeout(timer); reject(error); });
+    child.on('close', code => {
+      clearTimeout(timer);
+      if (job) job.child = null;
+      if (code === 0 || fs.existsSync(outputJson)) return resolve({ code, stdout, stderr, recoveredFromOutputJson: code !== 0 });
+      reject(new Error(stderr.trim() || `PowerShell zakonczyl sie kodem ${code}.`));
+    });
+  });
 }
 
 async function zipDirectory(sourceDir, zipPath) {
@@ -260,7 +286,7 @@ async function zipDirectory(sourceDir, zipPath) {
 
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'wnioski-powykonawcze', queue: wordQueue.getState() }));
 
-app.post('/api/convert', heavyJobLimiter, upload.array('files', MAX_FILES), async (req, res) => {
+app.post('/api/jobs', heavyJobLimiter, upload.array('files', MAX_FILES), async (req, res) => {
   const jobId = crypto.randomUUID();
   const createdAt = Date.now();
   const jobDir = path.join(OUTPUT_DIR, jobId);
@@ -268,9 +294,9 @@ app.post('/api/convert', heavyJobLimiter, upload.array('files', MAX_FILES), asyn
   const debugDir = path.join(jobDir, 'docx');
   await fsp.mkdir(pdfDir, { recursive: true });
   await fsp.mkdir(debugDir, { recursive: true });
-  const job = { id: jobId, createdAt, status: 'running', pdfDir, debugDir, files: [], failed: [], uploadPaths: [] };
+  const job = { id: jobId, createdAt, status: 'queued', pdfDir, debugDir, files: [], failed: [], uploadPaths: [], total: 0, done: 0, child: null };
   jobs.set(jobId, job);
-persistJobsIndex();
+  persistJobsIndex();
 
   try {
     const files = req.files || [];
@@ -292,72 +318,104 @@ persistJobsIndex();
     const inputJson = path.join(jobDir, 'input.json');
     const outputJson = path.join(jobDir, 'result.json');
     writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx, visibleWord });
-
-    job.status = 'queued';
-    persistJobsIndex();
-    await wordQueue.run(() => runConvertScript(inputJson, outputJson));
-    const result = readJsonFileNoBom(outputJson);
-    if (!result.ok) throw new Error(result.error || 'Nie udało się przetworzyć dokumentów.');
-
-    const okFiles = [];
-    const failed = [];
-    for (const item of result.results || []) {
-      if (item.ok && item.pdf && fs.existsSync(item.pdf)) okFiles.push({ file: path.basename(item.pdf), path: item.pdf });
-      else failed.push({ input: item.input, error: item.error || 'Nieznany błąd' });
-    }
-    if (!okFiles.length) throw new Error(failed[0]?.error || 'Nie utworzono żadnego PDF-a.');
-
-    job.status = failed.length ? 'finished-with-errors' : 'finished';
-    job.files = okFiles;
-    job.failed = failed;
+    job.total = manifestFiles.length;
     job.dateText = dateText;
     job.prefix = prefix;
-
-    let zipUrl = null;
-    let zipError = null;
-    if (okFiles.length > 1) {
-      const zipPath = path.join(jobDir, `wnioski-powykonawcze-${jobId.slice(0, 8)}.zip`);
-      try {
-        await zipDirectory(pdfDir, zipPath);
-        job.zipPath = zipPath;
-        zipUrl = `/api/jobs/${jobId}/zip`;
-      } catch (zipErr) {
-        zipError = String(zipErr?.message || zipErr);
-        job.zipPath = null;
-        job.zipError = zipError;
-        job.status = 'finished-with-errors';
-        console.error('[wm-zip]', zipError);
-      }
-    } else if (okFiles.length === 1) {
-      // Przy jednym PDF-ie ZIP nie jest potrzebny. W poprzedniej wersji blad ZIP-a
-      // potrafil oznaczac caly plik jako bledny mimo gotowego PDF-a.
-      job.zipPath = null;
-    }
-
     persistJobsIndex();
+    res.status(202).json({ ok: true, jobId, status: 'queued' });
 
-    const filesForResponse = okFiles.map(f => ({
-      file: f.file,
-      url: `/api/jobs/${jobId}/files/${encodeURIComponent(f.file)}`
-    }));
+    setImmediate(async () => {
+      try {
+        await wordQueue.run(async () => {
+          if (job.status === 'cancelled') return;
+          job.status = 'running';
+          persistJobsIndex();
+          await runConvertScript(inputJson, outputJson, job);
+        });
+        if (job.status === 'cancelled') return;
+        const result = readJsonFileNoBom(outputJson);
+        if (!result.ok) throw new Error(result.error || 'Nie udało się przetworzyć dokumentów.');
 
-    res.json({
-      ok: true,
-      jobId,
-      status: job.status,
-      count: okFiles.length,
-      failed,
-      files: filesForResponse,
-      queue: wordQueue.getState(),
-      zipUrl,
-      zipError
+        const okFiles = [];
+        const failed = [];
+        for (const item of result.results || []) {
+          if (item.ok && item.pdf && fs.existsSync(item.pdf)) okFiles.push({ file: path.basename(item.pdf), path: item.pdf });
+          else failed.push({ input: item.input, error: item.error || 'Nieznany błąd' });
+        }
+        if (!okFiles.length) throw new Error(failed[0]?.error || 'Nie utworzono żadnego PDF-a.');
+        job.files = okFiles;
+        job.failed = failed;
+        job.done = okFiles.length + failed.length;
+        job.status = failed.length ? 'finished-with-errors' : 'finished';
+
+        if (okFiles.length > 1) {
+          const zipPath = path.join(jobDir, `wnioski-powykonawcze-${jobId.slice(0, 8)}.zip`);
+          try {
+            await zipDirectory(pdfDir, zipPath);
+            job.zipPath = zipPath;
+          } catch (zipErr) {
+            job.zipError = String(zipErr?.message || zipErr);
+            job.zipPath = null;
+            job.status = 'finished-with-errors';
+          }
+        }
+        persistJobsIndex();
+      } catch (error) {
+        if (job.status !== 'cancelled') {
+          job.status = 'fatal-error';
+          job.error = error.message;
+          persistJobsIndex();
+        }
+      }
     });
   } catch (error) {
-    job.status = 'error';
+    job.status = 'fatal-error';
     job.error = error.message;
     persistJobsIndex();
     res.status(400).json({ ok: false, message: error.message });
   }
+});
+
+app.get('/api/jobs/:id', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
+  res.json({
+    ok: true,
+    job: {
+      id: job.id,
+      status: job.status,
+      interruptedReason: job.interruptedReason || null,
+      total: job.total || 0,
+      done: job.done || 0,
+      error: job.error || null,
+      failed: job.failed || [],
+      zipError: job.zipError || null,
+      zipUrl: job.zipPath ? `/api/jobs/${job.id}/zip` : null,
+      files: (job.files || []).map(file => ({ file: file.file, url: `/api/jobs/${job.id}/files/${encodeURIComponent(file.file)}` }))
+    }
+  });
+});
+
+app.post('/api/jobs/:id/cancel', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
+  if (['finished', 'finished-with-errors', 'cancelled', 'fatal-error'].includes(job.status)) {
+    return res.json({ ok: true, status: job.status, message: 'Zadanie jest już zakończone.' });
+  }
+  job.status = 'cancelled';
+  try { job.child?.kill(); } catch {}
+  job.child = null;
+  persistJobsIndex();
+  res.json({ ok: true, status: job.status });
+});
+
+app.get('/api/jobs/:id/download', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).send('Nie znaleziono zadania.');
+  if (job.zipPath && fs.existsSync(job.zipPath)) return res.download(job.zipPath, path.basename(job.zipPath));
+  const onlyFile = job.files?.length === 1 ? job.files[0] : null;
+  if (onlyFile?.path && fs.existsSync(onlyFile.path)) return res.download(onlyFile.path, onlyFile.file);
+  return res.status(404).send('Nie znaleziono gotowego pliku do pobrania.');
 });
 
 // Automatyczny tryb "caly folder WM": uzytkownik podaje tylko sciezke

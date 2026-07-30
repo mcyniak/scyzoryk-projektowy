@@ -9,6 +9,7 @@ function appMeta(app) {
   const bits = [];
   bits.push(app.processAlive ? 'proces żywy' : 'proces martwy');
   if (app.queue) bits.push(`kolejka: ${app.queue.queued || 0}${app.queue.active ? ' + aktywne' : ''}`);
+  if (app.child?.circuitOpen) bits.push(`blokada restartów: ${app.child.circuitReason || 'wymagany restart Scyzoryka'}`);
   if (app.child?.restarts) bits.push(`restarty: ${app.child.restarts}`);
   if (app.child?.lastExit) bits.push(`ostatnie wyjście: ${fmtTime(app.child.lastExit.at)}`);
   if (app.health?.ms != null) bits.push(`${app.health.ms} ms`);
@@ -39,9 +40,9 @@ async function refreshStatus() {
       const meta = card.querySelector('.card-meta');
       if (link && app.url) link.href = app.url;
       card.classList.toggle('disabled', !app.running);
-      card.classList.toggle('warn', Boolean(app.processAlive && !app.running));
+      card.classList.toggle('warn', Boolean((app.processAlive && !app.running) || app.child?.circuitOpen));
       if (badge) {
-        badge.textContent = app.running ? 'gotowe' : (app.processAlive ? 'uruchamianie' : 'restart');
+        badge.textContent = app.running ? 'gotowe' : (app.child?.circuitOpen ? 'awaria — uruchom ponownie Scyzoryka' : (app.processAlive ? 'uruchamianie' : 'restart'));
         badge.classList.toggle('online', Boolean(app.running));
         badge.classList.toggle('offline', !app.running);
       }

@@ -107,6 +107,19 @@
     return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  async function apiJson(url, options = {}) {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => null);
+    if (!response.ok || !data?.ok) {
+      const error = new Error(data?.message || `Błąd żądania (${response.status}).`);
+      error.status = response.status;
+      error.code = data?.code;
+      error.data = data;
+      throw error;
+    }
+    return data;
+  }
+
   filesInput.addEventListener('change', () => { addFiles(filesInput.files); filesInput.value = ''; });
 
   ['dragenter', 'dragover'].forEach(evt => {
@@ -252,9 +265,7 @@
   async function loadTemplateOptions() {
     templateSelect.innerHTML = '<option value="">— rozpoznaj automatycznie —</option>';
     try {
-      const res = await fetch('/api/ocr/templates');
-      const data = await res.json().catch(() => null);
-      if (!data?.ok) return;
+      const data = await apiJson('/api/ocr/templates');
       for (const tpl of data.templates || []) {
         const opt = document.createElement('option');
         opt.value = tpl.id;
@@ -372,13 +383,11 @@
     };
 
     try {
-      const res = await fetch('/api/ocr/extract-fields', {
+      const data = await apiJson('/api/ocr/extract-fields', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
         body: JSON.stringify(payload)
       });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.ok) throw new Error(data?.message || 'Nie udało się sprawdzić danych.');
 
       statusBox.hidden = true;
       const failed = (data.results || []).filter(r => !r.ok);
@@ -598,20 +607,14 @@
 
     const item = reviewQueue[queuePos];
     try {
-      const resp = await fetch('/api/ocr/mark-field-region', {
+      const data = await apiJson('/api/ocr/mark-field-region', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
         body: JSON.stringify({ analysisId, fileId: item.fileId, blockIndex: item.blockIndex, fieldKey: item.fieldKey, pageIndex: markPageIndex, region })
       });
-      const data = await resp.json();
-      if (data.ok) {
-        item.field.previewUrl = data.previewUrl;
-        item.field.pageIndex = markPageIndex;
-        renderCurrentField();
-      } else {
-        markError.hidden = false;
-        markError.textContent = data.message || 'Nie udało się zapisać zaznaczenia.';
-      }
+      item.field.previewUrl = data.previewUrl;
+      item.field.pageIndex = markPageIndex;
+      renderCurrentField();
     } catch (err) {
       markError.hidden = false;
       markError.textContent = `Nie udało się zapisać zaznaczenia: ${err.message}`;
@@ -647,19 +650,15 @@
     try {
       const item = reviewQueue[queuePos];
       const trimmed = typeof value === 'string' ? value.trim().slice(0, 300) : '';
-      try {
-        await fetch('/api/ocr/resolve-field', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
-          body: JSON.stringify({ analysisId, fileId: item.fileId, blockIndex: item.blockIndex, fieldKey: item.fieldKey, value })
-        });
-        // Aktualizacja LOKALNEGO stanu pola (serwer juz to ma, ale reviewQueue[...].field
-        // trzymalo dotad STARA wartosc z pierwszego przebiegu OCR) - potrzebne, zeby
-        // "Poprzednie pole" pokazywalo faktycznie ZAPISANA wartosc, nie te sprzed poprawki.
-        item.field.value = trimmed;
-        item.field.needsReview = false;
-        item.field.resolved = true;
-      } catch (_) { /* najgorszy przypadek: pole zostanie ponownie zaznaczone jako niepewne przy finalize */ }
+      await apiJson('/api/ocr/resolve-field', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+        body: JSON.stringify({ analysisId, fileId: item.fileId, blockIndex: item.blockIndex, fieldKey: item.fieldKey, value })
+      });
+      // Stan lokalny zmieniamy dopiero po potwierdzonym zapisie na serwerze.
+      item.field.value = trimmed;
+      item.field.needsReview = false;
+      item.field.resolved = true;
       queuePos += 1;
 
       // Czy WLASNIE przeszlismy z jednego bloku (adresu) do innego? Jesli tak - wykorzystaj
@@ -688,6 +687,8 @@
         fieldsQueueEl.hidden = true;
         excelStep.hidden = false;
       }
+    } catch (err) {
+      errorBox.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
     } finally {
       isProcessingField = false;
       setFormBusy(false);
@@ -700,14 +701,15 @@
   async function maybeRecalibrateFromBlock(sourceItem) {
     setStatus('Wykorzystuję sprawdzony adres jako wzór dla pozostałych...', 80);
     try {
-      const resp = await fetch('/api/ocr/recalibrate-remaining', {
+      const data = await apiJson('/api/ocr/recalibrate-remaining', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
         body: JSON.stringify({ analysisId, sourceFileId: sourceItem.fileId, sourceBlockIndex: sourceItem.blockIndex, family: selectedFamily || undefined })
       });
-      const data = await resp.json().catch(() => null);
-      if (data?.ok && data.updatedBlocks?.length) applyRecalibratedBlocks(data.updatedBlocks);
-    } catch (_) { /* best effort */ }
+      if (data.updatedBlocks?.length) applyRecalibratedBlocks(data.updatedBlocks);
+    } catch (err) {
+      errorBox.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+    }
     statusBox.hidden = true;
   }
 
@@ -747,18 +749,13 @@
     saveTemplateBtn.disabled = true;
     saveTemplateNote.hidden = true;
     try {
-      const resp = await fetch('/api/ocr/save-template', {
+      const data = await apiJson('/api/ocr/save-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
         body: JSON.stringify({ analysisId, fileId: file.fileId, blockIndex: block.blockIndex, label: label.trim() })
       });
-      const data = await resp.json();
       saveTemplateNote.hidden = false;
-      if (data.ok) {
-        saveTemplateNote.textContent = `Zapisano wzór (${data.textFieldsCount} pól tekstowych, ${data.groupFieldsCount} grup checkboxów) - kolejne adresy tej gminy skorzystają z niego automatycznie.`;
-      } else {
-        saveTemplateNote.textContent = `Nie udało się zapisać wzoru: ${data.message || 'nieznany błąd'}.`;
-      }
+      saveTemplateNote.textContent = `Zapisano wzór (${data.textFieldsCount} pól tekstowych, ${data.groupFieldsCount} grup checkboxów) - kolejne adresy tej gminy skorzystają z niego automatycznie.`;
     } catch (err) {
       saveTemplateNote.hidden = false;
       saveTemplateNote.textContent = `Nie udało się zapisać wzoru: ${err.message}.`;
@@ -787,13 +784,35 @@
     };
 
     try {
-      const res = await fetch('/api/ocr/finalize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
-        body: JSON.stringify(payload)
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.ok) throw new Error(data?.message || 'Nie udało się zapisać plików.');
+      let data;
+      try {
+        data = await apiJson('/api/ocr/finalize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+          body: JSON.stringify(payload)
+        });
+      } catch (err) {
+        if (err.code !== 'EXCEL_ALREADY_EXISTS') throw err;
+        const choice = window.prompt(
+          'Plik Excel już istnieje.\n\nWpisz 1 — wybierz inną nazwę\nWpisz 2 — nadpisz i zachowaj kopię zapasową\nWpisz 3 — anuluj',
+          '1'
+        );
+        if (choice === '1') {
+          statusBox.hidden = true;
+          excelPathInput.focus();
+          excelPathInput.select();
+          return;
+        }
+        if (choice !== '2') {
+          statusBox.hidden = true;
+          return;
+        }
+        data = await apiJson('/api/ocr/finalize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+          body: JSON.stringify({ ...payload, overwriteConfirmed: true })
+        });
+      }
 
       setStatus('Gotowe.', 100);
       statusBox.hidden = true;
@@ -813,7 +832,7 @@
         excelResultNote.hidden = false;
         excelResultNote.textContent = data.excelError
           ? `Pliki PDF zapisane, ale nie udało się zapisać Excela: ${data.excelError}`
-          : `Zapisano nowy plik Excela (${data.excelRowCount} ${data.excelRowCount === 1 ? 'adres' : 'adresów'}): ${data.excelPath}`;
+          : `Zapisano nowy plik Excela (${data.excelRowCount} ${data.excelRowCount === 1 ? 'adres' : 'adresów'}): ${data.excelPath}${data.excelBackupPath ? ` (kopia poprzedniego pliku: ${data.excelBackupPath})` : ''}`;
       } else {
         excelResultNote.hidden = true;
       }

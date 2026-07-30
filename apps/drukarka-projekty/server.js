@@ -5,21 +5,24 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom } = require("../../lib/hardening");
+const { getAppDataDir } = require("../../lib/appPaths");
 const { sessionMiddleware } = require("./lib/sessionStore");
 const excelInvestment = require("./src/excelInvestment");
 const folderMatch = require("./src/folderMatch");
 const wmFolder = require("./src/wmFolder");
 const printService = require("../../lib/printing");
+const { withPrintLease, PrintLeaseBusyError } = require("../../lib/printCoordinator");
 const pdfMerge = require("./src/pdfMerge");
 
 const app = express();
-setupProcessDiagnostics("drukarka-projekty", __dirname);
+const APP_DATA_ROOT = getAppDataDir("drukarka-projekty");
+setupProcessDiagnostics("drukarka-projekty", APP_DATA_ROOT);
 const PORT = Number(process.env.PORT || 3010);
 const HOST = process.env.SCYZORYK_HOST || "127.0.0.1";
 // Brak takiego limitu bylo niespojnoscia wobec apps/drukarka (MAX_QUEUE=200) -
 // skan WM potrafi realnie zwrocic 100+ pozycji z jednego folderu.
 const MAX_QUEUE = Number(process.env.DRUKARKA_PROJEKTY_MAX_QUEUE || 500);
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = path.join(APP_DATA_ROOT, "data");
 const LAST_FOLDERS_FILE = path.join(DATA_DIR, "ostatnie-foldery.json");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -470,6 +473,7 @@ app.get("/api/file/:id/preview", (req, res) => {
   res.sendFile(path.resolve(item.path));
 });
 
+app.get("/api/health", (req, res) => res.json({ ok: true, name: "drukarka-projekty", version: require("./package.json").version }));
 app.get("/api/status", (req, res) => res.json(req.session.status));
 
 app.post("/api/print", async (req, res) => {
@@ -489,6 +493,7 @@ app.post("/api/print", async (req, res) => {
       return res.status(400).json({ ok: false, message: "Nie udalo sie utworzyc kolejki przed drukiem: " + (err.message || err) });
     }
   }
+
   // Patrz analogiczny komentarz w apps/drukarka/server.js - bez
   // Number.isFinite niepoprawne (nieliczbowe) wejscie cicho dawalo NaN i
   // zero wyslanych kopii mimo odpowiedzi ok:true.
@@ -511,61 +516,88 @@ app.post("/api/print", async (req, res) => {
 
   if (!session.queue.length) return res.status(400).json({ ok: false, message: "Brak plikow w kolejce" });
 
-  session.printing = true;
-  const itemsToPrint = [...session.queue];
-  const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
-  const printerLabel = printerName ? ` na drukarke "${printerName}"` : "";
-
-  session.status = { printing: true, message: `Start drukowania: ${copies} kop.${printerLabel}`, current: 0, total: printJobs.length, percent: 0, done: false, error: null };
-  res.json({ ok: true });
-
   try {
-    // Bez tego wybor "Jednostronnie/Dwustronnie" w UI byl czystą dekoracją -
-    // serwer nigdy nie czytal ani nie stosowal sideMode, wiec druk zawsze
-    // wychodzil z takim ustawieniem duplexu, jakie akurat mial fizycznie
-    // ustawione sterownik drukarki (patrz audyt: prawdziwy, zywy blad).
-    const printerSetup = await printService.applyPrinterSides(sideMode, printerName);
-    if (!printerSetup.ok) session.status.message = printerSetup.message;
-    if (printerSetup.ok) await printService.wait(800);
+    await withPrintLease({ app: "drukarka-projekty", sessionId: req.sessionID || null, printerName }, async () => {
+      session.printing = true;
+      const itemsToPrint = [...session.queue];
+      const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
+      const printerLabel = printerName ? ` na drukarke "${printerName}"` : "";
 
-    for (let i = 0; i < printJobs.length; i++) {
-      const job = printJobs[i];
-      const item = job.item;
-      session.status.current = i + 1;
-      session.status.total = printJobs.length;
-      session.status.percent = Math.round((i / printJobs.length) * 100);
-      session.status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}: ${item.label ? item.label + " - " : ""}${item.originalName}`;
+      session.status = {
+        printing: true,
+        message: `Start drukowania: ${copies} kop.${printerLabel}`,
+        current: 0,
+        total: printJobs.length,
+        percent: 0,
+        done: false,
+        error: null
+      };
 
-      await printService.printFileWindows(item.path, printerName, {
-        cwd: __dirname,
-        logDir: DATA_DIR,
-        timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_PS_TIMEOUT_MS || 120000)
-      });
+      try {
+        res.json({ ok: true });
 
-      session.status.percent = Math.round(((i + 1) / printJobs.length) * 100);
-      await printService.wait(delaySeconds * 1000);
-    }
-    session.status.message = `✅ Wszystkie zadania wyslane do kolejki drukowania (${printJobs.length})`;
-    session.status.percent = 100;
-    session.status.done = true;
+        // Bez tego wybor "Jednostronnie/Dwustronnie" w UI byl czystą dekoracją -
+        // serwer nigdy nie czytal ani nie stosowal sideMode, wiec druk zawsze
+        // wychodzil z takim ustawieniem duplexu, jakie akurat mial fizycznie
+        // ustawione sterownik drukarki (patrz audyt: prawdziwy, zywy blad).
+        await printService.withPrinterSides(sideMode, printerName, async printerSetup => {
+          if (!printerSetup.ok) session.status.message = printerSetup.message;
+          if (printerSetup.ok) await printService.wait(800);
 
-    printService.closePdfAppsAfterBatch(__dirname);
+          for (let i = 0; i < printJobs.length; i++) {
+            const job = printJobs[i];
+            const item = job.item;
+            session.status.current = i + 1;
+            session.status.total = printJobs.length;
+            session.status.percent = Math.round((i / printJobs.length) * 100);
+            session.status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}: ${item.label ? item.label + " - " : ""}${item.originalName}`;
+
+            await printService.printFileWindows(item.path, printerName, {
+              cwd: __dirname,
+              logDir: DATA_DIR,
+              timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_PS_TIMEOUT_MS || 120000)
+            });
+
+            session.status.percent = Math.round(((i + 1) / printJobs.length) * 100);
+            await printService.wait(delaySeconds * 1000);
+          }
+        });
+
+        session.status.message = `✅ Wszystkie zadania wyslane do kolejki drukowania (${printJobs.length})`;
+        session.status.percent = 100;
+        session.status.done = true;
+      } catch (err) {
+        session.status.error = String(err.message || err);
+        session.status.message = "❌ Blad drukowania: " + session.status.error;
+      } finally {
+        // Kolejka NIE czyscila sie nigdy po druku (ani tu, ani we froncie) - drugi
+        // klik DRUKUJ po prostu wysylal cala kolejke jeszcze raz. Czyscimy JEJ
+        // referencje w pamieci zawsze (sukces i blad), tak jak juz robi
+        // apps/drukarka, zeby przypadkowy powtorny klik nie powielal fizycznego
+        // wydruku. Same PLIKI polaczonych PDF-ow NIE sa kasowane od razu tutaj -
+        // to robi ponizsze cleanupPrintedMergedFilesLater, z opoznieniem (patrz
+        // jego komentarz: Acrobat/Windows potrafi jeszcze czytac plik tuz po
+        // wyslaniu do druku).
+        session.queue = [];
+        cleanupPrintedMergedFilesLater(itemsToPrint, session);
+        session.printing = false;
+        session.status.printing = false;
+      }
+    });
   } catch (err) {
+    if (err instanceof PrintLeaseBusyError) {
+      return res.status(409).json({
+        ok: false,
+        code: "PRINT_LOCK_BUSY",
+        message: err.message,
+        owner: err.ownerMeta
+      });
+    }
+    if (!res.headersSent) {
+      return res.status(500).json({ ok: false, message: err.message || "Nie udalo sie rozpoczac drukowania." });
+    }
     session.status.error = String(err.message || err);
     session.status.message = "❌ Blad drukowania: " + session.status.error;
-  } finally {
-    // Kolejka NIE czyscila sie nigdy po druku (ani tu, ani we froncie) - drugi
-    // klik DRUKUJ po prostu wysylal cala kolejke jeszcze raz. Czyscimy JEJ
-    // referencje w pamieci zawsze (sukces i blad), tak jak juz robi
-    // apps/drukarka, zeby przypadkowy powtorny klik nie powielal fizycznego
-    // wydruku. Same PLIKI polaczonych PDF-ow NIE sa kasowane od razu tutaj -
-    // to robi ponizsze cleanupPrintedMergedFilesLater, z opoznieniem (patrz
-    // jego komentarz: Acrobat/Windows potrafi jeszcze czytac plik tuz po
-    // wyslaniu do druku).
-    session.queue = [];
-    cleanupPrintedMergedFilesLater(itemsToPrint, session);
-    session.printing = false;
-    session.status.printing = false;
   }
 });
 

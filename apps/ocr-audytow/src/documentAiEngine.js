@@ -10,9 +10,7 @@
 //
 // Konfiguracja jest czytana w tej kolejnosci:
 //   1. zmienne srodowiskowe OCR_DOCAI_*,
-//   2. plik dolaczony do wewnetrznego instalatora:
-//      apps/ocr-audytow/config/document-ai.json,
-//   3. plik uzytkownika:
+//   2. plik uzytkownika:
 //      %LOCALAPPDATA%/Scyzoryk/ocr-document-ai.json.
 //
 // Plik konfiguracyjny ma postac:
@@ -30,12 +28,18 @@ const path = require('path');
 const os = require('os');
 const { DocumentProcessorServiceClient } = require('@google-cloud/documentai').v1;
 
-const EMBEDDED_CONFIG_PATH = path.join(__dirname, '..', 'config', 'document-ai.json');
 const USER_CONFIG_PATH = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
   'Scyzoryk',
   'ocr-document-ai.json'
 );
+const MIME_TYPES = Object.freeze({
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff'
+});
 
 let cachedClient = null;
 let cachedClientSignature = null;
@@ -89,10 +93,8 @@ function getConfiguration() {
   const envConfig = getEnvironmentConfig();
   if (isComplete(envConfig)) return envConfig;
 
-  for (const configPath of [EMBEDDED_CONFIG_PATH, USER_CONFIG_PATH]) {
-    const fileConfig = normalizeFileConfig(configPath, readJsonFile(configPath));
-    if (isComplete(fileConfig)) return fileConfig;
-  }
+  const fileConfig = normalizeFileConfig(USER_CONFIG_PATH, readJsonFile(USER_CONFIG_PATH));
+  if (isComplete(fileConfig)) return fileConfig;
 
   return null;
 }
@@ -172,10 +174,11 @@ async function ocrImage(imagePath) {
   const client = getClient(config);
   const name = `projects/${config.projectId}/locations/${config.location}/processors/${config.processorId}`;
   const content = (await fs.readFile(imagePath)).toString('base64');
+  const mimeType = resolveMimeType(imagePath);
 
   const [result] = await client.processDocument({
     name,
-    rawDocument: { content, mimeType: 'image/jpeg' }
+    rawDocument: { content, mimeType }
   });
   const document = result.document;
   const fullText = document.text || '';
@@ -230,4 +233,14 @@ async function ocrImage(imagePath) {
   return { text: fullText, words, formFields, tables, visualElements };
 }
 
-module.exports = { isConfigured, getConfigurationStatus, ocrImage };
+function resolveMimeType(filePath) {
+  const extension = path.extname(String(filePath || '')).toLowerCase();
+  const mimeType = MIME_TYPES[extension];
+  if (mimeType) return mimeType;
+  if (extension === '.jp2' || extension === '.jpx') {
+    throw new Error('Google Document AI nie obsluguje obrazow JPEG 2000 (JP2/JPX). Ta strona zostanie skopiowana bez OCR.');
+  }
+  throw new Error(`Nieobslugiwany format obrazu OCR: ${extension || 'brak rozszerzenia'}.`);
+}
+
+module.exports = { isConfigured, getConfigurationStatus, ocrImage, resolveMimeType };

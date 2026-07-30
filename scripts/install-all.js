@@ -2,8 +2,10 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const { createRequire } = require('module');
 const fs = require('fs');
+const { hasDependencies } = require('../lib/dependencyCheck');
 
 const ROOT = path.join(__dirname, '..');
+const VERIFY_APP_HEALTH = path.join(ROOT, 'scripts', 'verify-app-health.js');
 const isWin = process.platform === 'win32';
 const npmCmd = process.env.NPM_CMD || (isWin ? 'npm.cmd' : 'npm');
 
@@ -76,13 +78,7 @@ function run(command, args, cwd, options = {}) {
 }
 
 function hasDeps(app) {
-  try {
-    const requireFromApp = createRequire(path.join(app.dir, 'server.js'));
-    for (const dep of app.deps) requireFromApp.resolve(`${dep}/package.json`);
-    return true;
-  } catch (_) {
-    return false;
-  }
+  return hasDependencies(app.dir, app.deps);
 }
 
 function hasChromium(app) {
@@ -120,6 +116,9 @@ for (const app of apps) {
       run(npmCmd, ['run', 'install-browsers'], app.dir, { attempts: 2 });
     }
   }
+
+  console.log('Sprawdzam endpoint /api/health...');
+  run(process.execPath, [VERIFY_APP_HEALTH, app.dir, path.basename(app.dir)], ROOT, { attempts: 1 });
 }
 
 console.log('\nGotowe. Mozesz uruchomic: node server.js albo start.cmd');

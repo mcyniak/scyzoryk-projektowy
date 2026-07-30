@@ -4,6 +4,8 @@ import process from 'node:process';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+const { getAppDataDir } = require('../../../lib/appPaths');
+const appDataRoot = getAppDataDir('formularze-ecodan');
 
 function ok(label, value = '') {
   console.log(`[OK] ${label}${value ? `: ${value}` : ''}`);
@@ -53,7 +55,7 @@ try {
   warn('Playwright cannot be loaded', error.message);
 }
 
-const dirs = ['output', 'uploads'];
+const dirs = [path.join(appDataRoot, 'output'), path.join(appDataRoot, 'uploads')];
 for (const dir of dirs) {
   try {
     fs.mkdirSync(dir, { recursive: true });

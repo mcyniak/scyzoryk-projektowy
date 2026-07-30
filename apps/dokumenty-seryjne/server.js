@@ -28,19 +28,19 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
+const { getAppDataDir } = require('../../lib/appPaths');
 const { detectMailMergeSheetBinding } = require('./src/mailMergeSheetBinding');
-
-
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 const ROOT = __dirname;
-setupProcessDiagnostics('dokumenty-seryjne', ROOT);
+const APP_DATA_ROOT = getAppDataDir('dokumenty-seryjne');
+setupProcessDiagnostics('dokumenty-seryjne', APP_DATA_ROOT);
 const wordQueue = createSerialQueue('dokumenty-seryjne-word');
-const DATA_DIR = path.join(ROOT, 'data');
-const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-const OUTPUT_DIR = path.join(DATA_DIR, 'output');
+const DATA_DIR = path.join(APP_DATA_ROOT, 'data');
+const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
+const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
 const MAX_FILE_MB = Number(process.env.SERYJNE_MAX_FILE_MB || 80);
 const MAX_ROWS = Number(process.env.SERYJNE_MAX_ROWS || 500);
 const JOB_TTL_MS = Number(process.env.SERYJNE_JOB_TTL_MS || 24 * 60 * 60 * 1000);
@@ -112,15 +112,7 @@ function persistJobsIndex() {
       template: job.template,
       templateGroups: job.templateGroups,
       excel: job.excel,
-      workbook: job.workbook ? {
-        sheetNames: job.workbook.sheetNames || [],
-        sheetName: job.workbook.sheetName || '',
-        columns: job.workbook.columns || [],
-        rows: job.workbook.rows || [],
-        totalRows: job.workbook.totalRows || 0,
-        truncatedAt: job.workbook.truncatedAt || null,
-        summaries: job.workbook.summaries || []
-      } : null
+      workbook: job.workbook || null
     }));
     writeJsonFileNoBom(JOBS_INDEX, { savedAt: new Date().toISOString(), jobs: items });
   } catch (err) {
@@ -133,7 +125,8 @@ function restoreJobsIndex() {
     if (!fs.existsSync(JOBS_INDEX)) return;
     const data = readJsonFileNoBom(JOBS_INDEX);
     for (const item of data.jobs || []) {
-      if (!item?.id || !item.outputDir || !fs.existsSync(item.outputDir)) continue;
+      if (!item?.id || !item.outputDir) continue;
+      const interrupted = ['running', 'queued', 'cancelling'].includes(item.status);
       jobs.set(item.id, {
         id: item.id,
         createdAt: Number(item.createdAt || Date.now()),
@@ -147,7 +140,8 @@ function restoreJobsIndex() {
         outputDir: item.outputDir,
         logPath: item.logPath || path.join(item.outputDir, 'log.txt'),
         debugJsonPath: item.debugJsonPath || path.join(item.outputDir, 'debug-events.jsonl'),
-        status: item.status || 'restored',
+        status: interrupted ? 'interrupted' : (item.status || 'restored'),
+        interruptedReason: interrupted ? 'process-restarted' : item.interruptedReason,
         progress: item.progress || { phase: 'restored', percent: 100, message: 'Zadanie odtworzone po restarcie.', updatedAt: nowIso() },
         logs: [],
         result: item.result || null,
@@ -339,8 +333,9 @@ function parseSheet(workbook, sheetName) {
   const parsedRows = worksheetRows(sheet.data || []);
   const filtered = parsedRows.rows.filter(row => Object.values(row).some(v => String(v || '').trim() !== ''));
   const columns = Object.keys(filtered[0] || {}).length ? Object.keys(filtered[0]) : parsedRows.columns.map(String).filter(Boolean);
-  const previewRows = filtered.slice(0, MAX_ROWS).map((row, index) => ({ _record: index + 1, ...row }));
-  return { sheetName, columns, rows: previewRows, totalRows: filtered.length, truncatedAt: filtered.length > MAX_ROWS ? MAX_ROWS : null };
+  const allRows = filtered.map((row, index) => ({ _record: index + 1, ...row }));
+  const previewRows = allRows.slice(0, MAX_ROWS);
+  return { sheetName, columns, rows: allRows, previewRows, totalRows: allRows.length, truncatedAt: allRows.length > MAX_ROWS ? MAX_ROWS : null };
 }
 
 function detectPowerFromText(text) {
@@ -595,13 +590,26 @@ async function parseWorkbook(filePath, preferredSheetName = '') {
     summaries.push({ name, totalRows: parsed.totalRows, columns: parsed.columns.length, suggestedAddressColumn: guessAddressColumn(parsed.columns) });
   }
   const selected = sheets[defaultSheet];
-  return { sheetNames, sheetName: defaultSheet, columns: selected.columns, rows: selected.rows, totalRows: selected.totalRows, truncatedAt: selected.truncatedAt, sheets, summaries };
+  return { sheetNames, sheetName: defaultSheet, columns: selected.columns, rows: selected.previewRows, totalRows: selected.totalRows, truncatedAt: selected.truncatedAt, sheets, summaries };
 }
 
 
 function getWorkbookSheet(workbook, sheetName) {
   const requested = String(sheetName || workbook.sheetName || '').trim();
   return (requested && workbook.sheets && workbook.sheets[requested]) || (workbook.sheets && workbook.sheets[workbook.sheetName]) || workbook;
+}
+
+function workbookPreview(workbook, sheetName) {
+  const sheet = getWorkbookSheet(workbook, sheetName);
+  return {
+    sheetNames: workbook.sheetNames,
+    sheetName: sheet.sheetName,
+    columns: sheet.columns,
+    rows: sheet.previewRows || sheet.rows?.slice(0, MAX_ROWS) || [],
+    totalRows: sheet.totalRows,
+    truncatedAt: sheet.truncatedAt,
+    summaries: workbook.summaries
+  };
 }
 
 function guessAddressColumn(columns) {
@@ -903,7 +911,7 @@ registerFolderRoutes(app, {
   contentDispositionHeader
 });
 
-app.get('/api/health', (req, res) => res.json({ ok: true, app: 'dokumenty-seryjne', queue: wordQueue.getState() }));
+app.get('/api/health', (req, res) => res.json({ ok: true, name: 'dokumenty-seryjne', queue: wordQueue.getState() }));
 
 app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxCount: 1 }, { name: 'templates', maxCount: 60 }, { name: 'excel', maxCount: 1 }]), async (req, res) => {
   try {
@@ -987,7 +995,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     res.json({
       ok: true,
       jobId,
-      workbook,
+      workbook: workbookPreview(workbook, workbook.sheetName),
       suggestedAddressColumn: guessAddressColumn(workbook.columns),
       suggestedUidColumn: guessUidColumn(workbook.columns),
       templateGroups: templateGroups.map(g => ({ name: g.name, hasVariants: g.hasVariants, variants: Object.keys(g.variants) })),
@@ -1006,7 +1014,25 @@ app.get('/api/sheet/:jobId/:sheetName', (req, res) => {
   const sheetName = req.params.sheetName;
   const sheet = getWorkbookSheet(job.workbook, sheetName);
   if (!sheet || sheet.sheetName !== sheetName) return res.status(404).json({ ok: false, message: 'Nie znaleziono arkusza w Excelu.' });
-  res.json({ ok: true, workbook: { ...sheet, sheetNames: job.workbook.sheetNames, summaries: job.workbook.summaries }, suggestedAddressColumn: guessAddressColumn(sheet.columns || []), suggestedUidColumn: guessUidColumn(sheet.columns || []) });
+  const missingColumns = validateReferenceColumns(sheet.columns);
+  if (missingColumns.length) {
+    return res.status(400).json({ ok: false, sheetName, missingColumns, message: `Arkusz "${sheetName}" nie ma wymaganych kolumn: ${missingColumns.join(', ')}.` });
+  }
+  res.json({ ok: true, workbook: workbookPreview(job.workbook, sheetName), suggestedAddressColumn: guessAddressColumn(sheet.columns || []), suggestedUidColumn: guessUidColumn(sheet.columns || []) });
+});
+
+app.get('/api/jobs/:jobId/sheets/:sheetName/rows', (req, res) => {
+  const job = getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
+  const sheet = getWorkbookSheet(job.workbook, req.params.sheetName);
+  if (!sheet || sheet.sheetName !== req.params.sheetName) return res.status(404).json({ ok: false, message: 'Nie znaleziono arkusza w Excelu.' });
+  const missingColumns = validateReferenceColumns(sheet.columns);
+  if (missingColumns.length) {
+    return res.status(400).json({ ok: false, sheetName: sheet.sheetName, missingColumns, message: `Arkusz "${sheet.sheetName}" nie ma wymaganych kolumn: ${missingColumns.join(', ')}.` });
+  }
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+  res.json({ ok: true, totalRows: sheet.rows.length, offset, limit, rows: sheet.rows.slice(offset, offset + limit) });
 });
 
 app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
@@ -1020,6 +1046,10 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
     const body = req.body || {};
     const sheetName = String(body.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
     const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
+    const missingColumns = validateReferenceColumns(selectedSheet?.columns || []);
+    if (missingColumns.length) {
+      return res.status(400).json({ ok: false, sheetName, missingColumns, message: `Arkusz "${sheetName}" nie ma wymaganych kolumn: ${missingColumns.join(', ')}.` });
+    }
     const selectedRowRecords = Array.isArray(body.selectedRows) ? body.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
     const selectedGroups = Array.isArray(body.selectedGroups) ? body.selectedGroups.filter(Boolean) : null;
 
@@ -1057,6 +1087,11 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
 app.post('/api/cancel/:jobId', async (req, res) => {
   const job = getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
+  if (job.status === 'interrupted') {
+    job.status = 'cancelled';
+    persistJobsIndex();
+    return res.json({ ok: true, message: 'Zadanie oznaczone jako anulowane.', status: job.status });
+  }
   if (job.status !== 'running' || !job.child) return res.json({ ok: true, message: 'Zadanie nie jest uruchomione.', status: job.status });
   appendLog(job, 'warn', 'Użytkownik przerwał generowanie.');
   try { job.child.kill(); } catch {}

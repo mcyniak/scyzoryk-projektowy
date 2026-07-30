@@ -16,7 +16,7 @@
     "jimp": "^1.6.1",
     "multer": "^2.0.2",
     "pdf-lib": "^1.17.1",
-    "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "4.8.69",
     "sanitize-filename": "^1.6.3",
     "xlsx": "^0.18.5"
   },

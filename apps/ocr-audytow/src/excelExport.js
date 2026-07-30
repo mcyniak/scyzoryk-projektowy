@@ -16,6 +16,7 @@
 // PRZED zapisem, zamiast zapisywac po jednym na blok).
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const XLSX = require('xlsx');
 const ExcelJS = require('exceljs');
 
@@ -30,16 +31,46 @@ function validatePath(filePath) {
 // `sheetName`, zawierajacym naglowek + jeden wiersz na kazdy element
 // `rowValuesList` (kazdy to obiekt { [columnKey]: wartosc }). `columns` to
 // uporzadkowana lista kluczy kolumn, `columnLabels` mapuje klucz na naglowek.
-function writeFreshRows(filePath, sheetName, columns, columnLabels, rowValuesList) {
+async function atomicWriteXlsx(filePath, writeTempFile) {
+  const extension = path.extname(filePath);
+  const baseName = path.basename(filePath, extension);
+  const tempPath = path.join(path.dirname(filePath), `.${baseName}-${crypto.randomUUID()}.tmp${extension}`);
+  const backupPath = fs.existsSync(filePath)
+    ? path.join(path.dirname(filePath), `${baseName}.backup-${new Date().toISOString().replace(/[:.]/g, '-')}${extension}`)
+    : null;
+  let targetMovedToBackup = false;
+
+  try {
+    await writeTempFile(tempPath);
+    const validationWorkbook = new ExcelJS.Workbook();
+    await validationWorkbook.xlsx.readFile(tempPath);
+    if (backupPath) {
+      await fs.promises.rename(filePath, backupPath);
+      targetMovedToBackup = true;
+    }
+    await fs.promises.rename(tempPath, filePath);
+    return { backupPath };
+  } catch (error) {
+    await fs.promises.rm(tempPath, { force: true }).catch(() => {});
+    if (targetMovedToBackup && backupPath && !fs.existsSync(filePath)) {
+      await fs.promises.rename(backupPath, filePath).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+async function writeFreshRows(filePath, sheetName, columns, columnLabels, rowValuesList) {
   validatePath(filePath);
   if (!sheetName) throw new Error('Nie podano nazwy arkusza.');
   const headerRow = columns.map((key) => columnLabels[key] || key);
   const dataRows = rowValuesList.map((rowValues) => columns.map((key) => rowValues[key] ?? ''));
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]), sheetName);
-  XLSX.writeFile(wb, filePath);
-  return { rowCount: dataRows.length };
+  const { backupPath } = await atomicWriteXlsx(filePath, async (tempPath) => {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]), sheetName);
+    XLSX.writeFile(wb, tempPath);
+  });
+  return { rowCount: dataRows.length, backupPath };
 }
 
 // Jak writeFreshRows, ale dla rodzin z wlasnym, prawdziwym firmowym wzorem
@@ -115,8 +146,8 @@ async function writeFamilyTemplateRows(templatePath, outputPath, sheetName, rowV
     row.commit();
   });
 
-  await workbook.xlsx.writeFile(outputPath);
-  return { rowCount: rowValuesList.length };
+  const { backupPath } = await atomicWriteXlsx(outputPath, (tempPath) => workbook.xlsx.writeFile(tempPath));
+  return { rowCount: rowValuesList.length, backupPath };
 }
 
-module.exports = { writeFreshRows, writeFamilyTemplateRows, validatePath };
+module.exports = { writeFreshRows, writeFamilyTemplateRows, atomicWriteXlsx, validatePath };

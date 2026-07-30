@@ -28,7 +28,8 @@ const fs = require('fs/promises');
 const path = require('path');
 const { PDFDocument } = require('pdf-lib');
 const { Jimp } = require('jimp');
-const { checkTextLayer } = require('./textLayerCheck');
+const { createSemaphore } = require('../../../lib/hardening');
+const { checkTextLayerByPage } = require('./textLayerCheck');
 const { extractPageImages } = require('./pdfImageExtractor');
 // Silnik OCR podmieniony 2026-07-22: Google Vision -> Google Document AI
 // (Form Parser) - ten sam interfejs {ocrImage, isConfigured}, patrz
@@ -82,12 +83,34 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-const OCR_PAGE_TIMEOUT_MS = 90000;
+const OCR_PAGE_TIMEOUT_MS = Number(process.env.OCR_PAGE_TIMEOUT_MS || 90000);
+const OCR_GLOBAL_CONCURRENCY = Number(process.env.OCR_GLOBAL_CONCURRENCY || 5);
+const globalOcrSemaphore = createSemaphore(OCR_GLOBAL_CONCURRENCY);
+
+function runWithGlobalOcrLimit(task) {
+  return globalOcrSemaphore.run(task);
+}
+
+async function inspectDocument(sourcePdfPath) {
+  const textPages = await checkTextLayerByPage(sourcePdfPath);
+  if (textPages.length) return { pageCount: textPages.length, pages: textPages };
+
+  const sourceDoc = await PDFDocument.load(await fs.readFile(sourcePdfPath), { updateMetadata: false });
+  const pageCount = sourceDoc.getPageCount();
+  return {
+    pageCount,
+    pages: Array.from({ length: pageCount }, (_, pageIndex) => ({
+      pageIndex,
+      hasTextLayer: false,
+      textLength: 0
+    }))
+  };
+}
 
 async function ocrPage(page) {
   try {
     const { text, words, formFields, tables, visualElements } = await withTimeout(
-      ocrImage(page.imagePath),
+      runWithGlobalOcrLimit(() => ocrImage(page.imagePath)),
       OCR_PAGE_TIMEOUT_MS,
       `Strona ${page.pageIndex + 1}: rozpoznawanie tekstu`
     );
@@ -112,14 +135,12 @@ async function assemblePdfRange({ sourcePdfPath, ocrPdfPath, pages, range, outPa
 
   const startPage = range?.startPage ?? 0;
   const endPage = range?.endPage ?? pages.length - 1;
-  let ocrPageCursor = pages.slice(0, startPage).filter((p) => p.imagePath).length;
 
   for (let i = startPage; i <= endPage; i++) {
     const info = pages[i];
-    if (info.imagePath) {
-      const [copied] = await finalDoc.copyPages(ocrDoc, [ocrPageCursor]);
+    if (Number.isInteger(info.ocrOutputIndex) && ocrDoc) {
+      const [copied] = await finalDoc.copyPages(ocrDoc, [info.ocrOutputIndex]);
       finalDoc.addPage(copied);
-      ocrPageCursor += 1;
     } else {
       const [copied] = await finalDoc.copyPages(sourceDoc, [info.pageIndex]);
       finalDoc.addPage(copied);
@@ -382,18 +403,27 @@ async function buildOcrPdf({ pages, outPath }) {
 // Zwraca `pages`+`ocrPdfPath` potrzebne finalizeSplit do pociecia JUZ
 // zrobionego OCR-u na finalne pliki (patrz assemblePdfRange) - OCR nigdy nie
 // jest powtarzany.
-async function analyzeDocument({ sourcePdfPath, workDir }) {
+async function analyzeDocument({ sourcePdfPath, workDir, inspection = null }) {
   await fs.mkdir(workDir, { recursive: true });
 
-  const textCheck = await checkTextLayer(sourcePdfPath);
-  if (textCheck.hasText) {
-    const sourceDoc = await PDFDocument.load(await fs.readFile(sourcePdfPath), { updateMetadata: false });
-    const pageCount = sourceDoc.getPageCount();
+  const inspected = inspection || await inspectDocument(sourcePdfPath);
+  const pageCount = inspected.pageCount;
+  const textLength = inspected.pages.reduce((sum, page) => sum + page.textLength, 0);
+  const needsOcrCount = inspected.pages.filter((page) => !page.hasTextLayer).length;
+
+  if (needsOcrCount === 0) {
     return {
       status: 'skipped-already-has-text',
-      textLength: textCheck.textLength,
+      textLength,
       pageCount,
-      pages: null,
+      pages: inspected.pages.map((page) => ({
+        pageIndex: page.pageIndex,
+        hasTextLayer: true,
+        needsOcr: false,
+        ocrOutputIndex: null,
+        imagePath: null,
+        ocrError: null
+      })),
       ocrPdfPath: null,
       avgConfidence: null,
       lowConfidenceRatio: 0,
@@ -407,32 +437,38 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
     throw new Error('Brak konfiguracji Google Document AI (OCR_DOCAI_KEY_FILE/OCR_DOCAI_PROJECT_ID/OCR_DOCAI_LOCATION/OCR_DOCAI_PROCESSOR_ID). Ustaw zmienne srodowiskowe i uruchom ponownie.');
   }
 
-  const { pageCount, pages: extractedPages } = await extractPageImages(sourcePdfPath, workDir);
+  const { pages: extractedPages } = await extractPageImages(sourcePdfPath, workDir);
+  const textByIndex = new Map(inspected.pages.map((page) => [page.pageIndex, page]));
+  let pages = extractedPages.map((page) => {
+    const hasTextLayer = Boolean(textByIndex.get(page.pageIndex)?.hasTextLayer);
+    return {
+      ...page,
+      hasTextLayer,
+      needsOcr: !hasTextLayer,
+      ocrOutputIndex: null,
+      ocrError: null
+    };
+  });
   const warnings = [];
-  const skippedPages = extractedPages.filter((p) => !p.imagePath);
+  const skippedPages = pages.filter((page) => page.needsOcr && !page.imagePath);
 
-  for (const p of skippedPages) {
-    warnings.push(`Strona ${p.pageIndex + 1}: brak rozpoznanego obrazu (${p.unsupportedFilter ? 'nieobslugiwany format: ' + p.unsupportedFilter : 'brak osadzonego obrazu'}) - skopiowana bez OCR.`);
-  }
-  // Rozpoznawanie tekstu KAZDEJ strony z obrazem, rownolegle (patrz
-  // mapWithConcurrency) - jedno zadanie na strone. Limit obnizony z 15
-  // (Vision) do 5 przy migracji na Document AI (2026-07-22) - Document AI's
-  // synchroniczne processDocument ma zazwyczaj nizszy domyslny limit
-  // zapytan/min niz Vision; jesli w praktyce (wieksze partie skanow) pojawia
-  // sie bledy quota/429, obnizyc dalej.
-  const imagedExtracted = extractedPages.filter((p) => p.imagePath);
-  const ocrResults = await mapWithConcurrency(imagedExtracted, 5, ocrPage);
-  const ocrByIndex = new Map(ocrResults.map((p) => [p.pageIndex, p]));
-  let pages = extractedPages.map((p) => ocrByIndex.get(p.pageIndex) || p);
-  for (const p of pages) {
-    if (p.ocrError) warnings.push(`Strona ${p.pageIndex + 1}: rozpoznawanie tekstu nie powiodlo sie (${p.ocrError}) - strona skopiowana bez OCR.`);
+  for (const page of skippedPages) {
+    warnings.push(`Strona ${page.pageIndex + 1}: brak rozpoznanego obrazu (${page.unsupportedFilter ? 'nieobslugiwany format: ' + page.unsupportedFilter : 'brak osadzonego obrazu'}) - skopiowana bez OCR.`);
   }
 
-  const imagedPages = pages.filter((p) => p.imagePath);
+  const imagedExtracted = pages.filter((page) => page.needsOcr && page.imagePath);
+  const ocrResults = await mapWithConcurrency(imagedExtracted, OCR_GLOBAL_CONCURRENCY, ocrPage);
+  const ocrByIndex = new Map(ocrResults.map((page) => [page.pageIndex, page]));
+  pages = pages.map((page) => ocrByIndex.get(page.pageIndex) || page);
+  for (const page of pages) {
+    if (page.ocrError) warnings.push(`Strona ${page.pageIndex + 1}: rozpoznawanie tekstu nie powiodlo sie (${page.ocrError}) - strona skopiowana bez warstwy OCR.`);
+  }
+
+  const imagedPages = pages.filter((page) => page.needsOcr && page.imagePath && !page.ocrError);
   if (!imagedPages.length) {
     return {
       status: 'no-ocr-possible',
-      textLength: textCheck.textLength,
+      textLength,
       pageCount,
       pages,
       ocrPdfPath: null,
@@ -444,6 +480,7 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
     };
   }
 
+  imagedPages.forEach((page, ocrOutputIndex) => { page.ocrOutputIndex = ocrOutputIndex; });
   const ocrOutPath = path.join(workDir, 'ocr-output.pdf');
   const { avgConfidence, lowConfidenceRatio } = await buildOcrPdf({ pages: imagedPages, outPath: ocrOutPath });
   if (avgConfidence !== null && avgConfidence < 70) {
@@ -461,7 +498,7 @@ async function analyzeDocument({ sourcePdfPath, workDir }) {
 
   return {
     status: 'ocr-done',
-    textLength: textCheck.textLength,
+    textLength,
     pageCount,
     pages,
     ocrPdfPath: ocrOutPath,
@@ -489,4 +526,14 @@ async function finalizeSplit({ sourcePdfPath, ocrPdfPath, pages, blocks, outPath
   }
 }
 
-module.exports = { analyzeDocument, finalizeSplit, assemblePdfRange, buildThumbnails, buildFieldPreview, cropPageRegion, computeFieldCropRect };
+module.exports = {
+  analyzeDocument,
+  inspectDocument,
+  finalizeSplit,
+  assemblePdfRange,
+  buildThumbnails,
+  buildFieldPreview,
+  cropPageRegion,
+  computeFieldCropRect,
+  runWithGlobalOcrLimit
+};

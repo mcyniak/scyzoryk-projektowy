@@ -87,25 +87,41 @@ function findAddressFolder(baseFolder, lpGmina) {
 // podfolderow (czesto dokumenty siedza w podfolderze np. "PDF" zamiast
 // bezposrednio w folderze adresu). Zwraca sciezki wzgledne wobec folderPath
 // (moga zawierac segment podfolderu, np. "PDF\Opis_techniczny.pdf").
+const MAX_SCAN_DEPTH = Number(process.env.DRUKARKA_PROJEKTY_MAX_SCAN_DEPTH || 8);
+const TEMP_FILE_PATTERNS = [/^~\$/, /\.tmp$/i, /\.temp$/i, /\.lock$/i, /^Thumbs\.db$/i, /^desktop\.ini$/i];
+
+function isTemporaryFile(fileName) {
+  const base = path.basename(fileName);
+  return TEMP_FILE_PATTERNS.some(re => re.test(base));
+}
+
 function scanFilesRecursive(folderPath) {
   const results = [];
-  const topEntries = fs.readdirSync(folderPath, { withFileTypes: true });
-  for (const e of topEntries) {
-    if (e.isFile()) {
-      results.push(e.name);
-    } else if (e.isDirectory()) {
-      let subEntries = [];
-      try { subEntries = fs.readdirSync(path.join(folderPath, e.name), { withFileTypes: true }); } catch (_) { continue; }
-      for (const se of subEntries) {
-        if (se.isFile()) results.push(path.join(e.name, se.name));
+  function walk(currentPath, relativePath, depth) {
+    if (depth > MAX_SCAN_DEPTH) return;
+    let entries;
+    try { entries = fs.readdirSync(currentPath, { withFileTypes: true }); } catch (_) { return; }
+    for (const entry of entries) {
+      const entryFull = path.join(currentPath, entry.name);
+      const entryRel = relativePath ? path.join(relativePath, entry.name) : entry.name;
+      // Dirent.isSymbolicLink() obejmuje standardowe symlinki i junctiony widziane
+      // przez Node. Nietypowe reparse points sterowników mogą wymagać osobnego API.
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isFile()) {
+        results.push(entryRel);
+      } else if (entry.isDirectory()) {
+        walk(entryFull, entryRel, depth + 1);
       }
     }
   }
+  walk(folderPath, '', 0);
   return results;
 }
 
 function classifyFiles(folderPath) {
-  const entries = scanFilesRecursive(folderPath);
+  const allEntries = scanFilesRecursive(folderPath);
+  const ignoredTemporary = allEntries.filter(isTemporaryFile);
+  const entries = allEntries.filter(name => !isTemporaryFile(name));
 
   const printableRaw = entries.filter(name => PRINTABLE_EXT.has(path.extname(name).toLowerCase()));
   const skipped = entries.filter(name => !PRINTABLE_EXT.has(path.extname(name).toLowerCase()));
@@ -115,9 +131,11 @@ function classifyFiles(folderPath) {
   const byBaseName = new Map();
   for (const name of printableRaw) {
     const ext = path.extname(name).toLowerCase();
+    const dir = path.dirname(name);
     const base = path.basename(name, ext).toLowerCase();
-    if (!byBaseName.has(base)) byBaseName.set(base, []);
-    byBaseName.get(base).push(name);
+    const key = `${normalize(dir)}|${base}`;
+    if (!byBaseName.has(key)) byBaseName.set(key, []);
+    byBaseName.get(key).push(name);
   }
   const printable = [];
   const droppedDuplicates = [];
@@ -146,7 +164,7 @@ function classifyFiles(folderPath) {
   if (printable.includes(techDescDocx)) usedSoFar.add(techDescDocx);
   const pool = printable.filter(n => !usedSoFar.has(n));
 
-  return { printable, skipped, droppedDuplicates, titlePage, techDescPdf, techDescDocx, drawingLike, otStVariants, pool };
+  return { printable, skipped, ignoredTemporary, droppedDuplicates, titlePage, techDescPdf, techDescDocx, drawingLike, otStVariants, pool };
 }
 
 async function extractText(folderPath, techDescDocx, techDescPdf) {
@@ -192,11 +210,11 @@ function extractAttachmentsList(text) {
   // "(?:[ąa]cznik|\\.)" (pelne slowo ALBO sama kropka po skrocie) i "\\s+"
   // (ktore juz samo w sobie obejmuje znaki nowej linii) laczace numer z
   // nazwa nawet gdy dzieli je pusta linia.
-  const re = /Za[łl](?:[ąa]cznik|\.)\s*nr\.?\s*(\d+)(?:\.\d+)?[.:]?\s+([^\n\r]+)/gi;
+  const re = /Za[łl](?:[ąa]cznik|\.)\s*nr\.?\s*(\d+(?:\.\d+)*)[.:]?\s+([^\n\r]+)/gi;
   const items = [];
   let m;
   while ((m = re.exec(text)) !== null) {
-    const num = Number(m[1]);
+    const num = m[1];
     const name = m[2].trim().replace(/\s{2,}/g, " ");
     if (name.length > 0 && name.length < 200) items.push({ num, name });
   }
@@ -206,7 +224,7 @@ function extractAttachmentsList(text) {
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  }).sort((a, b) => a.num - b.num);
+  }).sort((a, b) => compareAttachmentNumbers(a.num, b.num));
   const seenNum = new Set();
   const numbered = deduped.filter(it => {
     if (seenNum.has(it.num)) return false;
@@ -227,9 +245,19 @@ function extractAttachmentsList(text) {
   for (const line of lines) {
     const isHeading = /^[A-ZĄĆĘŁŃÓŚŹŻ0-9][A-ZĄĆĘŁŃÓŚŹŻ0-9 .:/-]{3,}$/.test(line) && line === line.toUpperCase();
     if (isHeading) break;
-    if (line.length > 0 && line.length < 200) fallback.push({ num: fallback.length + 1, name: line.replace(/\.$/, "") });
+    if (line.length > 0 && line.length < 200) fallback.push({ num: String(fallback.length + 1), name: line.replace(/\.$/, "") });
   }
   return fallback;
+}
+
+function compareAttachmentNumbers(a, b) {
+  const segA = String(a).split('.').map(Number);
+  const segB = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(segA.length, segB.length); i++) {
+    const diff = (segA[i] ?? 0) - (segB[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 const KEYWORD_MAP = [
@@ -379,4 +407,17 @@ function buildOrder(classified, attachmentsList, addressHint) {
   return order;
 }
 
-module.exports = { findAddressFolder, classifyFiles, detectByContent, extractText, extractAttachmentsList, buildOrder, normalize, addressTokens, filenameMatchesOwnAddress };
+module.exports = {
+  findAddressFolder,
+  scanFilesRecursive,
+  classifyFiles,
+  detectByContent,
+  extractText,
+  extractAttachmentsList,
+  compareAttachmentNumbers,
+  isTemporaryFile,
+  buildOrder,
+  normalize,
+  addressTokens,
+  filenameMatchesOwnAddress
+};

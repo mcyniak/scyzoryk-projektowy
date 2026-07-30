@@ -8,8 +8,14 @@ REM zainstalowanego globalnie na komputerze.
 set "PATH=%~dp0node-runtime;%PATH%"
 set "PLAYWRIGHT_BROWSERS_PATH=0"
 
-echo Zamykam stare procesy Node, jesli istnieja...
-taskkill /F /IM node.exe >nul 2>nul
+powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3000/api/health' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>nul
+if not errorlevel 1 (
+  start "" "http://127.0.0.1:3000"
+  exit /b 0
+)
+
+echo Zatrzymuje tylko osierocone procesy Scyzoryka, jesli istnieja...
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop-scyzoryk.ps1
 
 echo.
 echo Startuje Scyzoryk: http://127.0.0.1:3000

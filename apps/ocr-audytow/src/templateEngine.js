@@ -23,8 +23,9 @@ const fs = require('fs').promises;
 const path = require('path');
 const { computeFieldCropRect } = require('./ocrPipeline');
 const { FIELD_DEFS, extractField, toFieldResult } = require('./fieldExtraction');
+const { getAppDataDir } = require('../../../lib/appPaths');
 
-const TEMPLATES_DIR = path.join(__dirname, '..', 'data', 'templates');
+const TEMPLATES_DIR = path.join(getAppDataDir('ocr-audytow'), 'data', 'templates');
 
 function flattenText(text) {
   return String(text || '').replace(/\s+/g, ' ').toUpperCase();
@@ -107,15 +108,20 @@ async function loadTemplates() {
 }
 
 function matchTemplate(pages, block, templates) {
+  const matches = [];
   for (const tpl of templates) {
     const pageIdx = block.startPage + (tpl.headerPageIndexInBlock || 0);
     const page = pages[pageIdx];
     if (!page) continue;
     let re;
     try { re = new RegExp(tpl.headerPattern, 'i'); } catch (_) { continue; }
-    if (re.test(flattenText(page.ocrText))) return tpl;
+    const match = flattenText(page.ocrText).match(re);
+    if (match) matches.push({ template: tpl, score: match[0].replace(/\s+/g, ' ').trim().length });
   }
-  return null;
+  matches.sort((a, b) => b.score - a.score);
+  if (!matches.length) return null;
+  if (matches.length > 1 && matches[0].score === matches[1].score) return null;
+  return matches[0].template;
 }
 
 // --- Ekstrakcja przez wzor ---

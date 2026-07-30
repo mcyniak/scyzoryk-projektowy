@@ -1,4 +1,5 @@
 const XLSX = require("xlsx");
+const { isAffirmativeFlag } = require("../../../lib/businessFlags");
 
 // Przechowujemy ostatnio wgrany arkusz w pamięci procesu - to lokalne,
 // jednoosobowe narzędzie, więc nie potrzeba pełnej sesyjności. Wpisy nigdy
@@ -113,9 +114,7 @@ function isTruthyMark(value) {
 }
 
 function isRezygnacja(value) {
-  if (value === null || value === undefined || value === "") return false;
-  const s = String(value).trim().toLowerCase();
-  return s === "tak" || s === "x" || s === "+" || s === "rezygnacja";
+  return isAffirmativeFlag(value);
 }
 
 // Zwraca liste kandydatow (bez zaznaczonego odbioru i bez rezygnacji),

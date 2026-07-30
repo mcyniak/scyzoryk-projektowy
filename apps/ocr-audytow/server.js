@@ -9,25 +9,30 @@ const path = require('path');
 const crypto = require('crypto');
 const { Jimp } = require('jimp');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
-const { analyzeDocument, finalizeSplit, buildFieldPreview, cropPageRegion } = require('./src/ocrPipeline');
+const { getAppDataDir } = require('../../lib/appPaths');
+const { analyzeDocument, inspectDocument, finalizeSplit, buildFieldPreview, cropPageRegion, runWithGlobalOcrLimit } = require('./src/ocrPipeline');
 const { isConfigured: isOcrConfigured, ocrImage: docAiOcrImage } = require('./src/documentAiEngine');
 const { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS } = require('./src/fieldExtraction');
-const { writeFreshRows, validatePath: validateExcelPath } = require('./src/excelExport');
+const { writeFreshRows, writeFamilyTemplateRows, validatePath: validateExcelPath } = require('./src/excelExport');
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
 const { loadTemplates, matchTemplate, extractFieldsFromTemplate, buildTemplateFromReview, harvestTemplateFields } = require('./src/templateEngine');
+const { validateOcrBatchInspections } = require('./src/ocrLimits');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 const ROOT = __dirname;
-setupProcessDiagnostics('ocr-audytow', ROOT);
+const APP_DATA_ROOT = getAppDataDir('ocr-audytow');
+setupProcessDiagnostics('ocr-audytow', APP_DATA_ROOT);
 
-const DATA_DIR = path.join(ROOT, 'data');
-const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-const OUTPUT_DIR = path.join(DATA_DIR, 'output');
-const ANALYSIS_DIR = path.join(DATA_DIR, 'analysis');
+const DATA_DIR = path.join(APP_DATA_ROOT, 'data');
+const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
+const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
+const ANALYSIS_DIR = path.join(APP_DATA_ROOT, 'analysis');
 const MAX_FILE_MB = Number(process.env.OCR_MAX_FILE_MB || 100);
 const MAX_FILES = Number(process.env.OCR_MAX_FILES || 20);
+const OCR_MAX_TOTAL_PAGES = Number(process.env.OCR_MAX_TOTAL_PAGES || 300);
+const OCR_MAX_PAGES_PER_FILE = Number(process.env.OCR_MAX_PAGES_PER_FILE || 60);
 const JOB_TTL_MS = Number(process.env.OCR_JOB_TTL_MS || 24 * 60 * 60 * 1000);
 // Krotszy TTL niz JOB_TTL_MS: sesja analizy to tylko przegladanie/poprawianie
 // podzialu na bloki przed pobraniem, nie docelowe miejsce przechowywania plikow -
@@ -99,6 +104,20 @@ const jobs = new Map();
 // patrz src/ocrPipeline.js.
 const analyses = new Map();
 
+async function touchAnalysis(analysis) {
+  if (!analysis) return;
+  analysis.lastActivityAt = Date.now();
+  await fsp.utimes(analysis.dir, new Date(), new Date()).catch(() => {});
+}
+
+app.use('/api', (req, res, next) => {
+  const urlMatch = req.path.match(/^\/analysis\/([^/]+)/);
+  const analysisId = req.body?.analysisId || urlMatch?.[1];
+  const analysis = analysisId ? analyses.get(analysisId) : null;
+  if (analysis) touchAnalysis(analysis).catch(() => {});
+  next();
+});
+
 function decodeOriginalName(name) {
   try { return Buffer.from(name, 'latin1').toString('utf8'); } catch { return name; }
 }
@@ -161,6 +180,9 @@ setInterval(() => cleanupOldJobs().catch(err => console.error('[ocr-cleanup]', e
 
 async function purgeAnalysis(analysis) {
   await fsp.rm(analysis.dir, { recursive: true, force: true }).catch(() => {});
+  for (const uploadPath of analysis.uploadPaths || []) {
+    await fsp.rm(uploadPath, { force: true }).catch(() => {});
+  }
   for (const fileEntry of analysis.files.values()) {
     await fsp.rm(fileEntry.sourcePdfPath, { force: true }).catch(() => {});
   }
@@ -169,7 +191,7 @@ async function purgeAnalysis(analysis) {
 async function cleanupOldAnalyses() {
   const now = Date.now();
   for (const [id, analysis] of analyses) {
-    if (now - analysis.createdAt <= ANALYSIS_TTL_MS) continue;
+    if (now - analysis.lastActivityAt <= ANALYSIS_TTL_MS) continue;
     await purgeAnalysis(analysis);
     analyses.delete(id);
   }
@@ -194,15 +216,29 @@ app.post('/api/ocr/analyze', heavyJobLimiter, upload.array('files', MAX_FILES), 
   // nizej, mergeHarvestedIntoTemplate) - NIE jest zastepowany za kazdym razem swiezym
   // wzorem z tylko-co-skonczonego bloku, zeby wiedza z WCZESNIEJSZYCH adresow (zwlaszcza
   // reczne zaznaczenia uzytkownika) nie ginela, gdy kolejny adres dostarczy nowy wzor.
-  const analysis = { id: analysisId, createdAt: Date.now(), dir: analysisDir, files: new Map(), templateState: { textFields: [], groupFields: [] } };
+  const analysis = { id: analysisId, createdAt: Date.now(), lastActivityAt: Date.now(), dir: analysisDir, files: new Map(), uploadPaths: [], templateState: { textFields: [], groupFields: [] } };
 
   try {
     const files = req.files || [];
+    analysis.uploadPaths = files.map((file) => file.path);
     if (!files.length) throw new Error('Dodaj przynajmniej jeden plik PDF.');
     for (const file of files) validatePdf(file);
 
     await fsp.mkdir(analysisDir, { recursive: true });
+    const inspections = new Map();
+    const inspectionEntries = [];
+    for (const file of files) {
+      const inspection = await inspectDocument(file.path);
+      const original = decodeOriginalName(file.originalname || path.basename(file.path));
+      inspectionEntries.push({ originalName: original, inspection });
+      inspections.set(file.path, inspection);
+    }
+    validateOcrBatchInspections(inspectionEntries, {
+      maxTotalPages: OCR_MAX_TOTAL_PAGES,
+      maxPagesPerFile: OCR_MAX_PAGES_PER_FILE
+    });
     analyses.set(analysisId, analysis);
+    await touchAnalysis(analysis);
 
     const results = [];
     for (const file of files) {
@@ -211,7 +247,7 @@ app.post('/api/ocr/analyze', heavyJobLimiter, upload.array('files', MAX_FILES), 
       const baseName = safeName(path.basename(original, path.extname(original)), 'audyt');
       const workDir = path.join(analysisDir, fileId);
       try {
-        const result = await analyzeDocument({ sourcePdfPath: file.path, workDir, lang: 'pol' });
+        const result = await analyzeDocument({ sourcePdfPath: file.path, workDir, inspection: inspections.get(file.path) });
         analysis.files.set(fileId, {
           fileId,
           originalName: original,
@@ -281,8 +317,8 @@ app.get('/api/analysis/:analysisId/files/:fileId/page/:pageIndex', (req, res) =>
   if (!fileEntry) return res.status(404).send('Nie znaleziono strony.');
   const pageIndex = Number(req.params.pageIndex);
   if (!Number.isInteger(pageIndex) || pageIndex < 0) return res.status(400).send('Nieprawidlowy numer strony.');
-  const fileName = `page-${String(pageIndex + 1).padStart(3, '0')}.jpg`;
-  const filePath = path.join(fileEntry.workDir, safeName(fileName, 'page.jpg'));
+  const filePath = fileEntry.pages?.find((page) => page.pageIndex === pageIndex)?.imagePath;
+  if (!filePath) return res.status(404).send('Nie znaleziono strony.');
   if (!filePath.startsWith(fileEntry.workDir) || !fs.existsSync(filePath)) return res.status(404).send('Nie znaleziono strony.');
   res.sendFile(filePath);
 });
@@ -297,7 +333,7 @@ function trivialFields() {
   const fields = {};
   for (const key of COLUMN_ORDER) {
     if (key === 'adres') continue;
-    fields[key] = { value: '', confidence: null, needsReview: false, resolved: true, pageIndex: null, labelBBox: null, valueBBox: null };
+    fields[key] = { value: '', confidence: null, needsReview: true, resolved: false, pageIndex: null, labelBBox: null, valueBBox: null };
   }
   return fields;
 }
@@ -350,6 +386,34 @@ function fillMissingFieldsFromTemplate(pages, block, templateFields, allowedKeys
   return { ...fallbackFields, ...templateFields };
 }
 
+function normalizedBlockHeader(fileEntry, block) {
+  const page = fileEntry.pages?.find((item) => item.pageIndex === block.startPage);
+  return String(page?.ocrText || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .slice(0, 160);
+}
+
+function blockLayoutFingerprint(fileEntry, block) {
+  return (fileEntry.pages || [])
+    .filter((page) => page.pageIndex >= block.startPage && page.pageIndex <= block.endPage)
+    .map((page) => `${Math.round((page.width || 0) / 50)}x${Math.round((page.height || 0) / 50)}`)
+    .join('|');
+}
+
+function calibrationGroupKey({ fileEntry, block, forcedTemplate, usedTemplate }) {
+  if (forcedTemplate?.id) return `manual-template:${forcedTemplate.id}`;
+  if (usedTemplate?.id) return `matched-template:${usedTemplate.id}`;
+  const header = normalizedBlockHeader(fileEntry, block);
+  if (header.length >= 20) return `header:${header}`;
+  const layout = blockLayoutFingerprint(fileEntry, block);
+  if (layout) return `layout:${layout}`;
+  return `file:${fileEntry.fileId}`;
+}
+
 // Buduje podglady (+ retry-with-crop dla pol NIE z wzoru) dla wszystkich pol needsReview
 // jednego bloku - wydzielone z /api/ocr/extract-fields (2026-07-23), zeby ta sama logika
 // dala sie reuzyc w /api/ocr/recalibrate-remaining bez duplikowania.
@@ -385,7 +449,7 @@ async function retryFieldWithCrop({ field, key, page, refBBox, sourceImage, prev
   try {
     const built = await cropPageRegion({ pageImagePath: page.imagePath, bbox: refBBox, outPath: cropPath, sourceImage });
     if (!built) return;
-    const { text, words, formFields, tables, visualElements } = await docAiOcrImage(cropPath);
+    const { text, words, formFields, tables, visualElements } = await runWithGlobalOcrLimit(() => docAiOcrImage(cropPath));
     const miniPage = { pageIndex: field.pageIndex, ocrText: text, ocrWords: words, formFields: formFields || [], tables: tables || [], visualElements: visualElements || [] };
     const retried = extractSingleField(miniPage, key);
     if (!retried) return;
@@ -502,7 +566,13 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
 
           await buildPreviewsForBlock({ fields, fileEntry, blockIndex, previewDir, analysisId, loadPageImage });
 
-          resolvedBlocks.push({ ...block, blockIndex, fields, matchedTemplateLabel: usedTemplate?.label || null });
+          resolvedBlocks.push({
+            ...block,
+            blockIndex,
+            fields,
+            matchedTemplateLabel: usedTemplate?.label || null,
+            calibrationGroupKey: calibrationGroupKey({ fileEntry, block, forcedTemplate, usedTemplate })
+          });
         }
 
         fileEntry.resolvedBlocks = resolvedBlocks;
@@ -601,12 +671,15 @@ app.post('/api/ocr/recalibrate-remaining', heavyJobLimiter, async (req, res) => 
   } catch (err) {
     return res.status(500).json({ ok: false, message: err.message || 'Nie udało się skalibrować z tego adresu.' });
   }
-  if (!analysis.templateState) analysis.templateState = { textFields: [], groupFields: [] };
-  mergeHarvestedIntoTemplate(analysis.templateState, harvested);
-  if (!analysis.templateState.textFields.length && !analysis.templateState.groupFields.length) {
+  const sourceGroupKey = sourceBlock.calibrationGroupKey || `file:${sourceFileEntry.fileId}`;
+  if (!analysis.templateStates) analysis.templateStates = new Map();
+  const templateState = analysis.templateStates.get(sourceGroupKey) || { textFields: [], groupFields: [] };
+  mergeHarvestedIntoTemplate(templateState, harvested);
+  analysis.templateStates.set(sourceGroupKey, templateState);
+  if (!templateState.textFields.length && !templateState.groupFields.length) {
     return res.json({ ok: true, updatedBlocks: [] });
   }
-  const inMemoryTemplate = { textFields: analysis.templateState.textFields, groupFields: analysis.templateState.groupFields };
+  const inMemoryTemplate = { textFields: templateState.textFields, groupFields: templateState.groupFields };
   const loadPageImage = makePageImageLoader();
 
   const updatedBlocks = [];
@@ -615,6 +688,7 @@ app.post('/api/ocr/recalibrate-remaining', heavyJobLimiter, async (req, res) => 
     for (let blockIndex = 0; blockIndex < fileEntry.resolvedBlocks.length; blockIndex++) {
       if (fileEntry.fileId === sourceFileId && blockIndex === sourceBlockIndex) continue;
       const block = fileEntry.resolvedBlocks[blockIndex];
+      if (block.calibrationGroupKey !== sourceGroupKey) continue;
       // Realny problem zlapany 2026-07-24: to wywolanie teraz odpala sie PO KAZDYM
       // bloku (nie tylko raz po pierwszym - patrz app.js), zeby pole, ktorego adres 1
       // nie zdolal zlokalizowac (uzytkownik po prostu wpisal wartosc recznie, bez
@@ -843,7 +917,7 @@ function validateBlocks(blocks, pageCount) {
 // jesli dla ktoregos bloku zostaly nierozstrzygniete pola do przegladu,
 // finalizacja jest BLOKOWANA (wymaga tego kompletnosc tabelki, patrz plan).
 app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
-  const { analysisId, files: requestedFiles, excelPath, family } = req.body || {};
+  const { analysisId, files: requestedFiles, excelPath, family, overwriteConfirmed } = req.body || {};
   const analysis = analyses.get(analysisId);
   if (!analysis) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła lub nie istnieje - wgraj pliki ponownie.' });
   if (!Array.isArray(requestedFiles) || !requestedFiles.length) {
@@ -855,6 +929,13 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     }
     if (family && !TABELA_FAMILIES[family]) {
       return res.status(400).json({ ok: false, message: 'Nieznana rodzina protokołu.' });
+    }
+    if (fs.existsSync(excelPath) && overwriteConfirmed !== true) {
+      return res.status(409).json({
+        ok: false,
+        code: 'EXCEL_ALREADY_EXISTS',
+        message: 'Plik Excel już istnieje. Wybierz inną nazwę albo potwierdź nadpisanie z kopią zapasową.'
+      });
     }
   }
 
@@ -882,7 +963,7 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
         continue;
       }
 
-      const unresolved = fileEntry.resolvedBlocks.some((b) => Object.values(b.fields).some((f) => f.needsReview));
+      const unresolved = excelPath && fileEntry.resolvedBlocks.some((b) => Object.values(b.fields).some((f) => f.needsReview || !f.resolved));
       if (unresolved) {
         results.push({ ok: false, originalName: fileEntry.originalName, error: 'Ten plik ma jeszcze nieuzupełnione pola - dokończ "Uzupełnij dane" przed pobraniem.' });
         continue;
@@ -943,14 +1024,21 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     // wyslanych adresow"). Zapisywane PO petli (nie per-blok), zeby jedno wywolanie
     // writeFreshRows objelo caly zestaw wierszy tej paczki naraz.
     let excelError = null;
+    let excelBackupPath = null;
     if (excelPath && excelRows.length) {
       try {
         if (family) {
-          const { sheetName, columns } = TABELA_FAMILIES[family];
-          const identityLabels = Object.fromEntries(columns.map((c) => [c.label, c.label]));
-          writeFreshRows(excelPath, sheetName, columns.map((c) => c.label), identityLabels, excelRows);
+          const definition = TABELA_FAMILIES[family];
+          const written = await writeFamilyTemplateRows(
+            definition.templateFile,
+            excelPath,
+            definition.sheetName,
+            excelRows
+          );
+          excelBackupPath = written.backupPath;
         } else {
-          writeFreshRows(excelPath, 'Audyty', COLUMN_ORDER, COLUMN_LABELS, excelRows);
+          const written = await writeFreshRows(excelPath, 'Audyty', COLUMN_ORDER, COLUMN_LABELS, excelRows);
+          excelBackupPath = written.backupPath;
         }
       } catch (err) {
         excelError = err.message || 'Nie udało się zapisać pliku Excel.';
@@ -963,7 +1051,7 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     // odcinalo to calkowicie (endpoint /api/ocr/save-template dostawal "sesja wygasla").
     // Sesja i tak zniknie sama przez istniejacy TTL (cleanupOldAnalyses, ANALYSIS_TTL_MS
     // = 2h domyslnie) - wystarczajaco duzo czasu, zeby po fakcie zdecydowac o wzorze.
-    res.json({ ok: true, jobId, results, excelPath: excelPath || null, excelRowCount: excelRows.length, excelError });
+    res.json({ ok: true, jobId, results, excelPath: excelPath || null, excelBackupPath, excelRowCount: excelRows.length, excelError });
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
   }

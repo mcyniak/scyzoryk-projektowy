@@ -233,9 +233,37 @@ let activeJob = null;
     async function pollStatus() {
       if (!activeJob) return;
       const res = await fetch(`/api/batch/status/${activeJob}`);
-      const json = await res.json();
-      if (!json.ok) return;
+      if (res.status === 404) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        activeJob = null;
+        document.querySelector('#finishInfo').textContent = 'To zadanie już nie istnieje (prawdopodobnie restart panelu). Uruchom generowanie ponownie.';
+        document.querySelector('#startBatch').disabled = false;
+        return;
+      }
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        document.querySelector('#finishInfo').textContent = json?.error || 'Błąd odczytu statusu zadania.';
+        return;
+      }
       const job = json.job;
+      const outputWarning = document.querySelector('#outputPathWarning');
+      if (job.outputPathWarning) {
+        outputWarning.textContent = `Wybrana ścieżka zapisu została odrzucona: ${job.outputPathWarning}. Wyniki zapisano w: ${job.outputPath || job.outputDir || job.outputRootDisplay || job.pdfDirDisplay || '-'}`;
+        outputWarning.classList.remove('hidden');
+      } else {
+        outputWarning.classList.add('hidden');
+      }
+      if (job.status === 'interrupted') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        activeJob = null;
+        document.querySelector('#finishInfo').textContent = 'Zadanie zostało przerwane przez restart panelu. Możesz uruchomić je ponownie.';
+        document.querySelector('#startBatch').disabled = false;
+        return;
+      }
 
       const total = job.total || 0;
       const done = job.done || 0;

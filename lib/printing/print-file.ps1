@@ -32,7 +32,7 @@ $AcrobatPath = "C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
 if (-not (Test-Path $AcrobatPath)) {
   $AcrobatPath = "C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe"
 }
-$useTargetedPrinter = ($PrinterName -and $PrinterName.Trim() -and ((Test-Path $SumatraPath) -or (Test-Path $AcrobatPath)))
+$hasTargetedPrinter = ($PrinterName -and $PrinterName.Trim())
 
 function Get-DefaultPrinterName {
   try {
@@ -115,32 +115,40 @@ function Restore-Foreground([IntPtr]$target) {
   } catch {}
 }
 
-function Set-WindowMinimized([IntPtr]$handle) {
-  try { if ($handle -ne [IntPtr]::Zero) { [void][ScyzorykFocusGuard]::ShowWindowAsync($handle, 6) } } catch {}
-}
-
-function Set-PrintAppWindowsMinimized {
-  try {
-    $pids = New-Object 'System.Collections.Generic.HashSet[uint32]'
-    foreach ($name in @('Acrobat','AcroRd32','WINWORD','SumatraPDF')) {
-      Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object { [void]$pids.Add([uint32]$_.Id) }
-    }
-    if ($pids.Count -eq 0) { return }
-    $handles = [ScyzorykFocusGuard]::FindVisibleWindowsForProcesses($pids)
-    foreach ($h in $handles) { Set-WindowMinimized $h }
-  } catch {}
-}
-
 $originalForeground = [IntPtr]::Zero
 try { $originalForeground = [ScyzorykFocusGuard]::GetForegroundWindow() } catch {}
-Set-PrintAppWindowsMinimized
 
-$printerName = if ($useTargetedPrinter) { $PrinterName.Trim() } else { Get-DefaultPrinterName }
+$printerName = if ($hasTargetedPrinter) { $PrinterName.Trim() } else { Get-DefaultPrinterName }
 $jobIdsBefore = Get-PrintJobIds $printerName
 
 function Invoke-PrintWithShell([string]$path) {
   try { return Start-Process -FilePath $path -Verb Print -PassThru -WindowStyle Hidden }
   catch { return Start-Process -FilePath $path -Verb Print -PassThru }
+}
+
+function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
+  $word = $null
+  $doc = $null
+  try {
+    $word = New-Object -ComObject Word.Application
+    $word.Visible = $false
+    $word.DisplayAlerts = 0
+    $word.AutomationSecurity = 3
+
+    $doc = $word.Documents.Open($FilePath, [ref]$false, [ref]$true)
+    if ($PrinterName) { $word.ActivePrinter = $PrinterName }
+    $doc.PrintOut()
+
+    # Czekamy, az utworzona przez nas instancja Worda przekaze zadanie do spoolera.
+    while ($word.BackgroundPrintingStatus -ne 0) { Start-Sleep -Milliseconds 200 }
+  } finally {
+    if ($doc) { try { $doc.Close([ref]$false) } catch {} }
+    if ($word) { try { $word.Quit() } catch {} }
+    if ($doc) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($doc) | Out-Null }
+    if ($word) { [System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($word) | Out-Null }
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
+  }
 }
 
 function Quote-CmdArg([string]$value) { return '"' + $value.Replace('"', '\"') + '"' }
@@ -178,14 +186,11 @@ function Invoke-PrintWithAcrobat([string]$path, [string]$targetPrinter) {
 
 # WAZNE: Sumatra i Acrobat "/t" umieja drukowac TYLKO pliki PDF. Dla Worda
 # (.docx) i innych formatow proba przez ktoregokolwiek z nich zawsze
-# zawodzi (i tylko marnuje czas na oczekiwanie) - dla plikow nie-PDF od
-# razu uzywamy zwyklego "otworz i wydrukuj przez skojarzony program"
-# (Word), co realnie dziala, ale nie pozwala wybrac innej niz domyslna
-# drukarki systemu (to jest dzisiejsze ograniczenie, nie da sie tego
-# latwo obejsc bez prawdziwej automatyzacji Worda).
+# zawodzi. Dla plikow Worda tworzymy wlasna, niewidoczna instancje COM,
+# zeby zastosowac drukarke wybrana w panelu i nie dotykac Worda uzytkownika.
 $isPdf = $FilePath.ToLower().EndsWith(".pdf")
 
-if ($useTargetedPrinter -and $isPdf) {
+if ($hasTargetedPrinter -and $isPdf) {
   $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName
   if (-not $sent) {
     Write-PrintLog "Sumatra nie wyslala - probuje Acrobata"
@@ -193,10 +198,9 @@ if ($useTargetedPrinter -and $isPdf) {
     Write-PrintLog "Acrobat wynik: $sent"
   }
   if (-not $sent) { $null = Invoke-PrintWithShell -path $FilePath }
+} elseif (-not $isPdf) {
+  Invoke-PrintWithWordCom -FilePath $FilePath -PrinterName $printerName
 } else {
-  if ($useTargetedPrinter -and -not $isPdf) {
-    Write-PrintLog "Plik nie-PDF - wybor drukarki pomijam, drukuje na domyslna systemu"
-  }
   $null = Invoke-PrintWithShell -path $FilePath
 }
 
@@ -207,7 +211,6 @@ $waited = 0
 $trackingAvailable = ($printerName -and $null -ne $jobIdsBefore)
 
 while ($waited -lt $maxWaitMs) {
-  Set-PrintAppWindowsMinimized
   Restore-Foreground $originalForeground
   if ($trackingAvailable) {
     $jobIdsNow = Get-PrintJobIds $printerName
@@ -224,7 +227,6 @@ while ($waited -lt $maxWaitMs) {
   $waited += $stepMs
 }
 
-Set-PrintAppWindowsMinimized
 Restore-Foreground $originalForeground
 
 Write-PrintLog "--- KONIEC (wyslano do sledzenia kolejki) ---"

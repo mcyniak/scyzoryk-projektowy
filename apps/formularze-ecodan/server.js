@@ -14,15 +14,19 @@ import { ZipArchive } from 'archiver';
 import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX } from './src/config.js';
 import { setProjectRoot, getProjectRoot } from './src/debug.js';
 import { calculate } from './src/rules.js';
-import { cancelAllJobs, cancelJob, createJob, jobs, runAutomation, runBatchJob } from './src/jobs.js';
+import { cancelAllJobs, cancelJob, createJob, jobs, persistJobsIndex, runAutomation, runBatchJob } from './src/jobs.js';
 import { readExcelRecords } from './src/excel.js';
+import appPaths from '../../lib/appPaths.js';
 
+const { getAppDataDir } = appPaths;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-setProjectRoot(__dirname);
+const APP_DATA_ROOT = getAppDataDir('formularze-ecodan');
+const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
+setProjectRoot(APP_DATA_ROOT);
 
 const app = express();
-const diagnosticsDir = path.join(__dirname, 'logs');
+const diagnosticsDir = path.join(APP_DATA_ROOT, 'logs');
 try { fsSync.mkdirSync(diagnosticsDir, { recursive: true }); } catch {}
 function appendDiagnostic(level, event, data = {}) {
   try { fsSync.appendFileSync(path.join(diagnosticsDir, 'formularze-ecodan.jsonl'), JSON.stringify({ ts: new Date().toISOString(), level, app: 'formularze-ecodan', event, pid: process.pid, memory: process.memoryUsage(), ...data }) + '\n', 'utf8'); } catch {}
@@ -71,7 +75,7 @@ app.use('/api', apiLimiter);
 app.use('/shared', express.static(path.join(__dirname, '..', '..', 'shared-styles')));
 app.use(express.static(path.join(__dirname, 'public')));
 
-const uploadDir = path.join(__dirname, 'uploads');
+const uploadDir = path.join(APP_DATA_ROOT, 'uploads');
 fs.mkdir(uploadDir, { recursive: true }).catch(() => {});
 const upload = multer({
   dest: uploadDir,
@@ -159,8 +163,12 @@ function findPdfForJobRow(job, rowNumber) {
   return row?.pdf || null;
 }
 
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, name: 'formularze-ecodan', version: APP_VERSION });
+});
+
 app.get('/api/version', (req, res) => {
-  res.json({ ok: true, version: APP_VERSION, defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX }, safeOutputBase: process.env.SCYZORYK_OUTPUT_BASE || path.join(__dirname, 'output') });
+  res.json({ ok: true, version: APP_VERSION, defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX }, safeOutputBase: process.env.SCYZORYK_OUTPUT_BASE || OUTPUT_DIR });
 });
 
 app.post('/api/calculate', (req, res) => {
@@ -246,6 +254,7 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
       job.status = 'fatal-error';
       job.finishedAt = new Date().toISOString();
       job.errors.push({ error: String(error?.message || error), stack: String(error?.stack || '') });
+      persistJobsIndex().catch(() => {});
     });
   });
 });

@@ -81,14 +81,9 @@ const ZARNOW_ATTACHMENTS = [
   { num: 5, name: 'Karta katalogowa zasobnika solarnego' },
   { num: 6, name: 'Karta katalogowa grupy pompowej solarnej' }
 ];
-// Dokladny wynik buildOrder() na dzien 2026-07-15, zweryfikowany bezposrednio
-// na zywym folderze na G:\ (patrz komentarz na gorze). Zawiera tez znany,
-// NIE naprawiony w tym przebiegu drobny problem: plik blokady Worda
-// "~$_S_P_Ż_250.docx" (tworzony automatycznie gdy ktos ma otwarty OT w
-// Wordzie) laduje jako "Niedopasowany plik" zamiast byc pominietym cichym
-// smieciem - swiadomie zostawione w tescie, zeby przyszla poprawka tego
-// zachowania byla widoczna jako oczekiwana zmiana testu, a nie przypadkowa
-// regresja.
+// Dokladny wynik buildOrder() zweryfikowany na zywym folderze na G:\.
+// Plik blokady Worda "~$_S_P_Ż_250.docx" jest obecny w fixture, ale celowo
+// nie trafia do kolejki ani jako niedopasowany dokument.
 const ZARNOW_EXPECTED_ORDER = [
   { file: 'ST_S_P_Ż_250.docx', label: 'Strona tytułowa', confidence: 'pewne' },
   { file: 'OT_S_P_Ż_250.docx', label: 'Opis techniczny', confidence: 'pewne' },
@@ -98,8 +93,7 @@ const ZARNOW_EXPECTED_ORDER = [
   { file: 'Żarnów Spacerowa.pdf', label: 'Załącznik nr 3: Protokół uzgodnień projektowych', confidence: 'pewne' },
   { file: 'Kolektor KSG 21GT.pdf', label: 'Załącznik nr 4: Karta katalogowa kolektora słonecznego', confidence: 'słowo kluczowe' },
   { file: 'Zasobnik SGW(S)B 250.pdf', label: 'Załącznik nr 5: Karta katalogowa zasobnika solarnego', confidence: 'słowo kluczowe' },
-  { file: 'Grupa pompowa.pdf', label: 'Załącznik nr 6: Karta katalogowa grupy pompowej solarnej', confidence: 'słowo kluczowe' },
-  { file: '~$_S_P_Ż_250.docx', label: 'Niedopasowany plik - sprawdź ręcznie', confidence: 'niedopasowane' }
+  { file: 'Grupa pompowa.pdf', label: 'Załącznik nr 6: Karta katalogowa grupy pompowej solarnej', confidence: 'słowo kluczowe' }
 ];
 
 async function testZarnow41() {

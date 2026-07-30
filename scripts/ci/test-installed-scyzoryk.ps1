@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$InstallerPath,
   [Parameter(Mandatory = $true)][string]$InstallDir,
   [Parameter(Mandatory = $true)][string]$LogsDir
@@ -53,7 +53,7 @@ Run-Test 'Instalacja na swiezym Windowsie' {
   Assert-True ($proc.ExitCode -eq 0) "Instalator zakonczyl sie kodem $($proc.ExitCode)."
 }
 
-Run-Test 'Kompletnosc instalacji i konfiguracja OCR' {
+Run-Test 'Kompletnosc instalacji bez sekretow OCR' {
   $required = @(
     'server.js','package.json','public\index.html','node-runtime\node.exe','unins000.exe',
     'apps\drukarka\node_modules\express',
@@ -63,17 +63,17 @@ Run-Test 'Kompletnosc instalacji i konfiguracja OCR' {
     'apps\wnioski-powykonawcze\node_modules\express',
     'apps\karty-katalogowe\node_modules\express',
     'apps\drukarka-projekty\node_modules\express',
-    'apps\ocr-audytow\node_modules\express',
-    'apps\ocr-audytow\config\document-ai.json',
-    'apps\ocr-audytow\config\service-account.json'
+    'apps\ocr-audytow\node_modules\express'
   )
   $missing = @($required | Where-Object { -not (Test-Path (Join-Path $InstallDir $_)) })
   Assert-True ($missing.Count -eq 0) "Brakuje elementow instalacji: $($missing -join ', ')"
 
-  $cfg = Get-Content (Join-Path $InstallDir 'apps\ocr-audytow\config\document-ai.json') -Raw | ConvertFrom-Json
-  Assert-True ($cfg.projectId -eq 'scyzoryk-ocr-test') 'Nieprawidlowy projekt OCR.'
-  Assert-True ($cfg.location -eq 'eu') 'Nieprawidlowa lokalizacja OCR.'
-  Assert-True ($cfg.processorId -eq 'c8cea9ff6f6430c3') 'Nieprawidlowy processor ID OCR.'
+  $forbidden = @(
+    'apps\ocr-audytow\config\document-ai.json',
+    'apps\ocr-audytow\config\service-account.json'
+  )
+  $bundledSecrets = @($forbidden | Where-Object { Test-Path (Join-Path $InstallDir $_) })
+  Assert-True ($bundledSecrets.Count -eq 0) "Instalator zawiera zabroniona konfiguracje OCR: $($bundledSecrets -join ', ')"
 }
 
 Run-Test 'Aktualny panel narzedzi w instalatorze' {
@@ -138,17 +138,17 @@ Run-Test 'Uruchomienie Scyzoryka bez globalnego Node.js' {
   Start-ScheduledTask -TaskName $script:TaskName
 }
 
-Run-Test 'Health-check wszystkich narzedzi i ocrConfigured' {
+Run-Test 'Health-check wszystkich narzedzi i bezpieczny stan OCR' {
   $checks = @(
     @{ name='panel'; port=3000; path='/api/apps' },
-    @{ name='drukarka'; port=3001; path='/api/status' },
-    @{ name='pieczatki'; port=3002; path='/api/health' },
-    @{ name='formularze'; port=3003; path='/api/version' },
-    @{ name='dokumenty-seryjne'; port=3004; path='/api/health' },
-    @{ name='wnioski-powykonawcze'; port=3005; path='/api/health' },
-    @{ name='karty-katalogowe'; port=3006; path='/api/health' },
-    @{ name='drukarka-projekty'; port=3010; path='/api/status' },
-    @{ name='ocr-audytow'; port=3011; path='/api/health' }
+    @{ name='drukarka'; port=3001; path='/api/health'; expectedName='drukarka' },
+    @{ name='pieczatki-pdf'; port=3002; path='/api/health'; expectedName='pieczatki-pdf' },
+    @{ name='formularze-ecodan'; port=3003; path='/api/health'; expectedName='formularze-ecodan' },
+    @{ name='dokumenty-seryjne'; port=3004; path='/api/health'; expectedName='dokumenty-seryjne' },
+    @{ name='wnioski-powykonawcze'; port=3005; path='/api/health'; expectedName='wnioski-powykonawcze' },
+    @{ name='karty-katalogowe'; port=3006; path='/api/health'; expectedName='karty-katalogowe' },
+    @{ name='drukarka-projekty'; port=3010; path='/api/health'; expectedName='drukarka-projekty' },
+    @{ name='ocr-audytow'; port=3011; path='/api/health'; expectedName='ocr-audytow' }
   )
 
   foreach ($check in $checks) {
@@ -157,7 +157,9 @@ Run-Test 'Health-check wszystkich narzedzi i ocrConfigured' {
     while ((Get-Date) -lt $deadline) {
       try {
         $response = Invoke-WebRequest -Uri "http://127.0.0.1:$($check.port)$($check.path)" -UseBasicParsing -TimeoutSec 3
-        if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { $ok = $true; break }
+        $payload = $response.Content | ConvertFrom-Json
+        $nameMatches = (-not $check.ContainsKey('expectedName')) -or ($payload.name -eq $check.expectedName)
+        if ($response.StatusCode -eq 200 -and $payload.ok -eq $true -and $nameMatches) { $ok = $true; break }
       } catch {}
       Start-Sleep -Seconds 2
     }
@@ -166,43 +168,7 @@ Run-Test 'Health-check wszystkich narzedzi i ocrConfigured' {
 
   $ocr = Invoke-RestMethod 'http://127.0.0.1:3011/api/health' -TimeoutSec 10
   $ocr | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $LogsDir 'reports\ocr-health.json') -Encoding utf8
-  Assert-True ([bool]$ocr.ocrConfigured) 'OCR odpowiada, ale ocrConfigured=false.'
-}
-
-Run-Test 'Prawdziwe polaczenie z Google Document AI' {
-  Add-Type -AssemblyName System.Drawing
-  $jpg = Join-Path $LogsDir 'input\ocr-test.jpg'
-  $bitmap = New-Object Drawing.Bitmap 1000,300
-  $graphics = [Drawing.Graphics]::FromImage($bitmap)
-  $font = New-Object Drawing.Font('Arial',32)
-  try {
-    $graphics.Clear([Drawing.Color]::White)
-    $graphics.DrawString('TEST OCR SCYZORYK 123', $font, [Drawing.Brushes]::Black, 40, 100)
-    $bitmap.Save($jpg, [Drawing.Imaging.ImageFormat]::Jpeg)
-  } finally {
-    $font.Dispose()
-    $graphics.Dispose()
-    $bitmap.Dispose()
-  }
-
-  $testJs = Join-Path $LogsDir 'ocr-api-test.js'
-  $jsLines = @(
-    "const { ocrImage } = require(process.argv[2]);",
-    "ocrImage(process.argv[3]).then((result) => {",
-    "  const text = String(result && result.text || '').trim();",
-    "  console.log('Document AI odpowiedzial. Tekst:', text);",
-    "  if (!text) process.exit(2);",
-    "}).catch((error) => {",
-    "  console.error(error && error.stack || error);",
-    "  process.exit(1);",
-    "});"
-  )
-  [IO.File]::WriteAllLines($testJs, $jsLines, [Text.UTF8Encoding]::new($false))
-
-  $node = Join-Path $InstallDir 'node-runtime\node.exe'
-  $engine = Join-Path $InstallDir 'apps\ocr-audytow\src\documentAiEngine.js'
-  & $node $testJs $engine $jpg
-  Assert-True ($LASTEXITCODE -eq 0) 'Prawdziwe wywolanie Google Document AI nie powiodlo sie.'
+  Assert-True (-not [bool]$ocr.ocrConfigured) 'Swieza instalacja nie powinna zawierac konfiguracji OCR.'
 }
 
 Run-Test 'Zrzuty ekranow wszystkich narzedzi' {
@@ -258,7 +224,8 @@ Run-Test 'Ponowna instalacja' {
   )
   $proc = Start-Process -FilePath $InstallerPath -ArgumentList $args -Wait -PassThru
   Assert-True ($proc.ExitCode -eq 0) "Ponowna instalacja zakonczyla sie kodem $($proc.ExitCode)."
-  Assert-True (Test-Path (Join-Path $InstallDir 'apps\ocr-audytow\config\document-ai.json')) 'Po reinstalacji brakuje konfiguracji OCR.'
+  Assert-True (-not (Test-Path (Join-Path $InstallDir 'apps\ocr-audytow\config\document-ai.json'))) 'Reinstalacja dodala konfiguracje OCR.'
+  Assert-True (-not (Test-Path (Join-Path $InstallDir 'apps\ocr-audytow\config\service-account.json'))) 'Reinstalacja dodala klucz OCR.'
 }
 
 Run-Test 'Odinstalowanie' {

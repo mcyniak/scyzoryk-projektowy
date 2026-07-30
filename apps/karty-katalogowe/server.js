@@ -9,16 +9,19 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup, createSemaphore } = require('../../lib/hardening');
+const { getAppDataDir } = require('../../lib/appPaths');
+const { isAffirmativeFlag } = require('../../lib/businessFlags');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 const ROOT = __dirname;
-setupProcessDiagnostics('karty-katalogowe', ROOT);
+const APP_DATA_ROOT = getAppDataDir('karty-katalogowe');
+setupProcessDiagnostics('karty-katalogowe', APP_DATA_ROOT);
 
-const DATA_DIR = path.join(ROOT, 'data');
-const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
-const LOGS_DIR = path.join(ROOT, 'logs');
+const DATA_DIR = path.join(APP_DATA_ROOT, 'data');
+const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
+const LOGS_DIR = path.join(APP_DATA_ROOT, 'logs');
 const MAX_FILE_MB = Number(process.env.KK_MAX_FILE_MB || 25);
 const JOB_TTL_MS = Number(process.env.KK_JOB_TTL_MS || 24 * 60 * 60 * 1000);
 
@@ -287,7 +290,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
     // UID tylko naturalna konsekwencja rezygnacji. Realny przyklad z
     // produkcji: kilka z 17 wierszy "brak UID" w jednym uruchomieniu to
     // faktycznie byly rezygnacje z pustym UID.
-    if (rezygnacja) {
+    if (isAffirmativeFlag(rezygnacja)) {
       wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid: uid || null, status: 'pominieto-rezygnacja', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: rezygnacja dla adresu "${opisAdresu}" - pominieto.` };
       continue;
     }

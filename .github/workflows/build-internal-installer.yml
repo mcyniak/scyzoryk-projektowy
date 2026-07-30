@@ -1,7 +1,7 @@
 name: Zbuduj i przetestuj instalator Windows
 
-# Ten workflow buduje jeden poufny instalator z konfiguracja Google Document AI,
-# instaluje go na osobnej, swiezej maszynie Windows i publikuje dopiero po testach.
+# Ten workflow buduje instalator bez sekretów, instaluje go na osobnej,
+# swiezej maszynie Windows i publikuje dopiero po testach.
 
 on:
   workflow_dispatch: {}
@@ -21,30 +21,14 @@ permissions:
   contents: read
   actions: write
 
-env:
-  OCR_DOCAI_PROJECT_ID: scyzoryk-ocr-test
-  OCR_DOCAI_LOCATION: eu
-  OCR_DOCAI_PROCESSOR_ID: c8cea9ff6f6430c3
-
 jobs:
   build:
-    name: Zbuduj instalator z OCR
+    name: Zbuduj instalator
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
       - name: Pobierz kod repozytorium
         uses: actions/checkout@v4
-
-      - name: Sprawdz sekret OCR
-        shell: pwsh
-        env:
-          OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          if ([string]::IsNullOrWhiteSpace($env:OCR_DOCAI_CREDENTIALS_B64)) {
-            throw 'Brakuje GitHub Actions Secret: OCR_DOCAI_CREDENTIALS_B64.'
-          }
-          Write-Host 'Sekret OCR jest dostepny.'
 
       - name: Przygotuj Node.js
         uses: actions/setup-node@v4
@@ -64,8 +48,6 @@ jobs:
 
       - name: Zbuduj produkcyjny instalator
         shell: pwsh
-        env:
-          OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
         run: |
           $ErrorActionPreference = 'Stop'
           npm run build-installer

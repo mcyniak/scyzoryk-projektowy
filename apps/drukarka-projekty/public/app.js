@@ -140,7 +140,10 @@
     const groups = [];
     for (const r of state.batchResults.filter(r => r.ok)) {
       const items = r.order
-        .filter(o => o.fileName && !EXCLUDE_FROM_PRINT.has(o.confidence))
+        .filter(o => {
+          if (typeof o.includeInPrint !== "boolean") o.includeInPrint = !EXCLUDE_FROM_PRINT.has(o.confidence);
+          return o.fileName && o.includeInPrint === true;
+        })
         .map(o => ({ fullPath: o.fullPath, label: `${r.lpGmina} - ${r.adres} › ${o.label}` }));
       if (items.length) groups.push({ label: `${r.lpGmina} - ${r.adres}`, items });
     }
@@ -349,12 +352,14 @@
     const list = document.querySelector(`#addressGroups .order-list[data-gidx="${gIdx}"]`);
     if (!result || !list) return;
     list.innerHTML = result.order.map((item, idx) => {
+      if (typeof item.includeInPrint !== "boolean") item.includeInPrint = !EXCLUDE_FROM_PRINT.has(item.confidence);
       const confident = SETTLED.has(item.confidence);
       const classes = ["order-item"];
       classes.push(confident ? "compact" : "needs-review");
       return `
       <li class="${classes.join(" ")}" draggable="true" data-gidx="${gIdx}" data-idx="${idx}">
         <span class="handle">⠿</span>
+        <input type="checkbox" class="order-print-checkbox" data-gidx="${gIdx}" data-idx="${idx}" ${item.includeInPrint ? "checked" : ""} title="Dodaj do kolejki druku" />
         <div class="info">
           <strong>${escapeHtml(item.label)}</strong>
           <span>${item.fileName ? escapeHtml(item.fileName) : "brak pliku - dodaj ręcznie z Eksploratora"}</span>
@@ -366,6 +371,13 @@
     `;
     }).join("");
     attachDragHandlers(gIdx);
+    list.querySelectorAll(".order-print-checkbox").forEach(checkbox => {
+      checkbox.addEventListener("change", () => {
+        const item = state.batchResults.filter(r => r.ok)[Number(checkbox.dataset.gidx)]?.order?.[Number(checkbox.dataset.idx)];
+        if (item) item.includeInPrint = checkbox.checked;
+        buildPendingGroups();
+      });
+    });
     list.querySelectorAll(".preview-btn").forEach(btn => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
@@ -426,7 +438,12 @@
     $("previewModalFrame").src = "";
   });
 
-  const EXCLUDE_FROM_PRINT = new Set(["obcy adres - pominięte", "wariant - sprawdź ręcznie"]);
+  const EXCLUDE_FROM_PRINT = new Set([
+    "obcy adres - pominięte",
+    "wariant - sprawdź ręcznie",
+    "dopasowanie po kolejności - sprawdź",
+    "niedopasowane"
+  ]);
 
   $("confirmOrderBtn").addEventListener("click", async () => {
     const btn = $("confirmOrderBtn");

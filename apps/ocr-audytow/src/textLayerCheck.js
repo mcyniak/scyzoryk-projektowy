@@ -4,22 +4,51 @@
 // Prog dobrany z duzym zapasem ponizej realnych wartosci dla obu rodzin dokumentow
 // zaobserwowanych w danych (patrz analiza realnych plikow audytow), zeby nie
 // pomylic np. pojedynczego numeru strony/metadanych z prawdziwa warstwa tekstu.
-const pdfParse = require('pdf-parse');
 const fs = require('fs/promises');
 
 const MIN_TEXT_LENGTH = 300;
+let pdfJsPromise = null;
 
-async function checkTextLayer(pdfPath) {
-  const buffer = await fs.readFile(pdfPath);
-  let text = '';
-  try {
-    const result = await pdfParse(buffer);
-    text = result.text || '';
-  } catch (_) {
-    text = '';
-  }
-  const trimmedLength = text.replace(/\s+/g, ' ').trim().length;
-  return { hasText: trimmedLength >= MIN_TEXT_LENGTH, textLength: trimmedLength };
+function getPdfJs() {
+  if (!pdfJsPromise) pdfJsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
+  return pdfJsPromise;
 }
 
-module.exports = { checkTextLayer };
+async function checkTextLayerByPage(pdfPath) {
+  const buffer = await fs.readFile(pdfPath);
+  const pdfJs = await getPdfJs();
+  let document = null;
+  try {
+    document = await pdfJs.getDocument({
+      data: new Uint8Array(buffer),
+      disableWorker: true,
+      useSystemFonts: true
+    }).promise;
+  } catch (_) {
+    return [];
+  }
+
+  const pages = [];
+  for (let pageIndex = 0; pageIndex < document.numPages; pageIndex += 1) {
+    let text = '';
+    try {
+      const page = await document.getPage(pageIndex + 1);
+      const content = await page.getTextContent({ normalizeWhitespace: true });
+      text = (content.items || []).map((item) => item.str || '').join(' ');
+    } catch (_) {
+      text = '';
+    }
+    const textLength = text.replace(/\s+/g, ' ').trim().length;
+    pages.push({ pageIndex, hasTextLayer: textLength >= MIN_TEXT_LENGTH, textLength });
+  }
+  await document.destroy?.();
+  return pages;
+}
+
+async function checkTextLayer(pdfPath) {
+  const pages = await checkTextLayerByPage(pdfPath);
+  const textLength = pages.reduce((sum, page) => sum + page.textLength, 0);
+  return { hasText: pages.length > 0 && pages.every((page) => page.hasTextLayer), textLength };
+}
+
+module.exports = { checkTextLayer, checkTextLayerByPage };

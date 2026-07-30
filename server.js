@@ -4,8 +4,14 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { createRequire } = require('module');
 const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog } = require('./lib/hardening');
+const { acquireSingleInstanceLock } = require('./lib/singleInstanceLock');
+const { recordChildFailure } = require('./lib/childRestartPolicy');
+const { getDataRoot, getAppDataDir } = require('./lib/appPaths');
+const { migrateLegacyDataIfNeeded } = require('./lib/appDataMigration');
+const { hasDependencies } = require('./lib/dependencyCheck');
 
 const ROOT = __dirname;
+const PANEL_DATA_ROOT = getAppDataDir('panel');
 // Realny blad zlapany 2026-07-24: sprawdzenie Chromium w appHasDependencies() (nizej)
 // czyta process.env.PLAYWRIGHT_BROWSERS_PATH, zeby wiedziec, GDZIE playwright trzyma
 // swoja przegladarke (wspolna z tym, co child-procesy dostaja przy starcie - patrz
@@ -17,7 +23,11 @@ const ROOT = __dirname;
 // obronny co install-all.js), zeby caly proces (sprawdzenie ORAZ dzieci) mial spojna,
 // gwarantowana wartosc niezaleznie od tego, jak server.js zostal uruchomiony.
 process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '0';
-const diagnostics = setupProcessDiagnostics('panel-glowny', ROOT);
+if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
+  migrateLegacyDataIfNeeded([{ slug: 'panel', dir: ROOT }]);
+}
+const diagnostics = setupProcessDiagnostics('panel-glowny', PANEL_DATA_ROOT);
+const CHILDREN_LOG_FILE = path.join(PANEL_DATA_ROOT, 'logs', 'children.jsonl');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const SHARED_DIR = path.join(ROOT, 'shared-styles');
 const PORT = Number(process.env.PORT || 3000);
@@ -33,21 +43,21 @@ const SECURITY_HEADERS = {
 };
 
 const apps = [
-  { slug: 'drukarka', name: 'Drukarka', description: 'Kolejkowanie i drukowanie dokumentow z lokalnego panelu.', dir: path.join(ROOT, 'apps', 'drukarka'), port: Number(process.env.DRUKARKA_PORT || 3001), healthPath: '/api/status' },
-  { slug: 'pieczatki', name: 'Pieczatki PDF', description: 'Dodawanie pieczatki do plikow PDF i pobieranie wynikow.', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), port: Number(process.env.PIECZATKI_PORT || 3002), healthPath: '/api/health' },
-  { slug: 'formularze', name: 'Formularze Ecodan', description: 'Generator raportow/formularzy na podstawie danych z Excela.', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), port: Number(process.env.FORMULARZE_PORT || 3003), healthPath: '/api/version', extraEnv: { HEADLESS: process.env.HEADLESS || 'true', BATCH_CONCURRENCY: process.env.BATCH_CONCURRENCY || '1', BATCH_RESTART_EVERY: process.env.BATCH_RESTART_EVERY || '5', PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || '0' } },
+  { slug: 'drukarka', name: 'Drukarka', description: 'Kolejkowanie i drukowanie dokumentow z lokalnego panelu.', dir: path.join(ROOT, 'apps', 'drukarka'), port: Number(process.env.DRUKARKA_PORT || 3001), healthPath: '/api/health' },
+  { slug: 'pieczatki-pdf', name: 'Pieczatki PDF', description: 'Dodawanie pieczatki do plikow PDF i pobieranie wynikow.', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), port: Number(process.env.PIECZATKI_PORT || 3002), healthPath: '/api/health' },
+  { slug: 'formularze-ecodan', name: 'Formularze Ecodan', description: 'Generator raportow/formularzy na podstawie danych z Excela.', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), port: Number(process.env.FORMULARZE_PORT || 3003), healthPath: '/api/health', extraEnv: { HEADLESS: process.env.HEADLESS || 'true', BATCH_CONCURRENCY: process.env.BATCH_CONCURRENCY || '1', BATCH_RESTART_EVERY: process.env.BATCH_RESTART_EVERY || '5', PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || '0' } },
   { slug: 'dokumenty-seryjne', name: 'Dokumenty seryjne PDF', description: 'Tworzenie osobnego PDF-a dla kazdego adresu z korespondencji Word + Excel.', dir: path.join(ROOT, 'apps', 'dokumenty-seryjne'), port: Number(process.env.SERYJNE_PORT || 3004), healthPath: '/api/health' },
   { slug: 'wnioski-powykonawcze', name: 'Wnioski powykonawcze PDF', description: 'Zamiana wnioskow materialowych Word na dokumentacje powykonawcza PDF.', dir: path.join(ROOT, 'apps', 'wnioski-powykonawcze'), port: Number(process.env.WNIOSKI_PORT || 3005), healthPath: '/api/health' },
   { slug: 'karty-katalogowe', name: 'Karty katalogowe', description: 'Automatyczny dobor i kopiowanie kart katalogowych do folderow klientow na podstawie kolumny UID w Excelu.', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), port: Number(process.env.KARTY_PORT || 3006), healthPath: '/api/health' },
-  { slug: 'drukarka-projekty', name: 'Drukarka projekty', description: 'Automatyczne przygotowanie i druk dokumentacji projektowej na podstawie arkusza inwestycji.', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), port: Number(process.env.DRUKARKA_PROJEKTY_PORT || 3010), healthPath: '/api/status' },
+  { slug: 'drukarka-projekty', name: 'Drukarka projekty', description: 'Automatyczne przygotowanie i druk dokumentacji projektowej na podstawie arkusza inwestycji.', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), port: Number(process.env.DRUKARKA_PROJEKTY_PORT || 3010), healthPath: '/api/health' },
   { slug: 'ocr-audytow', name: 'OCR audytów', description: 'Rozpoznawanie tekstu (w tym pisma recznego) na zeskanowanych audytach, z podzialem zbundlowanych plikow na adresy.', dir: path.join(ROOT, 'apps', 'ocr-audytow'), port: Number(process.env.OCR_AUDYTOW_PORT || 3011), healthPath: '/api/health' }
 ];
 
 
 const dependencyChecks = [
   { slug: 'drukarka', dir: path.join(ROOT, 'apps', 'drukarka'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib'] },
-  { slug: 'pieczatki', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), deps: ['express', 'multer', 'pdf-lib', 'archiver', '@pdf-lib/fontkit', 'pdfjs-dist', 'express-rate-limit'] },
-  { slug: 'formularze', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), deps: ['express', 'playwright', 'read-excel-file', 'pdf-parse', 'pdf-lib', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'], playwright: true },
+  { slug: 'pieczatki-pdf', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), deps: ['express', 'multer', 'pdf-lib', 'archiver', '@pdf-lib/fontkit', 'pdfjs-dist', 'express-rate-limit'] },
+  { slug: 'formularze-ecodan', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), deps: ['express', 'playwright', 'read-excel-file', 'pdf-parse', 'pdf-lib', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'], playwright: true },
   { slug: 'dokumenty-seryjne', dir: path.join(ROOT, 'apps', 'dokumenty-seryjne'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
   { slug: 'wnioski-powykonawcze', dir: path.join(ROOT, 'apps', 'wnioski-powykonawcze'), deps: ['express', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
   { slug: 'karty-katalogowe', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'express-rate-limit'] },
@@ -63,10 +73,7 @@ function appHasDependencies(app) {
   // nie ma glownego eksportu dla zwyklego require) - to psulo probe
   // resolve() mimo ze pakiet byl poprawnie zainstalowany. Samo istnienie
   // folderu jest dużo prostszym i pewniejszym sygnalem "czy jest zainstalowany".
-  for (const dep of app.deps) {
-    const depDir = path.join(app.dir, 'node_modules', ...dep.split('/'));
-    if (!fs.existsSync(depDir)) return false;
-  }
+  if (!hasDependencies(app.dir, app.deps)) return false;
   // Realny problem zlapany 2026-07-24 (pytanie wlasciciela przy testowaniu autostartu):
   // folder node_modules/playwright moze istniec (npm install sie udal), a mimo to sam
   // BINARNY Chromium moze nie byc pobrany (osobny krok, `npm run install-browsers` w
@@ -135,7 +142,17 @@ function logLine(app, type, data) {
 
 function getChildMeta(slug) {
   if (!childMeta.has(slug)) {
-    childMeta.set(slug, { restarts: 0, failures: 0, lastExit: null, lastError: null, startedAt: null, nextRestartAt: null });
+    childMeta.set(slug, {
+      restarts: 0,
+      failures: 0,
+      lastExit: null,
+      lastError: null,
+      startedAt: null,
+      nextRestartAt: null,
+      failureTimestamps: [],
+      circuitOpen: false,
+      circuitReason: null
+    });
   }
   return childMeta.get(slug);
 }
@@ -148,7 +165,7 @@ function startChild(app, attempt = 0) {
   const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', err => {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
-    appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
+    appendJsonLine(CHILDREN_LOG_FILE, { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
     console.error(`[${app.slug}] Nie udalo sie uruchomic procesu: ${err.message}`);
   });
   children.set(app.slug, child);
@@ -160,10 +177,17 @@ function startChild(app, attempt = 0) {
     meta.lastExit = { at: Date.now(), code: code ?? null, signal: signal ?? null };
     console.log(`[${app.slug}] Proces zakonczony. code=${code ?? 'null'} signal=${signal ?? 'null'}`);
     if (code === 0 && signal === null) return;
+
+    if (recordChildFailure(meta)) {
+      appendJsonLine(CHILDREN_LOG_FILE, { level: 'error', app: app.slug, event: 'circuit-open', reason: meta.circuitReason });
+      console.error(`[${app.slug}] Circuit breaker OTWARTY: ${meta.circuitReason}. Nie restartuje automatycznie.`);
+      return;
+    }
+
     const delay = Math.min(30000, 1000 * Math.max(1, attempt + 1));
     meta.restarts += 1;
     meta.nextRestartAt = Date.now() + delay;
-    appendJsonLine(path.join(ROOT, 'logs', 'children.jsonl'), { level: 'warn', app: app.slug, event: 'child-restart-scheduled', code, signal, delay });
+    appendJsonLine(CHILDREN_LOG_FILE, { level: 'warn', app: app.slug, event: 'child-restart-scheduled', code, signal, delay });
     setTimeout(() => startChild(app, attempt + 1), delay).unref();
   });
 }
@@ -193,14 +217,16 @@ function readStaticFile(filePath, res, baseDir = PUBLIC_DIR) {
 function checkHealth(app) {
   return new Promise(resolve => {
     const started = Date.now();
-    const req = http.get({ hostname: HOST, port: app.port, path: app.healthPath || '/', timeout: 1600 }, res => {
+    const req = http.get({ hostname: HOST, port: app.port, path: app.healthPath || '/api/health', timeout: 1600 }, res => {
       let body = '';
       res.setEncoding('utf8');
       res.on('data', chunk => { body += chunk; if (body.length > 20000) req.destroy(); });
       res.on('end', () => {
         let payload = null;
         try { payload = body && body.trim().startsWith('{') ? JSON.parse(body) : null; } catch {}
-        resolve({ ok: res.statusCode >= 200 && res.statusCode < 500, statusCode: res.statusCode, ms: Date.now() - started, payload });
+        const expectedName = app.healthName || app.slug;
+        const healthy = res.statusCode === 200 && payload?.ok === true && payload?.name === expectedName;
+        resolve({ ok: healthy, statusCode: res.statusCode, ms: Date.now() - started, payload });
       });
     });
     req.on('timeout', () => { req.destroy(); resolve({ ok: false, timeout: true, ms: Date.now() - started }); });
@@ -249,28 +275,24 @@ async function getAppsStatus(req) {
       processAlive: children.has(app.slug),
       health,
       queue: health.payload?.queue || null,
-      child: { restarts: meta.restarts, failures: meta.failures, lastExit: meta.lastExit, lastError: meta.lastError, startedAt: meta.startedAt, nextRestartAt: meta.nextRestartAt }
+      child: {
+        restarts: meta.restarts,
+        failures: meta.failures,
+        lastExit: meta.lastExit,
+        lastError: meta.lastError,
+        startedAt: meta.startedAt,
+        nextRestartAt: meta.nextRestartAt,
+        circuitOpen: meta.circuitOpen,
+        circuitReason: meta.circuitReason
+      }
     };
   }));
-  return { ok: true, mainPort: PORT, host: HOST, uptimeSec: Math.round(process.uptime()), memory: process.memoryUsage(), storage: dirSizeSafe(path.join(ROOT, 'apps')), apps: statuses };
+  return { ok: true, mainPort: PORT, host: HOST, uptimeSec: Math.round(process.uptime()), memory: process.memoryUsage(), storage: dirSizeSafe(getDataRoot()), apps: statuses };
 }
 
 
 
-function readLastLines(filePath, maxLines = 80, maxBytes = 250000) {
-  try {
-    if (!fs.existsSync(filePath)) return [];
-    const stat = fs.statSync(filePath);
-    const start = Math.max(0, stat.size - maxBytes);
-    const fd = fs.openSync(filePath, 'r');
-    const buffer = Buffer.alloc(stat.size - start);
-    fs.readSync(fd, buffer, 0, buffer.length, start);
-    fs.closeSync(fd);
-    return buffer.toString('utf8').split(/\r?\n/).filter(Boolean).slice(-maxLines);
-  } catch (err) {
-    return [`Nie udalo sie odczytac logu: ${err.message || err}`];
-  }
-}
+
 
 function safeDecodePathname(rawPathname) {
   try { return decodeURIComponent(rawPathname); } catch { return null; }
@@ -283,14 +305,25 @@ const server = http.createServer(async (req, res) => {
   const decodedPath = safeDecodePathname(url.pathname);
   if (decodedPath === null) return send(res, 400, 'Bad Request');
   if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(req), null, 2), 'application/json; charset=utf-8');
-  if (decodedPath === '/api/admin/logs') return send(res, 200, JSON.stringify({ ok: true, lines: readLastLines(path.join(ROOT, 'logs', 'children.jsonl'), 100) }, null, 2), 'application/json; charset=utf-8');
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
-  if (decodedPath === '/admin' || decodedPath === '/admin.html') return readStaticFile(path.join(PUBLIC_DIR, 'admin.html'), res);
   if (decodedPath.startsWith('/shared/')) return readStaticFile(path.join(SHARED_DIR, decodedPath.slice('/shared/'.length)), res, SHARED_DIR);
   readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res);
 });
 
+const instanceLock = acquireSingleInstanceLock();
+if (!instanceLock.acquired) {
+  console.error(`Scyzoryk juz dziala (PID ${instanceLock.existingPid}). Otwieram przegladarke zamiast startowac druga instancje.`);
+  process.exit(0);
+}
+process.on('exit', () => instanceLock.release());
+
 applyHttpTimeouts(server, 'SCYZORYK');
 ensureDependenciesBeforeStart();
-for (const app of apps) startChild(app);
+if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
+  migrateLegacyDataIfNeeded(apps);
+}
+// Flaga sluzy testom prawdziwych tras panelu bez uruchamiania osmiu procesow potomnych.
+if (process.env.SCYZORYK_SKIP_CHILD_START !== '1') {
+  for (const app of apps) startChild(app);
+}
 server.listen(PORT, HOST, () => { console.log('Scyzoryk Projektowy dziala tylko lokalnie:'); console.log(`http://${HOST}:${PORT}`); for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`); });

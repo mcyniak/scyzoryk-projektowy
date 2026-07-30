@@ -20,6 +20,8 @@ const $ = s => document.querySelector(s);
     const today = new Date();
     let selectedFiles = [];
     let lastFailedKeys = new Set();
+    let activeJobId = null;
+    let manualPollTimer = null;
     const dateInput = $('#date');
     const monthOnlyEl = $('#monthOnly');
     const dateHint = $('#dateHint');
@@ -167,35 +169,73 @@ const $ = s => document.querySelector(s);
       resultBox.innerHTML = '';
       showStatus(`Przygotowuję ${files.length} plików w Wordzie. Word działa pojedynczo, więc większa paczka może potrwać.`, '');
       try {
-        const res = await fetch('/api/convert', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: fd });
+        const res = await fetch('/api/jobs', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: fd });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wygenerować PDF-ów.');
-        const failedList = data.failed || [];
-        const failedText = failedList.map(x => String(x.input || x.error || '')).join(' ');
-        selectedFiles.forEach(f => { f._state = failedText.includes(f.name) ? 'błąd' : 'gotowe'; });
-        renderFiles();
-        showStatus(`Gotowe. Utworzono PDF-y: ${data.count}.`, data.status === 'finished-with-errors' ? '' : 'ok');
-        const failed = failedList.length ? `<p class="status err">Niektóre pliki miały błąd: ${escapeHtml(failedList.map(x => x.error).join(' | '))}</p><button class="button secondary" id="retryFailed" type="button">Zostaw tylko błędne do ponowienia</button>` : '';
-        const fileItems = Array.isArray(data.files) ? data.files.map(item => typeof item === 'string' ? { file: item, url: '' } : item) : [];
-        const zipWarning = data.zipError ? `<p class="status err">PDF-y zostały utworzone, ale nie udało się przygotować ZIP-a. Pobierz pliki pojedynczo.</p>` : '';
-        const downloads = data.zipUrl
-          ? `<a class="button primary" href="${data.zipUrl}">Pobierz ZIP z PDF-ami</a>`
-          : fileItems.map(item => `<a class="button primary" href="${escapeHtml(item.url || '#')}">Pobierz ${escapeHtml(item.file || 'PDF')}</a>`).join('');
-        resultBox.innerHTML = `${failed}${zipWarning}${downloads || '<p class="status err">Brak linków pobierania. Sprawdź logi serwera.</p>'}`;
-        const retryBtn = document.querySelector('#retryFailed');
-        if (retryBtn) retryBtn.addEventListener('click', () => {
-          selectedFiles = selectedFiles.filter(f => f._state === 'błąd');
-          selectedFiles.forEach(f => f._state = 'czeka');
-          renderFiles();
-          showStatus('Na liście zostały tylko pliki błędne. Kliknij generuj jeszcze raz.', '');
-        });
+        activeJobId = data.jobId;
+        $('#cancelJob').hidden = false;
+        showStatus('Zadanie czeka w kolejce Word.', '');
+        await pollManualJob();
+        if (activeJobId) manualPollTimer = setInterval(pollManualJob, 1200);
       } catch (err) {
         selectedFiles.forEach(f => f._state = 'błąd');
         renderFiles();
         showStatus(err.message || 'Błąd generowania.', 'err');
       } finally {
-        submitBtn.disabled = false;
+        if (!activeJobId) submitBtn.disabled = false;
       }
+    });
+
+    async function pollManualJob() {
+      if (!activeJobId) return;
+      const res = await fetch(`/api/jobs/${activeJobId}`);
+      if (res.status === 404) {
+        stopManualPolling();
+        showStatus('Zadanie nie istnieje (prawdopodobnie restart panelu). Uruchom je ponownie.', 'err');
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        stopManualPolling();
+        showStatus(data.message || 'Nie udało się odczytać statusu zadania.', 'err');
+        return;
+      }
+      const job = data.job;
+      showStatus(`Status: ${job.status}. Gotowe: ${job.done || 0} / ${job.total || 0}.`, '');
+      if (job.status === 'interrupted') {
+        stopManualPolling();
+        showStatus('Zadanie zostało przerwane przez restart panelu. Uruchom je ponownie.', 'err');
+        return;
+      }
+      if (!['finished', 'finished-with-errors', 'cancelled', 'fatal-error'].includes(job.status)) return;
+      stopManualPolling();
+      if (job.status === 'cancelled') return showStatus('Generowanie zostało przerwane.', '');
+      if (job.status === 'fatal-error') return showStatus(job.error || 'Generowanie nie powiodło się.', 'err');
+
+      const failedList = job.failed || [];
+      const failedText = failedList.map(x => String(x.input || x.error || '')).join(' ');
+      selectedFiles.forEach(f => { f._state = failedText.includes(f.name) ? 'błąd' : 'gotowe'; });
+      renderFiles();
+      showStatus(`Gotowe. Utworzono PDF-y: ${(job.files || []).length}.`, job.status === 'finished-with-errors' ? '' : 'ok');
+      const failed = failedList.length ? `<p class="status err">Niektóre pliki miały błąd: ${escapeHtml(failedList.map(x => x.error).join(' | '))}</p>` : '';
+      const downloads = job.zipUrl
+        ? `<a class="button primary" href="${job.zipUrl}">Pobierz ZIP z PDF-ami</a>`
+        : (job.files || []).map(item => `<a class="button primary" href="${escapeHtml(item.url)}">Pobierz ${escapeHtml(item.file)}</a>`).join('');
+      resultBox.innerHTML = `${failed}${downloads}`;
+    }
+
+    function stopManualPolling() {
+      if (manualPollTimer) clearInterval(manualPollTimer);
+      manualPollTimer = null;
+      activeJobId = null;
+      submitBtn.disabled = false;
+      $('#cancelJob').hidden = true;
+    }
+
+    $('#cancelJob').addEventListener('click', async () => {
+      if (!activeJobId) return;
+      await fetch(`/api/jobs/${activeJobId}/cancel`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+      await pollManualJob();
     });
     renderFiles();
 

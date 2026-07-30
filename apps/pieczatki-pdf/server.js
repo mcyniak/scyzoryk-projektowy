@@ -27,15 +27,17 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
+const { getAppDataDir } = require('../../lib/appPaths');
 
 const app = express();
-setupProcessDiagnostics('pieczatki-pdf', __dirname);
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 const ROOT = __dirname;
-const UPLOAD_DIR = path.join(ROOT, 'uploads');
-const OUTPUT_DIR = path.join(ROOT, 'output');
-const TMP_DIR = path.join(ROOT, 'tmp');
+const APP_DATA_ROOT = getAppDataDir('pieczatki-pdf');
+setupProcessDiagnostics('pieczatki-pdf', APP_DATA_ROOT);
+const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
+const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
+const TMP_DIR = path.join(APP_DATA_ROOT, 'tmp');
 const MAX_FILE_MB = Number(process.env.MAX_FILE_MB || 80);
 const MAX_FILES = Number(process.env.MAX_FILES || 30);
 const MAX_STAMPS = Number(process.env.MAX_STAMPS || 20);
@@ -462,7 +464,7 @@ async function removeFiles(files) {
 }
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, app: 'pdf-stamper-standalone' });
+  res.json({ ok: true, name: 'pieczatki-pdf' });
 });
 
 app.post('/api/stamp', heavyJobLimiter, upload.array('pdfs', MAX_FILES), async (req, res) => {

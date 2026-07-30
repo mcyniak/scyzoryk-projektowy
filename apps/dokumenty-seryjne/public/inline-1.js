@@ -150,7 +150,9 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wczytać plików.');
 
-        currentJob = data.jobId; currentWorkbook = data.workbook; detectedTemplatePower = data.detectedTemplatePower || '';
+        currentJob = data.jobId; detectedTemplatePower = data.detectedTemplatePower || '';
+        data.workbook = await loadAllRows(data.workbook);
+        currentWorkbook = data.workbook;
         $('filePrefix').value = '';
         renderWorkbook(data.workbook, data.suggestedAddressColumn); refreshUidColumnOptions(data.workbook.columns || []); renderTemplateGroups(data.templateGroups || [], data.workbook.columns || [], data.suggestedUidColumn || '');
         const ambiguous = data.ambiguousTemplates || [];
@@ -228,6 +230,19 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       updateSelectedMetric(); hide($('recordsStatus'));
     }
 
+    async function loadAllRows(workbook) {
+      if (!currentJob || !workbook?.sheetName || (workbook.rows || []).length >= Number(workbook.totalRows || 0)) return workbook;
+      const rows = [];
+      const limit = 500;
+      for (let offset = 0; offset < Number(workbook.totalRows || 0); offset += limit) {
+        const res = await fetch(`/api/jobs/${currentJob}/sheets/${encodeURIComponent(workbook.sheetName)}/rows?offset=${offset}&limit=${limit}`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się pobrać rekordów arkusza.');
+        rows.push(...(data.rows || []));
+      }
+      return { ...workbook, rows };
+    }
+
     function updateSheetHint(sheetName) {
       const el = $('sheetHint');
       const sheet = String(sheetName || '');
@@ -251,6 +266,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         const res = await fetch(`/api/sheet/${currentJob}/${encodeURIComponent(sheet)}`);
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wczytać arkusza.');
+        data.workbook = await loadAllRows(data.workbook);
         renderWorkbook(data.workbook, data.suggestedAddressColumn); refreshUidColumnOptions(data.workbook.columns || []);
         status($('recordsStatus'), `Zmieniono arkusz na ${sheet}.`, 'ok');
       } catch (e) {

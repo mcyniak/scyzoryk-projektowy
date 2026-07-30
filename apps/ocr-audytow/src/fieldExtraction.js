@@ -87,7 +87,7 @@ function cleanPercentValue(value) {
 // przegladu).
 function toFieldResult(extracted, pageIndex, valueKind) {
   if (!extracted || !extracted.found) {
-    return { value: '', confidence: null, pageIndex, labelBBox: null, valueBBox: null, needsReview: false, resolved: true };
+    return { value: '', confidence: null, pageIndex, labelBBox: null, valueBBox: null, needsReview: true, resolved: false };
   }
   let value = extracted.value || '';
   if (value && !looksPlausible(value, valueKind)) value = '';
