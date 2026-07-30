@@ -1,0 +1,51 @@
+.guide-shell { max-width: 1180px; }
+.guide-hero { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, .6fr); gap: var(--space-5); margin-bottom: var(--space-5); }
+.guide-hero-main { display: flex; flex-direction: column; justify-content: center; gap: var(--space-3); }
+.guide-hero-main .lead { color: var(--text-secondary); max-width: 68ch; }
+.guide-summary { display: grid; gap: 10px; align-content: center; }
+.guide-summary-row { display: flex; gap: 10px; align-items: flex-start; }
+.guide-summary-row .icon { color: var(--brand-600); margin-top: 2px; flex: none; }
+.guide-summary-row strong { display: block; margin-bottom: 2px; }
+.guide-summary-row span { color: var(--text-secondary); font-size: var(--text-sm); line-height: var(--leading-snug); }
+.guide-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: var(--space-5); align-items: start; }
+.guide-nav { position: sticky; top: var(--space-4); display: grid; gap: 5px; }
+.guide-nav h2 { font-size: var(--text-sm); text-transform: uppercase; letter-spacing: .06em; color: var(--text-tertiary); margin-bottom: 4px; }
+.guide-nav a { display: block; padding: 9px 11px; border-radius: var(--radius-sm); color: var(--text-secondary); font-size: var(--text-sm); font-weight: 700; text-decoration: none; }
+.guide-nav a:hover { background: var(--gray-100); color: var(--text-primary); }
+.guide-content { display: grid; gap: var(--space-5); min-width: 0; }
+.guide-section { scroll-margin-top: var(--space-4); }
+.guide-section .panel-header { margin-bottom: var(--space-4); }
+.guide-section h2 { font-size: var(--text-xl); }
+.guide-section h3 { font-size: var(--text-md); margin: var(--space-4) 0 var(--space-2); }
+.guide-section p, .guide-section li { color: var(--text-secondary); line-height: 1.65; }
+.guide-section ol, .guide-section ul { padding-left: 22px; display: grid; gap: 7px; }
+.guide-section code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; background: var(--gray-100); border: 1px solid var(--border-default); border-radius: 5px; padding: 1px 5px; color: var(--text-primary); }
+.guide-callout { display: flex; align-items: flex-start; gap: 10px; padding: var(--space-4); border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--gray-50); margin-top: var(--space-4); }
+.guide-callout .icon { flex: none; margin-top: 2px; }
+.guide-callout.warning { background: var(--warning-50); border-color: var(--warning-100); }
+.guide-callout.success { background: var(--success-50); border-color: var(--success-100); }
+.guide-callout.danger { background: var(--danger-50); border-color: var(--danger-100); }
+.guide-callout strong { display: block; margin-bottom: 3px; }
+.guide-callout p { margin: 0; }
+.guide-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.guide-tool { border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-4); background: var(--surface-primary); }
+.guide-tool-head { display: flex; align-items: center; gap: 10px; margin-bottom: var(--space-3); }
+.guide-tool-head .icon-tile { width: 38px; height: 38px; display: grid; place-items: center; border-radius: var(--radius-sm); background: var(--brand-50); color: var(--brand-600); }
+.guide-tool h3 { margin: 0; }
+.guide-tool ol { margin: 0; }
+.guide-table-wrap { overflow-x: auto; }
+.guide-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.guide-table th, .guide-table td { padding: 11px 12px; text-align: left; border-bottom: 1px solid var(--border-default); vertical-align: top; }
+.guide-table th { color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
+.guide-table td { color: var(--text-secondary); }
+.guide-footer { text-align: center; color: var(--text-tertiary); font-size: var(--text-sm); padding: var(--space-6) 0 var(--space-3); }
+@media (max-width: 900px) {
+  .guide-hero { grid-template-columns: 1fr; }
+  .guide-layout { grid-template-columns: 1fr; }
+  .guide-nav { position: static; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .guide-nav h2 { grid-column: 1 / -1; }
+}
+@media (max-width: 700px) {
+  .guide-tools { grid-template-columns: 1fr; }
+  .guide-nav { grid-template-columns: 1fr; }
+}
