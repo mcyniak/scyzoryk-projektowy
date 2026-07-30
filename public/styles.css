@@ -1,5 +1,5 @@
 /* ============================================================
-   Panel glowny + admin - style specyficzne dla tego modulu.
+   Panel glowny - style specyficzne dla tego modulu.
    Wspolne tokeny/komponenty: /shared/tokens.css, /shared/components.css
    ============================================================ */
 
@@ -60,37 +60,3 @@
 .tool-category.is-empty-by-search { display: none; }
 .tool-search-empty { margin-top: var(--space-6); }
 .tool-search-empty:not(.is-visible) { display: none; }
-
-/* --- Pomoc: modal (struktura z shared components.css) --- */
-.support-intro { margin-bottom: var(--space-3); color: var(--text-secondary); }
-.compact-notices { display: grid; gap: 10px; }
-
-/* --- Admin: hero ciemny, metryki, tabela --- */
-.admin-hero {
-  display: flex; justify-content: space-between; gap: var(--space-5); align-items: flex-end; flex-wrap: wrap;
-  background: var(--gray-900); color: #fff; border-color: var(--gray-900);
-}
-.admin-hero .kicker { color: var(--brand-100); }
-.admin-hero .kicker::before { background: var(--brand-100); }
-.admin-hero h1, .admin-hero .lead { color: #fff; }
-.admin-hero .lead { opacity: .78; }
-.admin-hero-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--space-4); }
-.admin-hero-chips span { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 999px; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16); color: rgba(255,255,255,.86); font-weight: 700; font-size: 12.5px; }
-.admin-hero-chips span::before { content: ""; width: 6px; height: 6px; border-radius: 99px; background: var(--brand-100); }
-.admin-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; min-width: 200px; }
-.admin-actions .quiet { color: rgba(255,255,255,.7); font-size: var(--text-sm); }
-
-.admin-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); margin: var(--space-5) 0; }
-.metric-label { display: block; color: var(--text-tertiary); font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-.status-card strong { display: block; font-size: var(--text-2xl); letter-spacing: -.03em; margin: 4px 0; font-variant-numeric: tabular-nums; }
-.status-card small { color: var(--text-tertiary); font-size: var(--text-sm); }
-@media (max-width: 900px) { .admin-metrics { grid-template-columns: 1fr 1fr; } }
-
-.admin-grid-2 { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: var(--space-5); margin-top: var(--space-5); }
-.admin-checklist { margin: var(--space-3) 0 0; padding-left: 20px; display: grid; gap: 8px; color: var(--text-secondary); line-height: var(--leading-snug); }
-.admin-log {
-  min-height: 240px; max-height: 420px; overflow: auto; margin: var(--space-3) 0 0;
-  padding: var(--space-4); border-radius: var(--radius-md); background: var(--gray-900); color: #cbd2dc;
-  font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap;
-}
-@media (max-width: 900px) { .admin-grid-2 { grid-template-columns: 1fr; } }
