@@ -1,2 +1,2 @@
-2026-07-30T12:52:00+02:00
-Powod: ponowna weryfikacja po usunieciu wyscigu w sprzataniu testu blokady drukowania.
+2026-07-30T12:07:55.888+00:00
+Powod: dodanie realnych zrzutow ekranu do instrukcji i naprawa CSP blokujacej object-src (zamiana <object> na <img>).
