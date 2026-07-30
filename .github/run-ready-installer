@@ -1,2 +1,2 @@
-2026-07-30T12:07:55.888+00:00
-Powod: dodanie realnych zrzutow ekranu do instrukcji i naprawa CSP blokujacej object-src (zamiana <object> na <img>).
+2026-07-30T12:40:39.832+00:00
+Powod: rebuild po rozdzieleniu instrukcji na dwie wersje i scaleniu wersji do maila w jeden plik.
