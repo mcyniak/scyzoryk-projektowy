@@ -76,16 +76,24 @@ Run-Test 'Kompletnosc instalacji i konfiguracja OCR' {
   Assert-True ($cfg.processorId -eq 'c8cea9ff6f6430c3') 'Nieprawidlowy processor ID OCR.'
 }
 
-Run-Test 'Nowe opisy narzedzi w instalatorze' {
+Run-Test 'Aktualny panel narzedzi w instalatorze' {
   $html = Get-Content (Join-Path $InstallDir 'public\index.html') -Raw
-  $requiredTexts = @(
-    'Tworzy komplet dokumentów seryjnych dla każdego adresu',
-    'Przygotowuje paczkę plików do zwykłego drukowania',
-    'Przygotowuje do druku pełną dokumentację projektową',
-    'Odczytuje dane ze skanów audytów'
+  $requiredFragments = @(
+    'data-app="drukarka"',
+    'data-app="drukarka-projekty"',
+    'data-app="dokumenty-seryjne"',
+    'data-app="wnioski-powykonawcze"',
+    'data-app="formularze"',
+    'data-app="pieczatki"',
+    'data-app="karty-katalogowe"',
+    'data-app="ocr-audytow"',
+    '<h3>Drukarka dokumentów</h3>',
+    '<h3>Drukarka projektów</h3>',
+    '<h3>Dokumenty seryjne PDF</h3>',
+    '<h3>OCR audytów</h3>'
   )
-  $missing = @($requiredTexts | Where-Object { -not $html.Contains($_) })
-  Assert-True ($missing.Count -eq 0) "Instalator nie zawiera nowych opisow: $($missing -join ' | ')"
+  $missing = @($requiredFragments | Where-Object { -not $html.Contains($_) })
+  Assert-True ($missing.Count -eq 0) "W zainstalowanym panelu brakuje narzedzi lub stabilnych elementow: $($missing -join ' | ')"
 }
 
 Run-Test 'Sortowanie dokumentow projektowych' {
