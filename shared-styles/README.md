@@ -1,39 +1,16 @@
-# Wspólny CSS Scyzoryka - base.css
+# Wspólny wygląd Scyzoryka - shared-styles/
 
-## Co to jest
-`base.css` to jedno źródło prawdy dla wyglądu wszystkich modułów: kolory,
-przyciski, panele, karty, formularze, modal, komunikaty błędów. Wzięte
-z najczystszej wersji (Drukarka projektów) i oczyszczone z rzeczy
-specyficznych tylko dla niej (stepper, lista adresów itp.).
+Zobacz pełny opis: [`docs/UI-DESIGN-SYSTEM.md`](../docs/UI-DESIGN-SYSTEM.md).
 
-## Stan obecny (jeszcze NIE podłączone do modułów)
-Ten plik na razie leży tu jako gotowa baza. Żaden moduł jeszcze go nie
-używa - to następny krok.
+## Skrót
 
-## Plan podłączenia (do zrobienia per moduł)
-Dla każdego modułu (`apps/<nazwa>/public/`):
-1. Skopiuj `base.css` jako `apps/<nazwa>/public/base.css` (identyczna kopia).
-2. Z istniejącego `<style>` w index.html (albo starego style.css/styles.css)
-   zostaw TYLKO to, co unikalne dla tego modułu (własne listy, widgety),
-   zapisz jako `apps/<nazwa>/public/app.css`. Usuń duplikaty reguł, które
-   są już w base.css.
-3. W index.html: usuń `<style>...</style>`, dodaj w `<head>`:
-   ```html
-   <link rel="stylesheet" href="base.css">
-   <link rel="stylesheet" href="app.css">
-   ```
-4. Odśwież i porównaj wizualnie przed/po - upewnij się że nic się nie
-   rozjechało.
-
-## Jeśli zmieniasz kolory/wygląd w przyszłości
-Zmień `base.css` w JEDNYM miejscu (np. tu, w `shared-styles/`), potem
-skopiuj identycznie do wszystkich `apps/*/public/base.css`. Nie edytuj
-kopii w poszczególnych modułach osobno - rozjadą się.
-
-## Kolejność modułów do przerobienia (od najprostszych)
-1. Drukarka projektów - już czysta (można od razu podpiąć base.css +
-   przenieść resztę do app.css, jako pierwszy test wzorca).
-2. Karty katalogowe, Drukarka, Pieczątki PDF - mają już osobny plik CSS,
-   więc łatwiej odseparować unikalne reguły.
-3. Formularze Ecodan, Dokumenty seryjne, Wnioski powykonawcze - całość
-   inline w index.html, wymaga najwięcej pracy przy wyciąganiu.
+- `tokens.css` + `components.css` + `icons.svg` to jedyne źródło prawdy dla
+  wyglądu wszystkich modułów.
+- Każdy moduł (`apps/<nazwa>/server.js`) serwuje ten katalog pod `/shared` przez
+  `express.static(...)` i linkuje go bezpośrednio w `<head>` — **nie kopiuje**
+  plików do siebie. Zmiana tutaj jest od razu widoczna wszędzie.
+- Rzeczy unikalne dla jednego modułu (własne widgety, listy, nietypowy layout)
+  zostają w małym `apps/<nazwa>/public/app.css`, ładowanym po `components.css`.
+- Stare `base.css` (kopiowane ręcznie do `apps/*/public/base.css`) zostało
+  usunięte 2026-07-30 - powodowało rozjazd kopii i warstwy `!important`
+  ("UI refresh", "v3", "final polish") w każdym module.

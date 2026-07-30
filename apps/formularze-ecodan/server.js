@@ -68,6 +68,7 @@ const heavyJobLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
+app.use('/shared', express.static(path.join(__dirname, '..', '..', 'shared-styles')));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const uploadDir = path.join(__dirname, 'uploads');

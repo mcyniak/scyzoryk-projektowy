@@ -61,6 +61,7 @@ const apiLimiter = rateLimit({
   message: { ok: false, message: "Za duzo zadan w krotkim czasie. Odczekaj chwile i sprobuj ponownie." }
 });
 app.use("/api", apiLimiter);
+app.use('/shared', express.static(path.join(__dirname, '..', '..', 'shared-styles')));
 app.use(express.static(path.join(__dirname, "public")));
 
 const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });

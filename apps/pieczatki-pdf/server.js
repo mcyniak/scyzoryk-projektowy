@@ -103,6 +103,7 @@ app.use((req, res, next) => {
   res.status(403).json({ error: 'Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie.' });
 });
 app.use('/pdfjs', express.static(path.join(ROOT, 'node_modules', 'pdfjs-dist', 'build')));
+app.use('/shared', express.static(path.join(ROOT, '..', '..', 'shared-styles')));
 app.use(express.static(path.join(ROOT, 'public')));
 app.use(express.json({ limit: '4mb' }));
 

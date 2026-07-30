@@ -88,6 +88,7 @@ const heavyJobLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
+app.use('/shared', express.static(path.join(ROOT, '..', '..', 'shared-styles')));
 app.use(express.static(path.join(ROOT, 'public')));
 
 const jobs = new Map();

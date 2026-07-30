@@ -1,0 +1,131 @@
+/* ============================================================
+   Scyzoryk Design System - tokens.css
+   Jedyne źródło prawdy dla kolorów, odstępów, promieni, cieni,
+   typografii i czasów animacji. Serwowane przez każdy moduł pod
+   /shared/tokens.css (patrz docs/UI-DESIGN-SYSTEM.md) - NIE kopiuj
+   tego pliku do apps (katalog public), tylko linkuj bezpośrednio.
+   ============================================================ */
+
+:root {
+  /* --- Kolory: neutralne (chłodny, jasny szary) --- */
+  --gray-0: #ffffff;
+  --gray-25: #fbfcfd;
+  --gray-50: #f4f6f8;
+  --gray-100: #eceef2;
+  --gray-200: #e1e5eb;
+  --gray-300: #cbd2dc;
+  --gray-400: #9aa4b2;
+  --gray-500: #6b7684;
+  --gray-600: #4b5563;
+  --gray-700: #384152;
+  --gray-800: #1f2530;
+  --gray-900: #12151c;
+
+  /* --- Marka: czerwień Scyzoryka (akcent, przycisk główny, logo) --- */
+  --brand-50: #fdecec;
+  --brand-100: #fad2d3;
+  --brand-500: #cf171f;
+  --brand-600: #b8141b;
+  --brand-700: #971117;
+  --brand-contrast: #ffffff;
+
+  /* --- Błąd: świadomie inny odcień niż marka (rose/crimson), żeby nie
+     mylić "to jest przycisk czerwony" z "to jest błąd" --- */
+  --danger-50: #fef1f3;
+  --danger-100: #fbd8de;
+  --danger-500: #e11d48;
+  --danger-600: #be123c;
+  --danger-700: #9f1239;
+
+  /* --- Sukces --- */
+  --success-50: #ecfdf5;
+  --success-100: #d1fae5;
+  --success-500: #059669;
+  --success-600: #047857;
+
+  /* --- Ostrzeżenie --- */
+  --warning-50: #fffbeb;
+  --warning-100: #fef1c7;
+  --warning-500: #d97706;
+  --warning-600: #b45309;
+
+  /* --- Informacja / linki --- */
+  --info-50: #eff6ff;
+  --info-100: #dbeafe;
+  --info-500: #2563eb;
+  --info-600: #1d4ed8;
+
+  /* --- Znaczenie semantyczne (nazwy uzywane w components.css) --- */
+  --bg-page: var(--gray-50);
+  --bg-surface: var(--gray-0);
+  --bg-surface-muted: var(--gray-25);
+  --bg-sunken: var(--gray-100);
+  --border-default: var(--gray-200);
+  --border-strong: var(--gray-300);
+  --text-primary: var(--gray-900);
+  --text-secondary: var(--gray-600);
+  --text-tertiary: var(--gray-500);
+  --text-on-brand: var(--brand-contrast);
+  --focus-ring: rgba(37, 99, 235, .38);
+
+  /* --- Spacing (skala 4px) --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* --- Promienie --- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 999px;
+
+  /* --- Cienie: subtelne, nigdy "unoszące pół ekranu" --- */
+  --shadow-xs: 0 1px 2px rgba(16, 24, 40, .06);
+  --shadow-sm: 0 2px 6px rgba(16, 24, 40, .07);
+  --shadow-md: 0 8px 20px rgba(16, 24, 40, .09);
+  --shadow-lg: 0 16px 36px rgba(16, 24, 40, .12);
+  --shadow-focus: 0 0 0 4px var(--focus-ring);
+
+  /* --- Typografia --- */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", var(--font-sans);
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14.5px;
+  --text-md: 16px;
+  --text-lg: 19px;
+  --text-xl: 24px;
+  --text-2xl: 30px;
+  --text-3xl: 38px;
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-normal: 1.55;
+
+  /* --- Ruch --- */
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 220ms;
+  --ease-standard: cubic-bezier(.2, .8, .2, 1);
+
+  /* --- Rozmiar minimalnego obszaru klikalnego (WCAG) --- */
+  --hit-min: 42px;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Narzędzie jest projektowane jako jasny "workspace"; ciemny motyw
+     nie jest w zakresie tego redesignu, ale nie wymuszamy jasnych barw
+     na elementach natywnych przegladarki (scrollbary, kontrolki formularzy). */
+  :root { color-scheme: light; }
+}

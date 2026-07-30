@@ -5,42 +5,50 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Drukarka projektów</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-  <link rel="stylesheet" href="base.css" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
-  <main class="app shell">
-    <div class="topbar">
-      <a class="logo" href="http://127.0.0.1:3000/">
-        <span class="logo-mark" aria-hidden="true"></span>
-        <span><span class="logo-small">Scyzoryk</span>Drukarka projektów</span>
-      </a>
-      <a class="button-link ghost top-link" href="http://127.0.0.1:3000">← Panel główny</a>
-    </div>
-
-    <!-- Wybór trybu: projekty (arkusz Excel) albo wnioski materiałowe (WM) -->
-    <!-- To jest pierwsza rzecz jaka uzytkownik widzi i decyzja, od ktorej
-         zalezy cala reszta strony - musi wygladac jak GLOWNY punkt strony,
-         a nie jak jeszcze jeden maly krok, dlatego uzywa tych samych klas
-         .hero/.hero-main/.info-card co sekcje "Drukarka projektów"/"WM"
-         ponizej. -->
-    <section class="hero" id="panelModeChoice">
-      <div class="glass hero-main">
-        <div class="kicker">Zacznij tutaj</div>
-        <h1>Co drukujesz?</h1>
-        <p class="lead">Wybierz tryb pracy - drukarka przeprowadzi Cię przez resztę krok po kroku. Pamięta oba tryby, ale pracujesz zawsze tylko w jednym naraz.</p>
-        <div class="hero-actions">
-          <button id="modeProjektyBtn" class="ghost mode-btn" type="button">📁 Drukuj projekty (arkusz Excel)</button>
-          <button id="modeWmBtn" class="ghost mode-btn" type="button">📄 Drukuj wnioski materiałowe (WM)</button>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="http://127.0.0.1:3000/">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-folder"/></svg>
+          <strong>Drukarka projektów</strong>
         </div>
       </div>
-      <aside class="glass info-card">
-        <h2>2 tryby</h2>
-        <div class="pill-list">
-          <div class="pill">Projekty: arkusz Excel + folder z projektami adresów</div>
-          <div class="pill">Wnioski materiałowe (WM): jeden folder, jeden adres</div>
+      <a class="btn btn-ghost btn-sm" href="http://127.0.0.1:3000">
+        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+        Panel główny
+      </a>
+    </header>
+
+    <!-- Wybór trybu: projekty (arkusz Excel) albo wnioski materiałowe (WM) -->
+    <section class="panel" id="panelModeChoice">
+      <div class="panel-header">
+        <div>
+          <div class="kicker">Zacznij tutaj</div>
+          <h2 class="panel-title" style="font-size: var(--text-xl); margin-top: 6px;">Co drukujesz?</h2>
+          <p class="panel-desc">Wybierz tryb pracy — drukarka przeprowadzi Cię przez resztę krok po kroku. Pamięta oba tryby, ale pracujesz zawsze tylko w jednym naraz.</p>
         </div>
-      </aside>
+      </div>
+      <div class="mode-choice">
+        <button id="modeProjektyBtn" class="mode-card ghost" type="button">
+          <span class="mode-card-icon"><svg class="icon icon-lg"><use href="/shared/icons.svg#i-table"/></svg></span>
+          <span class="mode-card-title">Drukuj projekty</span>
+          <span class="mode-card-desc">Arkusz Excel + folder z projektami adresów. Wiele adresów naraz.</span>
+        </button>
+        <button id="modeWmBtn" class="mode-card ghost" type="button">
+          <span class="mode-card-icon"><svg class="icon icon-lg"><use href="/shared/icons.svg#i-file-check"/></svg></span>
+          <span class="mode-card-title">Drukuj wnioski materiałowe (WM)</span>
+          <span class="mode-card-desc">Jeden folder, jeden adres. Do szybkiego pojedynczego wydruku.</span>
+        </button>
+      </div>
     </section>
 
     <div id="flowProjekty" style="display:none;">
@@ -56,23 +64,7 @@
         <div class="step-dot" data-step="5"><span class="dot">5</span><span class="step-label">Druk</span></div>
       </nav>
 
-      <section class="hero">
-        <div class="glass hero-main">
-          <div class="kicker">Automatyczne przygotowanie dokumentacji</div>
-          <h1>Drukarka projektów</h1>
-          <p class="lead">Wgraj arkusz inwestycji, wybierz adres bez odbioru i rezygnacji, a narzędzie samo znajdzie folder projektu, odczyta kolejność z Opisu technicznego i przygotuje pliki do druku.</p>
-        </div>
-        <aside class="glass info-card">
-          <h2>5 kroków</h2>
-          <div class="pill-list">
-            <div class="pill">Wgraj arkusz i wybierz zakładkę</div>
-            <div class="pill">Wybierz jeden lub kilka adresów naraz</div>
-            <div class="pill">Wskaż folder z projektami</div>
-            <div class="pill">Sprawdź proponowaną kolejność</div>
-            <div class="pill">Wyślij do druku</div>
-          </div>
-        </aside>
-      </section>
+      <p class="hint" style="margin: -8px 0 var(--space-4);">Wgraj arkusz inwestycji, wybierz adres bez odbioru i rezygnacji, a narzędzie samo znajdzie folder projektu, odczyta kolejność z Opisu technicznego i przygotuje pliki do druku.</p>
 
       <!-- KROK 1: Arkusz -->
       <section class="panel" id="panelExcel">
@@ -84,11 +76,11 @@
         </div>
         <div class="field-row">
           <label class="option-field">
-            <span>Plik Excel</span>
+            <span class="option-label">Plik Excel</span>
             <input id="excelInput" type="file" accept=".xlsx,.xls" />
           </label>
           <label class="option-field">
-            <span>Zakładka</span>
+            <span class="option-label">Zakładka</span>
             <select id="sheetSelect" disabled>
               <option value="">— najpierw wgraj plik —</option>
             </select>
@@ -105,15 +97,15 @@
             <p class="panel-desc">Lista pokazuje tylko adresy bez zaznaczonego odbioru i bez rezygnacji, posortowane po LP gminy. Zaznacz jeden albo kilka - można drukować całą paczkę naraz.</p>
           </div>
         </div>
-        <div style="display:flex; align-items:center; gap:14px; margin-bottom:12px;">
-          <label style="display:flex; align-items:center; gap:8px; font-weight:800; color:#334155; cursor:pointer;">
+        <div class="candidate-toolbar">
+          <label class="candidate-select-all">
             <input type="checkbox" id="selectAllCandidates" /> Zaznacz wszystkie
           </label>
-          <span id="selectedCountLabel" class="help-note" style="margin:0;">0 zaznaczonych</span>
+          <span id="selectedCountLabel" class="hint" style="margin:0;">0 zaznaczonych</span>
         </div>
         <ul id="candidateList" class="candidate-list"></ul>
-        <div style="margin-top:16px;">
-          <button id="candidatesNextBtn" type="button" disabled>Dalej →</button>
+        <div style="margin-top: var(--space-4);">
+          <button id="candidatesNextBtn" class="btn btn-primary" type="button" disabled>Dalej →</button>
         </div>
       </section>
 
@@ -127,11 +119,11 @@
         </div>
         <div class="field-row">
           <label class="option-field" style="grid-column: 1 / -1;">
-            <span>Ścieżka folderu bazowego</span>
+            <span class="option-label">Ścieżka folderu bazowego</span>
             <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." />
           </label>
         </div>
-        <button id="matchBtn" type="button">Znajdź projekty</button>
+        <button id="matchBtn" class="btn btn-primary" type="button">Znajdź projekty</button>
         <div id="matchError"></div>
       </section>
 
@@ -147,8 +139,8 @@
         <div id="missingFoldersBox"></div>
         <div id="orderError"></div>
         <div id="addressGroups"></div>
-        <div style="margin-top:16px; display:flex; gap:12px;">
-          <button id="confirmOrderBtn" type="button">Zatwierdź i dodaj wszystko do kolejki →</button>
+        <div style="margin-top: var(--space-4);">
+          <button id="confirmOrderBtn" class="btn btn-primary btn-lg" type="button">Zatwierdź i dodaj wszystko do kolejki →</button>
         </div>
       </section>
     </div>
@@ -163,21 +155,7 @@
         <div class="step-dot" data-step="3"><span class="dot">3</span><span class="step-label">Druk</span></div>
       </nav>
 
-      <section class="hero">
-        <div class="glass hero-main">
-          <div class="kicker">Automatyczne przygotowanie dokumentacji</div>
-          <h1>Wnioski materiałowe (WM)</h1>
-          <p class="lead">Wskaż folder z wnioskami materiałowymi dla jednego adresu, a narzędzie samo znajdzie strony tytułowe i załączniki, ułoży je w kolejności i przygotuje do druku.</p>
-        </div>
-        <aside class="glass info-card">
-          <h2>3 kroki</h2>
-          <div class="pill-list">
-            <div class="pill">Wskaż folder WM</div>
-            <div class="pill">Sprawdź znalezione dokumenty</div>
-            <div class="pill">Wyślij do druku</div>
-          </div>
-        </aside>
-      </section>
+      <p class="hint" style="margin: -8px 0 var(--space-4);">Wskaż folder z wnioskami materiałowymi dla jednego adresu, a narzędzie samo znajdzie strony tytułowe i załączniki, ułoży je w kolejności i przygotuje do druku.</p>
 
       <section class="panel" id="panelWm">
         <div class="panel-header">
@@ -188,14 +166,14 @@
         </div>
         <div class="field-row">
           <label class="option-field" style="grid-column: 1 / -1;">
-            <span>Ścieżka folderu WM</span>
+            <span class="option-label">Ścieżka folderu WM</span>
             <input id="wmFolderInput" type="text" placeholder="G:\Dyski współdzielone\...\Projekty\<adres>\WM" />
           </label>
         </div>
-        <label style="display:flex; align-items:center; gap:8px; font-weight:800; color:#334155; cursor:pointer; margin-bottom:14px;">
+        <label style="display:flex; align-items:center; gap:8px; font-weight:700; color: var(--text-secondary); cursor:pointer; margin-bottom: var(--space-4);">
           <input type="checkbox" id="wmDokPodCheckbox" /> Wersja powykonawcza (dok.pod)
         </label>
-        <button id="wmScanBtn" type="button">Skanuj folder WM</button>
+        <button id="wmScanBtn" class="btn btn-primary" type="button">Skanuj folder WM</button>
         <div id="wmError"></div>
         <div id="wmResults"></div>
       </section>
@@ -211,29 +189,29 @@
       </div>
       <div class="field-row">
         <label class="option-field" style="grid-column: 1 / -1;">
-          <span>Drukarka</span>
+          <span class="option-label">Drukarka</span>
           <select id="printerSelect">
             <option value="">Ładowanie listy drukarek...</option>
           </select>
         </label>
       </div>
-      <div id="queueStatusText" class="help-note" style="margin-bottom:10px;">Kolejka jest pusta.</div>
+      <div id="queueStatusText" class="hint" style="margin-bottom: var(--space-3);">Kolejka jest pusta.</div>
       <div class="field-row">
         <label class="option-field">
-          <span>Kopie</span>
+          <span class="option-label">Kopie</span>
           <input id="copiesInput" type="number" min="1" max="20" value="1" />
         </label>
         <label class="option-field">
-          <span>Strony</span>
+          <span class="option-label">Strony</span>
           <select id="sideModeInput">
             <option value="two-sided" selected>Dwustronnie</option>
             <option value="one-sided">Jednostronnie</option>
           </select>
         </label>
       </div>
-      <div style="display:flex; gap:12px; align-items:center;">
-        <button id="clearBtn" class="ghost" type="button">Zacznij od nowa</button>
-        <button id="printBtn" type="button" style="margin-left:auto;">DRUKUJ</button>
+      <div style="display:flex; gap: var(--space-3); align-items:center;">
+        <button id="clearBtn" class="btn btn-secondary" type="button">Zacznij od nowa</button>
+        <button id="printBtn" class="btn btn-primary btn-lg print" type="button" style="margin-left:auto;">Drukuj</button>
       </div>
       <div class="status-box">
         <div id="statusText">Gotowy</div>
@@ -243,10 +221,10 @@
   </main>
 
   <div class="modal-overlay" id="previewModal">
-    <div class="modal-box">
+    <div class="modal-box modal-lg">
       <div class="modal-head">
         <strong id="previewModalTitle">Podgląd</strong>
-        <button id="previewModalClose" class="ghost" type="button">Zamknij</button>
+        <button id="previewModalClose" class="btn btn-icon btn-secondary" type="button" aria-label="Zamknij"><svg class="icon"><use href="/shared/icons.svg#i-x"/></svg></button>
       </div>
       <iframe id="previewModalFrame" title="Podgląd PDF"></iframe>
     </div>

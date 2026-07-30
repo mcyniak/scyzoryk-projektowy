@@ -5,94 +5,101 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Drukarka dokumentów</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-  <link rel="stylesheet" href="base.css" />
-  <link rel="stylesheet" href="style.css" />
-<style>/* final-user-polish */ input[type=checkbox]{accent-color:#d71924!important;width:18px!important;height:18px!important;}</style></head>
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
 <body>
-  <main class="app shell">
-    <div class="topbar">
-      <a class="logo" href="#" data-main-link aria-label="Wróć do panelu">
-        <span class="logo-mark" aria-hidden="true"></span>
-        <span><span class="logo-small">Scyzoryk</span>Drukarka dokumentów</span>
-      </a>
-      <a class="button-link ghost top-link" href="#" data-main-link>← Panel główny</a>
-    </div>
-
-    <section class="hero">
-      <div class="glass hero-main">
-        <div class="kicker">Drukowanie dokumentów</div>
-        <h1>Drukarka dokumentów</h1>
-        <p class="lead">Dodaj pliki PDF/DOC/DOCX, ustaw kolejność, wybierz kopie oraz druk jednostronny albo dwustronny i uruchom drukowanie z jednego miejsca.</p>
-        <div class="hero-actions">
-          <button id="addBtn" type="button">Dodaj pliki</button>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-printer"/></svg>
+          <strong>Drukarka dokumentów</strong>
         </div>
       </div>
-      <aside class="glass info-card">
-        <h2>Jak działa?</h2>
-        <div class="pill-list">
-          <div class="pill">Dodaj dokumenty.</div>
-          <div class="pill">Ustaw kolejność i kopie.</div>
-          <div class="pill">Wyślij całość do drukarki.</div>
-        </div>
-      </aside>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <section class="panel intro-panel">
+      <div class="intro-text">
+        <div class="kicker">Drukowanie dokumentów</div>
+        <h1>Dodaj, ułóż i wydrukuj</h1>
+        <p class="lead">Dodaj pliki PDF/DOC/DOCX, ustaw kolejność, wybierz kopie oraz druk jednostronny albo dwustronny i uruchom drukowanie z jednego miejsca.</p>
+      </div>
+      <button id="addBtn" type="button" class="btn btn-primary btn-lg">
+        <svg class="icon"><use href="/shared/icons.svg#i-plus"/></svg>
+        Dodaj pliki
+      </button>
     </section>
 
     <section class="panel">
       <div class="panel-header">
         <div>
           <h2 class="panel-title">Kolejka i podgląd</h2>
-          <p class="panel-desc">Przeciągnij pliki na pole po lewej albo użyj przycisku „Dodaj pliki”.</p>
+          <p class="panel-desc">Przeciągnij pliki na pole po lewej albo użyj przycisku „Dodaj pliki” powyżej.</p>
         </div>
       </div>
 
-      <div class="workspace">
+      <div class="split workspace">
         <div class="left">
-          <div id="dropZone" class="drop-zone">
+          <div id="dropZone" class="dropzone">
+            <svg class="icon icon-lg"><use href="/shared/icons.svg#i-upload-cloud"/></svg>
             <strong>Przeciągnij tutaj pliki</strong>
-            <span>albo kliknij „Dodaj pliki” u góry</span>
+            <span class="dz-hint">albo kliknij „Dodaj pliki” u góry</span>
           </div>
           <ul id="fileList" class="file-list"></ul>
         </div>
 
-        <aside class="preview">
-          <div class="preview-head">
-            <div class="preview-title">Podgląd PDF</div>
-            <div class="zoom-controls" aria-label="Przybliżenie podglądu PDF">
-              <button id="zoomOutBtn" class="zoom-btn" type="button" title="Pomniejsz">−</button>
-              <button id="zoomFitBtn" class="zoom-btn wide" type="button" title="Dopasuj do szerokości">Dopasuj</button>
-              <button id="zoomInBtn" class="zoom-btn" type="button" title="Powiększ">+</button>
-              <span id="zoomLabel" class="zoom-label">Dopasuj</span>
-            </div>
+        <aside class="doc-viewer">
+          <div class="doc-viewer-toolbar">
+            <span class="preview-title">Podgląd PDF</span>
+            <span style="flex:1"></span>
+            <button id="zoomOutBtn" class="btn btn-icon" type="button" title="Pomniejsz" aria-label="Pomniejsz"><svg class="icon"><use href="/shared/icons.svg#i-zoom-out"/></svg></button>
+            <button id="zoomFitBtn" class="btn btn-icon" type="button" title="Dopasuj do szerokości" aria-label="Dopasuj do szerokości"><svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg></button>
+            <button id="zoomInBtn" class="btn btn-icon" type="button" title="Powiększ" aria-label="Powiększ"><svg class="icon"><use href="/shared/icons.svg#i-zoom-in"/></svg></button>
+            <span id="zoomLabel" class="zoom-label">Dopasuj</span>
           </div>
-          <iframe id="pdfPreview" title="Podgląd PDF"></iframe>
-          <div id="previewFallback" class="preview-fallback">Wybierz PDF z listy</div>
+          <div class="doc-viewer-stage">
+            <iframe id="pdfPreview" title="Podgląd PDF"></iframe>
+            <div id="previewFallback" class="preview-fallback">Wybierz PDF z listy</div>
+          </div>
         </aside>
       </div>
     </section>
 
     <section class="panel controls-panel">
       <input id="fileInput" type="file" multiple accept=".pdf,.doc,.docx" hidden />
-      <div class="print-options" aria-label="Ustawienia druku">
-        <label class="option-field wide">
-          <span>Drukarka</span>
+      <div class="field-row print-options" aria-label="Ustawienia druku">
+        <label class="option-field">
+          <span class="option-label">Drukarka</span>
           <select id="printerSelectInput"><option value="">Domyslna systemu</option></select>
         </label>
 
-        <label class="option-field compact">
-          <span>Kopie</span>
+        <label class="option-field">
+          <span class="option-label">Kopie</span>
           <input id="copiesInput" type="number" min="1" max="20" value="1" />
         </label>
 
         <label class="option-field">
-          <span>Strony</span>
+          <span class="option-label">Strony</span>
           <select id="sideModeInput">
             <option value="two-sided" selected>Dwustronnie</option>
             <option value="one-sided">Jednostronnie</option>
           </select>
         </label>
 
-        <label class="option-field wide">
-          <span>Układ kopii</span>
+        <label class="option-field">
+          <span class="option-label">Układ kopii</span>
           <select id="copyModeInput">
             <option value="file">Kopia przy każdym pliku: A, A, B, B</option>
             <option value="set">Najpierw komplet, potem kopia: A, B, A, B</option>
@@ -101,11 +108,14 @@
         <input id="delayInput" type="hidden" value="1" />
       </div>
 
-      <div id="jobSummary" class="job-summary">1 kopia · dwustronnie · kolejność plików z listy</div>
+      <div id="jobSummary" class="hint job-summary">1 kopia · dwustronnie · kolejność plików z listy</div>
 
       <div class="controls">
-        <button id="clearBtn" class="ghost" type="button">Wyczyść</button>
-        <button id="printBtn" class="print" type="button">DRUKUJ</button>
+        <button id="clearBtn" class="btn btn-secondary" type="button">Wyczyść</button>
+        <button id="printBtn" class="btn btn-primary btn-lg print" type="button">
+          <svg class="icon"><use href="/shared/icons.svg#i-printer"/></svg>
+          Drukuj
+        </button>
       </div>
 
       <div class="status-box">

@@ -5,23 +5,34 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Panel admina - Scyzoryk</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/shared/components.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <main class="shell admin-shell">
-    <header class="topbar clean-topbar">
-      <a class="logo" href="/" aria-label="Scyzoryk Projektowy">
-        <span class="logo-mark" aria-hidden="true"></span>
-        <span>Scyzoryk Projektowy</span>
-      </a>
-      <a class="small-help-link" href="/">Wróć do panelu użytkownika</a>
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="/" aria-label="Scyzoryk Projektowy">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+          <span class="app-brand-text">Scyzoryk Projektowy</span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool"><strong>Panel administratora</strong></div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="/">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel użytkownika
+        </a>
+      </div>
     </header>
 
-    <section class="glass admin-hero">
+    <section class="panel admin-hero">
       <div>
         <div class="kicker">Administracja</div>
-        <h1>Panel administratora</h1>
-        <p class="lead">Status usług, kolejki, restarty, pamięć, dane robocze i logi. Status techniczny, logi i szybkie informacje serwisowe w jednym miejscu.</p>
+        <h1>Status wszystkich narzędzi</h1>
+        <p class="lead">Status usług, kolejki, restarty, pamięć, dane robocze i logi w jednym miejscu.</p>
         <div class="admin-hero-chips" aria-label="Zakres panelu administratora">
           <span>Usługi</span>
           <span>Kolejki Word</span>
@@ -30,16 +41,19 @@
         </div>
       </div>
       <div class="admin-actions">
-        <button class="button-link admin-refresh" id="refreshBtn" type="button">Odśwież</button>
+        <button class="btn btn-secondary admin-refresh" id="refreshBtn" type="button">
+          <svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg>
+          Odśwież
+        </button>
         <span class="quiet" id="lastRefresh">Jeszcze nie sprawdzono</span>
       </div>
     </section>
 
     <section class="admin-metrics" aria-live="polite">
-      <article class="status-card"><span class="metric-label">Usługi</span><strong id="metricServices">--</strong><small>działające / wszystkie</small></article>
-      <article class="status-card"><span class="metric-label">Pamięć Node</span><strong id="metricMemory">--</strong><small>RSS procesu głównego</small></article>
-      <article class="status-card"><span class="metric-label">Dane robocze</span><strong id="metricStorage">--</strong><small>rozmiar katalogu apps</small></article>
-      <article class="status-card"><span class="metric-label">Uptime</span><strong id="metricUptime">--</strong><small>czas działania panelu</small></article>
+      <article class="status-card panel"><span class="metric-label">Usługi</span><strong id="metricServices" class="tabular">--</strong><small>działające / wszystkie</small></article>
+      <article class="status-card panel"><span class="metric-label">Pamięć Node</span><strong id="metricMemory" class="tabular">--</strong><small>RSS procesu głównego</small></article>
+      <article class="status-card panel"><span class="metric-label">Dane robocze</span><strong id="metricStorage" class="tabular">--</strong><small>rozmiar katalogu apps</small></article>
+      <article class="status-card panel"><span class="metric-label">Uptime</span><strong id="metricUptime" class="tabular">--</strong><small>czas działania panelu</small></article>
     </section>
 
     <section class="panel admin-panel">
@@ -49,8 +63,8 @@
           <p class="panel-desc">Kliknij link, żeby otworzyć moduł. Gdy status jest czerwony, proces się uruchamia albo ostatni healthcheck nie odpowiedział.</p>
         </div>
       </div>
-      <div class="admin-table-wrap">
-        <table class="admin-table">
+      <div class="table-wrap">
+        <table class="table table-row-hover" id="appsTable">
           <thead>
             <tr>
               <th>Narzędzie</th>
@@ -59,7 +73,7 @@
               <th>Kolejka</th>
               <th>Restarty</th>
               <th>Healthcheck</th>
-              <th>Link</th>
+              <th class="col-actions">Link</th>
             </tr>
           </thead>
           <tbody id="appsBody">

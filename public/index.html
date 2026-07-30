@@ -5,121 +5,204 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scyzoryk Projektowy</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/shared/tokens.css">
+  <link rel="stylesheet" href="/shared/components.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <svg style="display:none" aria-hidden="true"><use id="i-preload"/></svg>
   <main class="shell">
-    <header class="topbar clean-topbar">
-      <a class="logo" href="/" aria-label="Scyzoryk Projektowy">
-        <span class="logo-mark" aria-hidden="true"></span>
-        <span>Scyzoryk Projektowy</span>
-      </a>
-      <button type="button" class="small-help-link" id="helpTopLink">Pomoc</button>
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="/" aria-label="Scyzoryk Projektowy">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+          <span class="app-brand-text">Scyzoryk Projektowy</span>
+        </a>
+      </div>
+      <div class="app-header-right">
+        <button type="button" class="btn btn-ghost btn-sm" id="helpTopLink">
+          <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
+          Pomoc
+        </button>
+      </div>
     </header>
 
-    <section class="hero user-hero single-hero">
-      <div class="glass hero-main">
+    <section class="hero">
+      <div class="panel hero-main">
         <div class="kicker">Panel narzędzi</div>
         <h1>Co chcesz teraz zrobić?</h1>
-        <p class="lead">Wybierz zadanie, które chcesz wykonać. Każde narzędzie podpowiada, jakie pliki dodać i przygotowuje gotowy wynik do pobrania albo druku.</p>
+        <p class="lead">Automatyzuje powtarzalne prace z dokumentami: tworzenie plików dla wielu adresów, przygotowanie dokumentacji do druku, dodawanie pieczątek, uzupełnianie formularzy i porządkowanie załączników.</p>
       </div>
-    </section>
-
-    <section class="panel value-panel" id="valuePanel">
-      <div class="panel-header simple-header">
-        <div>
-          <h2 class="panel-title">Do czego służy Scyzoryk?</h2>
-          <p class="panel-desc">Automatyzuje powtarzalne prace z dokumentami: tworzenie plików dla wielu adresów, przygotowanie dokumentacji do druku, dodawanie pieczątek, uzupełnianie formularzy i porządkowanie załączników.</p>
+      <div class="panel hero-search-card">
+        <label class="label" for="toolSearchInput">Szukaj narzędzia</label>
+        <div class="tool-search">
+          <svg class="icon"><use href="/shared/icons.svg#i-search"/></svg>
+          <input type="search" id="toolSearchInput" placeholder="np. pieczątki, OCR, druk..." autocomplete="off">
+          <kbd>/</kbd>
+        </div>
+        <div class="stat-row" role="status" aria-live="polite">
+          <div class="stat"><strong id="statOnline">--</strong><small>gotowe</small></div>
+          <div class="stat"><strong id="statTotal">--</strong><small>narzędzia razem</small></div>
         </div>
       </div>
     </section>
 
-    <section class="panel" id="tools">
-      <div class="panel-header simple-header">
-        <div>
-          <h2 class="panel-title">Narzędzia</h2>
-          <p class="panel-desc">Wybierz kafelek odpowiadający zadaniu, które masz wykonać.</p>
+    <div id="tools" aria-label="Lista narzędzi">
+      <div class="tool-category" data-category="Drukowanie">
+        <div class="tool-category-head">
+          <svg class="icon"><use href="/shared/icons.svg#i-printer"/></svg>
+          <h2>Drukowanie</h2>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card panel" data-app="drukarka">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-printer"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>Drukarka dokumentów</h3>
+            <p>Dodaj dokumenty, ustaw kolejność i liczbę kopii, wyślij całą paczkę do drukarki.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3001">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
+
+          <article class="tool-card panel" data-app="drukarka-projekty">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-folder"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>Drukarka projektów</h3>
+            <p>Wgraj arkusz inwestycji, wybierz adresy — narzędzie znajdzie foldery i ułoży dokumenty w kolejności do druku.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3010">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
         </div>
       </div>
 
-      <div class="tool-grid" aria-label="Lista narzędzi">
-        <article class="tool-card" data-app="dokumenty-seryjne">
-          <div class="icon">📄</div>
-          <div class="card-topline"><h3>Dokumenty seryjne PDF</h3><span class="badge">sprawdzam</span></div>
-          <p>Tworzy komplet dokumentów seryjnych dla każdego adresu. Dodaj wzory Word i tabelę Excel z danymi, wybierz adresy, a narzędzie uzupełni dokumenty i zapisze osobny PDF dla każdej lokalizacji.</p>
-          <a class="button-link" href="http://127.0.0.1:3004">Otwórz narzędzie</a>
-          <div class="card-meta" aria-hidden="true"></div>
-        </article>
+      <div class="tool-category" data-category="Dokumenty">
+        <div class="tool-category-head">
+          <svg class="icon"><use href="/shared/icons.svg#i-file-check"/></svg>
+          <h2>Dokumenty</h2>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card panel" data-app="dokumenty-seryjne">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-file-check"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>Dokumenty seryjne PDF</h3>
+            <p>Wzory Word + tabela Excel → osobny, gotowy PDF dla każdego adresu.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3004">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
 
-        <article class="tool-card" data-app="pieczatki">
-          <div class="icon">🧾</div>
-          <div class="card-topline"><h3>Pieczątki PDF</h3><span class="badge">sprawdzam</span></div>
-          <p>Dodaje wybraną pieczątkę lub oznaczenie do jednego albo wielu plików PDF. Możesz wskazać strony, pozycję, rozmiar i zapisać ustawienia do ponownego użycia.</p>
-          <a class="button-link" href="http://127.0.0.1:3002">Otwórz narzędzie</a>
-          <div class="card-meta" aria-hidden="true"></div>
-        </article>
+          <article class="tool-card panel" data-app="wnioski-powykonawcze">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>Wnioski powykonawcze PDF</h3>
+            <p>Zamienia wnioski materiałowe Word na uporządkowaną dokumentację powykonawczą PDF.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3005">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
 
-        <article class="tool-card" data-app="drukarka">
-          <div class="icon">🖨️</div>
-          <div class="card-topline"><h3>Drukarka dokumentów</h3><span class="badge">sprawdzam</span></div>
-          <p>Przygotowuje paczkę plików do zwykłego drukowania. Dodaj dokumenty, ustaw ich kolejność i liczbę kopii, a następnie wyślij cały zestaw do drukarki.</p>
-          <a class="button-link" href="http://127.0.0.1:3001">Otwórz narzędzie</a>
-          <div class="card-meta" aria-hidden="true"></div>
-        </article>
-
-        <article class="tool-card" data-app="drukarka-projekty">
-          <div class="icon">📦</div>
-          <div class="card-topline"><h3>Drukarka projektów</h3><span class="badge">sprawdzam</span></div>
-          <p>Przygotowuje do druku pełną dokumentację projektową dla wybranych adresów. Wgraj arkusz inwestycji, wybierz lokalizacje, a narzędzie znajdzie właściwe foldery i ułoży dokumenty w wymaganej kolejności.</p>
-          <a class="button-link" href="http://127.0.0.1:3010">Otwórz narzędzie</a>
-          <div class="card-meta" aria-hidden="true"></div>
-        </article>
-
-        <article class="tool-card" data-app="formularze">
-          <div class="icon">📋</div>
-          <div class="card-topline"><h3>Generator formularzy</h3><span class="badge">sprawdzam</span></div>
-          <p>Tworzy gotowe formularze i raporty PDF na podstawie danych z Excela. Użyj go, gdy ten sam formularz trzeba przygotować dla wielu adresów lub urządzeń.</p>
-          <a class="button-link" href="http://127.0.0.1:3003">Otwórz narzędzie</a>
-          <div class="card-meta" aria-hidden="true"></div>
-        </article>
-
-        <article class="tool-card" data-app="wnioski-powykonawcze">
-          <div class="icon">📑</div>
-          <div class="card-topline"><h3>Wnioski powykonawcze PDF</h3><span class="badge">sprawdzam</span></div>
-          <p>Przekształca wnioski materiałowe Word w uporządkowaną dokumentację powykonawczą PDF. Użyj go, gdy po zakończeniu prac trzeba przygotować końcowe dokumenty dla inwestycji.</p>
-          <a class="button-link" href="http://127.0.0.1:3005">Otwórz narzędzie</a>
-          <div class="card-meta" aria-hidden="true"></div>
-        </article>
-
-        <article class="tool-card" data-app="karty-katalogowe">
-          <div class="icon">🗂️</div>
-          <div class="card-topline"><h3>Karty katalogowe</h3><span class="badge">sprawdzam</span></div>
-          <p>Dobiera właściwe karty katalogowe urządzeń na podstawie numerów UID z Excela i kopiuje je do folderów odpowiednich klientów lub adresów.</p>
-          <a class="button-link" href="http://127.0.0.1:3006">Otwórz narzędzie</a>
-          <div class="card-meta" aria-hidden="true"></div>
-        </article>
-
-        <article class="tool-card" data-app="ocr-audytow">
-          <div class="icon">🔍</div>
-          <div class="card-topline"><h3>OCR audytów</h3><span class="badge">sprawdzam</span></div>
-          <p>Odczytuje dane ze skanów audytów, również z odręcznych wpisów. Rozdziela zbiorcze pliki na poszczególne adresy i przygotowuje dane do dalszej pracy.</p>
-          <a class="button-link" href="http://127.0.0.1:3011">Otwórz narzędzie</a>
-          <div class="card-meta" aria-hidden="true"></div>
-        </article>
+          <article class="tool-card panel" data-app="formularze">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-table"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>Formularze Ecodan</h3>
+            <p>Dane z Excela trafiają automatycznie do formularza w zewnętrznym systemie — bez ręcznego przepisywania.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3003">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
+        </div>
       </div>
-    </section>
+
+      <div class="tool-category" data-category="PDF">
+        <div class="tool-category-head">
+          <svg class="icon"><use href="/shared/icons.svg#i-stamp"/></svg>
+          <h2>PDF</h2>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card panel" data-app="pieczatki">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-stamp"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>Pieczątki PDF</h3>
+            <p>Dodaje pieczątkę do jednego albo wielu plików PDF — pozycja, rozmiar i strony do wyboru.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3002">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div class="tool-category" data-category="Dane i OCR">
+        <div class="tool-category-head">
+          <svg class="icon"><use href="/shared/icons.svg#i-scan"/></svg>
+          <h2>Dane i OCR</h2>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card panel" data-app="karty-katalogowe">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-book"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>Karty katalogowe</h3>
+            <p>Dobiera karty katalogowe urządzeń po UID z Excela i kopiuje je do folderów klientów.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3006">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
+
+          <article class="tool-card panel" data-app="ocr-audytow">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-scan"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>OCR audytów</h3>
+            <p>Odczytuje skany audytów (także pismo ręczne), dzieli zbiorcze pliki na adresy.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3011">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <p class="tool-search-empty state" id="toolSearchEmpty">
+        <span class="state-icon"><svg class="icon icon-lg"><use href="/shared/icons.svg#i-search"/></svg></span>
+        <span>Brak narzędzi pasujących do „<span id="toolSearchEmptyQuery"></span>”.</span>
+      </p>
+    </div>
 
     <div class="help-modal-overlay" id="helpModalOverlay">
       <div class="help-modal-box" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
         <div class="help-modal-head">
           <strong id="helpModalTitle">Pomoc</strong>
-          <button type="button" class="help-modal-close" id="helpModalClose" aria-label="Zamknij">&times;</button>
+          <button type="button" class="help-modal-close" id="helpModalClose" aria-label="Zamknij">
+            <svg class="icon"><use href="/shared/icons.svg#i-x"/></svg>
+          </button>
         </div>
-        <div class="support-body support-simple">
+        <div class="support-body support-simple" style="padding: var(--space-5);">
           <p class="support-intro">Krótka pomoc do bezpiecznej pracy z plikami.</p>
-          <div class="notice-panel compact-notices">
-            <div class="notice warning"><strong>Word:</strong> Dokumenty seryjne i Wnioski powykonawcze wymagają Microsoft Word na tym komputerze.</div>
-            <div class="notice"><strong>Dysk Google:</strong> pliki powinny być dostępne offline, żeby Word mógł je otworzyć.</div>
+          <div class="compact-notices">
+            <div class="alert alert-warning"><svg class="icon"><use href="/shared/icons.svg#i-alert-triangle"/></svg><div class="alert-body"><div class="alert-title">Word</div><div class="alert-desc">Dokumenty seryjne i Wnioski powykonawcze wymagają Microsoft Word na tym komputerze.</div></div></div>
+            <div class="alert alert-info"><svg class="icon"><use href="/shared/icons.svg#i-info"/></svg><div class="alert-body"><div class="alert-title">Dysk Google</div><div class="alert-desc">Pliki powinny być dostępne offline, żeby Word mógł je otworzyć.</div></div></div>
           </div>
         </div>
       </div>

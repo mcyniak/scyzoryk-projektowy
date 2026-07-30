@@ -5,26 +5,36 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OCR audytów</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-  <link rel="stylesheet" href="base.css" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
   <main class="shell">
-    <div class="topbar">
-      <a class="logo" href="#" data-main-link aria-label="Wróć do panelu głównego">
-        <span class="logo-mark" aria-hidden="true"></span>
-        <span><span class="logo-small">Scyzoryk</span>OCR audytów</span>
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu głównego">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-scan"/></svg>
+          <strong>OCR audytów</strong>
+        </div>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+        Panel główny
       </a>
-      <a class="button-link ghost top-link" href="#" data-main-link>← Panel główny</a>
-    </div>
+    </header>
 
     <section class="hero">
-      <div class="glass hero-main">
+      <div class="panel hero-main">
         <div class="kicker">Rozpoznawanie tekstu</div>
         <h1>OCR skanów audytów</h1>
         <p class="lead">Wgraj zeskanowane PDF-y audytów. Program rozpozna tekst i odda ten sam dokument z niewidoczną warstwą tekstu - da się w niej zaznaczać, kopiować i wyszukiwać. Wygląd oryginału (w tym odręczne notatki) zostaje bez zmian.</p>
       </div>
-      <aside class="glass info-card">
+      <aside class="panel info-card">
         <h2>Jak to działa?</h2>
         <div class="pill-list">
           <div class="pill">Dokumenty, które już mają tekst (np. eksporty z aplikacji), zostają bez zmian - OCR jest pomijany.</div>
@@ -35,7 +45,7 @@
       </aside>
     </section>
 
-    <section class="glass panel">
+    <section class="panel">
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">1</span>Dodaj pliki PDF</h2>
@@ -44,9 +54,10 @@
       </div>
 
       <form id="form">
-        <div class="drop-zone" id="dropZone">
+        <div class="dropzone" id="dropZone">
+          <svg class="icon icon-lg"><use href="/shared/icons.svg#i-upload-cloud"/></svg>
           <strong>Przeciągnij pliki PDF tutaj</strong>
-          <span class="panel-desc">albo</span>
+          <span class="dz-hint">albo</span>
           <div style="margin-top:10px">
             <input id="files" name="files" type="file" accept=".pdf" multiple>
           </div>
@@ -55,8 +66,8 @@
         <div class="file-list" id="fileList" hidden></div>
 
         <div class="hero-actions">
-          <button type="submit" id="submitBtn">Rozpoznaj tekst</button>
-          <button type="button" id="clearBtn" class="ghost">Wyczyść</button>
+          <button type="submit" id="submitBtn" class="btn btn-primary">Rozpoznaj tekst</button>
+          <button type="button" id="clearBtn" class="btn btn-secondary">Wyczyść</button>
         </div>
       </form>
 
@@ -67,7 +78,7 @@
       <div id="errorBox"></div>
     </section>
 
-    <section class="glass panel" id="reviewPanel" hidden>
+    <section class="panel" id="reviewPanel" hidden>
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">2</span>Sprawdź podział na adresy</h2>
@@ -76,7 +87,7 @@
       </div>
       <div id="reviewFiles"></div>
       <div class="option-field" style="margin-top:18px">
-        <span>Rodzina protokołu - zawęża listę pól do uzupełnienia do tych, które faktycznie trafiają do tabelki adresowej tej rodziny</span>
+        <span class="option-label">Rodzina protokołu - zawęża listę pól do uzupełnienia do tych, które faktycznie trafiają do tabelki adresowej tej rodziny</span>
         <select id="familySelect">
           <option value="">— nie zawężaj (wszystkie pola) —</option>
           <option value="pc">Pompy ciepła</option>
@@ -85,18 +96,18 @@
         </select>
       </div>
       <div class="option-field" style="margin-top:12px">
-        <span>Wzór gminy - domyślnie program sam rozpoznaje wzór po nagłówku protokołu; tu możesz go wymusić ręcznie (np. jeśli automatyczne rozpoznanie zawiedzie)</span>
+        <span class="option-label">Wzór gminy - domyślnie program sam rozpoznaje wzór po nagłówku protokołu; tu możesz go wymusić ręcznie (np. jeśli automatyczne rozpoznanie zawiedzie)</span>
         <select id="templateSelect">
           <option value="">— rozpoznaj automatycznie —</option>
         </select>
       </div>
       <div class="hero-actions">
-        <button type="button" id="confirmBtn">Zatwierdź podział</button>
-        <button type="button" id="cancelReviewBtn" class="ghost">Anuluj</button>
+        <button type="button" id="confirmBtn" class="btn btn-primary">Zatwierdź podział</button>
+        <button type="button" id="cancelReviewBtn" class="btn btn-secondary">Anuluj</button>
       </div>
     </section>
 
-    <section class="glass panel" id="fieldsPanel" hidden>
+    <section class="panel" id="fieldsPanel" hidden>
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">3</span>Uzupełnij dane</h2>
@@ -109,10 +120,10 @@
         <div class="field-review-card">
           <div class="field-preview-box">
             <img id="fieldPreviewImg" alt="Podgląd miejsca na skanie">
-            <button type="button" id="fieldRemarkBtn" class="ghost" hidden>Popraw zaznaczenie</button>
+            <button type="button" id="fieldRemarkBtn" class="btn btn-secondary" hidden>Popraw zaznaczenie</button>
             <div id="fieldPreviewMissingBox" hidden>
-              <p id="fieldPreviewMissing" class="help-note">Nie udało się zlokalizować tego pola na skanie. Jeśli pole faktycznie jest puste w oryginale, od razu kliknij "Brak w oryginale" niżej - nie trzeba nic zaznaczać. Jeśli wartość tam jest, sprawdź w oryginalnym dokumencie i wpisz ją, albo zaznacz miejsce ręcznie poniżej.</p>
-              <button type="button" id="fieldMarkBtn" class="ghost">Zaznacz ręcznie na skanie</button>
+              <p id="fieldPreviewMissing" class="hint">Nie udało się zlokalizować tego pola na skanie. Jeśli pole faktycznie jest puste w oryginale, od razu kliknij "Brak w oryginale" niżej - nie trzeba nic zaznaczać. Jeśli wartość tam jest, sprawdź w oryginalnym dokumencie i wpisz ją, albo zaznacz miejsce ręcznie poniżej.</p>
+              <button type="button" id="fieldMarkBtn" class="btn btn-secondary">Zaznacz ręcznie na skanie</button>
             </div>
           </div>
           <div id="fieldMarkBox" hidden>
@@ -120,12 +131,18 @@
               <img id="markPageImg" alt="Cała strona - zaznacz obszar pola przeciągając myszą">
               <div id="markOverlay"></div>
             </div>
-            <p class="help-note">Przeciągnij prostokąt wokół pola na skanie. Jeśli to nie ta strona, przełącz się przyciskami niżej.</p>
-            <p class="help-note" id="markError" hidden></p>
+            <p class="hint">Przeciągnij prostokąt wokół pola na skanie. Jeśli to nie ta strona, przełącz się przyciskami niżej.</p>
+            <p class="hint" id="markError" hidden></p>
             <div class="hero-actions">
-              <button type="button" id="markPrevPageBtn" class="ghost">◀ Poprzednia strona</button>
-              <button type="button" id="markNextPageBtn" class="ghost">Następna strona ▶</button>
-              <button type="button" id="markCancelBtn" class="ghost">Anuluj</button>
+              <button type="button" id="markPrevPageBtn" class="btn btn-secondary">
+                <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+                Poprzednia strona
+              </button>
+              <button type="button" id="markNextPageBtn" class="btn btn-secondary">
+                Następna strona
+                <svg class="icon"><use href="/shared/icons.svg#i-chevron-right"/></svg>
+              </button>
+              <button type="button" id="markCancelBtn" class="btn btn-secondary">Anuluj</button>
             </div>
           </div>
           <div class="field-input-box">
@@ -134,9 +151,12 @@
             <form id="fieldForm">
               <input type="text" id="fieldValueInput" autocomplete="off" placeholder="Wpisz odczytaną wartość...">
               <div class="hero-actions">
-                <button type="button" id="fieldBackBtn" class="ghost">◀ Poprzednie pole</button>
-                <button type="submit">Zapisz i dalej (Enter)</button>
-                <button type="button" id="fieldSkipBtn" class="ghost">Brak w oryginale</button>
+                <button type="button" id="fieldBackBtn" class="btn btn-secondary">
+                  <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+                  Poprzednie pole
+                </button>
+                <button type="submit" class="btn btn-primary">Zapisz i dalej (Enter)</button>
+                <button type="button" id="fieldSkipBtn" class="btn btn-secondary">Brak w oryginale</button>
               </div>
             </form>
           </div>
@@ -144,28 +164,28 @@
       </div>
 
       <div id="excelStep" hidden>
-        <p class="help-note" id="familyChosenNote"></p>
+        <p class="hint" id="familyChosenNote"></p>
         <div class="option-field" style="margin-top:18px">
-          <span>Ścieżka do tabelki Excela (.xlsx) - stworzy NOWY plik z wierszami wszystkich przetworzonych adresów (nadpisze, jeśli coś już tam jest)</span>
+          <span class="option-label">Ścieżka do tabelki Excela (.xlsx) - stworzy NOWY plik z wierszami wszystkich przetworzonych adresów (nadpisze, jeśli coś już tam jest)</span>
           <input type="text" id="excelPathInput" placeholder="G:\Dyski współdzielone\...\tabela-audytow.xlsx">
         </div>
-        <p class="help-note">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 2) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru.</p>
+        <p class="hint">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 2) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru.</p>
         <div class="hero-actions">
-          <button type="button" id="finalizeBtn">Zapisz i pobierz</button>
-          <button type="button" id="saveTemplateBtn" class="ghost">Zapisz układ jako wzór</button>
+          <button type="button" id="finalizeBtn" class="btn btn-primary">Zapisz i pobierz</button>
+          <button type="button" id="saveTemplateBtn" class="btn btn-secondary">Zapisz układ jako wzór</button>
         </div>
-        <p class="help-note" id="saveTemplateNote" hidden></p>
+        <p class="hint" id="saveTemplateNote" hidden></p>
       </div>
     </section>
 
-    <section class="glass panel" id="resultsPanel" hidden>
+    <section class="panel" id="resultsPanel" hidden>
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">4</span>Gotowe pliki</h2>
           <p class="panel-desc">Pobierz rozpoznane PDF-y - oryginalny plik źródłowy nie został zmieniony.</p>
         </div>
       </div>
-      <p class="help-note" id="excelResultNote" hidden></p>
+      <p class="hint" id="excelResultNote" hidden></p>
       <div class="result-list" id="resultList"></div>
     </section>
   </main>

@@ -22,9 +22,9 @@ function queueText(app) {
   return `${queued} w kolejce, ${active}`;
 }
 function statusBadge(ok, warmup) {
-  const cls = ok ? 'admin-ok' : (warmup ? 'admin-warn' : 'admin-bad');
+  const cls = ok ? 'badge-success' : (warmup ? 'badge-warning' : 'badge-danger');
   const text = ok ? 'działa' : (warmup ? 'uruchamianie' : 'problem');
-  return `<span class="admin-status ${cls}">${text}</span>`;
+  return `<span class="badge ${cls}">${text}</span>`;
 }
 function renderApps(apps) {
   const body = document.querySelector('#appsBody');

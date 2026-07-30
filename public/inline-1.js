@@ -29,6 +29,8 @@ async function refreshStatus() {
     setText('#metricStorage', fmtMb(data.storage?.bytes || 0));
     setText('#metricMode', data.host === '127.0.0.1' ? 'Lokalny' : data.host);
     setText('#lastRefresh', `Ostatnie sprawdzenie: ${new Date().toLocaleTimeString('pl-PL')}`);
+    setText('#statOnline', String(running));
+    setText('#statTotal', String(apps.length));
     for (const app of apps) {
       const card = cards.get(app.slug);
       if (!card) continue;
@@ -79,4 +81,52 @@ document.querySelector('#helpTopLink')?.addEventListener('click', () => {
   if (closeBtn) closeBtn.addEventListener('click', closeModal);
   overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.classList.contains('open')) closeModal(); });
+})();
+
+// Wyszukiwarka narzedzi: filtruje karty po nazwie i opisie, chowa puste
+// kategorie, pokazuje stan pusty. Skrot "/" ustawia fokus na polu wyszukiwania,
+// o ile uzytkownik nie pisze juz w innym formularzu.
+(function () {
+  const input = document.getElementById('toolSearchInput');
+  const categories = [...document.querySelectorAll('.tool-category')];
+  const cardsBySearch = [...document.querySelectorAll('.tool-card')];
+  const emptyState = document.getElementById('toolSearchEmpty');
+  const emptyQuery = document.getElementById('toolSearchEmptyQuery');
+  if (!input) return;
+
+  function normalize(text) {
+    return String(text || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
+  }
+
+  function applyFilter() {
+    const query = normalize(input.value.trim());
+    let visibleTotal = 0;
+    for (const category of categories) {
+      let visibleInCategory = 0;
+      for (const card of category.querySelectorAll('.tool-card')) {
+        const haystack = normalize(card.querySelector('h3')?.textContent + ' ' + card.querySelector('p')?.textContent);
+        const matches = !query || haystack.includes(query);
+        card.classList.toggle('is-hidden-by-search', !matches);
+        if (matches) visibleInCategory += 1;
+      }
+      category.classList.toggle('is-empty-by-search', visibleInCategory === 0);
+      visibleTotal += visibleInCategory;
+    }
+    if (emptyState) {
+      emptyState.classList.toggle('is-visible', query.length > 0 && visibleTotal === 0);
+      if (emptyQuery) emptyQuery.textContent = input.value.trim();
+    }
+  }
+
+  input.addEventListener('input', applyFilter);
+
+  document.addEventListener('keydown', e => {
+    if (e.key !== '/') return;
+    const target = e.target;
+    const isTyping = target instanceof HTMLElement && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+    if (isTyping) return;
+    e.preventDefault();
+    input.focus();
+    input.select();
+  });
 })();

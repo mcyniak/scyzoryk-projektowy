@@ -19,6 +19,7 @@ const ROOT = __dirname;
 process.env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH || '0';
 const diagnostics = setupProcessDiagnostics('panel-glowny', ROOT);
 const PUBLIC_DIR = path.join(ROOT, 'public');
+const SHARED_DIR = path.join(ROOT, 'shared-styles');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 
@@ -177,9 +178,9 @@ function send(res, statusCode, body, contentType = 'text/plain; charset=utf-8') 
   res.end(body);
 }
 
-function readStaticFile(filePath, res) {
+function readStaticFile(filePath, res, baseDir = PUBLIC_DIR) {
   const safePath = path.normalize(filePath);
-  const relative = path.relative(PUBLIC_DIR, safePath);
+  const relative = path.relative(baseDir, safePath);
   if (relative.startsWith('..') || path.isAbsolute(relative)) return send(res, 403, 'Forbidden');
   fs.readFile(safePath, (err, data) => {
     if (err) return send(res, 404, 'Not found');
@@ -285,6 +286,7 @@ const server = http.createServer(async (req, res) => {
   if (decodedPath === '/api/admin/logs') return send(res, 200, JSON.stringify({ ok: true, lines: readLastLines(path.join(ROOT, 'logs', 'children.jsonl'), 100) }, null, 2), 'application/json; charset=utf-8');
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
   if (decodedPath === '/admin' || decodedPath === '/admin.html') return readStaticFile(path.join(PUBLIC_DIR, 'admin.html'), res);
+  if (decodedPath.startsWith('/shared/')) return readStaticFile(path.join(SHARED_DIR, decodedPath.slice('/shared/'.length)), res, SHARED_DIR);
   readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res);
 });
 

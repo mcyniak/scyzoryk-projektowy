@@ -5,42 +5,37 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Pieczątki PDF</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-  <link rel="stylesheet" href="base.css" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
   <link rel="stylesheet" href="styles.css" />
-<style>/* final-user-polish */ input[type=checkbox]{accent-color:#d71924!important;width:18px!important;height:18px!important;} .status:empty,.progress:empty,.message:empty{display:none!important}</style></head>
+</head>
 <body>
-  <main class="app shell">
-    <div class="topbar">
-      <a class="logo" href="#" data-main-link aria-label="Wróć do panelu">
-        <span class="logo-mark" aria-hidden="true"></span>
-        <span><span class="logo-small">Scyzoryk</span>Pieczątki PDF</span>
-      </a>
-      <a class="button-link ghost top-link" href="#" data-main-link>← Panel główny</a>
-    </div>
-
-    <section class="hero compactHero">
-      <div class="glass hero-main">
-        <div class="kicker">Stemplowanie dokumentów PDF</div>
-        <h1>Pieczątki PDF</h1>
-        <p class="lead">Dodaj pieczątkę, ustaw ją na podglądzie i pobierz gotowy PDF.</p>
-      </div>
-      <aside class="glass info-card">
-        <h2>Jak działa?</h2>
-        <div class="pill-list">
-          <div class="pill">Dodaj PDF.</div>
-          <div class="pill">Dodaj pieczątkę.</div>
-          <div class="pill">Ustaw ją na podglądzie i pobierz wynik.</div>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-stamp"/></svg>
+          <strong>Pieczątki PDF</strong>
         </div>
-      </aside>
-    </section>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+        Panel główny
+      </a>
+    </header>
 
     <form id="stampForm" class="grid">
       <section class="panel controls">
         <h2>1. Pliki PDF</h2>
-        <label class="drop">
+        <label class="drop dropzone">
           <input id="pdfs" type="file" accept="application/pdf,.pdf" multiple required />
+          <svg class="icon icon-lg"><use href="/shared/icons.svg#i-upload-cloud"/></svg>
           <span>Wybierz PDF-y</span>
-          <small id="pdfInfo">Możesz zaznaczyć kilka plików naraz.</small>
+          <small id="pdfInfo" class="dz-hint">Możesz zaznaczyć kilka plików naraz.</small>
         </label>
         <div id="pdfPreviewList" class="pdfPreviewList" hidden></div>
 
@@ -59,23 +54,26 @@
             <input id="presetNameInput" type="text" placeholder="np. Projektant - rysunki" />
           </label>
           <div class="presetActions">
-            <button type="button" id="loadPresetBtn" class="ghost smallBtn">Wczytaj</button>
-            <button type="button" id="savePresetBtn" class="ghost smallBtn">Zapisz obecny</button>
-            <button type="button" id="deletePresetBtn" class="ghost dangerBtn smallBtn">Usuń</button>
-            <button type="button" id="exportPresetsBtn" class="ghost smallBtn">Eksport</button>
-            <label class="ghost smallBtn fileImportLabel">Import<input id="importPresetsInput" type="file" accept="application/json,.json" hidden /></label>
+            <button type="button" id="loadPresetBtn" class="btn btn-secondary smallBtn">Wczytaj</button>
+            <button type="button" id="savePresetBtn" class="btn btn-secondary smallBtn">Zapisz obecny</button>
+            <button type="button" id="deletePresetBtn" class="btn btn-danger-ghost smallBtn">Usuń</button>
+            <button type="button" id="exportPresetsBtn" class="btn btn-secondary smallBtn">Eksport</button>
+            <label class="btn btn-secondary smallBtn fileImportLabel">Import<input id="importPresetsInput" type="file" accept="application/json,.json" hidden /></label>
           </div>
           <small class="presetHint">Preset zapamiętuje pieczątki, strony, pozycje i ustawienia. Przy dużym pliku pieczątki może być potrzebne ponowne wybranie pliku.</small>
         </div>
 
         <div class="sectionHeader">
           <h2>3. Pieczątki</h2>
-          <button type="button" id="addStampBtn" class="ghost smallBtn">+ Dodaj</button>
+          <button type="button" id="addStampBtn" class="btn btn-secondary smallBtn">
+            <svg class="icon"><use href="/shared/icons.svg#i-plus"/></svg>
+            Dodaj
+          </button>
         </div>
         <div id="stampList" class="stampList"></div>
         <div id="activeEditor" class="activeEditor"></div>
 
-        <button id="submitBtn" class="primary" type="submit">Dodaj pieczątki i pobierz</button>
+        <button id="submitBtn" class="btn btn-primary btn-lg primary" type="submit">Dodaj pieczątki i pobierz</button>
         <p id="status" class="status"></p>
       </section>
 
@@ -86,21 +84,21 @@
             <p>Wybierz plik i stronę podglądu. Widoczne będą tylko te pieczątki, które mają zostać dodane na tej stronie.</p>
           </div>
           <div class="previewTools">
-            <button type="button" id="prevPage" class="ghost miniBtn">‹</button>
+            <button type="button" id="prevPage" class="btn btn-icon btn-secondary miniBtn" aria-label="Poprzednia strona"><svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg></button>
             <label class="pageJump">
               <span>Strona</span>
               <input id="previewPageInput" type="number" min="1" value="1" />
               <small id="pageCountLabel">/ -</small>
             </label>
-            <button type="button" id="nextPage" class="ghost miniBtn">›</button>
+            <button type="button" id="nextPage" class="btn btn-icon btn-secondary miniBtn" aria-label="Następna strona"><svg class="icon"><use href="/shared/icons.svg#i-chevron-right"/></svg></button>
             <div class="zoomGroup">
-              <button type="button" id="zoomOut" class="zoomBtn" title="Oddal podgląd">−</button>
+              <button type="button" id="zoomOut" class="zoomBtn" title="Oddal podgląd" aria-label="Oddal podgląd"><svg class="icon"><use href="/shared/icons.svg#i-zoom-out"/></svg></button>
               <span id="zoomLabel" class="zoomLabel">100%</span>
-              <button type="button" id="zoomIn" class="zoomBtn" title="Przybliż podgląd">+</button>
+              <button type="button" id="zoomIn" class="zoomBtn" title="Przybliż podgląd" aria-label="Przybliż podgląd"><svg class="icon"><use href="/shared/icons.svg#i-zoom-in"/></svg></button>
             </div>
             <div class="zoomActions">
-              <button type="button" id="zoomReset" class="ghost miniBtn" title="Dopasuj podgląd">Dopasuj</button>
-              <button type="button" id="resetPos" class="ghost miniBtn">Reset</button>
+              <button type="button" id="zoomReset" class="btn btn-secondary miniBtn" title="Dopasuj podgląd">Dopasuj</button>
+              <button type="button" id="resetPos" class="btn btn-secondary miniBtn">Reset</button>
             </div>
           </div>
         </div>
