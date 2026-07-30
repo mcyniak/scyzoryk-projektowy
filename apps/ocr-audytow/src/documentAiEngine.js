@@ -1,27 +1,14 @@
-// Cienki wrapper na Google Document AI (Form Parser processor) - zastapil
-// visionEngine.js (2026-07-22) po realnym tescie na trudnych plikach rodziny
-// Kotly/Solary (woj. lodzkie): Document AI rozpoznaje checkbox jako WLASNY
-// TYP BYTU i sam go paruje z etykieta (document.pages[].formFields), zamiast
-// zwracac losowy znak Unicode do recznego dopasowania geometrycznego jak
-// Vision - eliminuje cala klase bledow (przemieszana kolejnosc slow w
-// tablicy), ktora zmuszala do kruchych, recznych heurystyk w
-// fieldExtraction.js. Koszt: ~20x wyzszy niz Vision ($30 vs $1,50/1000
-// stron) - swiadoma decyzja wlasciciela, patrz plan migracji.
+// Cienki wrapper na Google Document AI (Form Parser processor).
 //
 // Konfiguracja jest czytana w tej kolejnosci:
 //   1. zmienne srodowiskowe OCR_DOCAI_*,
-//   2. plik uzytkownika:
-//      %LOCALAPPDATA%/Scyzoryk/ocr-document-ai.json.
+//   2. plik uzytkownika %LOCALAPPDATA%/Scyzoryk/ocr-document-ai.json,
+//   3. konfiguracja wbudowana w poufny instalator wewnetrzny:
+//      apps/ocr-audytow/config/document-ai.json.
 //
-// Plik konfiguracyjny ma postac:
-// {
-//   "projectId": "...",
-//   "location": "eu",
-//   "processorId": "...",
-//   "keyFile": "service-account.json"
-// }
-// Sciezka keyFile wzgledna jest rozwiazywana wzgledem katalogu konfiguracji.
-// Sam plik konta serwisowego NIGDY nie powinien trafic do zwyklego commita.
+// Wersja wbudowana pozwala przekazac pracownikowi jeden gotowy instalator bez
+// recznego kopiowania kluczy. Pliki konfiguracyjne sa tworzone tylko podczas
+// bezpiecznego builda z GitHub Actions Secret i nigdy nie trafiaja do repo.
 const fs = require('fs/promises');
 const fsSync = require('fs');
 const path = require('path');
@@ -33,6 +20,7 @@ const USER_CONFIG_PATH = path.join(
   'Scyzoryk',
   'ocr-document-ai.json'
 );
+const BUNDLED_CONFIG_PATH = path.join(__dirname, '..', 'config', 'document-ai.json');
 const MIME_TYPES = Object.freeze({
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -93,8 +81,11 @@ function getConfiguration() {
   const envConfig = getEnvironmentConfig();
   if (isComplete(envConfig)) return envConfig;
 
-  const fileConfig = normalizeFileConfig(USER_CONFIG_PATH, readJsonFile(USER_CONFIG_PATH));
-  if (isComplete(fileConfig)) return fileConfig;
+  const userConfig = normalizeFileConfig(USER_CONFIG_PATH, readJsonFile(USER_CONFIG_PATH));
+  if (isComplete(userConfig)) return userConfig;
+
+  const bundledConfig = normalizeFileConfig(BUNDLED_CONFIG_PATH, readJsonFile(BUNDLED_CONFIG_PATH));
+  if (isComplete(bundledConfig)) return bundledConfig;
 
   return null;
 }
@@ -127,23 +118,12 @@ function getClient(config) {
   return cachedClient;
 }
 
-// Document AI's textAnchor.content bywa PUSTY nawet gdy textSegments maja
-// realne indeksy (zaobserwowane na tokenach - dziala inaczej niz na
-// formFields, gdzie .content zazwyczaj jest juz wypelnione) - trzeba wtedy
-// samemu wyciac tekst z pelnego `document.text` na podstawie
-// startIndex/endIndex (zwracane jako STRINGI, nie liczby, przez klienta).
 function resolveTextAnchor(textAnchor, fullText) {
   if (textAnchor?.content) return textAnchor.content;
   const segments = textAnchor?.textSegments || [];
   return segments.map((seg) => fullText.slice(Number(seg.startIndex || 0), Number(seg.endIndex || 0))).join('');
 }
 
-// Konwertuje wierzcholki znormalizowane (0-1, wzgledem wymiarow strony) albo
-// juz-w-pikselach na ta sama konwencje co Vision's word.vertices (4 punkty w
-// pikselach). Uwaga: te wspolrzedne sa w WLASNEJ, wewnetrznie skorygowanej
-// ("logicznej") ramce Document AI, nie w ramce surowego, fizycznie obroconego
-// obrazu wejsciowego - patrz notatka w ocrPipeline.js (2026-07-24) o swiadomym
-// usunieciu automatycznego wykrywania/korygowania fizycznego obrotu strony.
 function toPixelVertices(boundingPoly, pageWidth, pageHeight) {
   if (boundingPoly?.vertices?.length) {
     return boundingPoly.vertices.map((v) => ({ x: v.x || 0, y: v.y || 0 }));
@@ -154,21 +134,10 @@ function toPixelVertices(boundingPoly, pageWidth, pageHeight) {
   return [];
 }
 
-// Rozpoznaje tekst na jednej stronie (obraz JPEG) - zwraca:
-//  - text: pelny tekst strony,
-//  - words: lista {text, confidence, vertices} w kolejnosci tokenow Document
-//    AI, DOKLADNIE w takim samym ksztalcie jak visionEngine.js's ocrImage,
-//    zeby bundleSplit.js/buildOcrPdf/buildThumbnails i
-//    cala dotychczasowa logika dopasowywania w fieldExtraction.js dzialaly
-//    bez zadnych zmian (uzywane jako FALLBACK gdy formFields nie pomoga),
-//  - formFields: lista {fieldName, fieldNameBBox, fieldValue, valueConfidence,
-//    valueBBox} z document.pages[].formFields - NOWA, ustrukturyzowana
-//    para pole-wartosc z gotowym parowaniem checkboxow, konsumowana przez
-//    formFieldMatch.js jako preferowana sciezka ekstrakcji.
 async function ocrImage(imagePath) {
   const config = getConfiguration();
   if (!config) {
-    throw new Error('Brak konfiguracji Google Document AI. Zainstaluj wewnetrzny instalator z konfiguracja OCR albo ustaw plik %LOCALAPPDATA%\\Scyzoryk\\ocr-document-ai.json.');
+    throw new Error('Brak konfiguracji Google Document AI. Uzyj gotowego instalatora wewnetrznego z OCR albo ustaw plik %LOCALAPPDATA%\\Scyzoryk\\ocr-document-ai.json.');
   }
 
   const client = getClient(config);
@@ -243,4 +212,11 @@ function resolveMimeType(filePath) {
   throw new Error(`Nieobslugiwany format obrazu OCR: ${extension || 'brak rozszerzenia'}.`);
 }
 
-module.exports = { isConfigured, getConfigurationStatus, ocrImage, resolveMimeType };
+module.exports = {
+  isConfigured,
+  getConfigurationStatus,
+  ocrImage,
+  resolveMimeType,
+  USER_CONFIG_PATH,
+  BUNDLED_CONFIG_PATH
+};
