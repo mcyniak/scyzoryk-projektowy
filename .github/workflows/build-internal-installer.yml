@@ -1,7 +1,8 @@
-name: Zbuduj i przetestuj instalator Windows
+name: Zbuduj instalator deweloperski bez OCR
 
-# Ten workflow buduje instalator bez sekretów, instaluje go na osobnej,
-# swiezej maszynie Windows i publikuje dopiero po testach.
+# Ten workflow buduje instalator bez sekretow. Sluzy do testow technicznych,
+# a nie do przekazywania pracownikom. Gotowy instalator dla uzytkownika koncowego
+# buduje osobny workflow build-ready-installer.yml.
 
 on:
   workflow_dispatch: {}
@@ -23,7 +24,7 @@ permissions:
 
 jobs:
   build:
-    name: Zbuduj instalator
+    name: Zbuduj instalator bez OCR
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -46,7 +47,7 @@ jobs:
           $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $found) { choco install innosetup --no-progress -y }
 
-      - name: Zbuduj produkcyjny instalator
+      - name: Zbuduj instalator deweloperski
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -56,13 +57,13 @@ jobs:
       - name: Przekaz instalator do testu
         uses: actions/upload-artifact@v4
         with:
-          name: techniczny-instalator-do-testu-${{ github.run_id }}
+          name: techniczny-instalator-bez-ocr-${{ github.run_id }}
           path: release/*.exe
           if-no-files-found: error
           retention-days: 1
 
   test:
-    name: Swieza instalacja i pelne testy
+    name: Swieza instalacja bez OCR i pelne testy
     needs: build
     runs-on: windows-latest
     timeout-minutes: 55
@@ -73,7 +74,7 @@ jobs:
       - name: Pobierz instalator z poprzedniego joba
         uses: actions/download-artifact@v4
         with:
-          name: techniczny-instalator-do-testu-${{ github.run_id }}
+          name: techniczny-instalator-bez-ocr-${{ github.run_id }}
           path: artifact
 
       - name: Przygotuj sciezki
@@ -82,14 +83,14 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installer = Get-ChildItem 'artifact\*.exe' | Select-Object -First 1
           if (-not $installer) { throw 'Nie znaleziono instalatora.' }
-          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test swieza instalacja'
-          $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-logs'
+          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test swieza instalacja bez OCR'
+          $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-logs-bez-ocr'
           New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
           "INSTALLER_FILE=$($installer.FullName)" >> $env:GITHUB_ENV
           "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
           "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
 
-      - name: Zainstaluj i przetestuj caly Scyzoryk
+      - name: Zainstaluj i przetestuj caly Scyzoryk bez OCR
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -102,15 +103,15 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: raport-testow-instalatora
+          name: raport-testow-instalatora-bez-ocr
           path: ${{ env.LOGS_DIR }}
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Udostepnij jeden przetestowany instalator
+      - name: Udostepnij przetestowany instalator deweloperski
         uses: actions/upload-artifact@v4
         with:
-          name: instalator-windows
+          name: Scyzoryk-Projektowy-DEWELOPERSKI-bez-OCR
           path: artifact/*.exe
           if-no-files-found: error
           retention-days: 3
@@ -121,7 +122,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $name = 'techniczny-instalator-do-testu-${{ github.run_id }}'
+          $name = 'techniczny-instalator-bez-ocr-${{ github.run_id }}'
           $response = gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" | ConvertFrom-Json
           $artifact = $response.artifacts | Where-Object { $_.name -eq $name } | Select-Object -First 1
           if ($artifact) {
