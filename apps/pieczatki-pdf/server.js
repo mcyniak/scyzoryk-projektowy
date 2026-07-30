@@ -46,11 +46,24 @@ for (const dir of [UPLOAD_DIR, OUTPUT_DIR, TMP_DIR]) {
 }
 scheduleCleanup([UPLOAD_DIR, OUTPUT_DIR, TMP_DIR], 24 * 60 * 60 * 1000, 60 * 60 * 1000);
 
+// Przegladarki wysylaja nazwe pliku w naglowku multipart jako surowe bajty
+// UTF-8, ale busboy/multer domyslnie dekoduje ten naglowek jako latin1 - bez
+// tej korekty kazdy polski znak diakrytyczny w originalname wychodzi jako
+// mojibake (np. "\u0105" -> "\u00c4\u2026"), co psuje zarowno nazwe zapisanego pliku na
+// dysku (safeOutputName), jak i komunikaty bledow. Ten sam wzorzec
+// (decodeOriginalName) jest juz uzywany we wszystkich pozostalych aplikacjach
+// Scyzoryka (drukarka, dokumenty-seryjne, wnioski-powykonawcze, ocr-audytow,
+// drukarka-projekty, karty-katalogowe) - tu wczesniej brakowalo tej korekty.
+function decodeOriginalName(name) {
+  try { return Buffer.from(name, 'latin1').toString('utf8'); } catch { return name; }
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase();
-    const safeBase = path.basename(file.originalname || 'plik', ext)
+    const original = decodeOriginalName(file.originalname || '');
+    const ext = path.extname(original).toLowerCase();
+    const safeBase = path.basename(original || 'plik', ext)
       .normalize('NFKD')
       .replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-zA-Z0-9._-]+/g, '_')
@@ -67,7 +80,7 @@ const upload = multer({
     files: MAX_FILES,
   },
   fileFilter: (req, file, cb) => {
-    const ext = path.extname(file.originalname || '').toLowerCase();
+    const ext = path.extname(decodeOriginalName(file.originalname || '')).toLowerCase();
     const isPdf = ext === '.pdf' || file.mimetype === 'application/pdf';
     if (file.fieldname === 'pdfs' && isPdf) return cb(null, true);
     cb(new Error('Dozwolone sa tylko pliki PDF do ostemplowania.'));
@@ -125,7 +138,7 @@ function readHeader(filePath, length = 8) {
 function validateUploadedPdfFile(file) {
   const header = readHeader(file.path, 8);
   const ascii = header.toString('latin1');
-  if (!ascii.startsWith('%PDF-')) throw new Error(`Plik ${file.originalname || file.filename} nie wygląda jak poprawny PDF.`);
+  if (!ascii.startsWith('%PDF-')) throw new Error(`Plik ${decodeOriginalName(file.originalname) || file.filename} nie wygląda jak poprawny PDF.`);
 }
 
 function parseNumber(value, fallback, min, max) {
@@ -395,7 +408,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
   const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
   const pages = doc.getPages();
   if (pages.length > MAX_PAGES_PER_PDF) {
-    throw new Error(`PDF ${inputFile.originalname} ma za duzo stron (${pages.length}). Limit: ${MAX_PAGES_PER_PDF}.`);
+    throw new Error(`PDF ${decodeOriginalName(inputFile.originalname)} ma za duzo stron (${pages.length}). Limit: ${MAX_PAGES_PER_PDF}.`);
   }
 
   const prepared = [];
@@ -421,7 +434,7 @@ async function stampPdf(inputFile, stamps, jobDir) {
   }
 
   const outputBytes = await doc.save({ useObjectStreams: true });
-  const outPath = path.join(jobDir, safeOutputName(inputFile.originalname));
+  const outPath = path.join(jobDir, safeOutputName(decodeOriginalName(inputFile.originalname)));
   await fsp.writeFile(outPath, outputBytes);
   return outPath;
 }
