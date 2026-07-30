@@ -62,28 +62,6 @@ document.querySelector('#refreshBtn')?.addEventListener('click', refreshStatus);
 refreshStatus();
 setInterval(refreshStatus, 10000);
 
-
-// Otwieranie sekcji Pomoc po kliknięciu przycisku w górnym panelu.
-document.querySelector('#helpTopLink')?.addEventListener('click', () => {
-  const panel = document.querySelector('#supportPanel');
-  if (panel) panel.open = true;
-});
-
-
-// Modal Pomocy (zamiast stalej sekcji na dole strony)
-(function () {
-  const overlay = document.getElementById('helpModalOverlay');
-  const openBtn = document.getElementById('helpTopLink');
-  const closeBtn = document.getElementById('helpModalClose');
-  if (!overlay || !openBtn) return;
-  function openModal() { overlay.classList.add('open'); }
-  function closeModal() { overlay.classList.remove('open'); }
-  openBtn.addEventListener('click', openModal);
-  if (closeBtn) closeBtn.addEventListener('click', closeModal);
-  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && overlay.classList.contains('open')) closeModal(); });
-})();
-
 // Wyszukiwarka narzedzi: filtruje karty po nazwie i opisie, chowa puste
 // kategorie, pokazuje stan pusty. Skrot "/" ustawia fokus na polu wyszukiwania,
 // o ile uzytkownik nie pisze juz w innym formularzu.
