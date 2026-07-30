@@ -1,0 +1,155 @@
+name: Zbuduj gotowy instalator Windows z OCR
+
+# Poufny workflow wewnetrzny. Buduje jeden instalator, ktory po instalacji ma
+# od razu dzialajacy OCR bez kopiowania kluczy lub ustawiania zmiennych.
+# Finalny instalator jest publikowany dopiero po pelnym tescie na swiezym Windowsie.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: gotowy-instalator-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  OCR_DOCAI_PROJECT_ID: scyzoryk-ocr-test
+  OCR_DOCAI_LOCATION: eu
+  OCR_DOCAI_PROCESSOR_ID: c8cea9ff6f6430c3
+
+jobs:
+  build:
+    name: Zbuduj instalator
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Pobierz kod repozytorium
+        uses: actions/checkout@v4
+
+      - name: Sprawdz sekret OCR
+        shell: pwsh
+        env:
+          OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:OCR_DOCAI_CREDENTIALS_B64)) {
+            throw 'Brakuje GitHub Actions Secret: OCR_DOCAI_CREDENTIALS_B64.'
+          }
+          try {
+            $bytes = [Convert]::FromBase64String($env:OCR_DOCAI_CREDENTIALS_B64)
+            $json = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json
+          } catch {
+            throw 'OCR_DOCAI_CREDENTIALS_B64 nie jest poprawnym plikiem JSON zakodowanym Base64.'
+          }
+          if ($json.type -ne 'service_account' -or [string]::IsNullOrWhiteSpace([string]$json.private_key)) {
+            throw 'Sekret OCR nie zawiera kompletnego konta serwisowego Google Cloud.'
+          }
+          Write-Host 'Sekret OCR jest dostepny i ma poprawny format.'
+
+      - name: Przygotuj Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Upewnij sie, ze Inno Setup jest dostepny
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) { choco install innosetup --no-progress -y }
+
+      - name: Zbuduj produkcyjny instalator
+        shell: pwsh
+        env:
+          OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run build-installer
+          $installer = Get-ChildItem release\*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Nie powstal instalator EXE.' }
+          Get-FileHash $installer.FullName -Algorithm SHA256 | Format-List
+          Get-ChildItem release | Format-Table Name, Length
+
+      - name: Przekaz instalator do testu
+        uses: actions/upload-artifact@v4
+        with:
+          name: techniczny-gotowy-instalator-${{ github.run_id }}
+          path: release/*.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  test:
+    name: Swieza instalacja i pelne testy
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - name: Pobierz skrypty testowe
+        uses: actions/checkout@v4
+
+      - name: Pobierz instalator z poprzedniego joba
+        uses: actions/download-artifact@v4
+        with:
+          name: techniczny-gotowy-instalator-${{ github.run_id }}
+          path: artifact
+
+      - name: Przygotuj sciezki
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem 'artifact\*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'Nie znaleziono instalatora.' }
+          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test swieza instalacja'
+          $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-logs'
+          New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+          "INSTALLER_FILE=$($installer.FullName)" >> $env:GITHUB_ENV
+          "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
+          "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
+
+      - name: Zainstaluj i przetestuj caly Scyzoryk
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & '.\scripts\ci\test-installed-scyzoryk.ps1' `
+            -InstallerPath $env:INSTALLER_FILE `
+            -InstallDir $env:INSTALL_DIR `
+            -LogsDir $env:LOGS_DIR `
+            -ExpectBundledOcr `
+            -TestLiveOcr
+
+      - name: Przeslij raporty i zrzuty ekranow
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raport-testow-gotowego-instalatora
+          path: ${{ env.LOGS_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Udostepnij przetestowany instalator
+        uses: actions/upload-artifact@v4
+        with:
+          name: Scyzoryk-Projektowy-gotowy-Windows-z-OCR
+          path: artifact/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Usun techniczny artefakt posredni
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $name = 'techniczny-gotowy-instalator-${{ github.run_id }}'
+          $response = gh api "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" | ConvertFrom-Json
+          $artifact = $response.artifacts | Where-Object { $_.name -eq $name } | Select-Object -First 1
+          if ($artifact) {
+            gh api --method DELETE "/repos/${{ github.repository }}/actions/artifacts/$($artifact.id)"
+          }
