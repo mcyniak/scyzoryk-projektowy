@@ -1,138 +1,236 @@
-# Instrukcja instalacji na nowym komputerze
+# Instrukcja instalacji i obsługi Scyzoryka Projektowego
 
-Ten dokument prowadzi krok po kroku przez pobranie Scyzoryka Projektowego z GitHuba i
-uruchomienie go na kolejnym komputerze — bez zakładania, że coś wcześniej tu było
-instalowane. Repozytorium jest **prywatne**, więc krok pobrania wymaga konta GitHub z
-dostępem nadanym przez właściciela repo.
+Ta instrukcja opisuje aktualną wersję Scyzoryka instalowaną jednym plikiem EXE.
+Użytkownik końcowy nie pobiera repozytorium, nie instaluje Node.js i nie ustawia ręcznie OCR.
 
-> Projekt jest w aktywnym rozwoju (patrz `README.md`) — struktura plików może się jeszcze
-> zmieniać. Ta instrukcja opisuje **sposób pobrania i uruchomienia**, nie zamraża
-> struktury repo.
+Ta sama instrukcja jest dostępna po uruchomieniu programu pod adresem:
 
-## 1. Czego potrzebujesz na nowym komputerze
-
-| Wymaganie | Po co | Jak sprawdzić |
-|---|---|---|
-| Windows | Skrypty `.cmd`/`.ps1`, drukowanie, Word COM | — |
-| **Node.js** (LTS, np. 20.x lub nowszy) | Uruchamia cały panel i wszystkie narzędzia | otwórz PowerShell/CMD i wpisz `node -v` |
-| **Microsoft Word** zainstalowany lokalnie | Wymagany tylko dla „Dokumenty seryjne” i „Wnioski powykonawcze” (automatyzacja przez Word COM) | — |
-| Dostęp do repo na GitHubie | Repo jest prywatne | zaproszenie/uprawnienia od właściciela |
-| (Opcjonalnie) klucz Google Cloud Vision | Tylko dla „OCR audytów” — bez niego reszta narzędzi działa normalnie | zmienna `OCR_VISION_API_KEY`, patrz krok 5 |
-
-`STARTUJ-SCYZORYK.cmd` **sam instaluje zależności npm** (w tym przeglądarkę Chromium
-dla Playwrighta, używaną przez „Formularze Ecodan”) — nie trzeba nic instalować ręcznie
-poza samym Node.js.
-
-## 2. Pobranie repozytorium z GitHuba
-
-Dwie opcje — wybierz jedną.
-
-### Opcja A: zwykłe pobranie ZIP-a (najprościej, bez instalowania Gita)
-
-1. Zaloguj się na GitHubie kontem, które ma dostęp do repo
-   `mcyniak/scyzoryk-projektowy`.
-2. Wejdź na stronę repozytorium: `https://github.com/mcyniak/scyzoryk-projektowy`.
-3. Kliknij zielony przycisk **`Code`** w prawym górnym rogu listy plików, a potem
-   **`Download ZIP`**.
-4. Rozpakuj pobrane archiwum w wybrane miejsce na dysku, np.
-   `C:\Scyzoryk\scyzoryk-projektowy`.
-
-Ta opcja **nie pozwala później łatwo pobierać aktualizacji** — przy każdej nowej wersji
-trzeba pobrać ZIP jeszcze raz i podmienić pliki. Do jednorazowego postawienia narzędzia
-na komputerze, który go wcześniej nie miał, w zupełności wystarczy.
-
-### Opcja B: `git clone` (polecane, jeśli będziesz aktualizować)
-
-1. Zainstaluj [Git for Windows](https://git-scm.com/download/win), jeśli go nie ma.
-2. Otwórz PowerShell w miejscu, gdzie ma powstać folder projektu, i wykonaj:
-
-   ```powershell
-   git clone https://github.com/mcyniak/scyzoryk-projektowy.git
-   cd scyzoryk-projektowy
-   ```
-
-3. Git poprosi o zalogowanie do GitHuba (przeglądarka albo token) — repo jest prywatne.
-
-Dzięki tej opcji kolejne aktualizacje to tylko `git pull` w folderze projektu.
-
-## 3. Pierwsze uruchomienie
-
-W folderze repo (ten, w którym jest plik `STARTUJ-SCYZORYK.cmd`) kliknij na niego
-dwukrotnie. Skrypt automatycznie:
-
-1. zamyka osierocone procesy `node.exe` z poprzednich uruchomień,
-2. sprawdza, czy jest zainstalowany Node.js (jeśli nie — wypisze komunikat i przerwie),
-3. instaluje zależności każdej aplikacji w `apps/*` (`npm ci`/`npm install`, plus
-   przeglądarkę Chromium dla Playwrighta) — **pierwsze uruchomienie trwa dłużej** z tego
-   powodu,
-4. uruchamia `npm run check` (sprawdzenie składni wszystkich plików `.js`/`.ps1`),
-5. startuje panel pod adresem `http://127.0.0.1:3000`.
-
-Jeśli coś pójdzie nie tak przy instalacji zależności (np. uszkodzony `node_modules` po
-przerwanej instalacji), uruchom `NAPRAW-ZALEZNOSCI.cmd` — usuwa `node_modules` i
-`package-lock.json` w każdej aplikacji i instaluje wszystko od zera, po czym można
-znowu odpalić `STARTUJ-SCYZORYK.cmd`.
-
-Po starcie otwórz w przeglądarce `http://127.0.0.1:3000` — powinien pojawić się panel
-główny:
-
-![Panel główny Scyzoryka](images/01-panel-glowny.png)
-
-## 4. Narzędzia dostępne z panelu
-
-Każdy kafelek na panelu głównym prowadzi do osobnego narzędzia, działającego na własnym
-porcie (przeglądarka łączy się z nim bezpośrednio, panel niczego nie proxuje):
-
-| Narzędzie | Port | Zrzut ekranu |
-|---|---|---|
-| Dokumenty seryjne PDF | 3004 | ![Dokumenty seryjne](images/05-dokumenty-seryjne.png) |
-| Pieczątki PDF | 3002 | ![Pieczątki PDF](images/03-pieczatki.png) |
-| Drukarka dokumentów | 3001 | ![Drukarka](images/02-drukarka.png) |
-| Drukarka projekty | 3010 | ![Drukarka projekty](images/08-drukarka-projekty.png) |
-| Wnioski powykonawcze PDF | 3005 | ![Wnioski powykonawcze](images/06-wnioski-powykonawcze.png) |
-| Karty katalogowe | 3006 | ![Karty katalogowe](images/07-karty-katalogowe.png) |
-| Formularze Ecodan | 3003 | ![Formularze Ecodan](images/04-formularze-ecodan.png) |
-| OCR audytów | 3011 | ![OCR audytów](images/09-ocr-audytow.png) |
-
-Panel techniczny (status procesów, restarty, logi) jest pod `/admin.html`:
-
-![Panel techniczny](images/10-panel-techniczny.png)
-
-## 5. Rzeczy, które trzeba doustawić na nowym komputerze
-
-- **OCR audytów** wymaga zmiennej środowiskowej `OCR_VISION_API_KEY` (klucz Google
-  Cloud Vision) — bez niej to jedno narzędzie nie zadziała, reszta panelu działa
-  normalnie. Ustaw ją przed startem, np. w PowerShell:
-
-  ```powershell
-  $env:OCR_VISION_API_KEY = "tu-wklej-klucz"
-  .\STARTUJ-SCYZORYK.cmd
-  ```
-
-  Żeby nie wpisywać tego za każdym razem, ustaw zmienną na stałe w Windows
-  (Panel sterowania → Zmienne środowiskowe) albo w skrócie startowym. Opcjonalnie
-  `OCR_VISION_REGION=eu`, żeby żądania szły przez europejski endpoint Google.
-- **Dokumenty seryjne / Wnioski powykonawcze** wymagają lokalnie zainstalowanego
-  Microsoft Worda (automatyzacja przez Word COM) — bez niego te dwa narzędzia zwrócą
-  błąd przy generowaniu, reszta panelu działa normalnie.
-- Wszystko nasłuchuje wyłącznie na `127.0.0.1` — to narzędzie **lokalne**, nie jest
-  pomyślane do wystawienia w sieci. Jeśli inny port jest zajęty, porty każdej aplikacji
-  da się nadpisać zmiennymi środowiskowymi (`DRUKARKA_PORT`, `PIECZATKI_PORT`,
-  `FORMULARZE_PORT`, `SERYJNE_PORT`, `WNIOSKI_PORT`, `KARTY_PORT`,
-  `DRUKARKA_PROJEKTY_PORT`, `OCR_AUDYTOW_PORT`, `PORT` dla samego panelu).
-
-## 6. Aktualizacja później
-
-Jeśli repo pobrano przez `git clone` (opcja B): w folderze projektu
-
-```powershell
-git pull
-.\STARTUJ-SCYZORYK.cmd
+```text
+http://127.0.0.1:3000/instrukcja.html
 ```
 
-`STARTUJ-SCYZORYK.cmd` sam douzupełni nowe/zmienione zależności npm przy kolejnym
-starcie.
+oraz przez przycisk **Pomoc** na panelu głównym.
 
-Jeśli repo pobrano jako ZIP (opcja A): pobierz nowy ZIP i podmień pliki w folderze
-projektu (najlepiej zachowując `apps/*/data`, jeśli są tam już jakieś zadania/pliki
-robocze, których nie chcesz stracić).
+## 1. Co jest potrzebne
+
+- Windows 10 lub Windows 11 w wersji 64-bitowej,
+- połączenie z internetem podczas instalacji,
+- połączenie z internetem podczas korzystania z OCR audytów i Formularzy Ecodan,
+- Microsoft Word dla narzędzi **Dokumenty seryjne PDF** i **Wnioski powykonawcze PDF**,
+- dostęp do używanej drukarki,
+- pliki z Dysku Google ustawione jako dostępne offline.
+
+Nie jest wymagane instalowanie:
+
+- Node.js,
+- npm,
+- Playwrighta,
+- Chromium,
+- Pythona,
+- klucza Google Document AI.
+
+Gotowy instalator zawiera przenośny Node.js, a podczas instalacji pobiera wymagane zależności i Chromium. Wewnętrzna wersja instalatora zawiera również gotową konfigurację Google Document AI.
+
+## 2. Pobranie właściwego instalatora
+
+1. Otwórz repozytorium na GitHubie.
+2. Przejdź do zakładki **Actions**.
+3. Uruchom workflow **Zbuduj gotowy instalator Windows z OCR**.
+4. Poczekaj, aż przejdą oba joby:
+   - **Zbuduj instalator**,
+   - **Świeża instalacja i pełne testy**.
+5. Pobierz artefakt:
+
+```text
+Scyzoryk-Projektowy-gotowy-Windows-z-OCR
+```
+
+6. Rozpakuj ZIP i uruchom plik `ScyzorykProjektowy-Setup-....exe`.
+
+Finalny artefakt jest publikowany dopiero po zainstalowaniu go na świeżym runnerze Windows, uruchomieniu wszystkich modułów, wykonaniu testów regresyjnych, zrzutów ekranów oraz prawdziwego testu Google Document AI.
+
+> Instalator zawiera wewnętrzną konfigurację OCR. Traktuj go jako plik poufny i nie udostępniaj publicznie.
+
+## 3. Instalacja
+
+1. Uruchom instalator EXE.
+2. Przejdź przez kreator instalacji.
+3. Pozostaw zaznaczoną opcję utworzenia ikony na pulpicie.
+4. Autostart przy logowaniu jest opcjonalny. Może wyświetlić jednorazowe okno UAC związane z konfiguracją lokalnego adresu.
+5. Poczekaj, aż instalator doinstaluje składniki. Nie zamykaj instalatora w trakcie tego kroku.
+6. Po zakończeniu uruchom Scyzoryk.
+
+Domyślny folder programu:
+
+```text
+%LOCALAPPDATA%\Programs\ScyzorykProjektowy
+```
+
+Dane użytkownika, ustawienia, wzory i pliki robocze są przechowywane oddzielnie:
+
+```text
+%LOCALAPPDATA%\ScyzorykProjektowy\Data
+```
+
+## 4. Uruchomienie
+
+Uruchom skrót **Scyzoryk Projektowy** z pulpitu albo plik:
+
+```text
+Uruchom-Scyzoryk.cmd
+```
+
+Panel otworzy się pod adresem:
+
+```text
+http://127.0.0.1:3000
+```
+
+Status **gotowe** na kafelku oznacza, że narzędzie działa. Jeżeli przez dłuższy czas widoczny jest status uruchamiania lub restartu, zamknij Scyzoryk i uruchom ponownie skrótem.
+
+## 5. Zasady bezpiecznej pracy
+
+- Przed pracą na całej inwestycji wykonaj próbę na jednym adresie.
+- Pliki z Dysku Google muszą być dostępne offline.
+- Nie przenoś wzorów Worda i Excela podczas trwającego zadania.
+- Przed drukiem sprawdź kolejność, drukarkę, kopie oraz tryb jednostronny lub dwustronny.
+- Nie uruchamiaj dwóch serii drukowania jednocześnie.
+- Nie usuwaj ręcznie folderu danych użytkownika, jeśli zawiera potrzebne wzory lub wyniki.
+
+## 6. Drukarka dokumentów
+
+1. Kliknij **Dodaj pliki** albo przeciągnij pliki PDF, DOC lub DOCX.
+2. Ułóż kolejność dokumentów.
+3. Wybierz drukarkę.
+4. Ustaw liczbę kopii.
+5. Wybierz druk jednostronny lub dwustronny.
+6. Wybierz układ kopii.
+7. Kliknij **Drukuj**.
+
+Scyzoryk nie powinien zamykać ani minimalizować prywatnych dokumentów Worda użytkownika. Po serii przywraca wcześniejszy tryb duplex drukarki.
+
+## 7. Drukarka projektów
+
+### Projekty z arkusza Excel
+
+1. Wybierz tryb **Drukuj projekty**.
+2. Wgraj Excel inwestycji i wybierz arkusz.
+3. Zaznacz adresy bez odbioru i bez rezygnacji.
+4. Wklej ścieżkę folderu bazowego.
+5. Kliknij **Znajdź projekty**.
+6. Sprawdź proponowaną kolejność dokumentów.
+7. Ręcznie sprawdź pozycje oznaczone jako wariant, niedopasowane albo dopasowane po kolejności.
+8. Zatwierdź kolejność i wydrukuj.
+
+### Wnioski materiałowe WM
+
+1. Wybierz **Drukuj wnioski materiałowe (WM)**.
+2. Wskaż folder WM jednego adresu.
+3. Opcjonalnie zaznacz wersję powykonawczą `dok.pod`.
+4. Zeskanuj folder, sprawdź wyniki i wydrukuj.
+
+## 8. Dokumenty seryjne PDF
+
+1. Wybierz cały folder z szablonami DOCX.
+2. Zaznacz rodzaje dokumentów do wygenerowania.
+3. Dodaj tabelę Excel.
+4. Kliknij **Sprawdź dane**.
+5. Wybierz arkusz z odpowiednią mocą.
+6. Jeśli dokumenty mają warianty, wybierz kolumnę wariantu.
+7. Zaznacz adresy.
+8. Ustaw opcjonalny przedrostek nazwy pliku.
+9. Kliknij **Utwórz PDF-y**.
+10. Pobierz pojedyncze pliki albo ZIP.
+
+Microsoft Word musi być zainstalowany i aktywowany.
+
+## 9. Wnioski powykonawcze PDF
+
+### Tryb ręczny
+
+1. Wybierz **Wgraj pliki ręcznie**.
+2. Dodaj pliki DOCX.
+3. Ustaw datę albo miesiąc i rok.
+4. Ustaw przedrostek nazwy.
+5. Kliknij **Utwórz PDF-y**.
+
+### Cały folder WM
+
+1. Wybierz **Cały folder WM (automatycznie)**.
+2. Wklej ścieżkę folderu.
+3. Ustaw datę i przedrostek.
+4. Kliknij **Skanuj folder**.
+5. Sprawdź znalezione kategorie.
+6. Kliknij **Przerób zaznaczone i zapisz w folderach**.
+
+## 10. Formularze Ecodan
+
+1. Dodaj Excel inwestycji.
+2. Uzupełnij nazwę inwestycji.
+3. Ustaw globalną lokalizację lub kod pocztowy.
+4. Zaznacz adresy do wygenerowania.
+5. Pozostaw zaznaczone **Pomiń już gotowe raporty**, jeżeli istniejących raportów nie trzeba generować ponownie.
+6. Kliknij **Start generowania PDF**.
+7. Po zakończeniu pobierz ZIP.
+
+### Ważna reguła Ecodan
+
+Każdy raport wynikowy zawiera wyłącznie pierwsze trzy strony, ponieważ tylko one są potrzebne. Dotyczy to:
+
+- nowo wygenerowanych raportów,
+- istniejących raportów wykrytych przez `skipExisting`,
+- raportów umieszczanych w ZIP-ie.
+
+Dokument mający jedną lub dwie strony pozostaje odpowiednio jedno- lub dwustronicowy.
+
+## 11. Pieczątki PDF
+
+1. Wybierz jeden albo kilka plików PDF.
+2. Wczytaj preset albo kliknij **Dodaj**.
+3. Ustaw pieczątkę, zakres stron, rozmiar i pozycję.
+4. Sprawdź podgląd.
+5. Kliknij **Dodaj pieczątki i pobierz**.
+6. Często używane ustawienia zapisz jako preset.
+
+## 12. Karty katalogowe
+
+1. Wybierz Excel z arkuszami `Solary {gmina}`.
+2. Wklej ścieżkę głównego folderu Kolektory.
+3. Kliknij **Sprawdź tabelę**.
+4. Sprawdź dopasowania UID, folderów i adresów.
+5. Kliknij **Uruchom dobór kart**.
+
+## 13. OCR audytów
+
+1. Dodaj zeskanowane PDF-y.
+2. Kliknij **Rozpoznaj tekst**.
+3. Sprawdź podział na adresy.
+4. Wybierz rodzinę dokumentów: Pompy ciepła, Solary albo Kotły.
+5. W razie potrzeby wybierz wzór gminy.
+6. Uzupełnij niepewne pola. Jeśli pole jest puste w oryginale, kliknij **Brak w oryginale**.
+7. Opcjonalnie podaj ścieżkę nowego pliku Excel.
+8. Kliknij **Zapisz i pobierz**.
+
+W gotowym instalatorze OCR działa bez ręcznego ustawiania klucza. Strony wymagające rozpoznania są wysyłane do Google Document AI, dlatego wymagają internetu i generują koszt usługi.
+
+## 14. Najczęstsze problemy
+
+| Problem | Rozwiązanie |
+|---|---|
+| Kafelek nie przechodzi na status „gotowe” | Uruchom Scyzoryk ponownie skrótem z pulpitu. |
+| Word nie tworzy PDF | Sprawdź instalację i aktywację Worda oraz dostępność pliku offline. |
+| Nie znaleziono pliku na Dysku Google | Ustaw plik lub folder jako dostępny offline. |
+| Drukowanie jest zajęte | Poczekaj na zakończenie serii w innym module lub karcie. |
+| OCR nie odpowiada | Sprawdź internet. Gotowy instalator nie wymaga ręcznego ustawiania klucza. |
+| Ecodan ma tylko trzy strony | To prawidłowe i wymagane działanie. |
+| Niepewny dokument projektu nie został zaznaczony | Sprawdź podgląd i zaznacz go ręcznie. |
+
+## 15. Aktualizacja
+
+Nie aktualizuj komputera użytkownika przez pobieranie ZIP-a repozytorium.
+
+1. Uruchom ponownie workflow **Zbuduj gotowy instalator Windows z OCR** na właściwym branchu.
+2. Pobierz nowy przetestowany artefakt.
+3. Uruchom nowy instalator na komputerze użytkownika.
+
+Instalator wykona ponowną instalację. Dane użytkownika znajdują się poza katalogiem programu.
