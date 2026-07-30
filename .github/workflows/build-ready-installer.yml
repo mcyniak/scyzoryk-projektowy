@@ -140,6 +140,8 @@ jobs:
       - name: Zapisz aktualne zrzuty w instrukcji
         if: ${{ success() && github.event_name == 'push' && !contains(github.event.head_commit.message, '[instruction-screenshots]') }}
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $source = Join-Path $env:LOGS_DIR 'screenshots'
@@ -174,7 +176,8 @@ jobs:
 
           git commit -m 'Aktualizuj zrzuty instrukcji [instruction-screenshots]'
           git push origin "HEAD:${{ github.ref_name }}"
-          Write-Host 'Zapisano nowe zrzuty. Kolejny automatyczny run zbuduje finalny instalator.'
+          gh workflow run build-ready-installer.yml --ref "${{ github.ref_name }}"
+          Write-Host 'Zapisano nowe zrzuty i uruchomiono finalny build instalatora.'
 
       - name: Przeslij raporty i zrzuty ekranow
         if: always()
