@@ -23,6 +23,7 @@ test('OCR odczytuje konfigurację w kolejności env, użytkownik, instalator', a
 
 test('build instalatora bierze sekret OCR tylko ze środowiska i dodaje go do stagingu', async () => {
   const source = await read('scripts/build-installer.ps1');
+  const gitignore = await read('.gitignore');
   assert.match(source, /OCR_DOCAI_CREDENTIALS_B64/);
   assert.match(source, /Add-OcrConfigurationToStaging/);
   assert.match(source, /FromBase64String/);
@@ -30,6 +31,8 @@ test('build instalatora bierze sekret OCR tylko ze środowiska i dodaje go do st
   assert.match(source, /Get-ChildItem -Path \$stagingDir -Recurse -File -Filter 'service-account\.json'/);
   assert.match(source, /Eksport repo zawiera zabroniony plik service-account\.json/);
   assert.match(source, /Dolaczono gotowa konfiguracje Google Document AI do instalatora/);
+  assert.match(gitignore, /apps\/ocr-audytow\/config\/document-ai\.json/);
+  assert.match(gitignore, /apps\/ocr-audytow\/config\/service-account\.json/);
 });
 
 test('workflow gotowego instalatora wymaga sekretu i testuje prawdziwy OCR', async () => {
