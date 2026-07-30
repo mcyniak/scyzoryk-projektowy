@@ -93,19 +93,34 @@ test('wspolny check zaleznosci nie odczytuje package.json przez exports', () => 
   }
 });
 
-test('instalator i CI nie pakuja klucza Document AI', () => {
+test('wariant deweloperski nie zawiera OCR, a gotowy instalator pakuje go tylko z sekretu Actions', () => {
   const root = path.resolve(__dirname, '..');
   const buildScript = fs.readFileSync(path.join(root, 'scripts', 'build-installer.ps1'), 'utf8');
-  const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build-internal-installer.yml'), 'utf8');
+  const developerWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build-internal-installer.yml'), 'utf8');
+  const readyWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build-ready-installer.yml'), 'utf8');
   const installedTest = fs.readFileSync(path.join(root, 'scripts', 'ci', 'test-installed-scyzoryk.ps1'), 'utf8');
   const engine = fs.readFileSync(path.join(root, 'apps', 'ocr-audytow', 'src', 'documentAiEngine.js'), 'utf8');
-  assert.doesNotMatch(buildScript, /Add-OcrConfigurationToStaging/);
-  assert.doesNotMatch(buildScript, /OCR_DOCAI_CREDENTIALS_B64/);
-  assert.match(buildScript, /Filter 'service-account\.json'/);
-  assert.doesNotMatch(workflow, /OCR_DOCAI_CREDENTIALS_B64/);
-  assert.doesNotMatch(installedTest, /Prawdziwe polaczenie z Google Document AI/);
-  assert.match(installedTest, /Instalator zawiera zabroniona konfiguracje OCR/);
-  assert.match(installedTest, /Swieza instalacja nie powinna zawierac konfiguracji OCR/);
-  assert.doesNotMatch(engine, /EMBEDDED_CONFIG_PATH/);
+  const gitignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
+
+  assert.match(buildScript, /function Add-OcrConfigurationToStaging/);
+  assert.match(buildScript, /OCR_DOCAI_CREDENTIALS_B64/);
+  assert.match(buildScript, /Get-ChildItem -Path \$stagingDir -Recurse -File -Filter 'service-account\.json'/);
+  assert.match(buildScript, /Eksport repo zawiera zabroniony plik service-account\.json/);
+
+  assert.match(developerWorkflow, /name: Zbuduj instalator deweloperski bez OCR/);
+  assert.doesNotMatch(developerWorkflow, /secrets\.OCR_DOCAI_CREDENTIALS_B64/);
+
+  assert.match(readyWorkflow, /name: Zbuduj gotowy instalator Windows z OCR/);
+  assert.match(readyWorkflow, /OCR_DOCAI_CREDENTIALS_B64: \$\{\{ secrets\.OCR_DOCAI_CREDENTIALS_B64 \}\}/);
+  assert.match(readyWorkflow, /-ExpectBundledOcr/);
+  assert.match(readyWorkflow, /-TestLiveOcr/);
+
+  assert.match(installedTest, /\[switch\]\$ExpectBundledOcr/);
+  assert.match(installedTest, /Prawdziwe polaczenie z Google Document AI bez konfiguracji po instalacji/);
+  assert.match(engine, /const BUNDLED_CONFIG_PATH/);
+  assert.match(engine, /if \(isComplete\(bundledConfig\)\) return bundledConfig/);
+
+  assert.match(gitignore, /apps\/ocr-audytow\/config\/service-account\.json/);
+  assert.match(gitignore, /apps\/ocr-audytow\/config\/document-ai\.json/);
   assert.equal(fs.existsSync(path.join(root, 'docs', 'ocr-document-ai.example.json')), true);
 });
