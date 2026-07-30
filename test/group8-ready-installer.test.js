@@ -35,13 +35,17 @@ test('build instalatora bierze sekret OCR tylko ze środowiska i dodaje go do st
   assert.match(gitignore, /apps\/ocr-audytow\/config\/service-account\.json/);
 });
 
-test('workflow gotowego instalatora wymaga sekretu i testuje prawdziwy OCR', async () => {
+test('workflow gotowego instalatora wymaga sekretu, testuje OCR i aktualizuje zrzuty instrukcji', async () => {
   const workflow = await read('.github/workflows/build-ready-installer.yml');
   assert.match(workflow, /name: Zbuduj gotowy instalator Windows z OCR/);
   assert.match(workflow, /name: Zbuduj instalator/);
+  assert.match(workflow, /contents: write/);
   assert.match(workflow, /OCR_DOCAI_CREDENTIALS_B64: \$\{\{ secrets\.OCR_DOCAI_CREDENTIALS_B64 \}\}/);
   assert.match(workflow, /-ExpectBundledOcr/);
   assert.match(workflow, /-TestLiveOcr/);
+  assert.match(workflow, /name: Zapisz aktualne zrzuty w instrukcji/);
+  assert.match(workflow, /public\\instrukcja-images/);
+  assert.match(workflow, /\[instruction-screenshots\]/);
   assert.match(workflow, /name: Scyzoryk-Projektowy-gotowy-Windows-z-OCR/);
 });
 
@@ -53,14 +57,25 @@ test('test świeżej instalacji rozróżnia zwykły i gotowy instalator OCR', as
   assert.match(source, /\[bool\]\$ocr\.ocrConfigured -eq \[bool\]\$ExpectBundledOcr/);
 });
 
-test('Pomoc prowadzi do pełnej lokalnej instrukcji, bez starego modala', async () => {
+test('Pomoc prowadzi do rozbudowanej lokalnej instrukcji z aktualnymi zrzutami', async () => {
   const panel = await read('public/index.html');
-  const script = await read('public/inline-1.js');
+  const panelScript = await read('public/inline-1.js');
   const instruction = await read('public/instrukcja.html');
+  const loader = await read('public/instrukcja.js');
+  const sections = await Promise.all([
+    'public/instrukcja-sections/01-start.html',
+    'public/instrukcja-sections/02-documents-stamps.html',
+    'public/instrukcja-sections/03-printing-projects.html',
+    'public/instrukcja-sections/04-ecodan-wnioski.html',
+    'public/instrukcja-sections/05-karty-ocr-pomoc.html'
+  ].map(read));
+  const fullGuide = instruction + loader + sections.join('\n');
 
   assert.match(panel, /id="helpTopLink" href="\/instrukcja\.html"/);
   assert.doesNotMatch(panel, /helpModalOverlay/);
-  assert.doesNotMatch(script, /openModal|helpModalOverlay/);
+  assert.doesNotMatch(panelScript, /openModal|helpModalOverlay/);
+  assert.match(loader, /instrukcja-sections\/01-start\.html/);
+
   for (const title of [
     'Drukarka dokumentów',
     'Drukarka projektów',
@@ -71,8 +86,17 @@ test('Pomoc prowadzi do pełnej lokalnej instrukcji, bez starego modala', async 
     'Karty katalogowe',
     'OCR audytów'
   ]) {
-    assert.ok(instruction.includes(title), `Instrukcja nie zawiera sekcji: ${title}`);
+    assert.ok(fullGuide.includes(title), `Instrukcja nie zawiera sekcji: ${title}`);
   }
-  assert.match(instruction, /pierwsze trzy strony/i);
-  assert.match(instruction, /nie trzeba ustawiać klucza/i);
+  for (const image of [
+    '01-panel.png', '02-drukarka.png', '03-pieczatki.png', '04-formularze.png',
+    '05-dokumenty-seryjne.png', '06-wnioski.png', '07-karty.png',
+    '08-drukarka-projekty.png', '09-ocr.png'
+  ]) {
+    assert.ok(fullGuide.includes(`/instrukcja-images/${image}`), `Brakuje miejsca na aktualny zrzut: ${image}`);
+  }
+  assert.doesNotMatch(fullGuide, /10-instrukcja\.png/);
+  assert.doesNotMatch(fullGuide, /Panel techniczny/);
+  assert.match(fullGuide, /pierwsze trzy strony/i);
+  assert.match(fullGuide, /nie trzeba ustawiać klucza/i);
 });
