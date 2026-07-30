@@ -20,10 +20,10 @@
         </a>
       </div>
       <div class="app-header-right">
-        <button type="button" class="btn btn-ghost btn-sm" id="helpTopLink">
+        <a class="btn btn-ghost btn-sm" id="helpTopLink" href="/instrukcja.html">
           <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
           Pomoc
-        </button>
+        </a>
       </div>
     </header>
 
@@ -189,25 +189,6 @@
         <span>Brak narzędzi pasujących do „<span id="toolSearchEmptyQuery"></span>”.</span>
       </p>
     </div>
-
-    <div class="help-modal-overlay" id="helpModalOverlay">
-      <div class="help-modal-box" role="dialog" aria-modal="true" aria-labelledby="helpModalTitle">
-        <div class="help-modal-head">
-          <strong id="helpModalTitle">Pomoc</strong>
-          <button type="button" class="help-modal-close" id="helpModalClose" aria-label="Zamknij">
-            <svg class="icon"><use href="/shared/icons.svg#i-x"/></svg>
-          </button>
-        </div>
-        <div class="support-body support-simple" style="padding: var(--space-5);">
-          <p class="support-intro">Krótka pomoc do bezpiecznej pracy z plikami.</p>
-          <div class="compact-notices">
-            <div class="alert alert-warning"><svg class="icon"><use href="/shared/icons.svg#i-alert-triangle"/></svg><div class="alert-body"><div class="alert-title">Word</div><div class="alert-desc">Dokumenty seryjne i Wnioski powykonawcze wymagają Microsoft Word na tym komputerze.</div></div></div>
-            <div class="alert alert-info"><svg class="icon"><use href="/shared/icons.svg#i-info"/></svg><div class="alert-body"><div class="alert-title">Dysk Google</div><div class="alert-desc">Pliki powinny być dostępne offline, żeby Word mógł je otworzyć.</div></div></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
   </main>
 
   <script src="inline-1.js"></script>
