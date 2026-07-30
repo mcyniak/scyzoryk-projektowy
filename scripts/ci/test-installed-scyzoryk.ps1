@@ -1,7 +1,9 @@
 ﻿param(
   [Parameter(Mandatory = $true)][string]$InstallerPath,
   [Parameter(Mandatory = $true)][string]$InstallDir,
-  [Parameter(Mandatory = $true)][string]$LogsDir
+  [Parameter(Mandatory = $true)][string]$LogsDir,
+  [switch]$ExpectBundledOcr,
+  [switch]$TestLiveOcr
 )
 
 $ErrorActionPreference = 'Stop'
@@ -53,9 +55,10 @@ Run-Test 'Instalacja na swiezym Windowsie' {
   Assert-True ($proc.ExitCode -eq 0) "Instalator zakonczyl sie kodem $($proc.ExitCode)."
 }
 
-Run-Test 'Kompletnosc instalacji bez sekretow OCR' {
+Run-Test 'Kompletnosc zainstalowanej aplikacji' {
   $required = @(
-    'server.js','package.json','public\index.html','node-runtime\node.exe','unins000.exe',
+    'server.js','package.json','public\index.html','public\instrukcja.html','public\instrukcja.css',
+    'node-runtime\node.exe','node-runtime\npm.cmd','unins000.exe',
     'apps\drukarka\node_modules\express',
     'apps\pieczatki-pdf\node_modules\express',
     'apps\formularze-ecodan\node_modules\playwright',
@@ -68,32 +71,88 @@ Run-Test 'Kompletnosc instalacji bez sekretow OCR' {
   $missing = @($required | Where-Object { -not (Test-Path (Join-Path $InstallDir $_)) })
   Assert-True ($missing.Count -eq 0) "Brakuje elementow instalacji: $($missing -join ', ')"
 
-  $forbidden = @(
-    'apps\ocr-audytow\config\document-ai.json',
-    'apps\ocr-audytow\config\service-account.json'
-  )
-  $bundledSecrets = @($forbidden | Where-Object { Test-Path (Join-Path $InstallDir $_) })
-  Assert-True ($bundledSecrets.Count -eq 0) "Instalator zawiera zabroniona konfiguracje OCR: $($bundledSecrets -join ', ')"
+  $configPath = Join-Path $InstallDir 'apps\ocr-audytow\config\document-ai.json'
+  $keyPath = Join-Path $InstallDir 'apps\ocr-audytow\config\service-account.json'
+
+  if ($ExpectBundledOcr) {
+    Assert-True (Test-Path $configPath) 'Gotowy instalator nie zawiera konfiguracji OCR.'
+    Assert-True (Test-Path $keyPath) 'Gotowy instalator nie zawiera klucza OCR.'
+
+    $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$cfg.projectId)) 'Brak projectId OCR.'
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$cfg.location)) 'Brak location OCR.'
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$cfg.processorId)) 'Brak processorId OCR.'
+    Assert-True ($cfg.keyFile -eq 'service-account.json') 'Nieprawidlowa sciezka keyFile OCR.'
+
+    if (-not [string]::IsNullOrWhiteSpace($env:OCR_DOCAI_PROJECT_ID)) {
+      Assert-True ($cfg.projectId -eq $env:OCR_DOCAI_PROJECT_ID) 'Instalator zawiera nieprawidlowy projekt OCR.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:OCR_DOCAI_LOCATION)) {
+      Assert-True ($cfg.location -eq $env:OCR_DOCAI_LOCATION) 'Instalator zawiera nieprawidlowa lokalizacje OCR.'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:OCR_DOCAI_PROCESSOR_ID)) {
+      Assert-True ($cfg.processorId -eq $env:OCR_DOCAI_PROCESSOR_ID) 'Instalator zawiera nieprawidlowy processor ID OCR.'
+    }
+
+    $credentials = Get-Content $keyPath -Raw | ConvertFrom-Json
+    Assert-True ($credentials.type -eq 'service_account') 'Plik OCR nie jest kontem serwisowym.'
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$credentials.client_email)) 'Brak client_email w kluczu OCR.'
+    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$credentials.private_key)) 'Brak private_key w kluczu OCR.'
+  } else {
+    Assert-True (-not (Test-Path $configPath)) 'Zwykly instalator nie powinien zawierac konfiguracji OCR.'
+    Assert-True (-not (Test-Path $keyPath)) 'Zwykly instalator nie powinien zawierac klucza OCR.'
+  }
 }
 
-Run-Test 'Aktualny panel narzedzi w instalatorze' {
-  $html = Get-Content (Join-Path $InstallDir 'public\index.html') -Raw
+Run-Test 'Aktualny panel i instrukcja w instalatorze' {
+  $indexPath = Join-Path $InstallDir 'public\index.html'
+  $instructionPath = Join-Path $InstallDir 'public\instrukcja.html'
+  $html = Get-Content $indexPath -Raw
+  $instruction = Get-Content $instructionPath -Raw
+
   $requiredFragments = @(
     'data-app="drukarka"',
     'data-app="drukarka-projekty"',
     'data-app="dokumenty-seryjne"',
     'data-app="wnioski-powykonawcze"',
-    'data-app="formularze"',
-    'data-app="pieczatki"',
+    'data-app="formularze-ecodan"',
+    'data-app="pieczatki-pdf"',
     'data-app="karty-katalogowe"',
     'data-app="ocr-audytow"',
+    'href="/instrukcja.html"',
     '<h3>Drukarka dokumentów</h3>',
-    '<h3>Drukarka projektów</h3>',
     '<h3>Dokumenty seryjne PDF</h3>',
     '<h3>OCR audytów</h3>'
   )
   $missing = @($requiredFragments | Where-Object { -not $html.Contains($_) })
-  Assert-True ($missing.Count -eq 0) "W zainstalowanym panelu brakuje narzedzi lub stabilnych elementow: $($missing -join ' | ')"
+  Assert-True ($missing.Count -eq 0) "W panelu brakuje stabilnych elementow: $($missing -join ' | ')"
+  Assert-True (-not $html.Contains('helpModalOverlay')) 'Panel nadal zawiera stary modal pomocy.'
+
+  $instructionFragments = @(
+    'Instrukcja obsługi Scyzoryka Projektowego',
+    'Drukarka dokumentów',
+    'Drukarka projektów',
+    'Dokumenty seryjne PDF',
+    'Wnioski powykonawcze PDF',
+    'Formularze Ecodan',
+    'Pieczątki PDF',
+    'Karty katalogowe',
+    'OCR audytów',
+    'pierwsze trzy strony'
+  )
+  $missingInstruction = @($instructionFragments | Where-Object { -not $instruction.Contains($_) })
+  Assert-True ($missingInstruction.Count -eq 0) "Instrukcja jest niekompletna: $($missingInstruction -join ' | ')"
+}
+
+Run-Test 'Regresje zainstalowanej wersji' {
+  $npm = Join-Path $InstallDir 'node-runtime\npm.cmd'
+  Push-Location $InstallDir
+  try {
+    & $npm run test:regressions
+    Assert-True ($LASTEXITCODE -eq 0) 'Testy regresyjne zainstalowanej wersji nie przeszly.'
+  } finally {
+    Pop-Location
+  }
 }
 
 Run-Test 'Sortowanie dokumentow projektowych' {
@@ -138,7 +197,7 @@ Run-Test 'Uruchomienie Scyzoryka bez globalnego Node.js' {
   Start-ScheduledTask -TaskName $script:TaskName
 }
 
-Run-Test 'Health-check wszystkich narzedzi i bezpieczny stan OCR' {
+Run-Test 'Health-check wszystkich narzedzi i stan OCR' {
   $checks = @(
     @{ name='panel'; port=3000; path='/api/apps' },
     @{ name='drukarka'; port=3001; path='/api/health'; expectedName='drukarka' },
@@ -168,10 +227,50 @@ Run-Test 'Health-check wszystkich narzedzi i bezpieczny stan OCR' {
 
   $ocr = Invoke-RestMethod 'http://127.0.0.1:3011/api/health' -TimeoutSec 10
   $ocr | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $LogsDir 'reports\ocr-health.json') -Encoding utf8
-  Assert-True (-not [bool]$ocr.ocrConfigured) 'Swieza instalacja nie powinna zawierac konfiguracji OCR.'
+  Assert-True ([bool]$ocr.ocrConfigured -eq [bool]$ExpectBundledOcr) "Nieprawidlowy stan ocrConfigured. Oczekiwano: $([bool]$ExpectBundledOcr)."
 }
 
-Run-Test 'Zrzuty ekranow wszystkich narzedzi' {
+if ($TestLiveOcr) {
+  Run-Test 'Prawdziwe polaczenie z Google Document AI bez konfiguracji po instalacji' {
+    Assert-True ([bool]$ExpectBundledOcr) 'Test prawdziwego OCR wymaga -ExpectBundledOcr.'
+    Add-Type -AssemblyName System.Drawing
+    $jpg = Join-Path $LogsDir 'input\ocr-test.jpg'
+    $bitmap = New-Object Drawing.Bitmap 1000,300
+    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    $font = New-Object Drawing.Font('Arial',32)
+    try {
+      $graphics.Clear([Drawing.Color]::White)
+      $graphics.DrawString('TEST OCR SCYZORYK 123', $font, [Drawing.Brushes]::Black, 40, 100)
+      $bitmap.Save($jpg, [Drawing.Imaging.ImageFormat]::Jpeg)
+    } finally {
+      $font.Dispose()
+      $graphics.Dispose()
+      $bitmap.Dispose()
+    }
+
+    $testJs = Join-Path $LogsDir 'ocr-api-test.js'
+    $jsLines = @(
+      "const { ocrImage, getConfigurationStatus } = require(process.argv[2]);",
+      "console.log('Konfiguracja OCR:', getConfigurationStatus());",
+      "ocrImage(process.argv[3]).then((result) => {",
+      "  const text = String(result && result.text || '').trim();",
+      "  console.log('Document AI odpowiedzial. Tekst:', text);",
+      "  if (!text) process.exit(2);",
+      "}).catch((error) => {",
+      "  console.error(error && error.stack || error);",
+      "  process.exit(1);",
+      "});"
+    )
+    [IO.File]::WriteAllLines($testJs, $jsLines, [Text.UTF8Encoding]::new($false))
+
+    $node = Join-Path $InstallDir 'node-runtime\node.exe'
+    $engine = Join-Path $InstallDir 'apps\ocr-audytow\src\documentAiEngine.js'
+    & $node $testJs $engine $jpg
+    Assert-True ($LASTEXITCODE -eq 0) 'Prawdziwe wywolanie Google Document AI nie powiodlo sie.'
+  }
+}
+
+Run-Test 'Zrzuty ekranow wszystkich narzedzi i instrukcji' {
   $targetsPath = Join-Path $LogsDir 'screenshot-targets.json'
   @(
     @{slug='01-panel'; url='http://127.0.0.1:3000/'},
@@ -182,7 +281,8 @@ Run-Test 'Zrzuty ekranow wszystkich narzedzi' {
     @{slug='06-wnioski'; url='http://127.0.0.1:3005/'},
     @{slug='07-karty'; url='http://127.0.0.1:3006/'},
     @{slug='08-drukarka-projekty'; url='http://127.0.0.1:3010/'},
-    @{slug='09-ocr'; url='http://127.0.0.1:3011/'}
+    @{slug='09-ocr'; url='http://127.0.0.1:3011/'},
+    @{slug='10-instrukcja'; url='http://127.0.0.1:3000/instrukcja.html'}
   ) | ConvertTo-Json | Set-Content $targetsPath -Encoding utf8
 
   $env:NODE_PATH = Join-Path $InstallDir 'apps\formularze-ecodan\node_modules'
@@ -224,8 +324,16 @@ Run-Test 'Ponowna instalacja' {
   )
   $proc = Start-Process -FilePath $InstallerPath -ArgumentList $args -Wait -PassThru
   Assert-True ($proc.ExitCode -eq 0) "Ponowna instalacja zakonczyla sie kodem $($proc.ExitCode)."
-  Assert-True (-not (Test-Path (Join-Path $InstallDir 'apps\ocr-audytow\config\document-ai.json'))) 'Reinstalacja dodala konfiguracje OCR.'
-  Assert-True (-not (Test-Path (Join-Path $InstallDir 'apps\ocr-audytow\config\service-account.json'))) 'Reinstalacja dodala klucz OCR.'
+
+  $configPath = Join-Path $InstallDir 'apps\ocr-audytow\config\document-ai.json'
+  $keyPath = Join-Path $InstallDir 'apps\ocr-audytow\config\service-account.json'
+  if ($ExpectBundledOcr) {
+    Assert-True (Test-Path $configPath) 'Po reinstalacji brakuje konfiguracji OCR.'
+    Assert-True (Test-Path $keyPath) 'Po reinstalacji brakuje klucza OCR.'
+  } else {
+    Assert-True (-not (Test-Path $configPath)) 'Reinstalacja dodala konfiguracje OCR.'
+    Assert-True (-not (Test-Path $keyPath)) 'Reinstalacja dodala klucz OCR.'
+  }
 }
 
 Run-Test 'Odinstalowanie' {
