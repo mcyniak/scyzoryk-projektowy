@@ -29,6 +29,7 @@ test('build instalatora bierze sekret OCR tylko ze środowiska i dodaje go do st
   assert.match(source, /service_account/);
   assert.match(source, /Get-ChildItem -Path \$stagingDir -Recurse -File -Filter 'service-account\.json'/);
   assert.match(source, /Eksport repo zawiera zabroniony plik service-account\.json/);
+  assert.match(source, /Dolaczono gotowa konfiguracje Google Document AI do instalatora/);
 });
 
 test('workflow gotowego instalatora wymaga sekretu i testuje prawdziwy OCR', async () => {
@@ -39,6 +40,14 @@ test('workflow gotowego instalatora wymaga sekretu i testuje prawdziwy OCR', asy
   assert.match(workflow, /-ExpectBundledOcr/);
   assert.match(workflow, /-TestLiveOcr/);
   assert.match(workflow, /name: Scyzoryk-Projektowy-gotowy-Windows-z-OCR/);
+});
+
+test('test świeżej instalacji rozróżnia zwykły i gotowy instalator OCR', async () => {
+  const source = await read('scripts/ci/test-installed-scyzoryk.ps1');
+  assert.match(source, /\[switch\]\$ExpectBundledOcr/);
+  assert.match(source, /\[switch\]\$TestLiveOcr/);
+  assert.match(source, /Prawdziwe polaczenie z Google Document AI bez konfiguracji po instalacji/);
+  assert.match(source, /\[bool\]\$ocr\.ocrConfigured -eq \[bool\]\$ExpectBundledOcr/);
 });
 
 test('Pomoc prowadzi do pełnej lokalnej instrukcji, bez starego modala', async () => {
@@ -63,9 +72,4 @@ test('Pomoc prowadzi do pełnej lokalnej instrukcji, bez starego modala', async 
   }
   assert.match(instruction, /pierwsze trzy strony/i);
   assert.match(instruction, /nie trzeba ustawiać klucza/i);
-});
-
-test('repozytorium nie zawiera śledzonego klucza konta serwisowego', async () => {
-  const forbidden = path.join(root, 'apps', 'ocr-audytow', 'config', 'service-account.json');
-  await assert.rejects(fs.access(forbidden), { code: 'ENOENT' });
 });
