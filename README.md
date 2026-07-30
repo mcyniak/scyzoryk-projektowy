@@ -14,104 +14,141 @@
 
 ## Czym jest Scyzoryk?
 
-**Scyzoryk Projektowy** to zestaw prostych narzędzi uruchamianych z jednego panelu w przeglądarce. Powstał po to, aby ograniczyć ręczne, powtarzalne czynności związane z przygotowaniem dokumentacji, drukowaniem, porządkowaniem plików oraz przepisywaniem danych.
+**Scyzoryk Projektowy** to zestaw prostych narzędzi uruchamianych z jednego panelu w przeglądarce. Ogranicza ręczne, powtarzalne czynności związane z przygotowaniem dokumentacji, drukowaniem, porządkowaniem plików i przepisywaniem danych.
 
-Zamiast otwierać wiele programów, wyszukiwać pliki w folderach i wykonywać te same kroki dla każdego adresu, użytkownik wybiera odpowiednie narzędzie i prowadzi zadanie przez czytelny formularz.
+Zamiast otwierać wiele programów i wykonywać te same kroki dla każdego adresu, użytkownik wybiera narzędzie i przechodzi przez czytelny formularz krok po kroku.
 
-> Scyzoryk nie zastępuje pracy projektanta. Automatyzuje czynności techniczne i organizacyjne, aby więcej czasu zostało na właściwą pracę projektową.
+> Scyzoryk nie zastępuje pracy projektanta. Automatyzuje czynności techniczne i organizacyjne.
 
 ## Co daje w praktyce?
 
 - mniej ręcznego przepisywania danych,
 - szybsze przygotowywanie powtarzalnych dokumentów,
-- właściwa kolejność plików podczas drukowania,
+- kontrolowaną kolejność plików podczas drukowania,
 - mniej pomyłek przy dobieraniu dokumentacji do adresu,
 - łatwiejsze przetwarzanie większej liczby lokalizacji,
-- jeden punkt dostępu do wszystkich firmowych narzędzi,
-- możliwość rozwijania kolejnych automatyzacji bez tworzenia osobnego programu od zera.
+- jeden punkt dostępu do wszystkich firmowych narzędzi.
 
 ## Dostępne narzędzia
 
 | Narzędzie | Do czego służy |
 |---|---|
-| 🖨️ **Drukarka** | Pozwala dodać wiele dokumentów, ustawić ich kolejność, liczbę kopii oraz sposób drukowania, a następnie uruchomić całą paczkę. |
-| 🗂️ **Drukarka projekty** | Wyszukuje dokumenty projektu, układa je w odpowiedniej kolejności i przygotowuje do druku na podstawie danych inwestycji. Obsługuje również dokumentację WM. |
-| 🧾 **Pieczątki PDF** | Dodaje przygotowaną pieczątkę tekstową do plików PDF bez ręcznego otwierania i poprawiania każdej strony. |
-| 📋 **Formularze Ecodan** | Pobiera dane z Excela i automatycznie przygotowuje formularze w zewnętrznym systemie, ograniczając ręczne przepisywanie informacji. |
-| 📄 **Dokumenty seryjne PDF** | Łączy dane z Excela, wzory Worda oraz informacje z folderu inwestycji i tworzy osobne dokumenty dla kolejnych adresów. |
-| 📝 **Wnioski powykonawcze PDF** | Zamienia przygotowane wnioski materiałowe na dokumentację powykonawczą — pojedynczo albo dla całego folderu. |
-| 📚 **Karty katalogowe** | Dobiera właściwe karty urządzeń na podstawie danych z Excela i kopiuje je do odpowiednich folderów klientów. |
-| 🔎 **OCR audytów** | Odczytuje zeskanowane audyty, również z odręcznymi wpisami, tworzy PDF-y z możliwym wyszukiwaniem tekstu, pomaga dzielić zbiorcze skany na adresy oraz przenosić sprawdzone dane do Excela. |
+| 🖨️ **Drukarka dokumentów** | Dodaje wiele plików PDF/DOC/DOCX, pozwala ustawić kolejność, liczbę kopii, drukarkę i tryb jednostronny lub dwustronny. |
+| 🗂️ **Drukarka projektów** | Na podstawie Excela i folderów adresów wyszukuje dokumentację, układa ją w kolejności i przygotowuje do druku. Obsługuje również wnioski materiałowe WM. |
+| 🧾 **Pieczątki PDF** | Dodaje jedną lub wiele pieczątek do plików PDF, z podglądem, presetami, zakresem stron i ustawieniem pozycji. |
+| 📋 **Formularze Ecodan** | Pobiera dane z Excela, automatycznie wypełnia formularze i zapisuje raporty PDF. Wynik zachowuje wyłącznie pierwsze trzy potrzebne strony. |
+| 📄 **Dokumenty seryjne PDF** | Łączy folder wzorów Worda z tabelą Excel i tworzy osobne dokumenty dla wybranych adresów i wariantów. |
+| 📝 **Wnioski powykonawcze PDF** | Zamienia wnioski materiałowe Word na dokumentację powykonawczą pojedynczo albo dla całego folderu WM. |
+| 📚 **Karty katalogowe** | Dobiera właściwe karty urządzeń według UID z Excela i kopiuje je do odpowiednich folderów klientów. |
+| 🔎 **OCR audytów** | Odczytuje skany, także z odręcznymi wpisami, tworzy przeszukiwalne PDF-y, dzieli pliki na adresy i przenosi sprawdzone dane do Excela. |
 
-## Jak wygląda codzienna praca?
+## Instalacja dla użytkownika końcowego
 
-```text
-1. Uruchamiasz Scyzoryk jednym plikiem.
-2. W przeglądarce wybierasz potrzebne narzędzie.
-3. Wskazujesz pliki, folder inwestycji albo arkusz Excel.
-4. Sprawdzasz podsumowanie i uruchamiasz zadanie.
-5. Pobierasz lub drukujesz gotowy wynik.
-```
+Użytkownik końcowy nie powinien pobierać repozytorium ani ręcznie instalować Node.js.
 
-Każde narzędzie działa niezależnie. Jeżeli jedno wykonuje dłuższe zadanie, pozostałe nadal mogą być używane.
-
-## Przykładowe zastosowania
-
-### Przygotowanie dokumentacji dla wielu adresów
-
-Wskazujesz folder inwestycji i arkusz z danymi. Scyzoryk odnajduje wzory, dopasowuje dodatkowe dane techniczne i tworzy osobny komplet dokumentów dla każdej lokalizacji.
-
-### Drukowanie projektu
-
-Zamiast ręcznie otwierać kolejne PDF-y i pilnować ich kolejności, wybierasz inwestycję. Program odnajduje dokumenty, układa je zgodnie z przyjętymi zasadami i przekazuje do drukarki.
-
-### Odczyt zeskanowanych audytów
-
-Wgrywasz skan PDF. Program rozpoznaje druk i pismo ręczne, pozwala sprawdzić wykryte dane, a następnie tworzy przeszukiwalny dokument i — w razie potrzeby — osobne pliki dla kolejnych adresów.
-
-## Uruchomienie
-
-### Najprostszy sposób
-
-Uruchom plik:
+1. W GitHub Actions uruchom workflow **Zbuduj gotowy instalator Windows z OCR**.
+2. Poczekaj, aż zakończą się joby **Zbuduj instalator** oraz **Świeża instalacja i pełne testy**.
+3. Pobierz artefakt:
 
 ```text
-STARTUJ-SCYZORYK.cmd
+Scyzoryk-Projektowy-gotowy-Windows-z-OCR
 ```
 
-Skrypt przygotuje potrzebne składniki, sprawdzi projekt i uruchomi panel. Następnie otwórz:
+4. Rozpakuj artefakt i uruchom `ScyzorykProjektowy-Setup-....exe`.
+
+Gotowy instalator:
+
+- zawiera przenośny Node.js,
+- instaluje wymagane zależności i Chromium,
+- zawiera wewnętrzną konfigurację Google Document AI,
+- po instalacji nie wymaga ustawiania OCR przez odbiorcę,
+- jest publikowany dopiero po teście na świeżym Windowsie.
+
+> Instalator z OCR zawiera poufne dane konta serwisowego i jest przeznaczony wyłącznie do użytku wewnętrznego.
+
+Pełna instrukcja: [`docs/INSTRUKCJA-INSTALACJI.md`](docs/INSTRUKCJA-INSTALACJI.md).
+
+Po instalacji ta sama instrukcja jest dostępna z przycisku **Pomoc** na panelu głównym lub pod adresem:
+
+```text
+http://127.0.0.1:3000/instrukcja.html
+```
+
+## Uruchomienie po instalacji
+
+Uruchom skrót **Scyzoryk Projektowy** z pulpitu albo plik:
+
+```text
+Uruchom-Scyzoryk.cmd
+```
+
+Panel działa lokalnie pod adresem:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-Instalacja od zera na nowym komputerze (pobranie z GitHuba, wymagania, zrzuty ekranu
-każdego narzędzia): [`docs/INSTRUKCJA-INSTALACJI.md`](docs/INSTRUKCJA-INSTALACJI.md).
+Każdy moduł działa jako osobny proces. Dłuższe zadanie w jednym narzędziu nie powinno blokować pozostałych.
 
-### Wymagania
+## Wymagania użytkownika końcowego
 
-- komputer z systemem **Windows**,
-- **Microsoft Word** dla narzędzi generujących dokumenty Word/PDF,
-- Node.js w wersji 18 lub nowszej albo przygotowana wersja przenośna,
-- dostęp do drukarki i programów PDF dla funkcji drukowania,
-- dostęp do Google Cloud Document AI dla narzędzia OCR audytów.
+- Windows 10 lub Windows 11 x64,
+- internet podczas instalacji,
+- Microsoft Word dla Dokumentów seryjnych i Wniosków powykonawczych,
+- drukarka dla funkcji drukowania,
+- pliki z Dysku Google dostępne offline,
+- internet podczas OCR audytów i Formularzy Ecodan.
 
-## Gdzie działają dokumenty?
+Nie jest wymagane ręczne instalowanie Node.js, npm, Playwrighta, Chromium ani konfiguracji OCR.
 
-Panel i narzędzia są uruchamiane lokalnie na komputerze użytkownika. Nie wymagają publicznego serwera ani konta użytkownika.
+## Działanie lokalne i dane
 
-Większość operacji odbywa się wyłącznie lokalnie. **Wyjątkiem jest OCR audytów**, który podczas rozpoznawania tekstu korzysta z Google Cloud Document AI i przesyła do tej usługi strony wybrane do analizy. Pozostałe narzędzia nie wysyłają dokumentów do zewnętrznych usług.
+Panel oraz narzędzia nasłuchują wyłącznie lokalnie na `127.0.0.1`.
 
-## Status projektu
+Większość operacji odbywa się na komputerze użytkownika. Wyjątkiem jest **OCR audytów**, który wysyła strony wymagające rozpoznania do Google Cloud Document AI. Formularze Ecodan komunikują się z zewnętrznym systemem formularzy.
 
-Projekt jest rozwijany na podstawie rzeczywistych dokumentów i sposobu pracy działu projektowego. Nowe funkcje są dodawane etapami i sprawdzane na prawdziwych inwestycjach.
+Dane runtime, ustawienia i zapisane wzory znajdują się domyślnie w:
 
-Możliwe są różnice pomiędzy folderami, wzorami dokumentów oraz sposobem nazewnictwa w poszczególnych inwestycjach. Dlatego przed szerszym użyciem nowej funkcji warto sprawdzić ją na kilku reprezentatywnych przykładach.
+```text
+%LOCALAPPDATA%\ScyzorykProjektowy\Data
+```
+
+## Rozwój ze źródeł
+
+Ta część dotyczy wyłącznie osób rozwijających projekt, a nie użytkowników instalatora.
+
+Wymagania deweloperskie:
+
+- Git,
+- Node.js 18 lub nowszy,
+- npm,
+- Microsoft Word do testów funkcji Word COM,
+- Inno Setup 6 do lokalnego budowania instalatora Windows.
+
+Podstawowe komendy:
+
+```powershell
+npm run install-all
+npm run check
+npm run test:regressions
+npm run security-smoke
+npm run start
+```
+
+Budowanie instalatora:
+
+```powershell
+npm run build-installer
+```
+
+Bez czterech zmiennych `OCR_DOCAI_*` powstanie instalator deweloperski bez wbudowanej konfiguracji OCR. Poufny instalator gotowy dla pracowników powinien być budowany przez właściwy workflow GitHub Actions z sekretem `OCR_DOCAI_CREDENTIALS_B64`.
 
 ## Dokumentacja
 
-- [⚙️ Techniczne wyjaśnienie działania projektu](docs/TECHNICZNE_DZIALANIE.md)
-- [🤖 Wskazówki dla Claude Code i osób rozwijających projekt](CLAUDE.md)
+- [Instrukcja instalacji i obsługi](docs/INSTRUKCJA-INSTALACJI.md)
+- [Techniczne wyjaśnienie działania projektu](docs/TECHNICZNE_DZIALANIE.md)
+- [System wyglądu interfejsu](docs/UI-DESIGN-SYSTEM.md)
+- [Wskazówki dla Claude Code i osób rozwijających projekt](CLAUDE.md)
 
 ---
 
