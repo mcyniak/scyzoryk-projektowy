@@ -1,10 +1,8 @@
 name: Zbuduj gotowy instalator Windows z OCR
 
-# Jeden kontrolowany przebieg:
-# 1. budowa instalatora probnego,
-# 2. swieza instalacja, testy i zrzuty ekranow,
-# 3. finalna budowa ze zrzutami w instrukcji,
-# 4. ponowna swieza instalacja i pelna weryfikacja finalnego EXE.
+# Jeden kontrolowany przebieg z dwiema swiezymi maszynami:
+# 1. checkout, build probny, instalacja/testy, zrzuty i finalny build,
+# 2. pobranie finalnego EXE, swieza instalacja, pelna weryfikacja i publikacja.
 # Workflow nie uruchamia sie przy zwyklych commitach.
 
 on:
@@ -27,10 +25,10 @@ env:
   OCR_DOCAI_PROCESSOR_ID: c8cea9ff6f6430c3
 
 jobs:
-  build_preview:
-    name: 1. Zbuduj instalator probny
+  prepare_final:
+    name: 1. Zbuduj, przetestuj i przygotuj finalny instalator
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
     steps:
       - name: Pobierz kod repozytorium
         uses: actions/checkout@v4
@@ -79,59 +77,33 @@ jobs:
           $ErrorActionPreference = 'Stop'
           npm run build-installer
           $installer = Get-ChildItem release\*.exe | Select-Object -First 1
-          if (-not $installer) { throw 'Nie powstal instalator EXE.' }
-          Get-FileHash $installer.FullName -Algorithm SHA256 | Format-List
+          if (-not $installer) { throw 'Nie powstal instalator probny EXE.' }
 
-      - name: Przekaz instalator probny
-        uses: actions/upload-artifact@v4
-        with:
-          name: instalator-probny-${{ github.run_id }}
-          path: release/*.exe
-          if-no-files-found: error
-          retention-days: 1
-
-  capture_and_test:
-    name: 2. Swieza instalacja, testy i zrzuty
-    needs: build_preview
-    runs-on: windows-latest
-    timeout-minutes: 75
-    steps:
-      - name: Pobierz kod i skrypty testowe
-        uses: actions/checkout@v4
-
-      - name: Pobierz instalator probny
-        uses: actions/download-artifact@v4
-        with:
-          name: instalator-probny-${{ github.run_id }}
-          path: artifact
-
-      - name: Przygotuj sciezki
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem 'artifact\*.exe' | Select-Object -First 1
-          if (-not $installer) { throw 'Nie znaleziono instalatora probnego.' }
           $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test zrzutow'
           $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-zrzuty'
           New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
-          "INSTALLER_FILE=$($installer.FullName)" >> $env:GITHUB_ENV
-          "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
-          "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
 
-      - name: Zainstaluj, przetestuj i wykonaj zrzuty
+          "PREVIEW_INSTALLER=$($installer.FullName)" >> $env:GITHUB_ENV
+          "PREVIEW_INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
+          "PREVIEW_LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
+          Get-FileHash $installer.FullName -Algorithm SHA256 | Format-List
+
+      - name: Zainstaluj, przetestuj i wykonaj aktualne zrzuty
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & '.\scripts\ci\test-installed-scyzoryk.ps1' `
-            -InstallerPath $env:INSTALLER_FILE `
-            -InstallDir $env:INSTALL_DIR `
-            -LogsDir $env:LOGS_DIR `
+            -InstallerPath $env:PREVIEW_INSTALLER `
+            -InstallDir $env:PREVIEW_INSTALL_DIR `
+            -LogsDir $env:PREVIEW_LOGS_DIR `
             -ExpectBundledOcr
 
-      - name: Sprawdz komplet zrzutow instrukcji
+      - name: Wstaw aktualne zrzuty do instrukcji
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $source = Join-Path $env:PREVIEW_LOGS_DIR 'screenshots'
+          $target = Join-Path $PWD 'public\instrukcja-images'
           $required = @(
             '01-panel.png',
             '02-drukarka.png',
@@ -143,79 +115,16 @@ jobs:
             '08-drukarka-projekty.png',
             '09-ocr.png'
           )
+
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
           foreach ($name in $required) {
-            $file = Join-Path $env:LOGS_DIR "screenshots\$name"
-            if (-not (Test-Path -LiteralPath $file)) { throw "Brakuje zrzutu: $name" }
+            $file = Join-Path $source $name
+            if (-not (Test-Path -LiteralPath $file)) { throw "Brakuje zrzutu instrukcji: $name" }
+            Copy-Item -LiteralPath $file -Destination (Join-Path $target $name) -Force
           }
 
-      - name: Przekaz aktualne zrzuty do finalnego builda
-        uses: actions/upload-artifact@v4
-        with:
-          name: aktualne-zrzuty-instrukcji-${{ github.run_id }}
-          path: ${{ env.LOGS_DIR }}/screenshots/*.png
-          if-no-files-found: error
-          retention-days: 1
-
-      - name: Przeslij raport z pierwszej instalacji
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: raport-testow-probnego-instalatora
-          path: ${{ env.LOGS_DIR }}
-          if-no-files-found: warn
-          retention-days: 14
-
-  build_final:
-    name: 3. Zbuduj finalny instalator z instrukcja
-    needs: capture_and_test
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - name: Pobierz kod repozytorium
-        uses: actions/checkout@v4
-
-      - name: Pobierz aktualne zrzuty
-        uses: actions/download-artifact@v4
-        with:
-          name: aktualne-zrzuty-instrukcji-${{ github.run_id }}
-          path: public/instrukcja-images
-
-      - name: Sprawdz pliki instrukcji
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $required = @(
-            '01-panel.png',
-            '02-drukarka.png',
-            '03-pieczatki.png',
-            '04-formularze.png',
-            '05-dokumenty-seryjne.png',
-            '06-wnioski.png',
-            '07-karty.png',
-            '08-drukarka-projekty.png',
-            '09-ocr.png'
-          )
-          foreach ($name in $required) {
-            $file = Join-Path $PWD "public\instrukcja-images\$name"
-            if (-not (Test-Path -LiteralPath $file)) { throw "Brakuje zrzutu w finalnym buildzie: $name" }
-          }
           if (-not (Test-Path 'public\instrukcja.html')) { throw 'Brakuje public\instrukcja.html.' }
-
-      - name: Przygotuj Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Upewnij sie, ze Inno Setup jest dostepne
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $candidates = @(
-            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-          )
-          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $found) { choco install innosetup --no-progress -y }
+          Get-ChildItem $target -Filter '*.png' | Format-Table Name, Length
 
       - name: Zbuduj finalny instalator z OCR i aktualnymi zrzutami
         shell: pwsh
@@ -223,12 +132,13 @@ jobs:
           OCR_DOCAI_CREDENTIALS_B64: ${{ secrets.OCR_DOCAI_CREDENTIALS_B64 }}
         run: |
           $ErrorActionPreference = 'Stop'
+          Remove-Item release\*.exe -Force -ErrorAction SilentlyContinue
           npm run build-installer
           $installer = Get-ChildItem release\*.exe | Select-Object -First 1
           if (-not $installer) { throw 'Nie powstal finalny instalator EXE.' }
           Get-FileHash $installer.FullName -Algorithm SHA256 | Format-List
 
-      - name: Przekaz finalny instalator do weryfikacji
+      - name: Przekaz finalny instalator do swiezej weryfikacji
         uses: actions/upload-artifact@v4
         with:
           name: finalny-kandydat-${{ github.run_id }}
@@ -236,11 +146,20 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Przeslij raport z przygotowania finalnego instalatora
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raport-przygotowania-finalnego-instalatora
+          path: ${{ env.PREVIEW_LOGS_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
   verify_final:
-    name: 4. Zweryfikuj finalny instalator
-    needs: build_final
+    name: 2. Zweryfikuj i opublikuj finalny instalator
+    needs: prepare_final
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
     steps:
       - name: Pobierz kod i skrypty testowe
         uses: actions/checkout@v4
@@ -257,9 +176,11 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installer = Get-ChildItem 'artifact\*.exe' | Select-Object -First 1
           if (-not $installer) { throw 'Nie znaleziono finalnego instalatora.' }
+
           $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test finalny'
           $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-finalny'
           New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+
           "INSTALLER_FILE=$($installer.FullName)" >> $env:GITHUB_ENV
           "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
           "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
@@ -285,6 +206,7 @@ jobs:
           retention-days: 14
 
       - name: Udostepnij przetestowany instalator
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Scyzoryk-Projektowy-gotowy-Windows-z-OCR
