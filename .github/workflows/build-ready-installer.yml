@@ -6,6 +6,18 @@ name: Zbuduj gotowy instalator Windows z OCR
 
 on:
   workflow_dispatch: {}
+  push:
+    branches: [ui-redesign-v1]
+    paths:
+      - 'apps/**'
+      - 'public/**'
+      - 'lib/**'
+      - 'test/**'
+      - 'server.js'
+      - 'package.json'
+      - 'scripts/**'
+      - 'installer/**'
+      - '.github/workflows/build-ready-installer.yml'
 
 permissions:
   contents: read
