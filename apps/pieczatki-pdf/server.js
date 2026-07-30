@@ -127,19 +127,23 @@ app.use('/api', apiLimiter);
 
 
 
-function readHeader(filePath, length = 8) {
-  const fd = fs.openSync(filePath, 'r');
+// Sync fs (openSync/readSync/closeSync) blokowaloby cala apke (Node ma jeden
+// wątek) na czas kazdego odczytu - przy wielu wgranych plikach naraz to
+// wystarczalo, zeby health-check z panelu glownego oberwal timeoutem i apka
+// przez chwile wygladala jak "uruchamianie sie", mimo ze proces zyl i dzialal.
+async function readHeader(filePath, length = 8) {
+  const handle = await fsp.open(filePath, 'r');
   try {
     const buffer = Buffer.alloc(length);
-    const bytes = fs.readSync(fd, buffer, 0, length, 0);
-    return buffer.subarray(0, bytes);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
   } finally {
-    fs.closeSync(fd);
+    await handle.close();
   }
 }
 
-function validateUploadedPdfFile(file) {
-  const header = readHeader(file.path, 8);
+async function validateUploadedPdfFile(file) {
+  const header = await readHeader(file.path, 8);
   const ascii = header.toString('latin1');
   if (!ascii.startsWith('%PDF-')) throw new Error(`Plik ${decodeOriginalName(file.originalname) || file.filename} nie wygląda jak poprawny PDF.`);
 }
@@ -482,7 +486,7 @@ app.post('/api/stamp', heavyJobLimiter, upload.array('pdfs', MAX_FILES), async (
       await removeFiles(cleanup);
       return res.status(400).json({ error: 'Dodaj przynajmniej jeden plik PDF.' });
     }
-    for (const file of uploadedPdfs) validateUploadedPdfFile(file);
+    for (const file of uploadedPdfs) await validateUploadedPdfFile(file);
 
     const stamps = parseStampsFromRequest(req.body);
     if (!stamps.length) {

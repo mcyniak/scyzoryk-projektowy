@@ -1,4 +1,4 @@
-const fs = require('fs');
+const fsp = require('fs/promises');
 const path = require('path');
 
 // Jedyny staly sygnal "to jest kategoria WM" - plik zaczynajacy sie od "WM"
@@ -22,11 +22,16 @@ function parseLeadingNumber(name) {
 }
 
 // Rekurencyjnie znajduje KAZDY folder, ktory bezposrednio zawiera plik "WM ...".
-function findCategoryFolders(rootPath, depth = 0, relParts = []) {
+// fs.readdirSync blokowaloby caly proces (Node ma jeden watek) na czas
+// przejscia calego drzewa folderow - dla wiekszej inwestycji na dysku
+// sieciowym/Dysku Google to wystarczalo, zeby health-check z panelu glownego
+// oberwal timeoutem i apka przez chwile wygladala jak "uruchamianie sie",
+// mimo ze proces zyl i po prostu skanowal foldery.
+async function findCategoryFolders(rootPath, depth = 0, relParts = []) {
   if (depth > MAX_DEPTH) return [];
   let entries;
   try {
-    entries = fs.readdirSync(rootPath, { withFileTypes: true });
+    entries = await fsp.readdir(rootPath, { withFileTypes: true });
   } catch (_) {
     return [];
   }
@@ -39,7 +44,7 @@ function findCategoryFolders(rootPath, depth = 0, relParts = []) {
 
   for (const e of entries) {
     if (e.isDirectory()) {
-      categories.push(...findCategoryFolders(path.join(rootPath, e.name), depth + 1, [...relParts, e.name]));
+      categories.push(...await findCategoryFolders(path.join(rootPath, e.name), depth + 1, [...relParts, e.name]));
     }
   }
   return categories;
@@ -79,8 +84,8 @@ function pickExistingDokPod(files) {
 // Skanuje folder WM (dowolnej inwestycji) i zwraca liste kategorii z
 // informacja, czy maja gotowy plik zrodlowy do przerobienia, czy juz maja
 // wersje powykonawcza, czy brak materialu do przerobienia.
-function scanWmFolder(rootPath) {
-  const categories = findCategoryFolders(rootPath).sort(categorySortComparator);
+async function scanWmFolder(rootPath) {
+  const categories = (await findCategoryFolders(rootPath)).sort(categorySortComparator);
 
   const items = categories.map(cat => {
     const label = categoryLabel(cat.relPath);

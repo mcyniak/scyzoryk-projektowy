@@ -351,7 +351,14 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
     for (const nazwaPliku of doSkopiowania) {
       const zrodlo = path.join(kartyDir, nazwaPliku);
       const cel = path.join(folderKlienta, nazwaPliku);
-      if (!fs.existsSync(zrodlo)) {
+      // fs.existsSync tutaj blokowaloby caly proces (jeden watek Node) na
+      // czas odczytu z dysku - a to jest kod wewnatrz Promise.all po wielu
+      // adresach naraz (FAZA 2 nizej), wiec przy wiekszej paczce i/lub
+      // wolnym dysku sieciowym sumowalo sie to na tyle, ze health-check z
+      // panelu glownego dostawal timeout i apka przez chwile wygladala jak
+      // "uruchamianie sie", mimo ze dzialala.
+      const zrodloIstnieje = await fsp.access(zrodlo).then(() => true).catch(() => false);
+      if (!zrodloIstnieje) {
         bledy.push(`Brak pliku zrodlowego: ${nazwaPliku}`);
         continue;
       }

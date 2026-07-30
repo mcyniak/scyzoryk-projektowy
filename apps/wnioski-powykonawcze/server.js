@@ -421,16 +421,16 @@ app.get('/api/jobs/:id/download', (req, res) => {
 // Automatyczny tryb "caly folder WM": uzytkownik podaje tylko sciezke
 // nadrzednego folderu (np. folderu inwestycji zawierajacego podfoldery WM),
 // a aplikacja sama znajduje w kazdym podfolderze plik "WM ..." do przerobienia.
-app.post('/api/wm-folder/scan', (req, res) => {
+app.post('/api/wm-folder/scan', async (req, res) => {
   const folderPath = String(req.body?.folderPath || '').trim();
   if (!folderPath) return res.status(400).json({ ok: false, message: 'Podaj ścieżkę folderu z wnioskami materiałowymi (WM).' });
   let stat;
-  try { stat = fs.statSync(folderPath); } catch (_) { stat = null; }
+  try { stat = await fsp.stat(folderPath); } catch (_) { stat = null; }
   if (!stat || !stat.isDirectory()) {
     return res.status(400).json({ ok: false, message: 'Nie znaleziono folderu: ' + folderPath });
   }
   try {
-    const result = wmFolderScan.scanWmFolder(folderPath);
+    const result = await wmFolderScan.scanWmFolder(folderPath);
     res.json({ ok: true, ...result });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Nie udało się przeskanować folderu WM.' });
