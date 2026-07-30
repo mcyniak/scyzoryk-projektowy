@@ -47,6 +47,15 @@ function request(port) {
   });
 }
 
+async function waitForLockRelease(timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await readLock()) === null) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.equal(await readLock(), null, 'Globalna blokada drukowania nie zostala zwolniona na czas.');
+}
+
 test('globalny lease odrzuca konkurencyjny druk i przejmuje martwy lock', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scyzoryk-print-lock-'));
   try {
@@ -80,7 +89,7 @@ test('globalny lease odrzuca konkurencyjny druk i przejmuje martwy lock', async 
       assert.equal(await readLock(), null);
     });
   } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
@@ -130,10 +139,11 @@ test('drugi endpoint drukowania dostaje HTTP 409 podczas aktywnego lease', async
       } finally {
         releaseFirst();
         await Promise.all([close(firstServer), close(secondServer)]);
+        await waitForLockRelease();
       }
     });
   } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 
