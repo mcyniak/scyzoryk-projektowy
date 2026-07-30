@@ -16,6 +16,7 @@
     "test:group5": "node --test test/group5-dokumenty-seryjne.test.js",
     "test:group6": "node --test test/group6-workflows.test.js",
     "test:group7": "node --test test/group7-data-paths.test.js",
+    "test:group8": "node --test test/group8-ready-installer.test.js",
     "test:regressions": "node scripts/run-regression-tests.js",
     "security-smoke": "node scripts/security-smoke-test.js",
     "audit": "node scripts/check-project.js",
