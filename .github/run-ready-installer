@@ -1,2 +1,2 @@
-2026-07-30T12:40:39.832+00:00
-Powod: rebuild po rozdzieleniu instrukcji na dwie wersje i scaleniu wersji do maila w jeden plik.
+2026-07-30T13:45:17.839+00:00
+Powod: fix blokujacych sync fs w 3 apkach + ujednolicona instrukcja ze wspolnym systemem projektowym.
