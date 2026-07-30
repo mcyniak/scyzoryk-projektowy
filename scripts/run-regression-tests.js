@@ -12,7 +12,8 @@ const tests = [
     'test/group5-dokumenty-seryjne.test.js',
     'test/group6-workflows.test.js',
     'test/group7-data-paths.test.js',
-    'test/group8-ready-installer.test.js'
+    'test/group8-ready-installer.test.js',
+    'test/group9-dependency-check.test.js'
   ],
   ['apps/drukarka-projekty/test-sorting-regression.js']
 ];
