@@ -58,3 +58,8 @@ desktop.ini
 
 # Zbudowane paczki do rozeslania (scripts/build-package.js) - wynik, nie zrodlo
 release/
+
+# Generowany przez scripts/build-installer.ps1 do zainstalowanej kopii - w repo
+# deweloperskim moze pojawic sie tylko recznie (np. do testowania updatera
+# lokalnie), nigdy nie powinien byc zacommitowany.
+/build-info.json
