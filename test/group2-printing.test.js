@@ -172,6 +172,33 @@ test('duplex jest przywracany w finally po bledzie serii', async () => {
   assert.match(commands[1], /Set-PrintConfiguration/);
 });
 
+test('print-file.ps1: brak cichego fallbacku na drukarke domyslna i wymog potwierdzenia kolejki (audyt v1.0.4, P0-1/P1-10)', () => {
+  const root = path.resolve(__dirname, '..');
+  const script = fs.readFileSync(path.join(root, 'lib', 'printing', 'print-file.ps1'), 'utf8');
+
+  // P0-1a: gdy jawnie wskazana drukarka zawiedzie (Sumatra i Acrobat obie),
+  // skrypt MUSI przerwac z bledem - nie wolno mu juz przechodzic na
+  // Invoke-PrintWithShell (ktora nie przyjmuje nazwy drukarki i moglaby
+  // wydrukowac na drukarce domyslnej bez ostrzezenia).
+  assert.match(script, /PRINT_TARGETED_FAILED/);
+  const targetedBlockMatch = script.match(/if \(\$hasTargetedPrinter -and \$isPdf\) \{[\s\S]*?\n\}/);
+  assert.ok(targetedBlockMatch, 'nie znaleziono bloku $hasTargetedPrinter -and $isPdf');
+  assert.doesNotMatch(targetedBlockMatch[0], /if \(-not \$sent\) \{ \$null = Invoke-PrintWithShell/);
+
+  // P0-1b: "OK" na koncu skryptu nie moze juz byc bezwarunkowe, gdy sledzenie
+  // kolejki bylo dostepne, a zadne nowe zadanie sie nie pojawilo.
+  assert.match(script, /PRINT_NOT_CONFIRMED/);
+  assert.match(script, /\$trackingAvailable -and -not \$jobConfirmed/);
+
+  // P1-10: petla oczekiwania na Word COM ma teraz limit czasu (wczesniej byla
+  // nieskonczona - zawieszony sterownik/spooler blokowalby caly proces na
+  // zawsze).
+  assert.match(script, /\$printWaitDeadline = \(Get-Date\)\.AddSeconds\(60\)/);
+  const wordWaitMatch = script.match(/while \(\$word\.BackgroundPrintingStatus -ne 0\) \{[\s\S]*?\n    \}/);
+  assert.ok(wordWaitMatch, 'nie znaleziono petli oczekiwania BackgroundPrintingStatus');
+  assert.match(wordWaitMatch[0], /printWaitDeadline/);
+});
+
 test('skrypt nie dotyka cudzych okien i drukuje DOCX przez wlasny Word COM', () => {
   const root = path.resolve(__dirname, '..');
   const script = fs.readFileSync(path.join(root, 'lib', 'printing', 'print-file.ps1'), 'utf8');

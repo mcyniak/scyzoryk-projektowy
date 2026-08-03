@@ -140,7 +140,19 @@ function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
     $doc.PrintOut()
 
     # Czekamy, az utworzona przez nas instancja Worda przekaze zadanie do spoolera.
-    while ($word.BackgroundPrintingStatus -ne 0) { Start-Sleep -Milliseconds 200 }
+    # Audyt v1.0.4, P1-10: petla nie miala zadnego limitu czasu - zawieszony
+    # sterownik/spooler zawieszalby to CALKOWICIE, na zawsze, blokujac finally
+    # (Close/Quit/FinalReleaseComObject) nizej. Po 60s przestajemy czekac (finally
+    # nadal posprzata Worda) - dalsze potwierdzenie pojawienia sie zadania w
+    # kolejce robi juz zewnetrzna petla nizej w tym pliku.
+    $printWaitDeadline = (Get-Date).AddSeconds(60)
+    while ($word.BackgroundPrintingStatus -ne 0) {
+      if ((Get-Date) -gt $printWaitDeadline) {
+        Write-PrintLog "OSTRZEZENIE: Word nie zakonczyl przekazywania wydruku do spoolera w 60s - przerywam oczekiwanie (mozliwe zawieszenie sterownika/spoolera)."
+        break
+      }
+      Start-Sleep -Milliseconds 200
+    }
   } finally {
     if ($doc) { try { $doc.Close([ref]$false) } catch {} }
     if ($word) { try { $word.Quit() } catch {} }
@@ -197,7 +209,16 @@ if ($hasTargetedPrinter -and $isPdf) {
     $sent = Invoke-PrintWithAcrobat -path $FilePath -targetPrinter $printerName
     Write-PrintLog "Acrobat wynik: $sent"
   }
-  if (-not $sent) { $null = Invoke-PrintWithShell -path $FilePath }
+  if (-not $sent) {
+    # Audyt v1.0.4, P0-1: wczesniej tu byl fallback na Invoke-PrintWithShell,
+    # ktory NIE przyjmuje nazwy drukarki (-Verb Print) - moglo to wysic
+    # dokument na zupelnie INNA (domyslna) drukarke niz ta, ktora uzytkownik
+    # jawnie wybral w panelu, bez zadnego ostrzezenia. Skoro drukarka zostala
+    # jawnie wskazana, a Sumatra i Acrobat obie zawiodly, to jest realny blad -
+    # przerywamy, zamiast po cichu drukowac gdzie indziej.
+    Write-PrintLog "Sumatra i Acrobat zawiodly dla jawnie wskazanej drukarki - PRZERYWAM (bez fallbacku na drukarke domyslna)."
+    throw "PRINT_TARGETED_FAILED: Nie udalo sie wyslac pliku na wskazana drukarke '$printerName' (Sumatra i Acrobat zawiodly). Sprawdz, czy drukarka jest wlaczona i dostepna w sieci."
+  }
 } elseif (-not $isPdf) {
   Invoke-PrintWithWordCom -FilePath $FilePath -PrinterName $printerName
 } else {
@@ -209,6 +230,7 @@ Restore-Foreground $originalForeground
 $maxWaitMs = 20000
 $waited = 0
 $trackingAvailable = ($printerName -and $null -ne $jobIdsBefore)
+$jobConfirmed = $false
 
 while ($waited -lt $maxWaitMs) {
   Restore-Foreground $originalForeground
@@ -218,7 +240,7 @@ while ($waited -lt $maxWaitMs) {
     if ($null -ne $jobIdsNow) {
       foreach ($id in $jobIdsNow) { if (-not $jobIdsBefore.Contains($id)) { $hasNewJob = $true; break } }
     }
-    if ($hasNewJob) { break }
+    if ($hasNewJob) { $jobConfirmed = $true; break }
   } elseif ($waited -ge 300) {
     break
   }
@@ -229,5 +251,17 @@ while ($waited -lt $maxWaitMs) {
 
 Restore-Foreground $originalForeground
 
-Write-PrintLog "--- KONIEC (wyslano do sledzenia kolejki) ---"
+# Audyt v1.0.4, P0-1: skrypt wczesniej ZAWSZE konczyl sie "OK", nawet gdy
+# sledzenie kolejki BYLO dostepne (mamy nazwe drukarki i dziala Get-PrintJob),
+# a mimo to zadne nowe zadanie sie nie pojawilo w 20s. To dawalo falszywe
+# potwierdzenie wydruku. Gdy sledzenie NIE jest dostepne (np. sterownik/
+# system nie wspiera Get-PrintJob), nie ma z czym porownac - zostaje
+# dotychczasowe zachowanie (krotkie 300ms i "OK"), bo wymaganie potwierdzenia
+# tam, gdzie technicznie nie da sie go uzyskac, tylko blokowaloby caly druk.
+if ($trackingAvailable -and -not $jobConfirmed) {
+  Write-PrintLog "--- KONIEC: BRAK POTWIERDZENIA zadania w kolejce drukarki '$printerName' po $($maxWaitMs / 1000)s ---"
+  throw "PRINT_NOT_CONFIRMED: Nie potwierdzono pojawienia sie zadania w kolejce drukarki '$printerName' w ciagu $($maxWaitMs / 1000)s. Wydruk mogl sie nie powiesc."
+}
+
+Write-PrintLog "--- KONIEC (wyslano do sledzenia kolejki, potwierdzono: $jobConfirmed) ---"
 Write-Output "OK"

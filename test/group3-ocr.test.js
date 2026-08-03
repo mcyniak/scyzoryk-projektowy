@@ -118,6 +118,114 @@ test('mieszany PDF wywołuje OCR raz i składa wszystkie trzy strony we właści
   assert.equal(finalDocument.getPageCount(), 3);
 });
 
+test('uszkodzony obraz strony OCR: finalny dokument dostaje oryginalna strone, nie biala (audyt v1.0.4, P0-7)', async (t) => {
+  const dir = await makeTempDir();
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const sourcePdfPath = path.join(dir, 'source.pdf');
+  const goodImagePath = path.join(dir, 'good.png');
+  const corruptImagePath = path.join(dir, 'corrupt.png');
+  const workDir = path.join(dir, 'work');
+  const outputPath = path.join(dir, 'final.pdf');
+  // Strona 0: 400x600, strona 1: 410x610 (patrz createPdf) - realne, rozne od
+  // rozmiaru "mockowanego" obrazu OCR ponizej, zeby dalo sie jednoznacznie
+  // sprawdzic, ktora strona trafila do finalnego pliku.
+  await createPdf(sourcePdfPath, 2);
+  await fsp.writeFile(goodImagePath, Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64'
+  ));
+  // Naglowek PNG jest tu celowo uszkodzony (losowe bajty) - pdf-lib's
+  // embedPng() musi sie na tym wywalic, symulujac realny przypadek z
+  // 2026-07-22 (fizycznie uszkodzone dane obrazu na jednej stronie pliku).
+  await fsp.writeFile(corruptImagePath, Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x05]));
+
+  const textCheckPath = require.resolve('../apps/ocr-audytow/src/textLayerCheck');
+  const extractorPath = require.resolve('../apps/ocr-audytow/src/pdfImageExtractor');
+  const enginePath = require.resolve('../apps/ocr-audytow/src/documentAiEngine');
+  const pipelinePath = require.resolve('../apps/ocr-audytow/src/ocrPipeline');
+  const originalCache = new Map([textCheckPath, extractorPath, enginePath, pipelinePath].map((key) => [key, require.cache[key]]));
+  require.cache[textCheckPath] = {
+    id: textCheckPath, filename: textCheckPath, loaded: true,
+    exports: { checkTextLayerByPage: async () => [
+      { pageIndex: 0, hasTextLayer: false, textLength: 0 },
+      { pageIndex: 1, hasTextLayer: false, textLength: 0 }
+    ] }
+  };
+  require.cache[extractorPath] = {
+    id: extractorPath, filename: extractorPath, loaded: true,
+    exports: { extractPageImages: async () => ({
+      pageCount: 2,
+      pages: [
+        { pageIndex: 0, imagePath: goodImagePath, width: 999, height: 999, dpi: 72 },
+        { pageIndex: 1, imagePath: corruptImagePath, width: 999, height: 999, dpi: 72 }
+      ]
+    }) }
+  };
+  require.cache[enginePath] = {
+    id: enginePath, filename: enginePath, loaded: true,
+    exports: {
+      isConfigured: () => true,
+      ocrImage: async () => ({ text: '', words: [], formFields: [], tables: [], visualElements: [] })
+    }
+  };
+  delete require.cache[pipelinePath];
+  t.after(() => {
+    for (const [key, value] of originalCache) {
+      if (value) require.cache[key] = value;
+      else delete require.cache[key];
+    }
+  });
+
+  const { analyzeDocument, finalizeSplit } = require(pipelinePath);
+  const result = await analyzeDocument({ sourcePdfPath, workDir });
+
+  // Strona 0 (obraz OK) zachowuje przypisany ocrOutputIndex; strona 1 (obraz
+  // uszkodzony) MUSI zostac cofnieta na null, zeby finalizeSplit nie wciagnal
+  // bialej strony z ocrDoc.
+  assert.equal(result.pages[0].ocrOutputIndex, 0);
+  assert.equal(result.pages[1].ocrOutputIndex, null);
+  assert.ok(result.warnings.some((w) => /nie udalo sie osadzic obrazu/.test(w)));
+
+  await finalizeSplit({
+    sourcePdfPath,
+    ocrPdfPath: result.ocrPdfPath,
+    pages: result.pages,
+    blocks: [{ startPage: 0, endPage: 1 }],
+    outPaths: [outputPath]
+  });
+
+  const finalDocument = await PDFDocument.load(await fsp.readFile(outputPath));
+  assert.equal(finalDocument.getPageCount(), 2);
+  // Strona 1 w finalnym dokumencie musi miec wymiary ORYGINALNEJ strony
+  // zrodlowej (410x610, patrz createPdf), NIE wymiary "mockowanego" obrazu
+  // OCR (999x999) - to potwierdza, ze zostal skopiowany oryginal, a nie
+  // biala strona z ocrDoc.
+  const secondPage = finalDocument.getPages()[1];
+  assert.equal(secondPage.getWidth(), 410);
+  assert.equal(secondPage.getHeight(), 610);
+});
+
+test('dedupeOutPaths: identyczna etykieta dwoch blokow nie nadpisuje pliku (audyt v1.0.4, OCR ustalenie 7)', async (t) => {
+  const dir = await makeTempDir();
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const { dedupeOutPaths } = require('../apps/ocr-audytow/server');
+
+  const paths = [
+    path.join(dir, 'audyt - Kowalski (OCR).pdf'),
+    path.join(dir, 'audyt - Kowalski (OCR).pdf'),
+    path.join(dir, 'audyt - Kowalski (OCR).pdf')
+  ];
+  const deduped = dedupeOutPaths(paths);
+  assert.equal(new Set(deduped).size, 3, 'wszystkie sciezki musza byc unikalne');
+  assert.equal(deduped[0], paths[0]);
+  assert.equal(deduped[1], path.join(dir, 'audyt - Kowalski (OCR) (2).pdf'));
+  assert.equal(deduped[2], path.join(dir, 'audyt - Kowalski (OCR) (3).pdf'));
+
+  // Rozne etykiety nie powinny dostawac zadnego sufiksu.
+  const distinct = dedupeOutPaths([path.join(dir, 'a.pdf'), path.join(dir, 'b.pdf')]);
+  assert.deepEqual(distinct, [path.join(dir, 'a.pdf'), path.join(dir, 'b.pdf')]);
+});
+
 test('globalny semafor OCR nie przekracza pięciu równoległych zadań', async () => {
   const { runWithGlobalOcrLimit } = require('../apps/ocr-audytow/src/ocrPipeline');
   let active = 0;

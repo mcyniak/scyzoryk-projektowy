@@ -224,6 +224,25 @@ function safeOutputName(originalName) {
   return `${base} - ostemplowany.pdf`;
 }
 
+// Audyt v1.0.4, P1-5: dwa wgrane pliki z roznych folderow, ale o identycznej
+// oryginalnej nazwie, dawaly ten sam wynikowy plik w tym samym jobDir - drugi
+// zapis cicho nadpisywal pierwszy. Stemplowanie w obrebie jednej paczki jest
+// sekwencyjne (petla for..await w handlerze /api/stamp), wiec proste
+// sprawdz-i-zwieksz jest tu bezpieczne (brak wspolbieznego zapisu do tego
+// samego jobDir).
+function uniqueOutputPath(jobDir, fileName) {
+  let candidate = path.join(jobDir, fileName);
+  if (!fs.existsSync(candidate)) return candidate;
+  const ext = path.extname(fileName);
+  const base = path.basename(fileName, ext);
+  let n = 2;
+  do {
+    candidate = path.join(jobDir, `${base} (${n})${ext}`);
+    n += 1;
+  } while (fs.existsSync(candidate));
+  return candidate;
+}
+
 function normalizeHexColor(hex, fallback = '#d40000') {
   return /^#[0-9a-f]{6}$/i.test(String(hex || '')) ? String(hex) : fallback;
 }
@@ -424,24 +443,37 @@ async function stampPdf(inputFile, stamps, jobDir) {
     if (!preparedStamp) {
       throw new Error(`Brak poprawnej pieczatki: ${stamp.name}.`);
     }
+    const customPages = parseCustomPages(stamp.customPages, pages.length);
+    // Audyt v1.0.4, P1-6: bledny/niezrozumialy zakres stron ("wybrane strony")
+    // cicho dawal pusty zbior stron - operacja konczyla sie "sukcesem", ale
+    // bez ANI JEDNEJ ostemplowanej strony. Tryb "custom" bez zadnej poprawnej
+    // strony jest bledem uzytkownika, nie cichym no-opem.
+    if (stamp.pageMode === 'custom' && customPages.size === 0) {
+      throw new Error(`Pieczatka "${stamp.name}": tryb "wybrane strony" nie zawiera zadnej poprawnej strony (wpisano: "${stamp.customPages || '(puste)'}"). Podaj poprawny zakres, np. "1,3,5-7".`);
+    }
     prepared.push({
       opts: stamp,
       preparedStamp,
-      customPages: parseCustomPages(stamp.customPages, pages.length),
+      customPages,
       excludedPages: parseCustomPages(stamp.excludedPages, pages.length),
     });
   }
 
+  let stampedPageCount = 0;
   for (const item of prepared) {
     for (let i = 0; i < pages.length; i++) {
       if (!pageMatches(i, pages.length, item.opts.pageMode, item.customPages)) continue;
       if (item.excludedPages.has(i + 1)) continue;
       drawPreparedStampOnPage(pages[i], item.preparedStamp, optionsForPage(item.opts, i + 1));
+      stampedPageCount += 1;
     }
+  }
+  if (stampedPageCount === 0) {
+    throw new Error(`Zadna strona pliku ${decodeOriginalName(inputFile.originalname)} nie zostala ostemplowana - sprawdz wykluczone strony i zakres "wybrane strony".`);
   }
 
   const outputBytes = await doc.save({ useObjectStreams: true });
-  const outPath = path.join(jobDir, safeOutputName(decodeOriginalName(inputFile.originalname)));
+  const outPath = uniqueOutputPath(jobDir, safeOutputName(decodeOriginalName(inputFile.originalname)));
   await fsp.writeFile(outPath, outputBytes);
   return outPath;
 }
@@ -522,7 +554,15 @@ app.use((err, req, res, next) => {
   res.status(400).json({ error: err.message || 'Blad przesylania plikow.' });
 });
 
-const server = app.listen(PORT, HOST, () => {
-  console.log(`PDF Stamper dziala tylko lokalnie: http://${HOST}:${PORT}`);
-});
-applyHttpTimeouts(server, 'PIECZATKI');
+// require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany
+// bezposrednio (node server.js), nie gdy jest wymagany przez testy (test/*.test.js
+// wymaga stampPdf/uniqueOutputPath/parseCustomPages ponizej i nie powinien przy
+// tym bindowac portu).
+if (require.main === module) {
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`PDF Stamper dziala tylko lokalnie: http://${HOST}:${PORT}`);
+  });
+  applyHttpTimeouts(server, 'PIECZATKI');
+}
+
+module.exports = { stampPdf, uniqueOutputPath, parseCustomPages, normalizeStampOptions };

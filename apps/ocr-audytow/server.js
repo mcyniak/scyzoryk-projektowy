@@ -127,6 +127,28 @@ function safeName(name, fallback = 'plik') {
   return (cleaned || fallback).slice(0, 150);
 }
 
+// Audyt v1.0.4 (OCR, ustalenie 7): uzytkownik moze recznie nadac dwom blokom
+// identyczna etykiete - bez tego kazdy kolejny zapis do tej samej sciezki
+// cicho nadpisywal poprzedni (zniknal caly wczesniejszy adres). Dodaje
+// licznik " (2)", " (3)"... do KAZDEGO powtorzonego pliku w tej samej
+// paczce (i sprawdza tez istniejace pliki na dysku, gdyby jakis juz tam byl).
+function dedupeOutPaths(paths) {
+  const usedPaths = new Set();
+  return paths.map((outPath) => {
+    const dir = path.dirname(outPath);
+    const ext = path.extname(outPath);
+    const base = path.basename(outPath, ext);
+    let candidate = outPath;
+    let n = 2;
+    while (usedPaths.has(candidate) || fs.existsSync(candidate)) {
+      candidate = path.join(dir, `${base} (${n})${ext}`);
+      n += 1;
+    }
+    usedPaths.add(candidate);
+    return candidate;
+  });
+}
+
 function readHeader(filePath, length = 5) {
   const fd = fs.openSync(filePath, 'r');
   try {
@@ -971,10 +993,10 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
 
       try {
         const blocks = fileEntry.resolvedBlocks;
-        const outPaths = blocks.map((b, i) => {
+        const outPaths = dedupeOutPaths(blocks.map((b, i) => {
           const suffix = blocks.length > 1 ? ` - ${b.label || `blok ${i + 1}`}` : '';
           return path.join(jobDir, safeName(`${fileEntry.baseName}${suffix} (OCR).pdf`, `audyt-${i + 1}.pdf`));
-        });
+        }));
 
         await finalizeSplit({
           sourcePdfPath: fileEntry.sourcePdfPath,
@@ -1070,5 +1092,12 @@ app.use((err, req, res, next) => {
   res.status(400).json({ ok: false, message: err.message || 'Błąd przetwarzania.' });
 });
 
-const server = app.listen(PORT, HOST, () => console.log(`OCR audytów: http://${HOST}:${PORT}`));
-applyHttpTimeouts(server, 'OCR-AUDYTOW');
+// require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany
+// bezposrednio (node server.js), nie gdy jest wymagany przez testy (test/*.test.js
+// wymaga dedupeOutPaths ponizej i nie powinien przy tym bindowac portu).
+if (require.main === module) {
+  const server = app.listen(PORT, HOST, () => console.log(`OCR audytów: http://${HOST}:${PORT}`));
+  applyHttpTimeouts(server, 'OCR-AUDYTOW');
+}
+
+module.exports = { dedupeOutPaths };

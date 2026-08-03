@@ -335,8 +335,16 @@ async function buildOcrPdf({ pages, outPath }) {
   let confSum = 0;
   let confCount = 0;
   let lowConfCount = 0;
+  // Audyt v1.0.4, P0-7: strona zostaje biala w TYM pliku (ocrDoc) jesli obraz
+  // nie da sie osadzic - samo w sobie OK, bo ocrDoc to tylko posrednik. Ale
+  // wywolujacy (analyzeDocument) przypisuje pozycyjny ocrOutputIndex PRZED
+  // wywolaniem tej funkcji, wiec bez zwrocenia TU, ktory indeks faktycznie
+  // wyszedl bialy, finalne skladanie dokumentu (assemblePdfRange) nie mialoby
+  // jak odroznic "prawdziwej" strony OCR od bialej i wciagneloby biala strone
+  // do dokumentu, ktory user faktycznie zachowuje, zamiast oryginalnego skanu.
+  const failedEmbedIndexes = [];
 
-  for (const page of pages) {
+  for (const [pageIdx, page] of pages.entries()) {
     const dpi = page.dpi || 300;
     const scale = 72 / dpi;
     const pageWidthPt = page.width * scale;
@@ -359,6 +367,7 @@ async function buildOcrPdf({ pages, outPath }) {
       const ext = path.extname(page.imagePath).toLowerCase();
       embeddedImage = ext === '.png' ? await pdfDoc.embedPng(imageBytes) : await pdfDoc.embedJpg(imageBytes);
     } catch (_) {
+      failedEmbedIndexes.push(pageIdx); // strona zostaje biala - wywolujacy musi to wiedziec, patrz komentarz wyzej
       continue; // strona zostaje biala, bez warstwy tekstu - nic wiecej nie da sie z niej zrobic
     }
     pdfPage.drawImage(embeddedImage, { x: 0, y: 0, width: pageWidthPt, height: pageHeightPt });
@@ -393,7 +402,7 @@ async function buildOcrPdf({ pages, outPath }) {
   await fs.writeFile(outPath, outBytes);
   const avgConfidence = confCount ? (confSum / confCount) * 100 : null;
   const lowConfidenceRatio = confCount ? lowConfCount / confCount : 0;
-  return { avgConfidence, lowConfidenceRatio };
+  return { avgConfidence, lowConfidenceRatio, failedEmbedIndexes };
 }
 
 // workDir: katalog roboczy analizy (obrazy posrednie, miniatury) - MUSI
@@ -482,9 +491,19 @@ async function analyzeDocument({ sourcePdfPath, workDir, inspection = null }) {
 
   imagedPages.forEach((page, ocrOutputIndex) => { page.ocrOutputIndex = ocrOutputIndex; });
   const ocrOutPath = path.join(workDir, 'ocr-output.pdf');
-  const { avgConfidence, lowConfidenceRatio } = await buildOcrPdf({ pages: imagedPages, outPath: ocrOutPath });
+  const { avgConfidence, lowConfidenceRatio, failedEmbedIndexes } = await buildOcrPdf({ pages: imagedPages, outPath: ocrOutPath });
   if (avgConfidence !== null && avgConfidence < 70) {
     warnings.push(`Niska srednia pewnosc rozpoznania tekstu (${avgConfidence.toFixed(0)}%) - czesc tekstu (np. odreczne wpisy) moze byc rozpoznana niepoprawnie.`);
+  }
+  // Audyt v1.0.4, P0-7: dla stron, ktore w ocrDoc wyszly biale (obraz sie nie
+  // dal osadzic), cofamy ocrOutputIndex na null - assemblePdfRange wtedy
+  // poprawnie kopiuje oryginalna strone zamiast biala strone z ocrDoc.
+  for (const idx of failedEmbedIndexes) {
+    const page = imagedPages[idx];
+    if (page) {
+      page.ocrOutputIndex = null;
+      warnings.push(`Strona ${page.pageIndex + 1}: nie udalo sie osadzic obrazu w wyniku OCR - w finalnym dokumencie zostanie skopiowana oryginalna strona (bez niewidocznej warstwy tekstu OCR na niej).`);
+    }
   }
 
   const boundaries = detectBlockBoundaries({ imagedPages });
