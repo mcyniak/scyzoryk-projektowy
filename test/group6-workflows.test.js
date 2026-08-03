@@ -9,10 +9,22 @@ const {
   classifyFiles,
   extractAttachmentsList,
   compareAttachmentNumbers,
-  isTemporaryFile
+  isTemporaryFile,
+  findAddressFolder,
+  addressTokens,
+  filenameMatchesOwnAddress
 } = require('../apps/drukarka-projekty/src/folderMatch');
+const { isTruthyMark } = require('../apps/drukarka-projekty/src/excelInvestment');
+const { buildQueueFromGroups } = require('../apps/drukarka-projekty/server');
 const { isAffirmativeFlag } = require('../lib/businessFlags');
 const { normalizeDate } = require('../apps/wnioski-powykonawcze/src/dateValidation');
+const { PDFDocument } = require('../apps/drukarka-projekty/node_modules/pdf-lib');
+
+async function createTestPdf(filePath) {
+  const doc = await PDFDocument.create();
+  doc.addPage([300, 400]);
+  await fsp.writeFile(filePath, await doc.save());
+}
 
 test('skanowanie folderu działa rekurencyjnie i respektuje limit głębokości', async (t) => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-scan-'));
@@ -102,4 +114,105 @@ test('wnioski powykonawcze używają szybkiego modelu zadaniowego z anulowaniem'
   assert.doesNotMatch(server, /app\.post\('\/api\/convert'/);
   assert.match(frontend, /setInterval\(pollManualJob/);
   assert.match(frontend, /res\.status === 404/);
+});
+
+test('drukarka-projekty: isTruthyMark (audyt P1-4) uzywa bialej listy zamiast wykluczac prawie wszystko', () => {
+  for (const value of ['tak', 'x', 'X', '+', '1', '15.03.2026', '2026-03-15', 5, 3.5]) {
+    assert.equal(isTruthyMark(value), true, `powinno byc "odebrane": ${value}`);
+  }
+  for (const value of ['', '0', 'nie', 'NIE', '-', null, undefined]) {
+    assert.equal(isTruthyMark(value), false, `powinno byc "nieodebrane": ${value}`);
+  }
+  // Literowki/nierozpoznane teksty NIE moga byc cicho traktowane jako
+  // "odebrane" - inaczej caly wiersz znika z listy kandydatow bez sladu.
+  for (const value of ['brak', 'n/d', 'costam']) {
+    assert.equal(isTruthyMark(value), false, `nierozpoznana wartosc nie powinna wykluczac wiersza: ${value}`);
+  }
+});
+
+test('drukarka-projekty: dopasowanie folderu po LP musi sprawdzic adres (audyt P0-6b)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-lp-conflict-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  // Dwie rozne inwestycje moga uzywac tego samego numeru LP (numeracja od
+  // nowa w kazdej) - tu obie maja LP "41", ale rozne adresy.
+  await fsp.mkdir(path.join(root, '41 - Zarnow, ul. Spacerowa'));
+  const { matches, allFolders } = findAddressFolder(root, '41');
+  assert.deepEqual(matches, ['41 - Zarnow, ul. Spacerowa']);
+  assert.ok(allFolders.includes('41 - Zarnow, ul. Spacerowa'));
+
+  const folderName = matches[0];
+
+  // Adres z Excela zgodny z folderem - nie powinno byc konfliktu.
+  const matchingTokens = addressTokens('Zarnow, ul. Spacerowa');
+  assert.ok(matchingTokens.length > 0);
+  assert.equal(filenameMatchesOwnAddress(folderName, matchingTokens), true);
+
+  // Adres z Excela NIEZGODNY z folderem (inna inwestycja, ten sam numer LP) -
+  // matchOneAddress w server.js musi to wykryc i zwrocic ok:false zamiast
+  // cicho podpiac zly folder pod zly adres.
+  const mismatchTokens = addressTokens('Kolektory, ul. Polna 7');
+  assert.ok(mismatchTokens.length > 0);
+  assert.equal(filenameMatchesOwnAddress(folderName, mismatchTokens), false);
+});
+
+test('drukarka-projekty: matchOneAddress w server.js blokuje niezgodny adres i pamieta ostatni folder per plik (audyt P0-6a/b)', async () => {
+  const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'server.js'), 'utf8');
+
+  // P0-6b: kontrola adresu zaraz po ustaleniu folderName, przed dalszym
+  // przetwarzaniem, z uzyciem gotowych funkcji z folderMatch.js.
+  assert.match(source, /addressHint\?\.adres/);
+  assert.match(source, /folderMatch\.addressTokens\(addressHint\.adres\)/);
+  assert.match(source, /folderMatch\.filenameMatchesOwnAddress\(folderName, tokens\)/);
+  assert.match(source, /mozliwy konflikt numeracji miedzy inwestycjami/);
+
+  // P0-6a: klucz pamieci ostatniego folderu juz nie jest sama nazwa zakladki -
+  // musi laczyc identyfikator pliku (fileKey) z nazwa zakladki, z tolerancja
+  // wsteczna (fallback na sama nazwe zakladki, gdy fileKey nie zostal
+  // przeslany).
+  assert.match(source, /function lastFolderKey\(fileKey, sheetName\)/);
+  assert.match(source, /\$\{key\}::\$\{sheetName\}/);
+  assert.match(source, /return key \? `\$\{key\}::\$\{sheetName\}` : sheetName;/);
+  assert.match(source, /computeFileKey\(req\.file\.buffer\)/);
+  assert.match(source, /crypto\.createHash\("sha256"\)/);
+  assert.match(source, /saveLastFolder\(lastFolderKey\(fileKey, sheetName\), baseFolder\)/);
+});
+
+test('drukarka-projekty: buildQueueFromGroups zachowuje przeplot PDF/DOCX/PDF zamiast grupowac (audyt P1-3)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-queue-order-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+
+  const pdf1 = path.join(root, '1-tytul.pdf');
+  const docx = path.join(root, '2-opis.docx');
+  const pdf2 = path.join(root, '3-rysunek.pdf');
+  await createTestPdf(pdf1);
+  await fsp.writeFile(docx, 'atrapa docx');
+  await createTestPdf(pdf2);
+
+  const fakeReq = { session: { lastBaseFolder: root }, sid: 'test-sid' };
+  const groups = [{ label: 'Adres testowy', items: [{ fullPath: pdf1 }, { fullPath: docx }, { fullPath: pdf2 }] }];
+
+  const { built, missing } = await buildQueueFromGroups(fakeReq, groups);
+  assert.deepEqual(missing, []);
+  // Wczesniej: oba PDF-y trafialyby do JEDNEGO polaczonego pliku, a DOCX
+  // zostalby dopisany na koniec (2 pozycje, zla kolejnosc: PDF+PDF, DOCX).
+  // Teraz: PDF/DOCX/PDF nie sa sasiadujace jako PDF-y, wiec zaden nie jest
+  // scalany - 3 pozycje, w oryginalnej kolejnosci.
+  assert.equal(built.length, 3);
+  assert.equal(built[0].path, pdf1);
+  assert.equal(built[1].path, docx);
+  assert.equal(built[2].path, pdf2);
+
+  // Kontrolne sprawdzenie, ze SASIADUJACE PDF-y nadal sie scalaja (nie
+  // zepsulismy tego przy okazji naprawy przeplotu).
+  const pdfA = path.join(root, '4-a.pdf');
+  const pdfB = path.join(root, '5-b.pdf');
+  await createTestPdf(pdfA);
+  await createTestPdf(pdfB);
+  const groups2 = [{ label: 'Adres testowy 2', items: [{ fullPath: pdfA }, { fullPath: pdfB }, { fullPath: docx }] }];
+  const { built: built2 } = await buildQueueFromGroups(fakeReq, groups2);
+  assert.equal(built2.length, 2);
+  assert.notEqual(built2[0].path, pdfA);
+  assert.notEqual(built2[0].path, pdfB);
+  assert.match(built2[0].path, /\.pdf$/);
+  assert.equal(built2[1].path, docx);
 });

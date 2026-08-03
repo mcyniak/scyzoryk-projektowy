@@ -106,11 +106,26 @@ function looksLikeUnlabeledIdColumn(rows, colIdx, sampleSize = 15) {
   return checked > 0 && numericCount === checked;
 }
 
+// Wczesniej KAZDA wartosc niebedaca pusta/"0"/"nie"/"-" byla cicho traktowana
+// jako "odebrane" (audyt P1-4) - literowka typu "brak"/"n/d"/losowy tekst
+// wykluczala caly wiersz z listy kandydatow bez sladu dla uzytkownika. Teraz
+// dzialamy odwrotnie: biala lista rozpoznanych wartosci "odebrane" (tak/x/+/1,
+// liczba dodatnia, data DD.MM.RRRR albo RRRR-MM-DD). Wszystko inne (w tym
+// nierozpoznane literowki) NIE liczy sie jako odebrane - bezpieczniejszy blad,
+// bo wiersz zostaje na liscie kandydatow zamiast zniknac po cichu.
 function isTruthyMark(value) {
   if (value === null || value === undefined || value === "") return false;
+  if (typeof value === "number") return value > 0;
   const s = String(value).trim().toLowerCase();
-  if (s === "0" || s === "nie" || s === "-") return false;
-  return true; // liczba, "+", "x", "tak", data itp. - traktujemy jako zaznaczone
+  if (!s) return false;
+  if (s === "tak" || s === "x" || s === "+" || s === "1") return true;
+  if (/^\d+([.,]\d+)?$/.test(s)) {
+    const n = Number(s.replace(",", "."));
+    return Number.isFinite(n) && n > 0;
+  }
+  if (/^\d{1,2}\.\d{1,2}\.\d{4}$/.test(s)) return true; // DD.MM.RRRR
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(s)) return true; // RRRR-MM-DD
+  return false;
 }
 
 function isRezygnacja(value) {
@@ -192,4 +207,4 @@ function listCandidates(token, sheetName) {
   return { candidates, columnsFound };
 }
 
-module.exports = { loadWorkbookFromBuffer, listCandidates };
+module.exports = { loadWorkbookFromBuffer, listCandidates, isTruthyMark };

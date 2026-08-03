@@ -3,6 +3,7 @@
 
   const state = {
     token: null,
+    fileKey: null,
     sheetName: null,
     allCandidates: [],
     selectedLp: new Set(),
@@ -96,6 +97,11 @@
     try {
       const data = await api("/api/excel/upload", { method: "POST", body: fd });
       state.token = data.token;
+      // fileKey (hash tresci pliku) identyfikuje KONKRETNA wgrana inwestycje,
+      // niezaleznie od nazwy zakladki - patrz komentarz przy lastFolderKey w
+      // server.js (audyt P0-6a: dwie rozne inwestycje z zakladka o tej samej
+      // nazwie nie moga juz dzielic podpowiedzi ostatniego folderu).
+      state.fileKey = data.fileKey || null;
       const select = $("sheetSelect");
       select.innerHTML = `<option value="">— wybierz zakładkę —</option>` +
         data.sheets.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
@@ -111,7 +117,8 @@
     state.sheetName = sheetName;
     showError("excelError", "");
     try {
-      const data = await api(`/api/excel/${encodeURIComponent(state.token)}/sheets/${encodeURIComponent(sheetName)}/candidates`);
+      const fileKeyQuery = state.fileKey ? `?fileKey=${encodeURIComponent(state.fileKey)}` : "";
+      const data = await api(`/api/excel/${encodeURIComponent(state.token)}/sheets/${encodeURIComponent(sheetName)}/candidates${fileKeyQuery}`);
       state.allCandidates = data.candidates;
       state.selectedLp = new Set();
       state.batchResults = [];
@@ -230,7 +237,7 @@
       const data = await api("/api/match-batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetName: state.sheetName, baseFolder, candidates: selectedCandidates, allAddresses })
+        body: JSON.stringify({ sheetName: state.sheetName, fileKey: state.fileKey, baseFolder, candidates: selectedCandidates, allAddresses })
       });
       state.batchResults = data.results;
       state.batchSummary = data.summary;

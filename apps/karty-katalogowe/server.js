@@ -205,6 +205,45 @@ function zbudujMapeFolderow(nazwyFolderow) {
   return { mapa, duplikaty };
 }
 
+// Adres z Excela byl dotad czytany tylko do komunikatow/logow - dopasowanie
+// folderu dzialo sie WYLACZNIE po numerze "LP gminy". Dwie rozne inwestycje
+// moga miec folder zaczynajacy sie od tego samego numeru (inna gmina/rok),
+// wiec samo dopasowanie po numerze nie gwarantuje, ze trafiony folder
+// rzeczywiscie nalezy do adresu z wiersza - trzeba to potwierdzic tokenami
+// adresu (audyt zewnetrzny). Wzorowane na apps/drukarka-projekty/src/folderMatch.js
+// (addressTokens/normalize), z ta sama poprawka na "l" - nie dekomponuje sie
+// pod NFKD tak jak pozostale polskie diakrytyki.
+function normalizeAdresDoPorownania(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/ł/g, 'l')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+const POMIJANE_TOKENY_ADRESU = new Set(['ul', 'nr']);
+
+function tokenyAdresu(adres) {
+  return normalizeAdresDoPorownania(adres)
+    .split(' ')
+    .filter(t => t && (t.length > 1 || /^\d$/.test(t)) && !POMIJANE_TOKENY_ADRESU.has(t));
+}
+
+// Prog jak w folderMatch.js's filenameMatchesOwnAddress: przy 1 tokenie wymagany
+// jest on caly, przy 2 wystarczy jeden (folder czesto nie ma numeru domu w
+// nazwie), przy wiekszej liczbie - min. 60%. Tokeny sa juz czysto alfanumeryczne
+// (po normalizacji), wiec bezpieczne do wstawienia wprost w RegExp.
+function adresPasujeDoFolderu(adres, folderNazwa) {
+  const tokeny = tokenyAdresu(adres);
+  if (!tokeny.length) return true; // brak adresu w Excelu - nie ma z czym porownac, przepuszczamy jak dotychczas
+  const folderNorm = normalizeAdresDoPorownania(folderNazwa);
+  const trafione = tokeny.filter(t => new RegExp(`(^|[^a-z0-9])${t}([^a-z0-9]|$)`).test(folderNorm)).length;
+  const wymagane = tokeny.length <= 1 ? tokeny.length : (tokeny.length === 2 ? 1 : Math.max(2, Math.ceil(tokeny.length * 0.6)));
+  return trafione >= wymagane;
+}
+
 async function istniejacePlikiWFolderze(dirPath) {
   try {
     const entries = await fsp.readdir(dirPath, { withFileTypes: true });
@@ -316,6 +355,14 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
     const folderNazwa = mapaFolderow.get(id);
     if (!folderNazwa) {
       wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` };
+      continue;
+    }
+
+    // Sam numer LP nie wystarcza (patrz komentarz przy adresPasujeDoFolderu) -
+    // potwierdzamy adresem PRZED faza kopiowania (zadania.push nizej), zeby zla
+    // para adres/folder nigdy tam nie dotarla.
+    if (!adresPasujeDoFolderu(adres, folderNazwa)) {
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: znaleziono folder "${folderNazwa}" dla numeru LP "${id}", ale jego nazwa nie zawiera adresu z Excela "${adres}" - mozliwy konflikt numeracji miedzy inwestycjami. Sprawdz recznie.` };
       continue;
     }
 
@@ -441,5 +488,13 @@ app.use((err, req, res, next) => {
   res.status(400).json({ ok: false, message: err.message || 'Blad przetwarzania.' });
 });
 
-const server = app.listen(PORT, HOST, () => console.log(`Karty katalogowe: http://${HOST}:${PORT}`));
-applyHttpTimeouts(server, 'KK');
+// require.main === module: uruchomienie serwera TYLKO gdy plik jest
+// startowany bezposrednio (node server.js), nie gdy jest wymagany przez testy
+// (test/*.test.js wymaga przetworzArkusz/adresPasujeDoFolderu ponizej i nie
+// powinien przy tym bindowac prawdziwego portu).
+if (require.main === module) {
+  const server = app.listen(PORT, HOST, () => console.log(`Karty katalogowe: http://${HOST}:${PORT}`));
+  applyHttpTimeouts(server, 'KK');
+}
+
+module.exports = { przetworzArkusz, adresPasujeDoFolderu };

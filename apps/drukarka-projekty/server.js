@@ -4,6 +4,7 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
 const { sessionMiddleware } = require("./lib/sessionStore");
@@ -75,12 +76,31 @@ function readLastFolders() {
   } catch (_) {}
   return {};
 }
-function saveLastFolder(sheetName, folderPath) {
+// Audyt P0-6a: klucz byl WYLACZNIE nazwa zakladki Excela (np. "Pompy") - jesli
+// uzytkownik wgral dwie ROZNE inwestycje, obie z zakladka o tej samej nazwie,
+// druga inwestycja dostawala podpowiedziany folder bazowy z PIERWSZEJ (zly
+// folder). Teraz klucz to hash zawartosci wgranego pliku + nazwa zakladki -
+// dwie rozne inwestycje (rozna zawartosc pliku) nigdy nie dziela klucza, nawet
+// przy identycznej nazwie zakladki. `fileKey` jest opcjonalny (przekazywany z
+// frontendu od tej zmiany) - jesli go brak (stary klient/cache przegladarki),
+// spadamy na sama nazwe zakladki jak dawniej, zeby nic sie nie wywalilo.
+function lastFolderKey(fileKey, sheetName) {
+  const key = String(fileKey || "").trim();
+  return key ? `${key}::${sheetName}` : sheetName;
+}
+function saveLastFolder(key, folderPath) {
   try {
     const data = readLastFolders();
-    data[sheetName] = folderPath;
+    data[key] = folderPath;
     writeJsonFileNoBom(LAST_FOLDERS_FILE, data);
   } catch (_) {}
+}
+function computeFileKey(buffer) {
+  try {
+    return crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 20);
+  } catch (_) {
+    return "";
+  }
 }
 
 function decodeOriginalName(name) {
@@ -100,7 +120,12 @@ app.post("/api/excel/upload", excelUpload.single("file"), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, message: "Brak pliku." });
     const { token, sheets } = excelInvestment.loadWorkbookFromBuffer(req.file.buffer);
-    res.json({ ok: true, token, sheets, fileName: decodeOriginalName(req.file.originalname) });
+    // fileKey identyfikuje TRESC wgranego pliku (hash), nie sesje uploadu -
+    // patrz komentarz przy lastFolderKey powyzej. Token z loadWorkbookFromBuffer
+    // jest per-upload/ulotny (wygasa z workbookiem), wiec nie nadaje sie jako
+    // trwaly klucz pamieci ostatniego folderu.
+    const fileKey = computeFileKey(req.file.buffer);
+    res.json({ ok: true, token, sheets, fileKey, fileName: decodeOriginalName(req.file.originalname) });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac pliku Excel." });
   }
@@ -110,7 +135,12 @@ app.get("/api/excel/:token/sheets/:sheetName/candidates", (req, res) => {
   try {
     const { candidates, columnsFound } = excelInvestment.listCandidates(req.params.token, req.params.sheetName);
     const lastFolders = readLastFolders();
-    res.json({ ok: true, candidates, columnsFound, lastFolder: lastFolders[req.params.sheetName] || "" });
+    const fileKey = String(req.query.fileKey || "").trim();
+    // Fallback na sama nazwe zakladki (klucz sprzed tej poprawki) - jesli nic
+    // nie ma pod kombinowanym kluczem, sprobuj starego, zeby wpisy zapisane
+    // przed ta zmiana nie znikaly bez powodu.
+    const lastFolder = lastFolders[lastFolderKey(fileKey, req.params.sheetName)] || lastFolders[req.params.sheetName] || "";
+    res.json({ ok: true, candidates, columnsFound, lastFolder });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac zakladki.", columnsFound: err.columnsFound });
   }
@@ -146,6 +176,24 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
   }
 
   const folderName = matches[0];
+  // Audyt P0-6b: dopasowanie po LP sprawdzalo WYLACZNIE numer na poczatku
+  // nazwy folderu - addressHint (adres z Excela) byl odczytany, ale nigdy nie
+  // porownywany z folderName. Dwie rozne inwestycje moga miec ten sam numer
+  // LP (numeracja zaczyna sie od nowa w kazdej), wiec bez tej kontroli
+  // dopasowanie moglo cicho podpiac zupelnie inny adres. Jesli nie mamy adresu
+  // z Excela (addressHint.adres puste) - nie ma z czym porownac, zachowujemy
+  // dotychczasowe zachowanie (nie blokujemy).
+  if (addressHint?.adres) {
+    const tokens = folderMatch.addressTokens(addressHint.adres);
+    if (tokens.length && !folderMatch.filenameMatchesOwnAddress(folderName, tokens)) {
+      return {
+        ok: false,
+        message: `Znaleziono folder "${folderName}" dla numeru "${lpGmina}", ale jego nazwa nie pasuje do adresu "${addressHint.adres}" - mozliwy konflikt numeracji miedzy inwestycjami. Sprawdz recznie.`,
+        folderName,
+        allFolders
+      };
+    }
+  }
   const folderPath = path.join(baseFolder, folderName);
   const classifiedRaw = folderMatch.classifyFiles(folderPath);
   const classified = await folderMatch.detectByContent(folderPath, classifiedRaw);
@@ -170,12 +218,12 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
 }
 
 app.post("/api/match", async (req, res) => {
-  const { sheetName, lpGmina, baseFolder, adres, gmina } = req.body || {};
+  const { sheetName, lpGmina, baseFolder, adres, gmina, fileKey } = req.body || {};
   if (!lpGmina || !baseFolder) {
     return res.status(400).json({ ok: false, message: "Brak numeru LP gmina albo folderu bazowego." });
   }
   try {
-    if (sheetName) saveLastFolder(sheetName, baseFolder);
+    if (sheetName) saveLastFolder(lastFolderKey(fileKey, sheetName), baseFolder);
     req.session.lastBaseFolder = baseFolder;
     const result = await matchOneAddress(baseFolder, lpGmina, { adres, gmina });
     if (!result.ok) return res.status(404).json(result);
@@ -186,11 +234,11 @@ app.post("/api/match", async (req, res) => {
 });
 
 app.post("/api/match-batch", async (req, res) => {
-  const { sheetName, baseFolder, candidates, allAddresses } = req.body || {};
+  const { sheetName, baseFolder, candidates, allAddresses, fileKey } = req.body || {};
   if (!baseFolder || !Array.isArray(candidates) || !candidates.length) {
     return res.status(400).json({ ok: false, message: "Brak folderu bazowego albo listy adresow." });
   }
-  if (sheetName) saveLastFolder(sheetName, baseFolder);
+  if (sheetName) saveLastFolder(lastFolderKey(fileKey, sheetName), baseFolder);
   req.session.lastBaseFolder = baseFolder;
 
   const results = new Array(candidates.length);
@@ -302,8 +350,7 @@ async function buildQueueFromGroups(req, groups) {
   const missing = [];
   for (const group of groups) {
     const items = Array.isArray(group.items) ? group.items : [];
-    const pdfPaths = [];
-    const nonPdf = [];
+    const resolved = [];
     for (const it of items) {
       const fullPath = String(it?.fullPath || "").trim();
       if (!fullPath) { missing.push(it?.fullPath || null); continue; }
@@ -317,18 +364,34 @@ async function buildQueueFromGroups(req, groups) {
         missing.push(fullPath);
         continue;
       }
-      if (fullPath.toLowerCase().endsWith(".pdf")) pdfPaths.push(fullPath);
-      else nonPdf.push({ ...it, fullPath });
+      resolved.push({ ...it, fullPath, isPdf: fullPath.toLowerCase().endsWith(".pdf") });
     }
-    if (pdfPaths.length >= 2) {
-      const safeLabel = String(group.label || "adres").replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
-      const outPath = path.join(MERGED_DIR, `${req.sid}_${Date.now()}_${safeLabel}.pdf`);
-      await pdfMerge.mergePdfs(pdfPaths, outPath);
-      built.push(buildQueueItem(outPath, group.label || ""));
-    } else if (pdfPaths.length === 1) {
-      built.push(buildQueueItem(pdfPaths[0], group.label || ""));
+
+    // Audyt P1-3: wczesniej WSZYSTKIE PDF-y z grupy byly zbierane do jednej
+    // listy i scalane razem, a kazdy plik nie-PDF dopisywany dopiero PO tym
+    // polaczonym PDF-ie - to gubilo zamierzona kolejnosc (np. PDF, DOCX, PDF
+    // stawalo sie PDF+PDF, DOCX). Teraz scalane sa TYLKO SASIADUJACE (w
+    // oryginalnej kolejnosci z folderMatch.buildOrder) fragmenty PDF, a plik
+    // nie-PDF przerywa taki fragment i zostaje na swoim miejscu w kolejnosci.
+    let i = 0;
+    while (i < resolved.length) {
+      if (!resolved[i].isPdf) {
+        built.push(buildQueueItem(resolved[i].fullPath, resolved[i].label || group.label || ""));
+        i += 1;
+        continue;
+      }
+      const runStart = i;
+      while (i < resolved.length && resolved[i].isPdf) i += 1;
+      const run = resolved.slice(runStart, i);
+      if (run.length >= 2) {
+        const safeLabel = String(group.label || "adres").replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
+        const outPath = path.join(MERGED_DIR, `${req.sid}_${Date.now()}_${runStart}_${safeLabel}.pdf`);
+        await pdfMerge.mergePdfs(run.map(r => r.fullPath), outPath);
+        built.push(buildQueueItem(outPath, group.label || ""));
+      } else {
+        built.push(buildQueueItem(run[0].fullPath, run[0].label || group.label || ""));
+      }
     }
-    for (const it of nonPdf) built.push(buildQueueItem(it.fullPath, it.label || group.label || ""));
   }
   return { built, missing };
 }
@@ -605,10 +668,17 @@ app.use((err, req, res, next) => {
   res.status(400).json({ ok: false, message: err?.message || "Blad." });
 });
 
-const server = app.listen(PORT, HOST, () => {
-  console.log("");
-  console.log("Drukarka Projekty dziala tylko lokalnie:");
-  console.log(`http://${HOST}:${PORT}`);
-  console.log("");
-});
-applyHttpTimeouts(server, "DRUKARKA_PROJEKTY");
+// require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany
+// bezposrednio (node server.js), nie gdy jest wymagany przez testy (test/*.test.js
+// wymaga buildQueueFromGroups ponizej i nie powinien przy tym bindowac portu).
+if (require.main === module) {
+  const server = app.listen(PORT, HOST, () => {
+    console.log("");
+    console.log("Drukarka Projekty dziala tylko lokalnie:");
+    console.log(`http://${HOST}:${PORT}`);
+    console.log("");
+  });
+  applyHttpTimeouts(server, "DRUKARKA_PROJEKTY");
+}
+
+module.exports = { buildQueueFromGroups };
