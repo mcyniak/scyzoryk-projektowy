@@ -420,7 +420,10 @@ test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready" -> "insta
   assert.equal(status.state, 'installing');
   assert.equal(status.percent, 100);
   assert.equal(spawned.length, 1);
-  assert.equal(spawned[0].exe, 'powershell.exe');
+  // Pelna sciezka (nie samo "powershell.exe" polegajace na PATH) - patrz
+  // resolvePowerShellExe() w lib/updateService.js.
+  assert.match(spawned[0].exe, /powershell\.exe$/i);
+  assert.match(spawned[0].exe, /WindowsPowerShell/i);
   assert.ok(spawned[0].args.includes('-File'));
   assert.ok(spawned[0].args.some(a => a.endsWith('run-update.ps1')));
   assert.ok(spawned[0].args.includes('9.9.9'));
