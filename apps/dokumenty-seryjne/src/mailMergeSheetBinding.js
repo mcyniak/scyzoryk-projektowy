@@ -45,4 +45,29 @@ function detectMailMergeSheetBinding(docxPath) {
   return { sheetName, dataSourcePath };
 }
 
-module.exports = { detectMailMergeSheetBinding };
+// Zwraca czas ostatniego zapisu dokumentu (docProps/core.xml, dcterms:modified)
+// w milisekundach, albo null gdy nie da sie go odczytac. Uzywane do
+// rozstrzygania, ktory z dwoch realnie powiazanych plikow tego samego typu
+// (np. przypadkowo zostawiona starsza kopia po zapisaniu poprawionej wersji
+// pod inna nazwa - realny przypadek w Slesinie: "OT_ZIN_10KW_korespondencja.docx"
+// i "..._korespondencja_1.docx" obok siebie) jest tym nowszym, zamiast po
+// prostu gubic caly typ dokumentu jako "niejednoznaczny". Metadane w
+// docProps/core.xml sa zapisywane przez Worda niezaleznie od systemu plikow,
+// wiec sa wiarygodne nawet po przejsciu pliku przez upload (ktory nie
+// zachowuje oryginalnego mtime).
+function getDocxModifiedTime(docxPath) {
+  let zip;
+  try {
+    zip = new AdmZip(docxPath);
+  } catch (_) {
+    return null;
+  }
+  const coreXml = readEntryText(zip, 'docProps/core.xml');
+  if (!coreXml) return null;
+  const m = coreXml.match(/<dcterms:modified[^>]*>([^<]+)<\/dcterms:modified>/);
+  if (!m) return null;
+  const t = Date.parse(m[1]);
+  return Number.isNaN(t) ? null : t;
+}
+
+module.exports = { detectMailMergeSheetBinding, getDocxModifiedTime };

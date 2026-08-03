@@ -29,7 +29,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
 const { getAppDataDir } = require('../../lib/appPaths');
-const { detectMailMergeSheetBinding } = require('./src/mailMergeSheetBinding');
+const { detectMailMergeSheetBinding, getDocxModifiedTime } = require('./src/mailMergeSheetBinding');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -508,8 +508,31 @@ function groupMailMergeTemplates(templateInfos) {
     const kind = deriveMailMergeKind(t.originalName, binding.sheetName);
     if (!groups.has(kind)) groups.set(kind, { name: kind, variants: {} });
     const g = groups.get(kind);
-    if (g.variants[binding.sheetName]) {
-      ambiguous.push({ kind, sheetName: binding.sheetName, relFolder: `${kind} (${binding.sheetName})`, files: [g.variants[binding.sheetName].originalName, t.originalName] });
+    const existing = g.variants[binding.sheetName];
+    if (existing) {
+      // Realny przypadek (Slesin PC Grunt): dwa pliki z prawdziwym powiazaniem
+      // do tej samej mocy/arkusza to zwykle starsza kopia zostawiona w folderze
+      // po zapisaniu poprawionej wersji pod inna nazwa (np. "..._korespondencja.docx"
+      // i "..._korespondencja_1.docx" po zapisie "Zachowaj obie kopie"), nie dwa
+      // naprawde inne dokumenty. Zamiast gubic caly typ dokumentu dla tej mocy,
+      // bierzemy ten NOWSZY wg daty zapisu w samym docx (docProps/core.xml,
+      // niezalezna od mtime pliku na dysku/po uploadzie) - starszy tylko
+      // odnotowujemy w komunikacie dla uzytkownika.
+      const existingTime = getDocxModifiedTime(existing.path);
+      const newTime = getDocxModifiedTime(t.path);
+      const newIsNewer = newTime != null && (existingTime == null || newTime > existingTime);
+      const kept = newIsNewer ? t : existing;
+      const skippedOne = newIsNewer ? existing : t;
+      g.variants[binding.sheetName] = kept;
+      ambiguous.push({
+        kind,
+        sheetName: binding.sheetName,
+        relFolder: `${kind} (${binding.sheetName})`,
+        files: [existing.originalName, t.originalName],
+        resolved: true,
+        keptFile: kept.originalName,
+        skippedFile: skippedOne.originalName
+      });
       continue;
     }
     g.variants[binding.sheetName] = t;

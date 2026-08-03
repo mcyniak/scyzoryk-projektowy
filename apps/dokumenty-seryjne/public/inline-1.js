@@ -157,7 +157,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         renderWorkbook(data.workbook, data.suggestedAddressColumn); refreshUidColumnOptions(data.workbook.columns || []); renderTemplateGroups(data.templateGroups || [], data.workbook.columns || [], data.suggestedUidColumn || '');
         const ambiguous = data.ambiguousTemplates || [];
         const ambiguousNote = ambiguous.length
-          ? ` Uwaga: w ${ambiguous.length === 1 ? 'folderze' : 'folderach'} znaleziono więcej niż jeden pasujący plik tego samego typu (${ambiguous.map(a => `"${a.relFolder}": ${a.files.join(' / ')}`).join('; ')}) — pominięto, sprawdź ręcznie.`
+          ? ` Uwaga: w ${ambiguous.length === 1 ? 'folderze' : 'folderach'} znaleziono więcej niż jeden pasujący plik tego samego typu (${ambiguous.map(a => a.resolved ? `"${a.relFolder}": użyto nowszego "${a.keptFile}" (starszy "${a.skippedFile}" zignorowano)` : `"${a.relFolder}": ${a.files.join(' / ')} — pominięto, sprawdź ręcznie`).join('; ')}).`
           : '';
         const ozcNote = data.ozcFoldersFound ? ` Znaleziono dane OZC/audytów — dodatkowe pola w szablonach będą uzupełniane automatycznie tam, gdzie to możliwe.` : '';
         status($('uploadStatus'), `Wczytano ${data.workbook.totalRows} rekordów.${ambiguousNote}${ozcNote}`, ambiguous.length ? 'warn' : 'ok');
