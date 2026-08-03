@@ -15,13 +15,27 @@ const { przetworzArkusz, adresPasujeDoFolderu } = require('../apps/karty-katalog
 
 const HEADER = ['LP gminy', 'Adres', 'UID', 'Rezygnacja'];
 
-function napiszArkusz(dir, sheetName, rows) {
+// Plik .xlsx zyje w SWOIM WLASNYM katalogu tymczasowym, ODDZIELNYM od "root"
+// (folderow projektow/kart). Zlapane realnie na Node 20 (dokladnie wersja
+// uzywana w CI): read-excel-file trzyma otwarty uchwyt pliku .xlsx dlugo po
+// tym, jak jego Promise sie rozwiazuje - na Windows to blokuje usuniecie
+// katalogu (EPERM/ENOTEMPTY) przez wiele sekund. Rozdzielenie katalogow
+// oznacza, ze sprzatanie "root" (gdzie faktycznie sprawdzamy wyniki) nigdy
+// nie zalezy od tego, czy uchwyt .xlsx zdazyl juz zostac zwolniony.
+async function napiszArkusz(sheetName, rows) {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-'));
   const file = path.join(dir, 'dane.xlsx');
   const ws = XLSX.utils.aoa_to_sheet([HEADER, ...rows]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, sheetName);
   XLSX.writeFile(wb, file);
-  return file;
+  return { file, dir };
+}
+
+// Sprzatanie katalogu .xlsx jest "best effort" (nie wplywa na wynik testu) -
+// w najgorszym razie zostawia kilka bajtow w %TEMP%, co i tak posprzata system.
+function usunPozniej(dir) {
+  fsp.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
 }
 
 async function przygotujRoot({ foldery, kartyPliki }) {
@@ -54,12 +68,13 @@ test('przetworzArkusz: konflikt numeracji miedzy inwestycjami - adres z Excela n
     foldery: ['41 - Zarnow, ul. Spacerowa'],
     kartyPliki: WYMAGANE_KARTY
   });
-  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
 
-  const file = napiszArkusz(root, 'Solary Zarnow', [
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary Zarnow', [
     // Adres w wierszu wskazuje na CALKIEM INNA miejscowosc/ulice niz folder "41 - Zarnow, ul. Spacerowa".
     [41, 'ul. Kwiatowa 3, Kamiensk', '2/250', '']
   ]);
+  t.after(() => usunPozniej(xlsxDir));
 
   const [arkusz] = await readXlsxFile(file, { getSheets: true });
   const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
@@ -79,11 +94,12 @@ test('przetworzArkusz: zgodny adres -> normalne kopiowanie, zero regresji', asyn
     foldery: ['41 - Zarnow, ul. Spacerowa'],
     kartyPliki: WYMAGANE_KARTY
   });
-  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
 
-  const file = napiszArkusz(root, 'Solary Zarnow', [
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary Zarnow', [
     [41, 'ul. Spacerowa 5, Zarnow', '2/250', '']
   ]);
+  t.after(() => usunPozniej(xlsxDir));
 
   const [arkusz] = await readXlsxFile(file, { getSheets: true });
   const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
