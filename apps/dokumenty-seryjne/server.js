@@ -890,7 +890,19 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
   const allErrors = [];
   const originalTemplate = job.template;
   let first = true;
-  for (const task of tasks) {
+  let cancelledEarly = false;
+  for (let i = 0; i < tasks.length; i += 1) {
+    // Audyt v1.0.4, P1-2: /api/cancel/:jobId dziala jako OSOBNE, rownolegle
+    // zadanie HTTP - zabijalo tylko AKTUALNY proces PowerShell (job.child),
+    // ale ta petla nie sprawdzala nic przed przejsciem do KOLEJNEGO szablonu,
+    // wiec po "Przerwij" i tak startowal nastepny szablon w paczce. Sprawdzamy
+    // job.cancelRequested na poczatku KAZDEJ iteracji, nie tylko raz na starcie.
+    if (job.cancelRequested) {
+      cancelledEarly = true;
+      appendLog(job, 'warn', `Anulowano - pominieto ${tasks.length - i} z ${tasks.length} pozostalych szablonow.`);
+      break;
+    }
+    const task = tasks[i];
     if (!task.rowRecords.length) continue;
     job.template = { path: task.templatePath, originalName: task.templateOriginalName };
     const taskOptions = { ...options, selectedRows: task.rowRecords, _keepLog: !first, filePrefix: task.groupName };
@@ -906,15 +918,19 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
     }
     first = false;
   }
-  for (const skipped of (skippedGroups || [])) {
-    allErrors.push({ file: skipped.groupName, message: skipped.reason });
+  if (!cancelledEarly) {
+    for (const skipped of (skippedGroups || [])) {
+      allErrors.push({ file: skipped.groupName, message: skipped.reason });
+    }
   }
   job.template = originalTemplate;
-  const message = `Wygenerowano ${allCreated.length} plik(ów) z ${tasks.length} szablon(ów).` + (allErrors.length ? ` Błędów: ${allErrors.length}.` : '');
+  const message = cancelledEarly
+    ? `Przerwano przez użytkownika. Wygenerowano ${allCreated.length} plik(ów) przed przerwaniem.` + (allErrors.length ? ` Błędów: ${allErrors.length}.` : '')
+    : `Wygenerowano ${allCreated.length} plik(ów) z ${tasks.length} szablon(ów).` + (allErrors.length ? ` Błędów: ${allErrors.length}.` : '');
   job.result = { ok: allCreated.length > 0, created: allCreated, errors: allErrors, message, logUrl: `/api/download/${job.id}/logs` };
-  job.status = allCreated.length > 0 ? 'done' : 'error';
+  job.status = cancelledEarly ? 'cancelled' : (allCreated.length > 0 ? 'done' : 'error');
   job.endedAt = Date.now();
-  setProgress(job, { phase: job.status === 'done' ? 'done' : 'error', percent: 100, message });
+  setProgress(job, { phase: job.status === 'done' ? 'done' : job.status, percent: 100, message });
   persistJobsIndex();
   return job.result;
 }
@@ -1117,6 +1133,11 @@ app.post('/api/cancel/:jobId', async (req, res) => {
   }
   if (job.status !== 'running' || !job.child) return res.json({ ok: true, message: 'Zadanie nie jest uruchomione.', status: job.status });
   appendLog(job, 'warn', 'Użytkownik przerwał generowanie.');
+  // job.cancelRequested (nie tylko job.status/job.child.kill()) - sprawdzane
+  // przez runMultiTemplateGeneration przed KAZDYM kolejnym szablonem w
+  // paczce (audyt v1.0.4, P1-2). Samo zabicie biezacego procesu PowerShell
+  // nie wystarczylo, bo petla po prostu ruszalaby z nastepnym szablonem.
+  job.cancelRequested = true;
   try { job.child.kill(); } catch {}
   job.status = 'error';
   job.endedAt = Date.now();

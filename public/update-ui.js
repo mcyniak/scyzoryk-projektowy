@@ -170,7 +170,7 @@
   // odpytywanie /api/update/status, az polaczenie zacznie zawodzic (serwer
   // zostal zatrzymany przez run-update.ps1), a potem czekamy na powrot
   // /api/health, zeby bezpiecznie odswiezyc strone.
-  async function trackProgressUntilServerStops() {
+  async function trackProgressUntilServerStops(expectedVersion) {
     for (let i = 0; i < 600; i++) {
       await sleep(PROGRESS_POLL_MS);
       let status;
@@ -178,7 +178,7 @@
         status = await fetchStatus();
       } catch (_) {
         setProgress('Zamykanie Scyzoryka…', PHASE_INSTALLING);
-        return waitForRestart();
+        return waitForRestart(expectedVersion);
       }
       if (status.state === 'downloading') {
         const downloadPercent = status.percent == null ? 0 : status.percent;
@@ -193,10 +193,10 @@
         return;
       }
     }
-    return waitForRestart();
+    return waitForRestart(expectedVersion);
   }
 
-  async function waitForRestart() {
+  async function waitForRestart(expectedVersion) {
     let percent = PHASE_RESTART_START;
     setProgress('Instalowanie aktualizacji…', percent);
     for (let i = 0; i < 150; i++) {
@@ -204,6 +204,18 @@
       try {
         const res = await fetch('/api/health', { cache: 'no-store' });
         if (res.ok) {
+          // Audyt v1.0.4, P0-8: samo "/api/health odpowiada 200" nie znaczy
+          // "nowa wersja dziala" - jesli restart przywrocil STARA wersje
+          // (np. instalator po cichu pominal zablokowany plik), health
+          // odpowiada normalnie, tylko ze to wciaz ta sama, stara wersja.
+          // Sprawdzamy pole "version" z odpowiedzi, jesli znamy oczekiwana.
+          let runningVersion = null;
+          try { runningVersion = (await res.json()).version || null; } catch (_) {}
+          if (expectedVersion && runningVersion && runningVersion !== expectedVersion) {
+            showError(`Po ponownym uruchomieniu nadal działa wersja ${runningVersion} (oczekiwano ${expectedVersion}). Sprawdź log aktualizacji i spróbuj ponownie.`);
+            resetInstallControls();
+            return;
+          }
           // Dopiero TERAZ nowa wersja faktycznie dziala - to jest jedyny
           // moment, w ktorym pasek pokazuje 100%. Krotka pauza, zeby
           // uzytkownik zdazyl to zobaczyc przed odswiezeniem strony.
@@ -241,11 +253,14 @@
     closeBtn.disabled = true;
     hide(errorBox);
     setProgress('Przygotowywanie aktualizacji…', 0);
+    // Zapamietujemy TERAZ, do jakiej wersji dazymy - status.latestVersion moze
+    // sie zmienic (albo zniknac) do czasu, az waitForRestart() go potrzebuje.
+    const expectedVersion = lastStatus ? lastStatus.latestVersion : null;
     try {
       const res = await fetch('/api/update/install', { method: 'POST', headers: HEADERS });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się rozpocząć aktualizacji.');
-      await trackProgressUntilServerStops();
+      await trackProgressUntilServerStops(expectedVersion);
     } catch (err) {
       showError(err.message || 'Nie udało się zainstalować aktualizacji.');
       resetInstallControls();

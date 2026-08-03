@@ -506,6 +506,77 @@ test('updateService: instalacja jest odrzucona, gdy nie ma wykrytej dostepnej we
   assert.equal(result.statusCode, 409);
 });
 
+test('updateService: aktualizacja jest zablokowana, gdy trwa drukowanie (audyt v1.0.4, P0-8)', async () => {
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  const dataRoot = tempDir('scz-print-lock-');
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  try {
+    const lockDir = path.join(dataRoot, 'runtime', 'printing');
+    fs.mkdirSync(lockDir, { recursive: true });
+    // process.pid tego samego (testowego) procesu - z definicji "zywy" PID,
+    // wiec isPrintingActive() musi go rozpoznac jako aktywna blokade.
+    fs.writeFileSync(path.join(lockDir, 'active.lock'), JSON.stringify({ pid: process.pid, app: 'drukarka' }));
+
+    const bytes = Buffer.from('x');
+    const release = buildFakeRelease('9.9.9', bytes);
+    const { service } = makeTestService({ currentVersion: '1.0.0', fetchLatestRelease: async () => release });
+    await service.checkForUpdate();
+
+    const result = service.startInstall();
+    assert.equal(result.started, false);
+    assert.equal(result.statusCode, 409);
+    assert.match(result.message, /drukowanie/);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
+    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('updateService: brak blokady druku (albo osierocony lock z martwym PID) nie przeszkadza w instalacji', async () => {
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  const dataRoot = tempDir('scz-print-lock-dead-');
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  try {
+    const lockDir = path.join(dataRoot, 'runtime', 'printing');
+    fs.mkdirSync(lockDir, { recursive: true });
+    // PID prawie na pewno juz nieuzywany - symuluje osierocona blokade po
+    // awarii procesu, ktora nie powinna blokowac niczego.
+    fs.writeFileSync(path.join(lockDir, 'active.lock'), JSON.stringify({ pid: 2147483647, app: 'drukarka' }));
+
+    const bytes = crypto.randomBytes(2000);
+    const hash = sha256Hex(bytes);
+    const release = buildFakeRelease('9.9.9', bytes);
+    const rootDir = tempDir('scz-print-lock-root-');
+    fs.mkdirSync(path.join(rootDir, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, 'scripts', 'run-update.ps1'), '# test');
+
+    const { service } = makeTestService({
+      rootDir,
+      currentVersion: '1.0.0',
+      fetchLatestRelease: async () => release,
+      downloadText: async () => `${hash}  ${release.installerAsset.name}`,
+      parseSha256File: (text) => text.split(/\s+/)[0],
+      downloadToPartialFile: async (url, dest, opts) => {
+        opts.onProgress({ downloadedBytes: bytes.length, totalBytes: bytes.length });
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(`${dest}.partial`, bytes);
+        return { bytes: bytes.length, sha256: hash, partialPath: `${dest}.partial` };
+      }
+    });
+    await service.checkForUpdate();
+    const install = service.startInstall();
+    assert.equal(install.started, true);
+    await install.flowPromise;
+    assert.equal(service.getStatusPayload().state, 'installing');
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
+    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
 test('updateService: wylaczony (enabled: false) nigdy nie sprawdza i nigdy nie instaluje', async () => {
   const { service } = makeTestService({ enabled: false, fetchLatestRelease: async () => { throw new Error('nie powinno byc wywolane'); } });
   const checkResult = await service.checkForUpdate();
@@ -925,4 +996,22 @@ test('wewnetrzny workflow z OCR blokuje sie na publicznym repozytorium PRZED uzy
   assert.ok(guardIndex < secretIndex, 'Sprawdzenie widocznosci repo musi isc PRZED jakimkolwiek uzyciem sekretu.');
   assert.match(workflow, /\.private/);
   assert.match(workflow, /throw ".*nie jest prywatne/i);
+});
+
+test('update-ui.js: pasek nie reloaduje strony, jesli po restarcie dziala inna wersja niz oczekiwana (audyt v1.0.4, P0-8)', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'update-ui.js'), 'utf8');
+  // Wczesniej jedynym kryterium sukcesu bylo "res.ok" z /api/health - nie
+  // sprawdzalo, KTORA wersja faktycznie odpowiedziala. Restart mogl przywrocic
+  // stara wersje (np. instalator po cichu pominal zablokowany plik), a pasek
+  // i tak pokazywalby 100% i przeladowywal strone.
+  assert.match(source, /async function waitForRestart\(expectedVersion\)/);
+  assert.match(source, /runningVersion = \(await res\.json\(\)\)\.version/);
+  assert.match(source, /expectedVersion && runningVersion && runningVersion !== expectedVersion/);
+  const waitForRestartFn = source.match(/async function waitForRestart\(expectedVersion\) \{[\s\S]*?\n  \}/);
+  assert.ok(waitForRestartFn, 'nie znaleziono waitForRestart');
+  assert.match(waitForRestartFn[0], /resetInstallControls\(\);\s*\n\s*return;/);
+  // expectedVersion musi byc przekazywane od momentu kliknięcia "zainstaluj",
+  // nie zgadywane pozniej.
+  assert.match(source, /const expectedVersion = lastStatus \? lastStatus\.latestVersion : null;/);
+  assert.match(source, /trackProgressUntilServerStops\(expectedVersion\)/);
 });

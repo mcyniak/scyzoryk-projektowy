@@ -8,7 +8,11 @@ REM zainstalowanego globalnie na komputerze.
 set "PATH=%~dp0node-runtime;%PATH%"
 set "PLAYWRIGHT_BROWSERS_PATH=0"
 
-powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:3000/api/health' -TimeoutSec 2; if ($r.StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>nul
+REM Audyt v1.0.4, P1-9: pojedyncze sprawdzenie z 2s timeoutem moglo dac
+REM falszywy negatyw dla zywego, ale chwilowo zajetego panelu (np. agreguje
+REM health 8 podaplikacji) - is-panel-alive.ps1 probuje kilka razy przez
+REM ~12s, zanim uzna panel za martwy.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\is-panel-alive.ps1" >nul 2>nul
 if not errorlevel 1 (
   start "" "http://127.0.0.1:3000"
   exit /b 0

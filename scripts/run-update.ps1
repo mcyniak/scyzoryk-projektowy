@@ -134,6 +134,25 @@ function Start-ScyzorykHidden {
   Write-Log "BLAD: brak $vbsPath i $cmdPath - nie mozna automatycznie uruchomic Scyzoryka ponownie."
 }
 
+# Audyt v1.0.4, P0-8: druga linia obrony (pierwsza jest w lib/updateService.js,
+# sprawdzana zanim ten proces w ogole sie odpali) - miedzy kliknieciem
+# "zainstaluj" a faktycznym uruchomieniem tego skryptu mija czas pobierania
+# (kilka(-naście) sekund), w ktorym druk mogl sie rozpoczac. Czekamy do 30s,
+# zanim zaczniemy zabijac procesy, zamiast przerywac aktywny wydruk na sile.
+function Test-PrintingActive {
+  try {
+    $dataRoot = if ($env:SCYZORYK_DATA_ROOT) { $env:SCYZORYK_DATA_ROOT } else { Join-Path ($env:LOCALAPPDATA) 'ScyzorykProjektowy\Data' }
+    $lockPath = Join-Path $dataRoot 'runtime\printing\active.lock'
+    if (-not (Test-Path -LiteralPath $lockPath)) { return $false }
+    $lock = Get-Content -LiteralPath $lockPath -Raw | ConvertFrom-Json
+    if (-not $lock -or -not $lock.pid) { return $false }
+    $proc = Get-Process -Id $lock.pid -ErrorAction SilentlyContinue
+    return ($null -ne $proc)
+  } catch {
+    return $false
+  }
+}
+
 Write-Log "=== Start aktualizacji Scyzoryka Projektowego do wersji $ExpectedVersion ==="
 Write-Log "InstallerPath = $InstallerPath"
 Write-Log "InstallDir    = $InstallDir"
@@ -147,6 +166,17 @@ try {
   # dojsc do przegladarki, zanim zaczniemy zatrzymywac serwer, ktory ja wysylal.
   Write-Log 'Czekam 2s, aby odpowiedz HTTP dotarla do przegladarki...'
   Start-Sleep -Seconds 2
+
+  if (Test-PrintingActive) {
+    Write-Log 'Wykryto aktywne drukowanie - czekam do 30s przed zatrzymaniem procesow...'
+    $printWaitDeadline = (Get-Date).AddSeconds(30)
+    while ((Test-PrintingActive) -and (Get-Date) -lt $printWaitDeadline) { Start-Sleep -Seconds 2 }
+    if (Test-PrintingActive) {
+      Write-Log 'OSTRZEZENIE: drukowanie nadal aktywne po 30s oczekiwania - kontynuuje mimo to (aktualizacja nie moze utknac w nieskonczonosc).'
+    } else {
+      Write-Log 'Drukowanie zakonczone - kontynuuje aktualizacje.'
+    }
+  }
 
   Write-Log 'Zatrzymuje procesy Scyzoryka...'
   Stop-ScyzorykOwnedProcesses -InstallDir $InstallDir
@@ -167,8 +197,6 @@ try {
   $message = "Blad aktualizacji: $($_.Exception.Message)"
   Write-Log $message
 } finally {
-  Write-LastResult -Ok $ok -Version $ExpectedVersion -ExitCode $exitCode -Message $message
-
   # Restart Scyzoryka NIEZALEZNIE od wyniku instalacji - uzytkownik ma zawsze
   # zostac z dzialajaca aplikacja (starsza lub nowa), a nie z niczym. Jesli
   # instalacja sie nie powiodla, interfejs po restarcie pokaze bledny wynik
@@ -182,15 +210,35 @@ try {
 
   Write-Log 'Sprawdzam /api/health po restarcie...'
   $healthy = $false
+  $runningVersion = $null
   $deadline = (Get-Date).AddSeconds(60)
   do {
     Start-Sleep -Seconds 2
     try {
       $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/health" -UseBasicParsing -TimeoutSec 3
-      if ($resp.StatusCode -eq 200) { $healthy = $true; break }
+      if ($resp.StatusCode -eq 200) {
+        $healthy = $true
+        try { $runningVersion = ($resp.Content | ConvertFrom-Json).version } catch { $runningVersion = $null }
+        break
+      }
     } catch {}
   } while ((Get-Date) -lt $deadline)
-  Write-Log "Health-check po restarcie: $healthy"
+  Write-Log "Health-check po restarcie: $healthy, wersja dzialajaca: $runningVersion"
+
+  # Audyt v1.0.4, P0-8: kod wyjscia instalatora (0 = "sukces") nigdy nie byl
+  # porownywany z wersja FAKTYCZNIE dzialajaca po restarcie - Restart Manager
+  # potrafi po cichu pominac zablokowany plik zamiast go nadpisac, dajac
+  # exitCode 0 mimo ze stara wersja nadal dziala. To jest jedyny prawdziwy
+  # test sukcesu z punktu widzenia uzytkownika.
+  if ($ok -and $healthy -and $runningVersion -and ($runningVersion -ne $ExpectedVersion)) {
+    $ok = $false
+    $message = "Instalator zakonczyl sie bez bledu, ale po restarcie nadal dziala wersja $runningVersion (oczekiwano $ExpectedVersion). Sprobuj ponownie."
+    Write-Log $message
+  } elseif ($ok -and $healthy -and -not $runningVersion) {
+    Write-Log 'OSTRZEZENIE: nie udalo sie odczytac wersji z /api/health po restarcie - nie mozna w pelni potwierdzic aktualizacji.'
+  }
+
+  Write-LastResult -Ok $ok -Version $ExpectedVersion -ExitCode $exitCode -Message $message
   Write-Log '=== Koniec aktualizacji ==='
 }
 

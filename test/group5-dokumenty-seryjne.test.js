@@ -30,6 +30,25 @@ test('zadania aktywne po restarcie są przerywane i można je anulować', async 
   assert.match(source, /if \(job\.status === 'interrupted'\) \{\s*job\.status = 'cancelled'/);
 });
 
+test('anulowanie zatrzymuje CALA paczke szablonow, nie tylko biezacy proces (audyt v1.0.4, P1-2)', async () => {
+  const source = await fsp.readFile(serverPath, 'utf8');
+  // /api/cancel/:jobId musi ustawiac flage sprawdzana przez petle wielo-
+  // szablonowa - samo job.child.kill() zabijalo tylko AKTUALNY proces
+  // PowerShell, a petla i tak ruszala z kolejnym szablonem w paczce.
+  assert.match(source, /job\.cancelRequested = true;/);
+  const cancelRoute = source.match(/app\.post\('\/api\/cancel\/:jobId'[\s\S]*?\n\}\);/);
+  assert.ok(cancelRoute, 'nie znaleziono trasy /api/cancel/:jobId');
+  assert.match(cancelRoute[0], /job\.cancelRequested = true;/);
+
+  const loopFn = source.match(/async function runMultiTemplateGeneration[\s\S]*?\n\}/);
+  assert.ok(loopFn, 'nie znaleziono runMultiTemplateGeneration');
+  // Sprawdzenie flagi musi byc W SRODKU petli (przed kazdym kolejnym
+  // szablonem), nie tylko raz przed jej rozpoczeciem.
+  assert.match(loopFn[0], /for \(let i = 0; i < tasks\.length; i \+= 1\) \{\s*\n\s*\/\/[\s\S]*?if \(job\.cancelRequested\)/);
+  assert.match(loopFn[0], /cancelledEarly = true/);
+  assert.match(loopFn[0], /job\.status = cancelledEarly \? 'cancelled'/);
+});
+
 test('frontend pobiera wszystkie strony rekordów przed renderowaniem', async () => {
   const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'public', 'inline-1.js'), 'utf8');
   assert.match(source, /async function loadAllRows/);
