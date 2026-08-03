@@ -17,7 +17,11 @@ if not errorlevel 1 (
 echo Zatrzymuje tylko osierocone procesy Scyzoryka, jesli istnieja...
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\stop-scyzoryk.ps1
 
-echo.
-echo Startuje Scyzoryk: http://127.0.0.1:3000
-"%~dp0node-runtime\node.exe" server.js
-pause
+REM Start w tle bez widocznego okna konsoli - ten sam mechanizm co autostart
+REM (scripts\run-hidden.vbs -> STARTUJ-SCYZORYK-CICHO.cmd). Wczesniej ten plik
+REM odpalal "node.exe server.js" wprost w widocznym oknie cmd, wiec przypadkowe
+REM zamkniecie tego okna ubijalo cala aplikacje, a uzytkownik mogl wziac to za blad.
+cscript //nologo "%~dp0scripts\run-hidden.vbs" >nul 2>nul
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\wait-and-open-panel.ps1"
+exit /b %errorlevel%

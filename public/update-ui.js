@@ -152,6 +152,19 @@
   laterBtn.addEventListener('click', closeModal);
   modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
+  // Cala droga (pobieranie -> weryfikacja -> instalacja -> restart -> health)
+  // jest mapowana na JEDEN pasek 0-100% - 100% ma znaczyc "gotowe, dziala
+  // nowa wersja", NIE "plik sie pobral". Bez tego uzytkownik widzial 100%
+  // zaraz po pobraniu i musial jeszcze dlugo czekac, co wygladalo jak
+  // zawieszenie mimo ze wszystko szlo poprawnie.
+  const PHASE_DOWNLOAD_MAX = 70;   // pobieranie: 0-70%, proporcjonalnie do realnego postepu
+  const PHASE_READY = 75;          // suma kontrolna sprawdzona
+  const PHASE_CLOSING = 85;        // serwer jeszcze odpowiada, ale za chwile zacznie sie zamykac
+  const PHASE_INSTALLING = 90;     // polaczenie przestalo odpowiadac - instalator dziala
+  const PHASE_RESTART_START = 90;
+  const PHASE_RESTART_CAP = 99;    // rosnie stopniowo, nigdy nie dobija do 100 samo z siebie
+  const PHASE_DONE = 100;          // WYLACZNIE w momencie, gdy /api/health juz odpowiada
+
   // Po kliknieciu "Zaktualizuj i uruchom ponownie" serwer odpowiada szybko
   // (202) i sam kontynuuje w tle - postep sledzimy przez osobne, czeste
   // odpytywanie /api/update/status, az polaczenie zacznie zawodzic (serwer
@@ -164,15 +177,16 @@
       try {
         status = await fetchStatus();
       } catch (_) {
-        setProgress('Zamykanie Scyzoryka…', 100);
+        setProgress('Zamykanie Scyzoryka…', PHASE_INSTALLING);
         return waitForRestart();
       }
       if (status.state === 'downloading') {
-        setProgress(`Pobieranie aktualizacji… ${status.percent == null ? 0 : status.percent}%`, status.percent);
+        const downloadPercent = status.percent == null ? 0 : status.percent;
+        setProgress(`Pobieranie aktualizacji… ${downloadPercent}%`, Math.round((downloadPercent / 100) * PHASE_DOWNLOAD_MAX));
       } else if (status.state === 'ready') {
-        setProgress('Sprawdzanie pobranego pliku…', 100);
+        setProgress('Sprawdzanie pobranego pliku…', PHASE_READY);
       } else if (status.state === 'installing' || status.state === 'restarting') {
-        setProgress('Instalowanie aktualizacji…', 100);
+        setProgress('Zamykanie Scyzoryka…', PHASE_CLOSING);
       } else if (status.state === 'error') {
         showError(status.error || 'Aktualizacja nie powiodła się.');
         resetInstallControls();
@@ -183,15 +197,29 @@
   }
 
   async function waitForRestart() {
-    setProgress('Ponowne uruchamianie…', 100);
+    let percent = PHASE_RESTART_START;
+    setProgress('Instalowanie aktualizacji…', percent);
     for (let i = 0; i < 150; i++) {
       await sleep(HEALTH_POLL_MS);
       try {
         const res = await fetch('/api/health', { cache: 'no-store' });
-        if (res.ok) { location.reload(); return; }
+        if (res.ok) {
+          // Dopiero TERAZ nowa wersja faktycznie dziala - to jest jedyny
+          // moment, w ktorym pasek pokazuje 100%. Krotka pauza, zeby
+          // uzytkownik zdazyl to zobaczyc przed odswiezeniem strony.
+          setProgress('Gotowe. Wczytuję nową wersję…', PHASE_DONE);
+          await sleep(400);
+          location.reload();
+          return;
+        }
       } catch (_) {
         // Serwer jeszcze wstaje - tolerowane, probujemy dalej.
       }
+      // Rosnie stopniowo w strone PHASE_RESTART_CAP, ale nigdy sama z siebie
+      // nie dobija do 100% - to zarezerwowane wylacznie dla potwierdzonego
+      // powrotu /api/health powyzej.
+      percent = Math.min(PHASE_RESTART_CAP, percent + 1);
+      setProgress('Ponowne uruchamianie…', percent);
     }
     showError('Nie udało się potwierdzić ponownego uruchomienia Scyzoryka. Odśwież stronę ręcznie.');
   }
