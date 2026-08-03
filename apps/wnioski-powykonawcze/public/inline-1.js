@@ -221,7 +221,31 @@ const $ = s => document.querySelector(s);
       const downloads = job.zipUrl
         ? `<a class="button primary" href="${job.zipUrl}">Pobierz ZIP z PDF-ami</a>`
         : (job.files || []).map(item => `<a class="button primary" href="${escapeHtml(item.url)}">Pobierz ${escapeHtml(item.file)}</a>`).join('');
-      resultBox.innerHTML = `${failed}${downloads}`;
+      resultBox.innerHTML = `${failed}${downloads}${renderChangesSummary(job.files || [])}`;
+    }
+
+    // Widocznosc tego, co skrypt faktycznie zmienil w kazdym dokumencie
+    // (audyt v1.0.4, P0-3/P0-4) - zamiana wszystkich dat na jedna wartosc i
+    // usuwanie od markera "ZATWIERDZAM..." do konca dokumentu nadal nie maja
+    // bezpiecznej, precyzyjnej granicy (wymaga realnego szablonu WM), wiec
+    // dopoki jej nie ma, pokazujemy uzytkownikowi co zostalo zmienione/usuniete,
+    // zeby dalo sie to zauwazyc i sprawdzic w PDF-ie przed wyslaniem dalej.
+    function renderChangesSummary(files) {
+      const withChanges = files.filter(f => f.deletedSection || (f.dateReplacements || []).length);
+      if (!withChanges.length) return '';
+      const rows = withChanges.map(f => {
+        const dateLines = (f.dateReplacements || [])
+          .map(d => `${escapeHtml(d.from)} → ${escapeHtml(d.to)}`)
+          .join(', ');
+        const deletionLine = f.deletedSection
+          ? `Usunięto sekcję od miejsca zatwierdzenia do końca dokumentu (${f.deletedCharCount} znaków). Podgląd usuniętego fragmentu: „${escapeHtml((f.deletedPreview || '').slice(0, 160))}${(f.deletedPreview || '').length > 160 ? '…' : ''}”`
+          : '';
+        return `<li><strong>${escapeHtml(f.file)}</strong>`
+          + (dateLines ? `<div class="small">Zamienione daty: ${dateLines}</div>` : '')
+          + (deletionLine ? `<div class="small">${deletionLine}</div>` : '')
+          + `</li>`;
+      }).join('');
+      return `<details style="margin-top:10px;"><summary>Sprawdź, co zostało zmienione (zalecane przed wysłaniem dalej)</summary><ul>${rows}</ul></details>`;
     }
 
     function stopManualPolling() {
@@ -399,7 +423,7 @@ const $ = s => document.querySelector(s);
         showWmConvertStatus(`Gotowe. Utworzono i zapisano w folderach: ${data.created}.`, failedList.length ? '' : 'ok');
         const okLines = (data.files || []).map(f => `<div class="row ok"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.file)}</small></div></div>`).join('');
         const failLines = failedList.map(f => `<div class="row err"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.error)}</small></div></div>`).join('');
-        wmConvertResult.innerHTML = `<div class="list">${okLines}${failLines}</div>`;
+        wmConvertResult.innerHTML = `<div class="list">${okLines}${failLines}</div>${renderChangesSummary(data.files || [])}`;
       } catch (err) {
         showWmConvertStatus(err.message || 'Błąd przerabiania dokumentów.', 'err');
       } finally {

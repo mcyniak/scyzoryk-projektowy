@@ -17,6 +17,7 @@ async function loadZipArchive() {
   return ZipArchiveClass;
 }
 const sanitize = require('sanitize-filename');
+const { normalizeDate } = require('./src/dateValidation');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -165,20 +166,6 @@ function validateDocx(file) {
   if (path.extname(original).toLowerCase() !== '.docx') throw new Error(`Plik ${original} nie jest DOCX.`);
   const header = readHeader(file.path, 4).toString('latin1');
   if (!header.startsWith('PK')) throw new Error(`Plik ${original} nie wygląda jak poprawny DOCX.`);
-}
-
-function normalizeDate(input) {
-  const raw = String(input || '').trim();
-  if (!raw) throw new Error('Wpisz datę dokumentacji powykonawczej.');
-  let m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) return `${m[3]}.${m[2]}.${m[1]}`;
-  m = raw.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/);
-  if (m) return `${m[1].padStart(2, '0')}.${m[2].padStart(2, '0')}.${m[3]}`;
-  m = raw.match(/^(\d{4})-(\d{2})$/);
-  if (m) return `${m[2]}.${m[1]}`;
-  m = raw.match(/^(\d{1,2})[.\/-](\d{4})$/);
-  if (m) return `${m[1].padStart(2, '0')}.${m[2]}`;
-  throw new Error('Nieprawidłowa data. Użyj formatu RRRR-MM-DD, DD.MM.RRRR albo MM.RRRR (tylko miesiąc i rok).');
 }
 
 function cleanPrefix(value) {
@@ -339,8 +326,24 @@ app.post('/api/jobs', heavyJobLimiter, upload.array('files', MAX_FILES), async (
         const okFiles = [];
         const failed = [];
         for (const item of result.results || []) {
-          if (item.ok && item.pdf && fs.existsSync(item.pdf)) okFiles.push({ file: path.basename(item.pdf), path: item.pdf });
-          else failed.push({ input: item.input, error: item.error || 'Nieznany błąd' });
+          if (item.ok && item.pdf && fs.existsSync(item.pdf)) {
+            // Widocznosc tego, co skrypt faktycznie zmienil/usunal w dokumencie
+            // (audyt v1.0.4, P0-3/P0-4) - zamiana WSZYSTKICH dat w dokumencie na
+            // jedna wartosc i usuwanie od markera "ZATWIERDZAM..." do konca
+            // dokumentu wciaz nie maja bezpiecznej, wskazanej granicy (wymaga
+            // realnego szablonu WM, zeby ja poprawnie ustalic) - dopoki jej nie
+            // ma, przynajmniej pokazujemy uzytkownikowi co zostalo zmienione,
+            // zeby dalo sie to zauwazyc przed wyslaniem dokumentu dalej.
+            okFiles.push({
+              file: path.basename(item.pdf), path: item.pdf,
+              deletedSection: Boolean(item.deletedSection),
+              deletedCharCount: Number(item.deletedCharCount || 0),
+              deletedPreview: item.deletedPreview || '',
+              dateReplacements: Array.isArray(item.dateReplacements) ? item.dateReplacements : []
+            });
+          } else {
+            failed.push({ input: item.input, error: item.error || 'Nieznany błąd' });
+          }
         }
         if (!okFiles.length) throw new Error(failed[0]?.error || 'Nie utworzono żadnego PDF-a.');
         job.files = okFiles;
@@ -491,7 +494,13 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
     for (const item of result.results || []) {
       const manifestEntry = byInputPath.get(item.input);
       if (item.ok && item.pdf && fs.existsSync(item.pdf)) {
-        okItems.push({ category: manifestEntry?.category || '', file: path.basename(item.pdf), path: item.pdf });
+        okItems.push({
+          category: manifestEntry?.category || '', file: path.basename(item.pdf), path: item.pdf,
+          deletedSection: Boolean(item.deletedSection),
+          deletedCharCount: Number(item.deletedCharCount || 0),
+          deletedPreview: item.deletedPreview || '',
+          dateReplacements: Array.isArray(item.dateReplacements) ? item.dateReplacements : []
+        });
       } else {
         failed.push({ category: manifestEntry?.category || '', input: item.input, error: item.error || 'Nieznany błąd' });
       }

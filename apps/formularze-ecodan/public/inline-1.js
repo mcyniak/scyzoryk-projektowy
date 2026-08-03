@@ -160,8 +160,20 @@ let activeJob = null;
         previewRecords = json.records || [];
         selectedRows = new Set(previewRecords.map(row => row.rowNumber));
         const skipped = json.skipped || {};
-        const skippedText = Object.values(skipped).reduce((a, b) => a + Number(b || 0), 0);
-        document.querySelector('#selectorInfo').textContent = `Arkusz: ${json.sheetName || '-'} · znaleziono ${previewRecords.length} adresów${skippedText ? ` · pominięto ${skippedText} wierszy niepasujących` : ''}.`;
+        const skippedTotal = Object.values(skipped).reduce((a, b) => a + Number(b || 0), 0);
+        // Rozbicie powodu pominiecia (nie tylko suma) - zeby bylo od razu widac
+        // czy chodzi o np. brak mocy/lokalizacji/zbiornika w Excelu, a nie tylko
+        // "cos zostalo pominiete" bez wskazowki co poprawic w arkuszu.
+        const skipLabels = {
+          empty: 'puste wiersze', ground: 'pompa gruntowa', unknownPumpType: 'nierozpoznany typ pompy',
+          missingAddress: 'brak adresu', missingOzc: 'brak OZC', missingPower: 'brak/niejednoznaczna moc',
+          missingLocation: 'brak lokalizacji', missingHeatingShare: 'brak udziału ogrzewania', missingTank: 'brak zbiornika CWU'
+        };
+        const skipBreakdown = Object.entries(skipped)
+          .filter(([, count]) => Number(count) > 0)
+          .map(([key, count]) => `${skipLabels[key] || key}: ${count}`)
+          .join(', ');
+        document.querySelector('#selectorInfo').textContent = `Arkusz: ${json.sheetName || '-'} · znaleziono ${previewRecords.length} adresów${skippedTotal ? ` · pominięto ${skippedTotal} wierszy (${skipBreakdown})` : ''}.`;
         renderAddressRows();
       } catch (error) {
         previewRecords = [];

@@ -295,9 +295,18 @@ function Replace-AllDates {
     [Parameter(Mandatory=$true)]$Doc,
     [Parameter(Mandatory=$true)][string]$DateText
   )
-  if ($null -eq $Doc) { return }
+  # Zwraca liste faktycznie znalezionych/podmienionych dat (stara -> nowa),
+  # zeby wywolujacy (server.js, potem UI) mogl to pokazac uzytkownikowi PRZED
+  # wyslaniem dokumentu dalej. Ta funkcja nadal podmienia KAZDA znaleziona
+  # date w calym dokumencie na jedna, wspolna wartosc (audyt v1.0.4, P0-3) -
+  # bez realnego szablonu WM nie da sie bezpiecznie zgadnac, ktora POJEDYNCZA
+  # data (np. "data dokumentacji powykonawczej") powinna byc jedynym celem,
+  # wiec zamiast zgadywac oznaczenie pola, dodajemy jawna widocznosc tego, co
+  # zostalo zmienione, zeby czlowiek mogl to zlapac przed wyslaniem dalej.
+  $replacements = New-Object System.Collections.Generic.List[object]
+  if ($null -eq $Doc) { return $replacements }
   $newDate = [string]$DateText
-  if ([string]::IsNullOrWhiteSpace($newDate)) { return }
+  if ([string]::IsNullOrWhiteSpace($newDate)) { return $replacements }
 
   # Najpierw zbierz widoczne daty z dokumentu i zamieniaj je literalnie.
   # To jest pewniejsze niz sam Word wildcard, bo daty w WM-ach siedza w tabelach.
@@ -306,6 +315,7 @@ function Replace-AllDates {
     if ([string]::IsNullOrWhiteSpace($oldDate)) { continue }
     if ($oldDate -eq $newDate) { continue }
     [void](Replace-InAllStories -Doc $Doc -FindText $oldDate -ReplaceText $newDate -Wildcards $false)
+    $replacements.Add([pscustomobject]@{ from = $oldDate; to = $newDate }) | Out-Null
   }
 
   # Fallback: kilka wzorow wildcard dla dokumentow z nietypowa data.
@@ -318,6 +328,8 @@ function Replace-AllDates {
   )) {
     [void](Replace-InAllStories -Doc $Doc -FindText $pattern -ReplaceText $newDate -Wildcards $true)
   }
+
+  return $replacements
 }
 
 function Delete-FromMarkerToEnd {
@@ -325,19 +337,27 @@ function Delete-FromMarkerToEnd {
     [Parameter(Mandatory=$true)]$Doc,
     [Parameter(Mandatory=$true)][string]$Marker
   )
-  if ($null -eq $Doc) { return $false }
+  # Zwraca obiekt (nie juz sam bool) z licznikiem znakow i podgladem tego, co
+  # zostalo usuniete - od znalezionego markera az do konca dokumentu, bez
+  # drugiej granicy (audyt v1.0.4, P0-4). Bez realnego szablonu WM nie da sie
+  # bezpiecznie zgadnac poprawnego drugiego markera (gdzie sekcja akceptacyjna
+  # faktycznie sie konczy) - wiec zamiast zgadywac, dodajemy widocznosc: ile
+  # tekstu i jaki fragment zostal usuniety, zeby czlowiek mogl to ocenic przed
+  # wyslaniem dokumentu dalej.
+  $noop = [pscustomobject]@{ deleted = $false; charCount = 0; preview = '' }
+  if ($null -eq $Doc) { return $noop }
 
   $content = $null
   try { $content = $Doc.Content } catch { $content = $null }
-  if ($null -eq $content) { return $false }
+  if ($null -eq $content) { return $noop }
 
   $range = $null
   try { $range = $content.Duplicate } catch { $range = $content }
-  if ($null -eq $range) { return $false }
+  if ($null -eq $range) { return $noop }
 
   $find = $null
   try { $find = $range.Find } catch { $find = $null }
-  if ($null -eq $find) { return $false }
+  if ($null -eq $find) { return $noop }
 
   try { [void]$find.ClearFormatting() } catch {}
   try {
@@ -353,14 +373,24 @@ function Delete-FromMarkerToEnd {
       $end = $content.End
       if ($null -ne $start -and $null -ne $end -and $end -gt $start) {
         $deleteRange = $Doc.Range($start, $end)
-        if ($null -ne $deleteRange) { [void]$deleteRange.Delete() }
+        $charCount = 0
+        $preview = ''
+        if ($null -ne $deleteRange) {
+          try { $charCount = [int]$deleteRange.Characters.Count } catch { $charCount = 0 }
+          try {
+            $rawPreview = [string]$deleteRange.Text
+            $preview = $rawPreview.Substring(0, [Math]::Min(200, $rawPreview.Length)) -replace '[\r\v\f]', ' '
+          } catch { $preview = '' }
+          [void]$deleteRange.Delete()
+        }
+        return [pscustomobject]@{ deleted = $true; charCount = $charCount; preview = $preview.Trim() }
       }
-      return $true
+      return [pscustomobject]@{ deleted = $true; charCount = 0; preview = '' }
     }
   } catch {
-    return $false
+    return $noop
   }
-  return $false
+  return $noop
 }
 
 function Convert-ToPowykonawczy {
@@ -397,11 +427,18 @@ function Convert-ToPowykonawczy {
   Replace-InContent -Doc $Doc -FindText $WN2 -ReplaceText "" | Out-Null
   Replace-InContent -Doc $Doc -FindText $WN3 -ReplaceText "" | Out-Null
 
-  $deleted = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK1
-  if (-not $deleted) { $deleted = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK2 }
-  if (-not $deleted) { $deleted = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK3 }
+  $deletion = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK1
+  if (-not $deletion.deleted) { $deletion = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK2 }
+  if (-not $deletion.deleted) { $deletion = Delete-FromMarkerToEnd -Doc $Doc -Marker $MARK3 }
 
-  Replace-AllDates -Doc $Doc -DateText $DateText
+  $dateReplacements = Replace-AllDates -Doc $Doc -DateText $DateText
+
+  return [pscustomobject]@{
+    deletedSection = $deletion.deleted
+    deletedCharCount = $deletion.charCount
+    deletedPreview = $deletion.preview
+    dateReplacements = @($dateReplacements)
+  }
 }
 
 try {
@@ -431,7 +468,7 @@ try {
         $doc = $word.Documents.Open($inputPath, $false, $true, $false, "", "", $false, "", "", 0, 65001, [bool]$config.visibleWord, $true)
         if ($null -eq $doc) { throw "Word nie otworzyl pliku: $inputPath" }
 
-        Convert-ToPowykonawczy -Doc $doc -DateText ([string]$config.dateText)
+        $changeReport = Convert-ToPowykonawczy -Doc $doc -DateText ([string]$config.dateText)
 
         if ([bool]$config.saveDocx) {
           $formatDocx = 16
@@ -441,7 +478,11 @@ try {
         $doc.SaveAs2($pdfPath, $formatPdf)
         $doc.Close($false)
         $doc = $null
-        $results.Add([pscustomobject]@{ ok=$true; input=$inputPath; pdf=$pdfPath; file=[System.IO.Path]::GetFileName($pdfPath) }) | Out-Null
+        $results.Add([pscustomobject]@{
+          ok=$true; input=$inputPath; pdf=$pdfPath; file=[System.IO.Path]::GetFileName($pdfPath)
+          deletedSection=$changeReport.deletedSection; deletedCharCount=$changeReport.deletedCharCount
+          deletedPreview=$changeReport.deletedPreview; dateReplacements=$changeReport.dateReplacements
+        }) | Out-Null
       } catch {
         if ($null -ne $doc) {
           try { $doc.Close($false) } catch {}

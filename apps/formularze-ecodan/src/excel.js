@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import sanitize from 'sanitize-filename';
 import readExcelFile from 'read-excel-file/node';
-import { num } from './rules.js';
+import { num, parsePowerKw, parseTank } from './rules.js';
 
 function formatDate(value) {
   if (!(value instanceof Date) || Number.isNaN(value.getTime())) return '';
@@ -216,7 +216,10 @@ export async function readExcelRecords(filePath, globalLocation = '') {
   const sheetNames = sheets.map(sheet => sheet.name).filter(Boolean);
 
   const records = [];
-  const skipped = { empty: 0, ground: 0, unknownPumpType: 0, missingAddress: 0, missingOzc: 0 };
+  const skipped = {
+    empty: 0, ground: 0, unknownPumpType: 0, missingAddress: 0, missingOzc: 0,
+    missingPower: 0, missingLocation: 0, missingHeatingShare: 0, missingTank: 0
+  };
 
   rows.forEach((row, index) => {
     const excelRowNumber = row.__excelRowNumber || index + 2;
@@ -252,6 +255,36 @@ export async function readExcelRecords(filePath, globalLocation = '') {
     const ozcValue = num(input.ozc);
     if (ozcValue <= 0) {
       skipped.missingOzc += 1;
+      return;
+    }
+
+    // Ten sam powod co przy OZC wyzej: puste/niejednoznaczne dane krytyczne
+    // dla doboru nie moga po cichu isc dalej z domyslna wartoscia (6 kW,
+    // Slesin, grzejniki, zbiornik 200 l) - wiersz jest widocznie pomijany
+    // (patrz "skipped" w odpowiedzi /api/batch/preview) zamiast wygenerowac
+    // pozornie poprawny, ale bezwartosciowy/blednie skonfigurowany raport.
+    // Pelna walidacja (w tym niejednoznaczne "9/12 kW") powtarza sie jeszcze
+    // raz w rules.js#calculate() jako druga linia obrony dla kazdej sciezki.
+    const municipalityPowerParsed = parsePowerKw(input.municipalityPower);
+    const chosenPowerParsed = parsePowerKw(input.chosenPower);
+    const powerForSelection = chosenPowerParsed.kw > 0 ? chosenPowerParsed.kw : municipalityPowerParsed.kw;
+    if (!municipalityPowerParsed.valid || !chosenPowerParsed.valid || powerForSelection <= 0) {
+      skipped.missingPower += 1;
+      return;
+    }
+
+    if (!String(input.location || '').trim()) {
+      skipped.missingLocation += 1;
+      return;
+    }
+
+    if (num(input.radiatorsShare) <= 0 && num(input.floorShare) <= 0) {
+      skipped.missingHeatingShare += 1;
+      return;
+    }
+
+    if (parseTank(input.cwuTank).litres <= 0) {
+      skipped.missingTank += 1;
       return;
     }
 

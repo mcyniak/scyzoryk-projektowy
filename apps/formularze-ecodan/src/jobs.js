@@ -282,7 +282,11 @@ async function runEcodanFlow(page, input, result, tmpDir) {
   } catch {}
 
   await domClickRegex(page, /ROZPOCZNIJ\s+DOBÓR/i, { name: 'ROZPOCZNIJ DOBÓR' });
-  await chooseLocation(page, input.location || '62-561 Ślesin');
+  // Brak lokalizacji jest juz zablokowany wczesniej (calculate().errors,
+  // sprawdzane w runAutomation/runAutomationInSession) - nie ma tu cichego
+  // fallbacku na prawdziwy adres "62-561 Slesin", zeby zla/pusta lokalizacja
+  // z Excela nigdy nie skonczyla sie realnym zgloszeniem dla innej miejscowosci.
+  await chooseLocation(page, input.location);
   await choosePowerMethodAndOzc(page, result);
   await chooseReceiver(page, result);
   await chooseCwu(page, result);
@@ -299,10 +303,22 @@ export async function runAutomationInSession(input, session, pdfDir, options = {
   const desiredPath = path.join(pdfDir, desiredFileName);
   const outputRoot = path.dirname(pdfDir);
 
+  // Obrona w glab: nawet gdyby cos ominelo filtrowanie na poziomie Excela
+  // (readExcelRecords) albo wywolalo ta funkcje wprost, dobor NIGDY nie
+  // powinien ruszyc z danymi, ktorych calculate() nie potrafilo poprawnie
+  // zinterpretowac - zero cichych domyslnych wartosci (6 kW, Slesin, itd.).
+  if (!result.calculated.valid) {
+    return { ok: false, blocked: true, result, error: result.calculated.errors.join(' '), durationMs: Date.now() - startedAt };
+  }
+
   if (options.skipExisting && await pathExists(desiredPath)) {
-    const pdfTrim = await keepFirstPdfPages(desiredPath).catch(error => ({ ok: false, error: String(error?.message || error) }));
-    if (!pdfTrim.ok) throw new Error(`Nie udało się skrócić istniejącego PDF do pierwszych 3 stron: ${pdfTrim.error}`);
-    return { ok: true, skippedExisting: true, trimmedExisting: pdfTrim.trimmed, result, pdf: desiredPath, pdfTrim, durationMs: Date.now() - startedAt };
+    // "Pomiń istniejące" ma oznaczać dosłownie brak jakichkolwiek zmian w
+    // istniejącym pliku - poprzednio ta gałąź otwierała i PRZYCINAŁA
+    // istniejący PDF do pierwszych 3 stron, co mogło nadpisać ręcznie
+    // umieszczony/starszy raport. Przycinanie ma sens tylko dla PLIKU
+    // WŁAŚNIE POBRANEGO z Ecodana (patrz niżej po pobraniu), nie dla pliku,
+    // który miał zostać w ogóle nietknięty.
+    return { ok: true, skippedExisting: true, result, pdf: desiredPath, durationMs: Date.now() - startedAt };
   }
 
   try {
@@ -647,6 +663,9 @@ export async function runBatchJob(job, filePath, options = {}) {
 
 export async function runAutomation(input) {
   const result = calculate(input);
+  if (!result.calculated.valid) {
+    return { ok: false, blocked: true, result, error: result.calculated.errors.join(' ') };
+  }
   const outputRoot = getOutputRoot();
   const tmpDir = path.join(outputRoot, 'tmp', 'single');
   const pdfDir = path.join(outputRoot, 'pdf');

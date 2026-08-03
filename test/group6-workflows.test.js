@@ -12,6 +12,7 @@ const {
   isTemporaryFile
 } = require('../apps/drukarka-projekty/src/folderMatch');
 const { isAffirmativeFlag } = require('../lib/businessFlags');
+const { normalizeDate } = require('../apps/wnioski-powykonawcze/src/dateValidation');
 
 test('skanowanie folderu działa rekurencyjnie i respektuje limit głębokości', async (t) => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-scan-'));
@@ -72,6 +73,21 @@ test('niepewne pozycje wymagają ręcznego zaznaczenia w UI', async () => {
   assert.match(source, /"niedopasowane"/);
   assert.match(source, /class="order-print-checkbox"/);
   assert.match(source, /item\.includeInPrint = checkbox\.checked/);
+});
+
+test('wnioski powykonawcze: normalizeDate odrzuca nieistniejące daty kalendarzowe (audyt v1.0.4, P1-7)', () => {
+  // Wczesniej walidacja sprawdzala tylko KSZTALT cyfr, wiec te trzy przechodzily
+  // bez bledu (JS Date po cichu "koryguje" 31.02 -> 03.03 itp.) - teraz musza
+  // zostac odrzucone jako nieistniejace daty.
+  for (const bad of ['31.02.2026', '99.99.2026', '2026-15-73', '2026-02-30', '32.01.2026', '00.01.2026', '01.00.2026']) {
+    assert.throws(() => normalizeDate(bad), /Nieprawidłowa data/, `powinno odrzucic: ${bad}`);
+  }
+  assert.equal(normalizeDate('15.02.2026'), '15.02.2026');
+  assert.equal(normalizeDate('2026-02-15'), '15.02.2026');
+  assert.equal(normalizeDate('29.02.2024'), '29.02.2024'); // 2024 to rok przestepny - 29 lutego istnieje
+  assert.throws(() => normalizeDate('29.02.2026'), /Nieprawidłowa data/); // 2026 NIE jest przestepny
+  assert.equal(normalizeDate('02.2026'), '02.2026');
+  assert.throws(() => normalizeDate('13.2026'), /Nieprawidłowa data/);
 });
 
 test('wnioski powykonawcze używają szybkiego modelu zadaniowego z anulowaniem', async () => {
