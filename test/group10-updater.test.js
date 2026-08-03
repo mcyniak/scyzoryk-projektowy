@@ -515,6 +515,145 @@ test('updateService: wylaczony (enabled: false) nigdy nie sprawdza i nigdy nie i
   assert.equal(installResult.started, false);
 });
 
+// Real bug znaleziony na produkcyjnej maszynie (2026-08-03): uzytkownik
+// kliknal "zainstaluj", pobieranie+weryfikacja przeszly, ale sam proces
+// run-update.ps1 nigdy nie ruszyl (cichy blad odpalenia). Po restarcie
+// (recznym, przez uzytkownika) panel po prostu wracal do czystego stanu
+// "dostepna aktualizacja X" bez ZADNEJ wzmianki, ze cos juz probowano -
+// wygladalo jak zero postepu. Te dwa testy pilnuja odczytu stanu z dysku
+// przy starcie createUpdateService (patrz sekcja "Cache ostatniego
+// poprawnego sprawdzenia" w lib/updateService.js).
+test('updateService: restart po nieudanej/przerwanej instalacji pokazuje blad zamiast cichego powrotu do "dostepna"', () => {
+  const updateRoot = tempDir('scz-svc-restart-fail-');
+  fs.writeFileSync(path.join(updateRoot, 'state.json'), JSON.stringify({
+    enabled: true,
+    state: 'installing',
+    available: true,
+    latestVersion: '2.0.0',
+    releaseName: 'Scyzoryk 2.0.0',
+    releaseNotes: 'Opis.',
+    publishedAt: '2026-01-01T00:00:00Z',
+    lastCheckedAt: '2026-01-01T00:00:00Z'
+  }));
+  const service = createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '1.0.0' }), // nadal stara - instalacja sie NIE udala
+    repo: 'o/r',
+    updateRoot,
+    port: 3000,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+  });
+  const status = service.getStatusPayload();
+  assert.equal(status.state, 'error');
+  assert.match(status.error, /2\.0\.0/);
+  assert.match(status.error, /1\.0\.0/);
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+test('updateService: restart PO udanej instalacji rozpoznaje sukces, mimo ze ostatni zapisany stan to "installing"', () => {
+  const updateRoot = tempDir('scz-svc-restart-ok-');
+  fs.writeFileSync(path.join(updateRoot, 'state.json'), JSON.stringify({
+    enabled: true,
+    state: 'installing',
+    available: true,
+    latestVersion: '2.0.0',
+    lastCheckedAt: '2026-01-01T00:00:00Z'
+  }));
+  const service = createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '2.0.0' }), // dogonila latestVersion - sukces
+    repo: 'o/r',
+    updateRoot,
+    port: 3000,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+  });
+  const status = service.getStatusPayload();
+  assert.equal(status.state, 'idle');
+  assert.equal(status.available, false);
+  assert.equal(status.error, null);
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+test('updateService: restart, gdy ostatni stan to zwykle "available" (nigdy nie kliknieto instaluj) - bez fałszywego bledu', () => {
+  const updateRoot = tempDir('scz-svc-restart-idle-');
+  fs.writeFileSync(path.join(updateRoot, 'state.json'), JSON.stringify({
+    enabled: true,
+    state: 'available',
+    available: true,
+    latestVersion: '2.0.0',
+    lastCheckedAt: '2026-01-01T00:00:00Z'
+  }));
+  const service = createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '1.0.0' }),
+    repo: 'o/r',
+    updateRoot,
+    port: 3000,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+  });
+  const status = service.getStatusPayload();
+  assert.equal(status.state, 'available');
+  assert.equal(status.error, null);
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+test('updateService: proces aktualizatora startuje, ale pada natychmiast (bez zdarzenia "error") - tez jest wykrywane', async () => {
+  const { EventEmitter } = require('events');
+  const bytes = crypto.randomBytes(2000);
+  const hash = sha256Hex(bytes);
+  const release = buildFakeRelease('5.0.0', bytes);
+  const rootDir = tempDir('scz-svc-root-exit-');
+  fs.mkdirSync(path.join(rootDir, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'scripts', 'run-update.ps1'), '# test');
+
+  let fakeChild;
+  // makeTestService nie pozwala podmienic spawnUpdaterProcess na fake
+  // EventEmitter (zwraca zawsze null) - budujemy wiec usluge bezposrednio
+  // przez createUpdateService, zeby przetestowac listener 'exit'.
+  const updateRoot2 = tempDir('scz-svc-root-exit2-');
+  const service2 = createUpdateService({
+    rootDir,
+    getInstalledVersion: () => ({ version: '1.0.0' }),
+    repo: 'o/r',
+    updateRoot: updateRoot2,
+    port: 3000,
+    log: () => {},
+    deps: {
+      fetchLatestRelease: async () => release,
+      downloadText: async () => `${hash}  ${release.installerAsset.name}`,
+      parseSha256File: (text) => text.split(/\s+/)[0],
+      downloadToPartialFile: async (url, dest, opts) => {
+        opts.onProgress({ downloadedBytes: bytes.length, totalBytes: bytes.length });
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(`${dest}.partial`, bytes);
+        return { bytes: bytes.length, sha256: hash, partialPath: `${dest}.partial` };
+      },
+      spawnUpdaterProcess: () => {
+        fakeChild = new EventEmitter();
+        // Symulacja: proces wystartowal, ale zaraz potem sam pada (np. run-update.ps1
+        // zostal uszkodzony przy kopiowaniu) - bez zdarzenia 'error', tylko 'exit'
+        // z niezerowym kodem, zanim run-update.ps1 zdazylby zabic ten proces.
+        setImmediate(() => fakeChild.emit('exit', 1, null));
+        return fakeChild;
+      }
+    }
+  });
+
+  await service2.checkForUpdate();
+  const install = service2.startInstall();
+  await install.flowPromise;
+  await new Promise(r => setImmediate(r)); // pozwol 'exit' (setImmediate) sie rozliczyc
+
+  const status = service2.getStatusPayload();
+  assert.equal(status.state, 'error');
+  assert.match(status.error, /kodem 1/);
+  fs.rmSync(rootDir, { recursive: true, force: true });
+  fs.rmSync(updateRoot2, { recursive: true, force: true });
+});
+
 test('cleanupUpdatesDir: zachowuje najwyzej 2 najnowsze wersje i usuwa pliki .partial', () => {
   const dir = tempDir('scz-cleanup-');
   try {
