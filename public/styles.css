@@ -64,3 +64,5 @@
 /* --- Aktualizacje (public/update-ui.js) --- */
 .hidden { display: none !important; }
 #updateAvailableBtn .icon { width: 16px; height: 16px; }
+#checkUpdateBtn.is-checking .icon { animation: scz-spin .8s linear infinite; }
+@keyframes scz-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

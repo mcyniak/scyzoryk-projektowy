@@ -11,6 +11,7 @@
 
   const btn = document.getElementById('updateAvailableBtn');
   const btnLabel = document.getElementById('updateAvailableBtnLabel');
+  const checkBtn = document.getElementById('checkUpdateBtn');
   const modal = document.getElementById('updateModal');
   if (!btn || !modal) return;
 
@@ -120,6 +121,33 @@
     hide(errorBox);
     openModal();
   });
+
+  // Reczne "sprawdz teraz" - bez tego trzeba czekac do 6h (albo restartu
+  // aplikacji) na kolejne automatyczne sprawdzenie. Sam check jest szybki
+  // (jedno zapytanie do GitHub API), wiec po kliknieciu po prostu krotko
+  // odpytujemy status, az zauwazymy ze lastCheckedAt sie zmienil.
+  if (checkBtn) {
+    checkBtn.addEventListener('click', async () => {
+      if (checkBtn.disabled) return;
+      checkBtn.disabled = true;
+      checkBtn.classList.add('is-checking');
+      const previousCheckedAt = lastStatus ? lastStatus.lastCheckedAt : null;
+      try {
+        await fetch('/api/update/check', { method: 'POST', headers: HEADERS });
+        for (let i = 0; i < 10; i++) {
+          await sleep(400);
+          const status = await refreshFromStatus();
+          if (status && status.lastCheckedAt !== previousCheckedAt) break;
+        }
+      } catch (_) {
+        // Brak internetu itp. - stan po prostu zostaje jak byl, bez alarmowania.
+      } finally {
+        checkBtn.disabled = false;
+        checkBtn.classList.remove('is-checking');
+      }
+    });
+  }
+
   closeBtn.addEventListener('click', closeModal);
   laterBtn.addEventListener('click', closeModal);
   modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
