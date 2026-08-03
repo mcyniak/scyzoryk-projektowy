@@ -69,6 +69,18 @@ jobs:
         shell: pwsh
         run: npm run check
 
+      - name: Zainstaluj zaleznosci wszystkich aplikacji (wymagane przez testy jednostkowe)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Niektore istniejace testy (np. test/group3-ocr.test.js,
+          # test/group4-ecodan.test.js) require() bezposrednio wlasny
+          # node_modules danej aplikacji (np. pdf-lib z apps/ocr-audytow) -
+          # bez tego kroku failowaly na swiezym checkoucie z MODULE_NOT_FOUND,
+          # mimo ze kod byl poprawny (zlapane realnie w tym workflow).
+          npm run install-all
+          if ($LASTEXITCODE -ne 0) { throw 'Instalacja zaleznosci aplikacji nie powiodla sie.' }
+
       - name: Uruchom wszystkie istniejace testy jednostkowe (test:groupN)
         shell: pwsh
         run: |
