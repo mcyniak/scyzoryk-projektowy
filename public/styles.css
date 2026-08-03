@@ -60,3 +60,7 @@
 .tool-category.is-empty-by-search { display: none; }
 .tool-search-empty { margin-top: var(--space-6); }
 .tool-search-empty:not(.is-visible) { display: none; }
+
+/* --- Aktualizacje (public/update-ui.js) --- */
+.hidden { display: none !important; }
+#updateAvailableBtn .icon { width: 16px; height: 16px; }

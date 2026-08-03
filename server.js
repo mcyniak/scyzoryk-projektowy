@@ -9,6 +9,9 @@ const { recordChildFailure } = require('./lib/childRestartPolicy');
 const { getDataRoot, getAppDataDir } = require('./lib/appPaths');
 const { migrateLegacyDataIfNeeded } = require('./lib/appDataMigration');
 const { hasDependencies } = require('./lib/dependencyCheck');
+const { getInstalledVersion } = require('./lib/updateBuildInfo');
+const { migrateOcrConfigIfNeeded } = require('./lib/ocrConfigMigration');
+const { createUpdateService } = require('./lib/updateService');
 
 const ROOT = __dirname;
 const PANEL_DATA_ROOT = getAppDataDir('panel');
@@ -27,11 +30,71 @@ if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
   migrateLegacyDataIfNeeded([{ slug: 'panel', dir: ROOT }]);
 }
 const diagnostics = setupProcessDiagnostics('panel-glowny', PANEL_DATA_ROOT);
+// Migracja wbudowanej konfiguracji OCR (tylko wewnetrzne buildy z sekretem)
+// do trwalego profilu uzytkownika - patrz lib/ocrConfigMigration.js. Musi
+// zajsc PRZED tym, jak publiczne (bez sekretow) aktualizacje zaczna
+// nadpisywac folder programu. Idempotentna i bezpieczna do wywolania przy
+// kazdym starcie; awaria migracji nie moze zatrzymac calego panelu.
+if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
+  try {
+    const ocrMigration = migrateOcrConfigIfNeeded(ROOT, { log: diagnostics.log });
+    if (ocrMigration.migrated) console.log('Konfiguracja OCR przeniesiona do profilu uzytkownika.');
+  } catch (err) {
+    diagnostics.log('warn', 'ocr-config-migration-failed', { message: err?.message || String(err) });
+  }
+}
 const CHILDREN_LOG_FILE = path.join(PANEL_DATA_ROOT, 'logs', 'children.jsonl');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const SHARED_DIR = path.join(ROOT, 'shared-styles');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
+
+// --- Aktualizacje przez GitHub Releases (lib/updateService.js) ---
+// Domyslnie WLACZONE, ALE: jesli SCYZORYK_UPDATE_ENABLED nie jest ustawione
+// wprost, dziedziczymy wylaczenie z SCYZORYK_SKIP_CHILD_START (flaga uzywana
+// przez istniejace testy tras panelu, patrz test/group1-supervisor.test.js) -
+// bez tego kazdy test spawnujacy server.js zaczalby po 3s wykonywac
+// prawdziwe zapytanie do api.github.com, co jest niepotrzebnym zewnetrznym
+// zaleznieniem i zrodlem flaki testow w piaskownicy bez internetu. Testy
+// dedykowane samemu aktualizatorowi wlaczaja to jawnie (SCYZORYK_UPDATE_ENABLED=1)
+// razem z SCYZORYK_UPDATE_API_BASE_URL wskazujacym na lokalny mock.
+const UPDATE_ENABLED = process.env.SCYZORYK_UPDATE_ENABLED != null
+  ? process.env.SCYZORYK_UPDATE_ENABLED !== '0'
+  : process.env.SCYZORYK_SKIP_CHILD_START !== '1';
+const UPDATE_REPOSITORY = process.env.SCYZORYK_UPDATE_REPOSITORY || 'mcyniak/scyzoryk-projektowy';
+const UPDATE_CHECK_INTERVAL_MS = Number(process.env.SCYZORYK_UPDATE_CHECK_INTERVAL_MS || 6 * 60 * 60 * 1000);
+// SCYZORYK_UPDATE_API_BASE_URL / SCYZORYK_UPDATE_DRY_RUN / SCYZORYK_UPDATE_ROOT
+// sa czytane WYLACZNIE ze zmiennych srodowiskowych procesu (nigdy z requestu
+// przegladarki) - sluza testom i lokalnemu uruchamianiu, nie sa i nie moga
+// byc wystawione przez zaden endpoint HTTP.
+function resolveUpdateRoot() {
+  if (process.env.SCYZORYK_UPDATE_ROOT) return path.resolve(process.env.SCYZORYK_UPDATE_ROOT);
+  const localData = process.env.LOCALAPPDATA || process.env.APPDATA;
+  if (!localData) throw new Error('Brak SCYZORYK_UPDATE_ROOT, LOCALAPPDATA i APPDATA - nie mozna wyznaczyc katalogu aktualizacji.');
+  return path.join(localData, 'ScyzorykProjektowy', 'Updates');
+}
+const UPDATE_DRY_RUN = process.env.SCYZORYK_UPDATE_DRY_RUN === '1';
+const updateServiceDeps = UPDATE_DRY_RUN ? {
+  // Tryb wylacznie do testow/lokalnego sprawdzania: prawdziwe sprawdzenie
+  // GitHub, prawdziwe pobieranie i weryfikacja SHA-256 przechodza normalnie,
+  // ale FAKTYCZNE odpalenie instalatora jest tylko zalogowane, nigdy nie
+  // uruchamiamy prawdziwego PowerShella/Inno Setup w tym trybie.
+  spawnUpdaterProcess(invocation) {
+    diagnostics.log('info', 'update-dry-run-spawn', { exe: invocation.exe, args: invocation.args });
+    return null;
+  }
+} : {};
+const updateService = createUpdateService({
+  rootDir: ROOT,
+  getInstalledVersion: () => getInstalledVersion(ROOT),
+  repo: UPDATE_REPOSITORY,
+  updateRoot: resolveUpdateRoot(),
+  enabled: UPDATE_ENABLED,
+  apiBaseUrl: process.env.SCYZORYK_UPDATE_API_BASE_URL || undefined,
+  port: PORT,
+  log: diagnostics.log,
+  deps: updateServiceDeps
+});
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -202,6 +265,56 @@ function send(res, statusCode, body, contentType = 'text/plain; charset=utf-8') 
   res.end(body);
 }
 
+function sendJson(res, statusCode, payload) {
+  send(res, statusCode, JSON.stringify(payload), 'application/json; charset=utf-8');
+}
+
+// Panel (w odroznieniu od aplikacji-dzieci oparych o Express) nie mial do tej
+// pory ZADNEGO endpointu POST, wiec brakuje mu odbioru body zadania. Trasy
+// aktualizacji nie potrzebuja zadnych danych od klienta (patrz komentarz przy
+// isTrustedMutation) - ta funkcja tylko bezpiecznie "wyciska" body z limitem
+// rozmiaru, zeby nigdy nie zawiesic polaczenia i nie przyjac gigantycznego
+// zadania, nawet jesli jego trec i tak jest ignorowana.
+function drainRequestBody(req, maxBytes = 65536) {
+  return new Promise((resolve, reject) => {
+    let total = 0;
+    req.on('data', chunk => {
+      total += chunk.length;
+      if (total > maxBytes) { req.destroy(); reject(new Error('Zadanie jest za duze.')); }
+    });
+    req.on('end', resolve);
+    req.on('error', reject);
+  });
+}
+
+// Dozwolone originy dla mutujacych zadan panelu (aktualizacje) - lokalny
+// adres IP/localhost oraz skonfigurowana przyjazna nazwa hosta
+// (scyzoryk.projektowy, patrz scripts/install-autostart.ps1), zawsze na
+// porcie tego panelu. Brak naglowka Origin jest dopuszczony: przegladarka
+// wysylajaca POST z WLASNEJ strony panelu i tak nie moze dolozyc naglowka
+// X-Scyzoryk-Request bez wywolania CORS preflightu, ktorego ten serwer nigdy
+// nie potwierdza (brak Access-Control-Allow-*) - to jest glowna, samodzielnie
+// wystarczajaca ochrona; sprawdzenie Origin to dodatkowa warstwa.
+function isTrustedOrigin(origin) {
+  if (!origin) return true;
+  let host;
+  try { host = new URL(origin).host.toLowerCase(); } catch (_) { return false; }
+  const allowed = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`, `scyzoryk.projektowy:${PORT}`]);
+  return allowed.has(host);
+}
+
+function requireTrustedMutation(req, res) {
+  if (req.headers['x-scyzoryk-request'] !== '1') {
+    sendJson(res, 403, { ok: false, message: 'Brak zabezpieczonego naglowka zadania. Odswiez strone i sprobuj ponownie.' });
+    return false;
+  }
+  if (!isTrustedOrigin(req.headers.origin)) {
+    sendJson(res, 403, { ok: false, message: 'Zadanie z niedozwolonego adresu.' });
+    return false;
+  }
+  return true;
+}
+
 function readStaticFile(filePath, res, baseDir = PUBLIC_DIR) {
   const safePath = path.normalize(filePath);
   const relative = path.relative(baseDir, safePath);
@@ -287,7 +400,7 @@ async function getAppsStatus(req) {
       }
     };
   }));
-  return { ok: true, mainPort: PORT, host: HOST, uptimeSec: Math.round(process.uptime()), memory: process.memoryUsage(), storage: dirSizeSafe(getDataRoot()), apps: statuses };
+  return { ok: true, mainPort: PORT, host: HOST, version: getInstalledVersion(ROOT).version, uptimeSec: Math.round(process.uptime()), memory: process.memoryUsage(), storage: dirSizeSafe(getDataRoot()), apps: statuses };
 }
 
 
@@ -305,6 +418,31 @@ const server = http.createServer(async (req, res) => {
   const decodedPath = safeDecodePathname(url.pathname);
   if (decodedPath === null) return send(res, 400, 'Bad Request');
   if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(req), null, 2), 'application/json; charset=utf-8');
+
+  if (decodedPath === '/api/update/status') {
+    if (req.method !== 'GET') return sendJson(res, 405, { ok: false, message: 'Metoda niedozwolona.' });
+    // Nigdy nie odpytuje GitHuba - zwraca tylko ostatni znany, juz policzony
+    // stan (patrz lib/updateService.js getStatusPayload).
+    return sendJson(res, 200, updateService.getStatusPayload());
+  }
+  if (decodedPath === '/api/update/check') {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, message: 'Metoda niedozwolona.' });
+    try { await drainRequestBody(req); } catch (_) { return sendJson(res, 400, { ok: false, message: 'Nieprawidlowe zadanie.' }); }
+    if (!requireTrustedMutation(req, res)) return;
+    updateService.checkForUpdate({ manual: true }).catch(() => {});
+    return sendJson(res, 202, { ok: true, message: 'Sprawdzanie aktualizacji rozpoczete.' });
+  }
+  if (decodedPath === '/api/update/install') {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, message: 'Metoda niedozwolona.' });
+    try { await drainRequestBody(req); } catch (_) { return sendJson(res, 400, { ok: false, message: 'Nieprawidlowe zadanie.' }); }
+    if (!requireTrustedMutation(req, res)) return;
+    // Wszystkie dane (ktora wersja, jaki URL) pochodza WYLACZNIE ze
+    // zweryfikowanego stanu backendu (lib/updateService.js) - przegladarka
+    // nie przekazuje tu ani wersji, ani adresu, ani sciezki.
+    const result = updateService.startInstall();
+    return sendJson(res, result.statusCode, { ok: result.started, message: result.message });
+  }
+
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
   if (decodedPath.startsWith('/shared/')) return readStaticFile(path.join(SHARED_DIR, decodedPath.slice('/shared/'.length)), res, SHARED_DIR);
   readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res);
@@ -326,4 +464,9 @@ if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
 if (process.env.SCYZORYK_SKIP_CHILD_START !== '1') {
   for (const app of apps) startChild(app);
 }
+// Pierwsze sprawdzenie aktualizacji leci asynchronicznie (3s po starcie, patrz
+// scheduleAutoChecks) i NIE blokuje startu panelu - awaria GitHuba/brak
+// internetu nie moze zatrzymac Scyzoryka.
+updateService.scheduleAutoChecks(UPDATE_CHECK_INTERVAL_MS);
+
 server.listen(PORT, HOST, () => { console.log('Scyzoryk Projektowy dziala tylko lokalnie:'); console.log(`http://${HOST}:${PORT}`); for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`); });

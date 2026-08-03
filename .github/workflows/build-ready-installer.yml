@@ -33,6 +33,25 @@ jobs:
       - name: Pobierz kod repozytorium
         uses: actions/checkout@v4
 
+      - name: Sprawdz, ze repozytorium jest prywatne (wymagane przed uzyciem sekretu OCR)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Ten workflow dolacza do instalatora prawdziwy klucz konta serwisowego
+          # Google Cloud (sekret OCR_DOCAI_CREDENTIALS_B64). Gotowy EXE trafia do
+          # GitHub Actions Artifact widocznego kazdemu z dostepem do repo/Actions -
+          # jesli repozytorium kiedykolwiek stanie sie publiczne, TEN workflow
+          # musi przestac dzialac PRZED dotknieciem sekretu, zamiast po cichu
+          # opublikowac instalator z kluczem do konta Google Cloud.
+          $repo = gh api "repos/${{ github.repository }}" --jq '.private' | Out-String
+          $isPrivate = $repo.Trim()
+          if ($isPrivate -ne 'true') {
+            throw "Repozytorium ${{ github.repository }} nie jest prywatne (private=$isPrivate). Ten workflow dolacza sekret OCR do instalatora i moze dzialac WYLACZNIE na prywatnym repozytorium - zatrzymuje sie przed uzyciem sekretu."
+          }
+          Write-Host 'Repozytorium jest prywatne - kontynuuje.'
+
       - name: Sprawdz sekret OCR
         shell: pwsh
         env:

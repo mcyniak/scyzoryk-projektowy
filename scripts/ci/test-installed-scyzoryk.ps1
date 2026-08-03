@@ -230,6 +230,25 @@ Run-Test 'Health-check wszystkich narzedzi i stan OCR' {
   Assert-True ([bool]$ocr.ocrConfigured -eq [bool]$ExpectBundledOcr) "Nieprawidlowy stan ocrConfigured. Oczekiwano: $([bool]$ExpectBundledOcr)."
 }
 
+Run-Test 'build-info.json obecny i zgodny z wersja z /api/health' {
+  $buildInfoPath = Join-Path $InstallDir 'build-info.json'
+  Assert-True (Test-Path $buildInfoPath) 'Brak build-info.json w zainstalowanej wersji (patrz scripts\build-installer.ps1).'
+  $buildInfo = Get-Content $buildInfoPath -Raw | ConvertFrom-Json
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$buildInfo.version)) 'build-info.json nie ma pola "version".'
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$buildInfo.commit)) 'build-info.json nie ma pola "commit".'
+  Assert-True (-not [string]::IsNullOrWhiteSpace([string]$buildInfo.builtAt)) 'build-info.json nie ma pola "builtAt".'
+
+  $health = Invoke-RestMethod 'http://127.0.0.1:3000/api/health' -TimeoutSec 10
+  Assert-True ($health.version -eq $buildInfo.version) "Wersja dzialajacej aplikacji ($($health.version)) nie zgadza sie z build-info.json ($($buildInfo.version))."
+}
+
+Run-Test 'Endpoint /api/update/status odpowiada z poprawnym kontraktem' {
+  $status = Invoke-RestMethod 'http://127.0.0.1:3000/api/update/status' -TimeoutSec 10
+  foreach ($field in @('enabled', 'state', 'available', 'currentVersion')) {
+    Assert-True ($status.PSObject.Properties.Name -contains $field) "Odpowiedz /api/update/status nie ma pola `"$field`"."
+  }
+}
+
 if ($TestLiveOcr) {
   Run-Test 'Prawdziwe polaczenie z Google Document AI bez konfiguracji po instalacji' {
     Assert-True ([bool]$ExpectBundledOcr) 'Test prawdziwego OCR wymaga -ExpectBundledOcr.'
@@ -313,6 +332,35 @@ Run-Test 'Drukarka dokumentow' {
   $queue = Invoke-RestMethod 'http://127.0.0.1:3001/api/queue' -TimeoutSec 10
   Assert-True ($queue.queue -and $queue.queue.Count -ge 1) 'Kolejka Drukarki jest pusta.'
   Invoke-RestMethod 'http://127.0.0.1:3001/api/clear' -Method Post -Headers @{ 'X-Scyzoryk-Request'='1' } | Out-Null
+}
+
+Run-Test 'Tryb /SCYZORYKUPDATE: cicha reinstalacja bez ponownej konfiguracji autostartu i bez drugiego wpisu aplikacji' {
+  Stop-Scyzoryk
+
+  $uninstallKeysBefore = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+    Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Scyzoryk Projektowy' })
+  Assert-True ($uninstallKeysBefore.Count -eq 1) "Oczekiwano dokladnie 1 wpisu odinstalowywania PRZED cicha aktualizacja, jest $($uninstallKeysBefore.Count)."
+
+  $autostartTaskName = 'Scyzoryk Projektowy - autostart'
+  if (Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $autostartTaskName -Confirm:$false
+  }
+
+  $log = Join-Path $LogsDir 'install\update-mode.log'
+  # /MERGETASKS=autostart PROBUJE zaznaczyc zadanie autostartu mimo trybu
+  # cichego - to jest kluczowy test: /SCYZORYKUPDATE (Check: not IsScyzorykUpdate
+  # w installer\scyzoryk.iss [Tasks]) musi WYGRAC i zablokowac to zadanie,
+  # zeby aktualizacja nigdy nie wywolala UAC/edycji pliku hosts.
+  $args = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/SCYZORYKUPDATE', '/MERGETASKS=autostart', "/DIR=`"$InstallDir`"", "/LOG=`"$log`"")
+  $proc = Start-Process -FilePath $InstallerPath -ArgumentList $args -Wait -PassThru
+  Assert-True ($proc.ExitCode -eq 0) "Cicha aktualizacja (/SCYZORYKUPDATE) zakonczyla sie kodem $($proc.ExitCode)."
+
+  $autostartTask = Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction SilentlyContinue
+  Assert-True ($null -eq $autostartTask) 'Tryb /SCYZORYKUPDATE zarejestrowal zadanie autostartu (UAC/hosts), mimo ze mial to pominac.'
+
+  $uninstallKeysAfter = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
+    Get-ItemProperty -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Scyzoryk Projektowy' })
+  Assert-True ($uninstallKeysAfter.Count -eq 1) "Cicha aktualizacja utworzyla drugi wpis aplikacji (jest $($uninstallKeysAfter.Count) wpisow) - powinna byc dokladnie 1."
 }
 
 Run-Test 'Ponowna instalacja' {

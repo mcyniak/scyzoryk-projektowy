@@ -20,6 +20,10 @@
         </a>
       </div>
       <div class="app-header-right">
+        <button type="button" class="btn btn-primary btn-sm hidden" id="updateAvailableBtn" aria-haspopup="dialog" aria-controls="updateModal">
+          <svg class="icon"><use href="/shared/icons.svg#i-download"/></svg>
+          <span id="updateAvailableBtnLabel">Dostępna aktualizacja</span>
+        </button>
         <a class="btn btn-ghost btn-sm" id="helpTopLink" href="/instrukcja.html">
           <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
           Pomoc
@@ -191,6 +195,47 @@
     </div>
   </main>
 
+  <div class="modal-overlay" id="updateModal" role="dialog" aria-modal="true" aria-labelledby="updateModalTitle" aria-hidden="true">
+    <div class="modal-box" role="document">
+      <div class="modal-head">
+        <strong id="updateModalTitle">Dostępna aktualizacja</strong>
+        <button type="button" class="btn btn-icon btn-secondary" id="updateModalClose" aria-label="Zamknij">
+          <svg class="icon"><use href="/shared/icons.svg#i-x"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="hint" style="margin-bottom: var(--space-4);">
+          Aktualna wersja: <strong id="updateCurrentVersion">-</strong><br>
+          Nowa wersja: <strong id="updateLatestVersion">-</strong><br>
+          Opublikowano: <span id="updatePublishedAt">-</span>
+        </p>
+        <div class="option-field">
+          <span class="option-label">Opis zmian</span>
+          <p id="updateReleaseNotes" style="white-space: pre-wrap; margin: 0; color: var(--text-secondary); font-size: var(--text-sm);"></p>
+        </div>
+        <div id="updateProgressBox" class="hidden" style="margin-top: var(--space-4);" aria-live="polite">
+          <div class="progress-meta">
+            <span id="updateProgressMessage">Przygotowywanie aktualizacji…</span>
+            <strong id="updateProgressPercent"></strong>
+          </div>
+          <div class="progress"><div class="bar" id="updateProgressBarFill"></div></div>
+        </div>
+        <div id="updateErrorBox" class="alert hidden" style="margin-top: var(--space-4);" role="alert">
+          <svg class="icon"><use href="/shared/icons.svg#i-alert-circle"/></svg>
+          <div class="alert-body">
+            <div class="alert-title">Nie udało się zainstalować aktualizacji.</div>
+            <div id="updateErrorMessage"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" id="updateLaterBtn">Później</button>
+        <button type="button" class="btn btn-primary" id="updateInstallBtn">Zaktualizuj i uruchom ponownie</button>
+      </div>
+    </div>
+  </div>
+
   <script src="inline-1.js"></script>
+  <script src="update-ui.js"></script>
 </body>
 </html>

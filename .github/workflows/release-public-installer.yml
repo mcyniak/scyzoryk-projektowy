@@ -1,0 +1,182 @@
+name: Opublikuj publiczny instalator (GitHub Release)
+
+# Publikuje PUBLICZNY instalator (bez zadnych sekretow OCR) jako GitHub
+# Release, ale tylko po przejsciu wszystkich testow. To jest zrodlo, z
+# ktorego korzysta wbudowany mechanizm aktualizacji Scyzoryka
+# (lib/updateService.js) - GET /repos/{repo}/releases/latest.
+#
+# Wyzwalane tagiem w formacie SemVer "vMAJOR.MINOR.PATCH" (patrz
+# lib/updateVersion.js dla dokladnego formatu porownywanego przez sama
+# aplikacje). Recznie (workflow_dispatch) rowniez mozliwe - walidacja wersji
+# jest IDENTYCZNA w obu przypadkach, nie da sie jej obejsc.
+#
+# Ten workflow NIGDY nie dostaje sekretu OCR_DOCAI_CREDENTIALS_B64 - publiczny
+# instalator jest budowany tak jak w build-internal-installer.yml (bez OCR).
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag do opublikowania (np. v1.2.0) - musi juz istniec w repo.'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-publiczny-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Zbuduj, przetestuj i opublikuj publiczny instalator
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Pobierz kod repozytorium (dokladnie ten tag)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Ustal i zwaliduj wersje (tag Git vs package.json)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tagRef = '${{ github.event.inputs.tag }}'
+          if ([string]::IsNullOrWhiteSpace($tagRef)) { $tagRef = '${{ github.ref_name }}' }
+          if ($tagRef -notmatch '^v(\d+\.\d+\.\d+)$') {
+            throw "Tag '$tagRef' nie ma formatu SemVer 'vMAJOR.MINOR.PATCH' (np. v1.2.0)."
+          }
+          $tagVersion = $Matches[1]
+          $packageVersion = (Get-Content -Raw 'package.json' | ConvertFrom-Json).version
+          if ($tagVersion -ne $packageVersion) {
+            throw "Tag Git ($tagRef -> wersja $tagVersion) nie zgadza sie z package.json (wersja $packageVersion). Publikacja przerwana PRZED zbudowaniem instalatora - popraw jedno albo drugie i utworz tag ponownie."
+          }
+          Write-Host "Wersja zgodna: tag=$tagRef, package.json=$packageVersion"
+          "RELEASE_VERSION=$tagVersion" >> $env:GITHUB_ENV
+          "RELEASE_TAG=$tagRef" >> $env:GITHUB_ENV
+
+      - name: Przygotuj Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Sprawdz caly projekt (node --check + parser PowerShell)
+        shell: pwsh
+        run: npm run check
+
+      - name: Uruchom wszystkie istniejace testy jednostkowe (test:groupN)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pkg = Get-Content -Raw 'package.json' | ConvertFrom-Json
+          $groupScripts = @($pkg.scripts.PSObject.Properties.Name | Where-Object { $_ -match '^test:group\d+$' } | Sort-Object)
+          foreach ($scriptName in $groupScripts) {
+            Write-Host "=== npm run $scriptName ==="
+            npm run $scriptName
+            if ($LASTEXITCODE -ne 0) { throw "$scriptName nie powiodl sie (kod $LASTEXITCODE)." }
+          }
+
+      - name: Uruchom testy regresyjne
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run test:regressions
+          if ($LASTEXITCODE -ne 0) { throw 'Testy regresyjne nie powiodly sie.' }
+
+      - name: Upewnij sie, ze Inno Setup jest dostepne
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $found) { choco install innosetup --no-progress -y }
+
+      - name: Zbuduj publiczny instalator (bez OCR, wersja z package.json)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm run build-installer
+          $installer = Get-ChildItem release\*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'Nie powstal instalator EXE.' }
+          $expectedName = "ScyzorykProjektowy-Setup-$env:RELEASE_VERSION.exe"
+          if ($installer.Name -ne $expectedName) {
+            throw "Nazwa instalatora ($($installer.Name)) nie zgadza sie z oczekiwana ($expectedName) - AppVersion Inno Setup rozjechal sie z wersja wydania."
+          }
+          "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
+          "INSTALLER_NAME=$($installer.Name)" >> $env:GITHUB_ENV
+
+      - name: Sprawdz, ze publiczny instalator NIE zawiera zadnej konfiguracji OCR
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Sprawdzenie Sekretow'
+          $proc = Start-Process -FilePath $env:INSTALLER_PATH -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart', "/DIR=`"$installDir`""
+          ) -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Instalacja testowa (sprawdzenie sekretow) zakonczyla sie kodem $($proc.ExitCode)." }
+
+          $forbidden = @(Get-ChildItem -Path $installDir -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq 'service-account.json' -or $_.Name -eq 'document-ai.json' })
+
+          if (Test-Path (Join-Path $installDir 'scripts\stop-scyzoryk.ps1')) {
+            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installDir 'scripts\stop-scyzoryk.ps1')
+          }
+          if (Test-Path (Join-Path $installDir 'unins000.exe')) {
+            Start-Process -FilePath (Join-Path $installDir 'unins000.exe') -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru | Out-Null
+          }
+
+          if ($forbidden.Count -gt 0) {
+            throw "Publiczny instalator zawiera zabronione pliki sekretne: $($forbidden.FullName -join ', ')"
+          }
+          Write-Host 'Potwierdzono: publiczny instalator nie zawiera zadnej konfiguracji OCR.'
+
+      - name: Zainstaluj i w pelni przetestuj publiczny instalator na swiezym Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Release Test'
+          $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-release-logs'
+          New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+          & '.\scripts\ci\test-installed-scyzoryk.ps1' `
+            -InstallerPath $env:INSTALLER_PATH `
+            -InstallDir $installDir `
+            -LogsDir $logsDir
+
+      - name: Przeslij raport testu instalatora
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raport-release-${{ env.RELEASE_VERSION }}
+          path: ${{ runner.temp }}/scyzoryk-release-logs
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Oblicz SHA-256 i utworz plik .sha256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $env:INSTALLER_PATH).Hash
+          $shaLine = "$hash  $env:INSTALLER_NAME"
+          $shaPath = "$($env:INSTALLER_PATH).sha256"
+          [IO.File]::WriteAllText($shaPath, "$shaLine`n", [Text.ASCIIEncoding]::new())
+          Write-Host $shaLine
+          "SHA_PATH=$shaPath" >> $env:GITHUB_ENV
+
+      - name: Utworz GitHub Release i dodaj instalator + sume kontrolna
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release create "$env:RELEASE_TAG" "$env:INSTALLER_PATH" "$env:SHA_PATH" `
+            --title "Scyzoryk $env:RELEASE_VERSION" `
+            --generate-notes
+          if ($LASTEXITCODE -ne 0) { throw "gh release create zakonczylo sie kodem $LASTEXITCODE." }

@@ -52,14 +52,18 @@ Name: "polish"; MessagesFile: "compiler:Languages\Polish.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Utworz ikone na pulpicie"; GroupDescription: "Dodatkowe ikony:"
+; Check: not IsScyzorykUpdate (patrz [Code] nizej) - podczas cichej aktualizacji
+; (/SCYZORYKUPDATE) te zadania sa niedostepne do wyboru, wiec zwiazane z nimi
+; kroki [Icons]/[Run] (skrot na pulpicie, ponowna rejestracja autostartu z UAC)
+; sie NIE wykonuja. Zwykla pierwsza instalacja dziala bez zmian.
+Name: "desktopicon"; Description: "Utworz ikone na pulpicie"; GroupDescription: "Dodatkowe ikony:"; Check: not IsScyzorykUpdate
 ; Zaznaczone domyslnie - to docelowy, zalecany sposob uruchamiania Scyzoryka (patrz
 ; scyzoryk_final_deployment_plan w pamieci projektu: Zaplanowane zadanie Windows przy
 ; logowaniu KONKRETNEGO uzytkownika, NIE usluga LocalSystem - zachowuje dostep do
 ; zmapowanego dysku i domyslnej drukarki przypietych do sesji uzytkownika). Wymaga
 ; jednorazowego podniesienia uprawnien (UAC) WYLACZNIE do wpisu w pliku hosts - sama
 ; instalacja aplikacji pozostaje bez-adminowa niezaleznie od wyboru tego zadania.
-Name: "autostart"; Description: "Uruchamiaj Scyzoryka automatycznie przy logowaniu (zalecane, wymaga jednorazowego okna UAC)"; GroupDescription: "Uruchamianie:"
+Name: "autostart"; Description: "Uruchamiaj Scyzoryka automatycznie przy logowaniu (zalecane, wymaga jednorazowego okna UAC)"; GroupDescription: "Uruchamianie:"; Check: not IsScyzorykUpdate
 
 [Files]
 Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
@@ -81,8 +85,11 @@ Filename: "{app}\instaluj-zaleznosci.cmd"; WorkingDir: "{app}"; StatusMsg: "Inst
 ; skryptu (patrz jego komentarz) gwarantuje ze faktycznie skonczy prace zanim
 ; instalator pokaze "gotowe". Pomijany calkowicie jesli uzytkownik odznaczyl zadanie
 ; (Tasks: autostart) - w tym rowniez przy /VERYSILENT bez jawnego /MERGETASKS=autostart.
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-autostart.ps1"""; WorkingDir: "{app}"; StatusMsg: "Rejestrowanie autostartu przy logowaniu..."; Tasks: autostart; Flags: runhidden waituntilterminated
-Filename: "{app}\Uruchom-Scyzoryk.cmd"; Description: "Uruchom Scyzoryka teraz"; Flags: postinstall skipifsilent nowait
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-autostart.ps1"""; WorkingDir: "{app}"; StatusMsg: "Rejestrowanie autostartu przy logowaniu..."; Tasks: autostart; Check: not IsScyzorykUpdate; Flags: runhidden waituntilterminated
+; Check: not IsScyzorykUpdate ponizej to dodatkowa (druga) warstwa obok
+; skipifsilent - podczas /SCYZORYKUPDATE restart aplikacji robi WYLACZNIE
+; scripts\run-update.ps1 (po zakonczeniu instalatora), nigdy ten krok.
+Filename: "{app}\Uruchom-Scyzoryk.cmd"; Description: "Uruchom Scyzoryka teraz"; Check: not IsScyzorykUpdate; Flags: postinstall skipifsilent nowait
 
 [UninstallRun]
 ; Wyrejestrowuje zadanie w Harmonogramie i wpis w hosts, JESLI byly zarejestrowane
@@ -93,6 +100,30 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile
 ; Zatrzymuje TYLKO node.exe nalezacy do tej instalacji (patrz scripts\stop-scyzoryk.ps1),
 ; zeby proces nie blokowal plikow podczas usuwania i zeby nie ubijac cudzych node.exe.
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-scyzoryk.ps1"""; Flags: runhidden; RunOnceId: "StopScyzoryk"
+
+[Code]
+// Rozpoznaje ciche wywolanie z run-update.ps1 (patrz lib/updateService.js
+// buildUpdaterInvocation): "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+// /SCYZORYKUPDATE /DIR=...". W tym trybie: bez kreatora (juz zapewnia
+// /VERYSILENT), bez ponownej rejestracji autostartu (UAC + plik hosts), bez
+// ponownego pytania o skrot na pulpicie, bez postinstall-autorun aplikacji -
+// restart robi wylacznie run-update.ps1 PO zakonczeniu tego instalatora.
+// Zwykla (pierwsza) instalacja nie przekazuje tego parametru, wiec dziala
+// dokladnie tak jak wczesniej.
+function IsScyzorykUpdate(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(I), '/SCYZORYKUPDATE') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
 
 [UninstallDelete]
 ; [Files] wie tylko o plikach ktore SAM instalator skopiowal - node_modules kazdej

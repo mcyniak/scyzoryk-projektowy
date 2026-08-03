@@ -121,10 +121,18 @@ if ($dirty) {
   Write-Warning 'W drzewie roboczym sa niescommitowane zmiany - NIE trafia one do instalatora.'
 }
 
+$commitHash = (& git -C $Root rev-parse --short HEAD).Trim()
 if (-not $Version) {
-  $Version = (& git -C $Root rev-parse --short HEAD).Trim()
+  # Domyslnie wersja instalatora = wersja z package.json (SemVer), NIE hash
+  # gita - system aktualizacji (lib/updateVersion.js) porownuje wersje
+  # numerycznie i musi widziec ta sama wartosc, co jest w package.json.
+  # Jawne -Version nadal jest mozliwe (np. do doraznych buildow testowych),
+  # ale domyslny, "produkcyjny" przebieg (uzywany przez workflow publikujacy
+  # wydania) nigdy nie powinien go podawac.
+  $packageJsonPath = Join-Path $Root 'package.json'
+  $Version = (Get-Content -Raw -Path $packageJsonPath | ConvertFrom-Json).version
 }
-Write-Host "Wersja instalatora: $Version"
+Write-Host "Wersja instalatora: $Version (commit $commitHash)"
 
 $stagingDir = Join-Path $env:TEMP ("scyzoryk-installer-staging-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
@@ -145,6 +153,15 @@ $secretFiles = @(Get-ChildItem -Path $stagingDir -Recurse -File -Filter 'service
 if ($secretFiles.Count -gt 0) {
   throw "Eksport repo zawiera zabroniony plik service-account.json: $($secretFiles.FullName -join ', ')"
 }
+
+# --- 1.5) build-info.json - wersja/commit zainstalowanej kopii (patrz lib/updateBuildInfo.js) ---
+$buildInfo = [ordered]@{
+  version = $Version
+  commit  = $commitHash
+  builtAt = (Get-Date).ToUniversalTime().ToString('o')
+}
+[IO.File]::WriteAllText((Join-Path $stagingDir 'build-info.json'), ($buildInfo | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+Write-Host 'Zapisano build-info.json.'
 
 # --- 2) Opcjonalna konfiguracja Google Document AI ---
 $ocrIncluded = Add-OcrConfigurationToStaging -StagingDir $stagingDir
