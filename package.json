@@ -1,6 +1,6 @@
 {
   "name": "scyzoryk-projektowy",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "description": "Panel startowy dla lokalnych narzedzi Node.js: drukarka, pieczatki PDF i formularze Ecodan.",
   "main": "server.js",
