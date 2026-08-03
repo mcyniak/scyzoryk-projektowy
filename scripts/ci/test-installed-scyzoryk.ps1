@@ -31,7 +31,12 @@ function Run-Test {
   } catch {
     $message = $_.Exception.Message
     $script:Failures.Add("$Name`: $message")
-    Write-Error "$Name`: $message"
+    # -ErrorAction Continue: bez tego, globalne $ErrorActionPreference =
+    # 'Stop' (ustawione na starcie skryptu) zmienia Write-Error w blad
+    # TERMINUJACY, co zabijaloby CALY skrypt na PIERWSZYM nieudanym tescie -
+    # dokladnie wbrew celowi zbierania $script:Failures i podsumowania na
+    # koniec (zlapane realnie: jeden nieudany test ucinal reszte przebiegu).
+    Write-Error "$Name`: $message" -ErrorAction Continue
   }
 }
 
@@ -42,6 +47,30 @@ function Stop-Scyzoryk {
   if (Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false
   }
+
+  # Czekamy, az WSZYSTKIE procesy node.exe tej instalacji (glowny panel +
+  # osmiu jego dzieci - server.js spawnuje po jednym procesie na aplikacje)
+  # faktycznie zakoncza dzialanie, zamiast na slepo spac 2s. Zlapane realnie:
+  # sam sleep nie zawsze wystarczal - Windows Restart Manager przy nastepnej
+  # cichej instalacji potrafil jeszcze zobaczyc "Node.js JavaScript Runtime"
+  # jako trzymajacy pliki i pod /SUPPRESSMSGBOXES automatycznie przerywal
+  # instalacje (Setup.exe kod wyjscia 5) - dokladnie ten problem, przed
+  # ktorym scripts\run-update.ps1 (prawdziwy aktualizator) juz sie chroni
+  # wlasna petla potwierdzajaca zamkniecie procesow.
+  $nodeExe = Join-Path $InstallDir 'node-runtime\node.exe'
+  if (Test-Path $nodeExe) {
+    $nodeExeFull = (Resolve-Path $nodeExe).Path
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+      $remaining = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $nodeExeFull) })
+      if ($remaining.Count -eq 0) { break }
+      Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
+  }
+  # Dodatkowy krotki bufor na zwolnienie uchwytow plikow przez system po
+  # zakonczeniu procesow (TerminateProcess nie gwarantuje natychmiastowego
+  # zwolnienia wszystkich uchwytow), zanim wywolujacy odpali kolejny instalator.
   Start-Sleep -Seconds 2
 }
 
@@ -107,8 +136,12 @@ Run-Test 'Kompletnosc zainstalowanej aplikacji' {
 Run-Test 'Aktualny panel i instrukcja w instalatorze' {
   $indexPath = Join-Path $InstallDir 'public\index.html'
   $instructionPath = Join-Path $InstallDir 'public\instrukcja.html'
-  $html = Get-Content $indexPath -Raw
-  $instruction = Get-Content $instructionPath -Raw
+  # -Encoding UTF8 jest tu obowiazkowe: bez niego Windows PowerShell 5.1
+  # czyta plik bez BOM w systemowej stronie kodowej (nie UTF-8), co lamie
+  # porownanie polskich znakow ("Drukarka dokumentów", "OCR audytów") -
+  # zlapane realnie lokalnie (system nie majacy domyslnie codepage 65001).
+  $html = Get-Content $indexPath -Raw -Encoding UTF8
+  $instruction = Get-Content $instructionPath -Raw -Encoding UTF8
 
   $requiredFragments = @(
     'data-app="drukarka"',
