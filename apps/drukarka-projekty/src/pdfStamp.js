@@ -11,9 +11,12 @@ const { PDFDocument, StandardFonts, rgb, degrees } = require("pdf-lib");
 
 const STAMP_LINES = ["DOKUMENTACJA", "POWYKONAWCZA"];
 const STAMP_COLOR = rgb(0, 0, 0); // czarny - drukarka docelowa jest czarno-biala
-const STAMP_LEFT_MARGIN_PCT = 0; // lewy brzeg boxu stempla - dosuniety do samej bocznej krawedzi kartki
+// Margines w PUNKTACH (nie w %) - dosuniecie "milimetrowe" do samego rogu ma
+// wygladac tak samo niezaleznie od rozmiaru/proporcji strony (A4, rysunek,
+// karta katalogowa itd.), a % marginesu skalowalby sie z rozmiarem strony.
+// 1mm = 2.83465pt.
+const STAMP_MARGIN_PT = 3; // ok. 1mm
 const STAMP_WIDTH_PCT = 20;
-const STAMP_TOP_MARGIN_PCT = 0.5; // dosuniety do samej gornej krawedzi kartki (rog, nie kawalek nizej)
 const STAMP_HEIGHT_PCT = 6;
 const MAX_FONT_SIZE = 9; // maly, nienarzucajacy sie napis - nie ma zasłaniac tresci dokumentu
 
@@ -48,9 +51,8 @@ function drawStampOnPage(page, font) {
   const visual = visualPageSize(page);
   const stampWidth = Math.max(8, visual.width * STAMP_WIDTH_PCT / 100);
   const stampHeight = Math.max(8, visual.height * STAMP_HEIGHT_PCT / 100);
-  const visualBoxX = visual.width * STAMP_LEFT_MARGIN_PCT / 100;
-  const visualTop = visual.height * STAMP_TOP_MARGIN_PCT / 100;
-  const visualBoxY = visual.height - visualTop - stampHeight;
+  const visualBoxX = STAMP_MARGIN_PT;
+  const visualBoxY = visual.height - STAMP_MARGIN_PT - stampHeight;
 
   const fontSize = Math.max(6, Math.min(stampHeight / STAMP_LINES.length * 0.6, stampWidth / 9, MAX_FONT_SIZE));
   const lineHeight = fontSize * 1.18;
