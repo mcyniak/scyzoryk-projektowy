@@ -1,6 +1,11 @@
 const crypto = require("crypto");
 
-const SESSION_COOKIE = "scyzoryk_sid";
+// Nazwa MUSI byc unikalna miedzy aplikacjami - ciasteczka na 127.0.0.1 NIE
+// sa rozdzielane wedlug portu (tylko Domain+Path), wiec dwie apki na tym
+// samym hoscie ale innym porcie dzielilyby jedna sesje (i nadpisywaly sobie
+// nawzajem sid), gdyby uzywaly tej samej nazwy ciasteczka. Kazda apka z
+// sesja ma wlasny, w pelni zdedykowany prefiks (patrz audyt v1.0.8, P3).
+const SESSION_COOKIE = "scyzoryk_nazywarka_skanow_sid";
 const SESSION_MAX_IDLE_MS = 12 * 60 * 60 * 1000;
 
 const sessions = new Map();

@@ -827,4 +827,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, "DRUKARKA_PROJEKTY");
 }
 
-module.exports = { buildQueueFromGroups, applyPowykonawczaTransformToQueue, buildQueueItem };
+module.exports = { app, buildQueueFromGroups, applyPowykonawczaTransformToQueue, buildQueueItem };
