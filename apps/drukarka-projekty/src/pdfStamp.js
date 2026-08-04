@@ -11,11 +11,11 @@ const { PDFDocument, StandardFonts, rgb, degrees } = require("pdf-lib");
 
 const STAMP_LINES = ["DOKUMENTACJA", "POWYKONAWCZA"];
 const STAMP_COLOR = rgb(0, 0, 0); // czarny - drukarka docelowa jest czarno-biala
-const STAMP_X_PCT = 62; // lewy brzeg boxu stempla - box siega az do ~96% szerokosci
-const STAMP_RIGHT_MARGIN_PCT = 4;
+const STAMP_LEFT_MARGIN_PCT = 4; // lewy brzeg boxu stempla (lewy gorny rog strony)
+const STAMP_WIDTH_PCT = 30;
 const STAMP_TOP_MARGIN_PCT = 3;
-const STAMP_HEIGHT_PCT = 9;
-const MAX_FONT_SIZE = 22; // rozmiar rzedu domyslnego w Pieczatkach PDF dla dwoch linii tekstu
+const STAMP_HEIGHT_PCT = 6;
+const MAX_FONT_SIZE = 11; // maly, nienarzucajacy sie napis - nie ma zasłaniac tresci dokumentu
 
 function visualPageSize(page) {
   const rotation = ((page.getRotation().angle % 360) + 360) % 360;
@@ -46,23 +46,35 @@ async function loadStampFont(doc) {
 
 function drawStampOnPage(page, font) {
   const visual = visualPageSize(page);
-  const stampWidth = Math.max(8, visual.width * (100 - STAMP_X_PCT - STAMP_RIGHT_MARGIN_PCT) / 100);
+  const stampWidth = Math.max(8, visual.width * STAMP_WIDTH_PCT / 100);
   const stampHeight = Math.max(8, visual.height * STAMP_HEIGHT_PCT / 100);
-  const visualX = visual.width * STAMP_X_PCT / 100;
+  const visualBoxX = visual.width * STAMP_LEFT_MARGIN_PCT / 100;
   const visualTop = visual.height * STAMP_TOP_MARGIN_PCT / 100;
-  const visualY = visual.height - visualTop - stampHeight;
-  const mapped = mapVisualBottomLeftToPdf(page, visualX, visualY);
+  const visualBoxY = visual.height - visualTop - stampHeight;
 
   const fontSize = Math.max(6, Math.min(stampHeight / STAMP_LINES.length * 0.6, stampWidth / 9, MAX_FONT_SIZE));
   const lineHeight = fontSize * 1.18;
   const totalHeight = lineHeight * STAMP_LINES.length;
-  const firstY = mapped.y + (stampHeight - totalHeight) / 2 + totalHeight - fontSize;
+  const firstVisualY = visualBoxY + (stampHeight - totalHeight) / 2 + totalHeight - fontSize;
 
+  // WAZNE: dla stron obroconych (90/270 st.) "prawo"/"dol" w ukladzie
+  // wizualnym NIE sa tym samym co +x/-y w ukladzie PDF-a (patrz
+  // mapVisualBottomLeftToPdf). Wczesniej centrowanie kazdej linii w poziomie
+  // dodawalo offset PROSTO do juz-zmapowanego mapped.x w przestrzeni PDF-a -
+  // dla stron z rotacja to przesuwalo kotwice w NIEWLASCIWYM kierunku i przy
+  // wystarczajaco duzym offsecie wypychalo caly tekst poza widoczna strone
+  // (niewidoczny stempel na stronach "bokiem", mimo poprawnej pozycji samego
+  // boxu). Naprawa: policz pozycje KAZDEJ linii w ukladzie WIZUALNYM
+  // (visualX/visualY), a mapowanie na PDF zrob jako ostatni krok, osobno dla
+  // kazdej linii (bo kazda ma inna szerokosc tekstu, wiec inny offset).
   STAMP_LINES.forEach((line, li) => {
     const textWidth = font.widthOfTextAtSize(line, fontSize);
+    const lineVisualX = visualBoxX + Math.max(0, (stampWidth - textWidth) / 2);
+    const lineVisualY = firstVisualY - li * lineHeight;
+    const mapped = mapVisualBottomLeftToPdf(page, lineVisualX, lineVisualY);
     page.drawText(line, {
-      x: mapped.x + Math.max(0, (stampWidth - textWidth) / 2),
-      y: firstY - li * lineHeight,
+      x: mapped.x,
+      y: mapped.y,
       size: fontSize,
       font,
       color: STAMP_COLOR,

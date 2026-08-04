@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { PDFDocument, degrees } = require('../apps/drukarka-projekty/node_modules/pdf-lib');
+const { PDFDocument, degrees, StandardFonts } = require('../apps/drukarka-projekty/node_modules/pdf-lib');
 const pdfStamp = require('../apps/drukarka-projekty/src/pdfStamp');
 const { buildQueueFromGroups, applyPowykonawczaTransformToQueue, buildQueueItem } = require('../apps/drukarka-projekty/server');
 
@@ -34,6 +34,36 @@ test('pdfStamp: mapVisualBottomLeftToPdf odwzorowuje prawy gorny rog "wizualny" 
 
   const page0 = { getRotation: () => ({ angle: 0 }), getWidth: () => 300, getHeight: () => 400 };
   assert.deepEqual(pdfStamp.mapVisualBottomLeftToPdf(page0, 10, 20), { x: 10, y: 20, rotation: 0 });
+});
+
+test('pdfStamp: drawStampOnPage trzyma kotwice KAZDEJ linii tekstu w granicach strony, nawet gdy strona jest obrocona o 90/270 st.', async (t) => {
+  // Realny blad zlapany na prawdziwym rysunku PDF (270 st.): wyliczanie
+  // pozycji kazdej linii centrowalo tekst dodajac offset PROSTO do juz-
+  // zmapowanego mapped.x/mapped.y w przestrzeni PDF-a. Dla stron bez rotacji
+  // to dziala (przestrzen wizualna == przestrzen PDF-a), ale dla stron
+  // obroconych "prawo"/"dol" w widoku wizualnym NIE sa tym samym co +x/-y w
+  // PDF-ie - offset szedl w zlym kierunku i przy szerszym tekscie wypychal
+  // caly stempel poza widoczna strone (niewidoczny, mimo poprawnej pozycji
+  // samego boxu). Test trzyma prawdziwy rozmiar strony A4 (595x842), na
+  // ktorym blad byl zaobserwowany.
+  for (const rotation of [0, 90, 180, 270]) {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([595, 842]);
+    page.setRotation(degrees(rotation));
+    const font = await doc.embedFont(StandardFonts.HelveticaBold);
+
+    const calls = [];
+    const originalDrawText = page.drawText.bind(page);
+    page.drawText = (text, options) => { calls.push({ text, x: options.x, y: options.y }); return originalDrawText(text, options); };
+
+    pdfStamp.drawStampOnPage(page, font);
+
+    assert.equal(calls.length, 2, `rotacja ${rotation}: powinny byc 2 linie tekstu`);
+    for (const call of calls) {
+      assert.ok(call.x >= 0 && call.x <= 595, `rotacja ${rotation}: x=${call.x} poza [0,595] dla "${call.text}"`);
+      assert.ok(call.y >= 0 && call.y <= 842, `rotacja ${rotation}: y=${call.y} poza [0,842] dla "${call.text}"`);
+    }
+  }
 });
 
 test('pdfStamp: stampAllPages ostemplowuje kazda strone (rowna i obrocona o 90) bez zmiany liczby/rozmiaru stron', async (t) => {
