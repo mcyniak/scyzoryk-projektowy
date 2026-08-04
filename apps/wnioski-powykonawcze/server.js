@@ -68,6 +68,12 @@ const apiLimiter = rateLimit({
   max: Number(process.env.WM_API_RATE_LIMIT || 60),
   standardHeaders: true,
   legacyHeaders: false,
+  // Panel glowny odpytuje /api/health KAZDEJ apki co 10s (patrz public/inline-1.js
+  // w korzeniu) - to samo ~90 zadan/15min, wiecej niz limit 60 - bez tego
+  // wyjatku ta apka permanentnie sama sobie generowala falszywy status "nie
+  // dziala" (429) w panelu, mimo ze proces byl cały czas zdrowy. Ten sam
+  // wzorzec juz dawno dziala w apps/drukarka i apps/drukarka-projekty.
+  skip: (req) => req.method === 'GET',
   message: { ok: false, message: 'Za duzo zadan w krotkim czasie. Odczekaj chwile i sprobuj ponownie.' }
 });
 const heavyJobLimiter = rateLimit({

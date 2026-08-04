@@ -86,3 +86,34 @@ test('nieobsluzone odrzucenie zapisuje raport i konczy proces kodem 1', async ()
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+// Realny blad zlapany na produkcji (2026-08): panel glowny odpytuje /api/health
+// KAZDEJ apki co 10s (public/inline-1.js w korzeniu) - to ~90 zadan/15min z
+// samego tylko panelu, w kazdej otwartej karcie przegladarki. apiLimiter
+// "generic" (max 60/15min) bez wylaczenia GET wyczerpuje sie na samym
+// health-checku i apka na zawsze wyglada w panelu jak "nie dziala" (429),
+// mimo ze proces jest zdrowy. Kazda apka musi albo wylaczac GET z limitu,
+// albo miec limit swiadomie podniesiony ponad ten ruch.
+test('kazda apka wylacza GET z ogolnego limitu zadan API albo ma limit swiadomie podniesiony (regresja panelowego 429)', () => {
+  const MIN_SAFE_MAX_WITHOUT_SKIP = 90; // panel sam generuje ~90 GET/15min na apke
+  const appsDir = path.join(__dirname, '..', 'apps');
+  const appNames = fs.readdirSync(appsDir).filter(name => fs.existsSync(path.join(appsDir, name, 'server.js')));
+  const problems = [];
+
+  for (const name of appNames) {
+    const source = fs.readFileSync(path.join(appsDir, name, 'server.js'), 'utf8');
+    const match = source.match(/const apiLimiter = rateLimit\(\{[\s\S]*?\n\}\);/);
+    if (!match) continue; // apka bez ogolnego limitera na /api (nic do sprawdzenia)
+    const block = match[0];
+    const hasGetSkip = /skip:\s*\(req\)\s*=>\s*req\.method === ['"]GET['"]/.test(block);
+    if (hasGetSkip) continue;
+
+    const maxMatch = block.match(/max:\s*Number\(process\.env\.\w+\s*\|\|\s*(\d+)\)/);
+    const defaultMax = maxMatch ? Number(maxMatch[1]) : 0;
+    if (defaultMax < MIN_SAFE_MAX_WITHOUT_SKIP) {
+      problems.push(`${name}: apiLimiter max=${defaultMax} bez skip GET (potrzeba >= ${MIN_SAFE_MAX_WITHOUT_SKIP} albo skip GET)`);
+    }
+  }
+
+  assert.deepEqual(problems, []);
+});
