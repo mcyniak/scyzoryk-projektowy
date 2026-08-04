@@ -147,6 +147,105 @@ test('readExcelRecords: wiersze z brakujacymi danymi krytycznymi sa pomijane, ni
   assert.equal(input.location, '');
 });
 
+// =====================================================================
+// Audyt v1.0.8, Priorytet 4: scisle parsery dla OZC, udzialow ogrzewania,
+// zbiornika CWU, bufora i wysokosci kotlowni - num() sklejal wieloznaczny
+// zapis w jedna pozornie poprawna (ale zmyslona) liczbe, np. "7/8" -> "78".
+// =====================================================================
+
+test('calculate(): niejednoznaczne OZC "7/8" jest odrzucane, NIE sklejane w 78', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = calculate({ ...validInput, ozc: '7/8' });
+  assert.equal(result.calculated.valid, false);
+  assert.equal(result.input.ozc, 0);
+  assert.ok(result.calculated.errors.some(e => /Nie rozumiem wartości OZC/.test(e) && /7\/8/.test(e)));
+});
+
+test('calculate(): niejednoznaczny udzial ogrzewania "50/50" jest odrzucany, NIE sklejany w 5050', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = calculate({ ...validInput, radiatorsShare: '50/50', floorShare: '0' });
+  assert.equal(result.calculated.valid, false);
+  assert.ok(result.calculated.errors.some(e => /Udział ogrzewania grzejnikowego/.test(e) && /50\/50/.test(e)));
+});
+
+test('calculate(): niejednoznaczna wielkosc zbiornika CWU "200/300" jest odrzucana, NIE sklejana w 200300', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = calculate({ ...validInput, cwuTank: '200/300', cwuTankRaw: '200/300' });
+  assert.equal(result.calculated.valid, false);
+  assert.ok(result.calculated.errors.some(e => /zbiornika CWU/.test(e) && /200\/300/.test(e)));
+});
+
+test('calculate(): ujemna wartosc OZC "-5" jest odrzucana, nie czytana jako dodatnie 5', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = calculate({ ...validInput, ozc: '-5' });
+  assert.equal(result.calculated.valid, false);
+  assert.ok(result.calculated.errors.some(e => /Nie rozumiem wartości OZC/.test(e) && /ujemna/.test(e)));
+});
+
+test('calculate(): niejednoznaczna wysokosc kotlowni "2/3" daje ostrzezenie (nie blokade - zgodnie z istniejaca lagodna surowoscia tego pola), a nie sklejone "23"', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = calculate({ ...validInput, boilerRoomHeight: '2/3' });
+  assert.equal(result.calculated.valid, true, 'wysokosc kotlowni nigdy nie blokowala doboru, tylko ostrzegala - to sie nie zmienia');
+  assert.equal(result.input.boilerRoomHeight, 0);
+  assert.ok(result.calculated.reasons.some(r => /wysokości kotłowni/.test(r) && /2\/3/.test(r)));
+});
+
+test('calculate(): niejednoznaczny bufor "100/200" daje ostrzezenie, nie blokade, i nie sklejone "100200"', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = calculate({ ...validInput, buffer: '100/200' });
+  assert.equal(result.calculated.valid, true);
+  assert.equal(result.calculated.bufferLitres, 0);
+  assert.ok(result.calculated.reasons.some(r => /bufora/.test(r) && /100\/200/.test(r)));
+});
+
+test('calculate(): zbiornik CWU z doklejonymi uwagami zawierajacymi INNA liczbe (np. numer dzialki) NIE jest falszywie odrzucany jako niejednoznaczny', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  // Symuluje dokladnie to, co robi excel.js#rowToInput: cwuTank to POLACZONY
+  // tekst (komorka + uwagi o ROZŁĄCZNYM ukladzie z numerem dzialki), a
+  // cwuTankRaw to SUROWA komorka - tylko cwuTankRaw ma byc scisle parsowane
+  // jako liczba litrow.
+  const result = calculate({
+    ...validInput,
+    cwuTankRaw: '300 l',
+    cwuTank: '300 l ROZŁĄCZNY - działka nr 45'
+  });
+  assert.equal(result.calculated.valid, true, 'liczba "45" z niepowiazanych uwag nie moze zablokowac wiersza z czytelnym rozmiarem zbiornika');
+  assert.equal(result.calculated.tankLitres, 300);
+});
+
+test('parseTank: bez drugiego argumentu (wywolanie spoza excel.js) parsuje liczbe z tego samego argumentu co markery - bez regresji', async () => {
+  const { parseTank } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = parseTank('300 l');
+  assert.equal(result.litres, 300);
+  assert.equal(result.litresValid, true);
+  assert.equal(result.hasSolarMarker, false);
+
+  const solarResult = parseTank('300 l SOLAR');
+  assert.equal(solarResult.litres, 300);
+  assert.equal(solarResult.hasSolarMarker, true);
+});
+
+test('rowToInput: cwuTankRaw to surowa komorka zbiornika, cwuTank pozostaje polaczony z uwagami o ROZŁ/SOLAR (bez regresji wykrywania markerow)', async () => {
+  const { rowToInput } = await import('../apps/formularze-ecodan/src/excel.js');
+  const row = {
+    'Adres': 'Testowa 9',
+    'Wielkość zbiornika CWU': '300 l',
+    'Uwagi': 'ROZŁĄCZNY - działka nr 45'
+  };
+  const input = rowToInput(row, '');
+  assert.equal(input.cwuTankRaw, '300 l', 'surowa komorka bez doklejonych uwag');
+  assert.equal(input.cwuTank, '300 l ROZŁĄCZNY - działka nr 45', 'polaczony tekst do wykrywania markera ROZŁ - bez zmian wobec wczesniejszego zachowania');
+});
+
+test('readExcelRecords: pre-filtr uzywa scislych parserow (OZC/udziały/zbiornik) - te sama logika co calculate(), niejednoznaczne wartosci pomijaja wiersz', async () => {
+  const excelSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'formularze-ecodan', 'src', 'excel.js'), 'utf8');
+  assert.match(excelSource, /const ozcParsed = parseOzc\(input\.ozc\)/);
+  assert.match(excelSource, /if \(!ozcParsed\.valid \|\| ozcParsed\.ozc <= 0\)/);
+  assert.match(excelSource, /const radiatorsShareParsed = parseHeatingSharePercent/);
+  assert.match(excelSource, /const tankParsed = parseTank\(input\.cwuTankRaw, input\.cwuTank\)/);
+  assert.match(excelSource, /if \(!tankParsed\.litresValid \|\| tankParsed\.litres <= 0\)/);
+});
+
 test('indeks zadań i frontend obsługują restart oraz ostrzeżenie ścieżki', async () => {
   const jobsSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'formularze-ecodan', 'src', 'jobs.js'), 'utf8');
   const uiSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'formularze-ecodan', 'public', 'inline-1.js'), 'utf8');

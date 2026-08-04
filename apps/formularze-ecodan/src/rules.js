@@ -3,29 +3,82 @@ export function num(value) {
   return Number(String(value).replace(',', '.').replace(/[^0-9.-]/g, '')) || 0;
 }
 
-// Osobny, scislejszy parser mocy (kW) - num() po prostu wycina wszystko
-// oprocz cyfr i sklejalby np. "9/12 kW" w 912, albo "10+6 kW" w 106, co
-// wygladaloby jak prawdopodobna, ale calkowicie zmyslona wartosc. Tutaj
-// wieloznaczny zapis (kilka liczb, "/" albo "+") jest jawnie odrzucany
-// zamiast po cichu sklejany w jedna cyfre.
-export function parsePowerKw(value) {
+// Wspolny, scislejszy parser liczbowy - num() po prostu wycina wszystko
+// oprocz cyfr/kropki/minusa, wiec wieloznaczny zapis z kilkoma liczbami
+// ("7/8", "50/50", "200/300") sklejalby sie w jedna pozornie poprawna
+// liczbe ("78", "5050", "200300"). Audyt v1.0.8 P4: to samo ryzyko co przy
+// mocy pompy (patrz parsePowerKw nizej) dotyczy TAKZE OZC, udzialow
+// ogrzewania, zbiornika CWU, bufora i wysokosci kotlowni - wieloznaczny
+// zapis (kilka liczb, "/" albo "+") jest tu jawnie odrzucany zamiast po
+// cichu sklejany w jedna cyfre.
+function parseStrictDecimal(value) {
   const raw = String(value ?? '').trim();
-  if (!raw) return { kw: 0, raw, present: false, valid: true };
-  const normalized = raw.replace(',', '.');
-  const numberGroups = normalized.match(/\d+(?:\.\d+)?/g) || [];
+  if (!raw) return { value: 0, raw, present: false, valid: true, error: null };
+  const normalized = raw.replace(/,/g, '.');
+  const numberGroups = normalized.match(/-?\d+(?:\.\d+)?/g) || [];
   if (/[/+]/.test(normalized) || numberGroups.length > 1) {
-    return { kw: 0, raw, present: true, valid: false };
+    return { value: 0, raw, present: true, valid: false, error: `niejednoznaczna wartość "${raw}" - podaj jedną liczbę, nie zakres/sumę` };
   }
-  if (numberGroups.length !== 1) return { kw: 0, raw, present: true, valid: false };
-  return { kw: Number(numberGroups[0]), raw, present: true, valid: true };
+  if (numberGroups.length !== 1) {
+    return { value: 0, raw, present: true, valid: false, error: `nie rozpoznaję liczby w wartości "${raw}"` };
+  }
+  const parsed = Number(numberGroups[0]);
+  if (parsed < 0) {
+    return { value: 0, raw, present: true, valid: false, error: `wartość ujemna "${raw}" nie jest tu dopuszczalna` };
+  }
+  return { value: parsed, raw, present: true, valid: true, error: null };
 }
 
-export function parseTank(value) {
-  const text = String(value || '').toUpperCase();
-  const litres = num(text);
+// Osobny, scislejszy parser mocy (kW) - patrz komentarz przy
+// parseStrictDecimal powyzej (ten sam problem: "9/12 kW" -> 912,
+// "10+6 kW" -> 106).
+export function parsePowerKw(value) {
+  const r = parseStrictDecimal(value);
+  return { kw: r.value, raw: r.raw, present: r.present, valid: r.valid, error: r.error };
+}
+
+export function parseOzc(value) {
+  const r = parseStrictDecimal(value);
+  return { ozc: r.value, raw: r.raw, present: r.present, valid: r.valid, error: r.error ? `Nie rozumiem wartości OZC: ${r.error}.` : null };
+}
+
+// Wspolny parser dla obu udzialow ogrzewania (grzejnikowego/podlogowego) -
+// fieldLabel trafia do komunikatu bledu, zeby bylo wiadomo, ktorego pola
+// dotyczy (ten sam wzorzec co osobne komunikaty dla "Moc pompy z gminy" /
+// "Moc dobrana" w calculate() nizej).
+export function parseHeatingSharePercent(value, fieldLabel) {
+  const r = parseStrictDecimal(value);
+  return { percent: r.value, raw: r.raw, present: r.present, valid: r.valid, error: r.error ? `Nie rozumiem wartości "${fieldLabel}": ${r.error}.` : null };
+}
+
+export function parseBufferLitres(value) {
+  const r = parseStrictDecimal(value);
+  return { litres: r.value, raw: r.raw, present: r.present, valid: r.valid, error: r.error ? `Nie rozumiem wielkości bufora: ${r.error}.` : null };
+}
+
+export function parseBoilerRoomHeight(value) {
+  const r = parseStrictDecimal(value);
+  return { metres: r.value, raw: r.raw, present: r.present, valid: r.valid, error: r.error ? `Nie rozumiem wysokości kotłowni: ${r.error}.` : null };
+}
+
+// tankValue: surowa zawartosc komorki "Wielkosc zbiornika CWU" - TYLKO to
+// jest scisle parsowane jako liczba litrow. markerText (domyslnie =
+// tankValue) sluzy WYLACZNIE do wykrywania slow kluczowych SOLAR/ROZŁ i w
+// realnym przeplywie (excel.js) bywa polaczeniem tankValue + tresci uwag
+// (np. "300 l ROZŁĄCZNY - działka nr 45") - gdyby scisly parser liczby
+// dzialal na TYM polaczonym tekscie, dodatkowa liczba z niepowiazanych uwag
+// ("45") falszywie oznaczalaby caly wiersz jako niejednoznaczny, mimo ze sam
+// rozmiar zbiornika jest czytelny. Dlatego liczba i wykrywanie slow
+// kluczowych czytaja z DWOCH oddzielnych zrodel (patrz audyt v1.0.8 P4,
+// decyzja wlasciciela: waliduj tylko komorke zbiornika osobno).
+export function parseTank(tankValue, markerText) {
+  const text = String(markerText ?? tankValue ?? '').toUpperCase();
+  const r = parseStrictDecimal(tankValue);
   return {
-    raw: String(value || ''),
-    litres,
+    raw: String(tankValue ?? ''),
+    litres: r.value,
+    litresValid: r.valid,
+    litresError: r.error ? `Nie rozumiem wielkości zbiornika CWU: ${r.error}.` : null,
     hasSolarMarker: text.includes('SOLAR'),
     hasSplitMarker: text.includes('ROZ') || text.includes('ROZL') || text.includes('ROZŁ')
   };
@@ -65,16 +118,25 @@ export function outdoorUnit(powerKw) {
 }
 
 export function calculate(input) {
-  const ozc = num(input.ozc);
+  const ozcParsed = parseOzc(input.ozc);
+  const ozc = ozcParsed.ozc;
   const municipalityPowerParsed = parsePowerKw(input.municipalityPower);
   const chosenPowerParsed = parsePowerKw(input.chosenPower);
   const municipalityPower = municipalityPowerParsed.kw;
   const chosenPower = chosenPowerParsed.kw;
   const location = String(input.location || '').trim();
-  const radiatorsShare = num(input.radiatorsShare);
-  const floorShare = num(input.floorShare);
-  const boilerRoomHeight = num(input.boilerRoomHeight);
-  const tank = parseTank(input.cwuTank);
+  const radiatorsShareParsed = parseHeatingSharePercent(input.radiatorsShare, 'Udział ogrzewania grzejnikowego');
+  const floorShareParsed = parseHeatingSharePercent(input.floorShare, 'Udział ogrzewania podłogowego');
+  const radiatorsShare = radiatorsShareParsed.percent;
+  const floorShare = floorShareParsed.percent;
+  const boilerRoomHeightParsed = parseBoilerRoomHeight(input.boilerRoomHeight);
+  const boilerRoomHeight = boilerRoomHeightParsed.metres;
+  const bufferParsed = parseBufferLitres(input.buffer);
+  // cwuTankRaw = surowa komorka zbiornika (bez doklejonych uwag) - patrz
+  // komentarz przy parseTank powyzej. Gdy nie zostanie podana osobno (np.
+  // wywolania calculate() bez przejscia przez excel.js), input.cwuTank samo
+  // sluzy za oba argumenty, dokladnie jak przed ta zmiana.
+  const tank = parseTank(input.cwuTankRaw ?? input.cwuTank, input.cwuTank);
   const forceSplit = String(input.forceSplit || '').toLowerCase() === 'tak' || tank.hasSplitMarker;
 
   // Bledy blokujace - w odroznieniu od "reasons" ponizej, NIE wolno z nimi
@@ -94,11 +156,15 @@ export function calculate(input) {
     errors.push('Brak mocy - puste pola "Moc dobrana" i "Moc pompy z gminy". Uzupełnij dane przed doborem.');
   }
   if (!location) errors.push('Brak lokalizacji (miejscowość/kod pocztowy) - wymagana do doboru na stronie Ecodan.');
-  if (ozc <= 0) errors.push('Brak OZC (obciążenia cieplnego) - uzupełnij dane przed doborem.');
-  if (radiatorsShare <= 0 && floorShare <= 0) {
+  if (!ozcParsed.valid) errors.push(ozcParsed.error);
+  if (ozc <= 0 && ozcParsed.valid) errors.push('Brak OZC (obciążenia cieplnego) - uzupełnij dane przed doborem.');
+  if (!radiatorsShareParsed.valid) errors.push(radiatorsShareParsed.error);
+  if (!floorShareParsed.valid) errors.push(floorShareParsed.error);
+  if (radiatorsShare <= 0 && floorShare <= 0 && radiatorsShareParsed.valid && floorShareParsed.valid) {
     errors.push('Brak udziału ogrzewania (puste pola "grzejniki" i "podłogówka") - uzupełnij dane przed doborem.');
   }
-  if (tank.litres <= 0) {
+  if (tank.litresValid === false) errors.push(tank.litresError);
+  if (tank.litres <= 0 && tank.litresValid) {
     errors.push(`Nie rozumiem wielkości zbiornika CWU: "${tank.raw}" - uzupełnij/popraw dane przed doborem.`);
   }
 
@@ -109,7 +175,13 @@ export function calculate(input) {
 
   if (powerForSelection > 0 && !selectedPower) reasons.push(`${chosenPower > 0 ? 'Moc dobrana' : 'Moc pompy z gminy'} powyżej 18 kW - ręczne sprawdzenie`);
   if (chosenPower > 0) reasons.push(`Dobór na podstawie ręcznie wpisanej mocy dobranej (${chosenPower} kW), nie z gminy`);
-  if (boilerRoomHeight <= 0) reasons.push('Wysokość kotłowni nieznana - zweryfikuj ręcznie przed montażem.');
+  // Wysokosc kotlowni (i bufor nizej) sa OSTRZEZENIEM, nie blokada - tak bylo
+  // przed audytem v1.0.8 P4 i to swiadomie zostaje (patrz zachowania celowe:
+  // nie zmieniamy istniejacej surowosci reguly tylko dlatego, ze dodajemy
+  // scislejsze parsowanie samej liczby).
+  if (!boilerRoomHeightParsed.valid) reasons.push(boilerRoomHeightParsed.error);
+  else if (boilerRoomHeight <= 0) reasons.push('Wysokość kotłowni nieznana - zweryfikuj ręcznie przed montażem.');
+  if (!bufferParsed.valid) reasons.push(bufferParsed.error);
 
   // Zgodnie z instrukcją: 16 kW i 18 kW to kaskada dwóch jednostek zewnętrznych,
   // ale sama kaskada NIE oznacza automatycznie układu rozłącznego.
@@ -177,7 +249,7 @@ export function calculate(input) {
       errors,
       valid: errors.length === 0,
       tankLitres,
-      bufferLitres: num(input.buffer),
+      bufferLitres: bufferParsed.litres,
       productSearchText,
       reasons: [...reasons, ...splitReasons].length ? [...reasons, ...splitReasons] : ['Standardowy zestaw']
     }

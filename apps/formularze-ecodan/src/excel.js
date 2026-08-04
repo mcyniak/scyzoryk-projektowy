@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import sanitize from 'sanitize-filename';
 import readExcelFile from 'read-excel-file/node';
-import { num, parsePowerKw, parseTank } from './rules.js';
+import { parsePowerKw, parseTank, parseOzc, parseHeatingSharePercent } from './rules.js';
 
 function formatDate(value) {
   if (!(value instanceof Date) || Number.isNaN(value.getTime())) return '';
@@ -191,6 +191,11 @@ export function rowToInput(row, globalLocation = '') {
     municipalityPower: getCell(row, ['Moc pompy z gminy', 'Moc z gminy', 'Moc pompy']),
     chosenPower: getCell(row, ['Moc dobrana', 'Moc dobrana (kW)', 'Dobrana moc', 'Moc dobrana pompy']),
     cwuTank: mergedTank,
+    // Surowa komorka zbiornika, BEZ doklejonych uwag - do scislego
+    // parsowania samej liczby litrow (patrz komentarz przy parseTank w
+    // rules.js: uwagi doklejone do cwuTank moga zawierac wlasne,
+    // niepowiazane liczby, np. numer dzialki).
+    cwuTankRaw: cwuTank,
     buffer: getCell(row, ['Wielkość bufora', 'Wielkosc bufora', 'Bufor']),
     boilerRoomHeight: getCell(row, ['Wysokość kotłowni (m)', 'Wysokosc kotlowni (m)', 'Wysokość kotłowni', 'Wysokosc kotlowni']),
     radiatorsShare: getCell(row, ['Udział ogrzew grzejnik', 'Udzial ogrzew grzejnik', 'Udział ogrzew grzejniki %', 'Grzejniki']),
@@ -250,10 +255,11 @@ export async function readExcelRecords(filePath, globalLocation = '') {
     }
 
     // OZC (obciazenie cieplne) trafia wprost do pola na stronie konfiguratora
-    // Ecodan. Brak/zerowe OZC nie powinno isc do automatu, bo wygeneruje
-    // pozornie poprawny, ale bezwartosciowy raport zamiast bledu.
-    const ozcValue = num(input.ozc);
-    if (ozcValue <= 0) {
+    // Ecodan. Brak/zerowe/niejednoznaczne OZC (np. "7/8" sklejone w "78" przez
+    // stary num()) nie powinno isc do automatu, bo wygeneruje pozornie
+    // poprawny, ale bezwartosciowy/zmyslony raport zamiast bledu.
+    const ozcParsed = parseOzc(input.ozc);
+    if (!ozcParsed.valid || ozcParsed.ozc <= 0) {
       skipped.missingOzc += 1;
       return;
     }
@@ -278,12 +284,23 @@ export async function readExcelRecords(filePath, globalLocation = '') {
       return;
     }
 
-    if (num(input.radiatorsShare) <= 0 && num(input.floorShare) <= 0) {
+    const radiatorsShareParsed = parseHeatingSharePercent(input.radiatorsShare, 'Udział ogrzewania grzejnikowego');
+    const floorShareParsed = parseHeatingSharePercent(input.floorShare, 'Udział ogrzewania podłogowego');
+    if (!radiatorsShareParsed.valid || !floorShareParsed.valid) {
+      skipped.missingHeatingShare += 1;
+      return;
+    }
+    if (radiatorsShareParsed.percent <= 0 && floorShareParsed.percent <= 0) {
       skipped.missingHeatingShare += 1;
       return;
     }
 
-    if (parseTank(input.cwuTank).litres <= 0) {
+    // cwuTankRaw = surowa komorka zbiornika, bez doklejonych uwag - patrz
+    // komentarz przy parseTank w rules.js (uwagi moga zawierac wlasne,
+    // niepowiazane liczby, np. numer dzialki, i falszywie wygladac na
+    // niejednoznaczna wartosc zbiornika, gdyby parsowac je razem).
+    const tankParsed = parseTank(input.cwuTankRaw, input.cwuTank);
+    if (!tankParsed.litresValid || tankParsed.litres <= 0) {
       skipped.missingTank += 1;
       return;
     }
