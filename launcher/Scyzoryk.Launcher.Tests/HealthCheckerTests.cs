@@ -33,7 +33,11 @@ public sealed class HealthCheckerTests
         var port = FakeHealthServer.GetFreePort();
         var checker = new HealthChecker();
 
-        var result = await checker.IsRespondingOnceAsync($"http://localhost:{port}/api/health", TimeSpan.FromSeconds(1));
+        // 127.0.0.1 literalnie (nie "localhost") - bez zadnego listenera odmowa
+        // polaczenia na loopbacku jest natychmiastowa na poziomie jadra systemu;
+        // nazwa "localhost" wymaga rozwiazania (IPv4/IPv6 dual-stack), co na
+        // niektorych sandboxach CI bywa zauwazalnie wolniejsze (zlapane realnie).
+        var result = await checker.IsRespondingOnceAsync($"http://127.0.0.1:{port}/api/health", TimeSpan.FromSeconds(1));
 
         Assert.False(result);
     }
@@ -58,7 +62,7 @@ public sealed class HealthCheckerTests
         var port = FakeHealthServer.GetFreePort();
         var checker = new HealthChecker();
 
-        var result = await checker.ProbeAlreadyRunningAsync($"http://localhost:{port}/api/health", attempts: 3, attemptTimeout: TimeSpan.FromMilliseconds(100), delayBetween: TimeSpan.FromMilliseconds(50));
+        var result = await checker.ProbeAlreadyRunningAsync($"http://127.0.0.1:{port}/api/health", attempts: 3, attemptTimeout: TimeSpan.FromMilliseconds(100), delayBetween: TimeSpan.FromMilliseconds(50));
 
         Assert.False(result);
     }
@@ -100,7 +104,7 @@ public sealed class HealthCheckerTests
         var checker = new HealthChecker();
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        var outcome = await checker.WaitForHealthyAsync($"http://localhost:{port}/api/health", TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(5), () => false);
+        var outcome = await checker.WaitForHealthyAsync($"http://127.0.0.1:{port}/api/health", TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(5), () => false);
 
         sw.Stop();
         Assert.Equal(HealthWaitOutcome.TimedOutProcessDead, outcome);
@@ -113,7 +117,7 @@ public sealed class HealthCheckerTests
         var port = FakeHealthServer.GetFreePort();
         var checker = new HealthChecker();
 
-        var outcome = await checker.WaitForHealthyAsync($"http://localhost:{port}/api/health", TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(300), () => true);
+        var outcome = await checker.WaitForHealthyAsync($"http://127.0.0.1:{port}/api/health", TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(300), () => true);
 
         Assert.Equal(HealthWaitOutcome.TimedOutProcessAlive, outcome);
     }
