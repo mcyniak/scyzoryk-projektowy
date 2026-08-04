@@ -349,7 +349,11 @@ function makeTestService(overrides = {}) {
     downloadText: overrides.downloadText,
     downloadToPartialFile: overrides.downloadToPartialFile,
     parseSha256File: overrides.parseSha256File,
-    spawnUpdaterProcess: (invocation) => { spawned.push(invocation); return null; }
+    spawnUpdaterProcess: (invocation) => { spawned.push(invocation); return null; },
+    // Domyslnie "wystartowal natychmiast" - testy skupione na innych etapach
+    // (pobieranie/weryfikacja) nie powinny czekac na realny fs-check/delay.
+    // Testy tej konkretnej weryfikacji podstawiaja wlasna wersje nizej.
+    confirmUpdaterStarted: overrides.confirmUpdaterStarted || (async () => true)
   };
   const service = createUpdateService({
     rootDir: overrides.rootDir || path.join(__dirname, '..'),
@@ -671,25 +675,27 @@ test('updateService: restart, gdy ostatni stan to zwykle "available" (nigdy nie 
   fs.rmSync(updateRoot, { recursive: true, force: true });
 });
 
-test('updateService: proces aktualizatora startuje, ale pada natychmiast (bez zdarzenia "error") - tez jest wykrywane', async () => {
-  const { EventEmitter } = require('events');
+// Audyt v1.0.4/P0-8, kontynuacja (zlapane REALNIE na produkcji 2026-08-04,
+// trzeci raz): spawn() z {detached:true} na Windows zawsze zglasza kod
+// wyjscia 0 w zdarzeniu 'exit', niezaleznie od realnego wyniku procesu -
+// zweryfikowane bezposrednio testem na tej samej maszynie (skrypt kończący
+// sie kodem 7 byl widziany jako kod 0). Nasluch na 'exit' z ta logika NIGDY
+// nie mogl wiec wykryc realnej awarii na Windows - zastapiony sprawdzeniem
+// nowego pliku logu na dysku (deps.confirmUpdaterStarted).
+function makeInstallableService({ confirmUpdaterStarted, spawnUpdaterProcess }) {
   const bytes = crypto.randomBytes(2000);
   const hash = sha256Hex(bytes);
   const release = buildFakeRelease('5.0.0', bytes);
-  const rootDir = tempDir('scz-svc-root-exit-');
+  const rootDir = tempDir('scz-svc-root-confirm-');
   fs.mkdirSync(path.join(rootDir, 'scripts'), { recursive: true });
   fs.writeFileSync(path.join(rootDir, 'scripts', 'run-update.ps1'), '# test');
+  const updateRoot = tempDir('scz-svc-root-confirm2-');
 
-  let fakeChild;
-  // makeTestService nie pozwala podmienic spawnUpdaterProcess na fake
-  // EventEmitter (zwraca zawsze null) - budujemy wiec usluge bezposrednio
-  // przez createUpdateService, zeby przetestowac listener 'exit'.
-  const updateRoot2 = tempDir('scz-svc-root-exit2-');
-  const service2 = createUpdateService({
+  const service = createUpdateService({
     rootDir,
     getInstalledVersion: () => ({ version: '1.0.0' }),
     repo: 'o/r',
-    updateRoot: updateRoot2,
+    updateRoot,
     port: 3000,
     log: () => {},
     deps: {
@@ -702,27 +708,71 @@ test('updateService: proces aktualizatora startuje, ale pada natychmiast (bez zd
         fs.writeFileSync(`${dest}.partial`, bytes);
         return { bytes: bytes.length, sha256: hash, partialPath: `${dest}.partial` };
       },
-      spawnUpdaterProcess: () => {
-        fakeChild = new EventEmitter();
-        // Symulacja: proces wystartowal, ale zaraz potem sam pada (np. run-update.ps1
-        // zostal uszkodzony przy kopiowaniu) - bez zdarzenia 'error', tylko 'exit'
-        // z niezerowym kodem, zanim run-update.ps1 zdazylby zabic ten proces.
-        setImmediate(() => fakeChild.emit('exit', 1, null));
-        return fakeChild;
-      }
+      spawnUpdaterProcess: spawnUpdaterProcess || (() => null),
+      confirmUpdaterStarted
     }
   });
+  return { service, rootDir, updateRoot };
+}
 
-  await service2.checkForUpdate();
-  const install = service2.startInstall();
+test('updateService: proces aktualizatora "startuje" (spawn bez bledu), ale nigdy nie tworzy logu - wykryte jako blad', async () => {
+  // Kod wyjscia 0 z detached procesu (patrz komentarz wyzej) wyglada
+  // identycznie na "sukces" i na "padl natychmiast" - dlatego confirmUpdaterStarted
+  // (a nie 'exit') jest tu jedynym wiarygodnym sygnalem.
+  const { service, rootDir, updateRoot } = makeInstallableService({
+    confirmUpdaterStarted: async () => false // brak nowego logu = nie ruszylo
+  });
+
+  await service.checkForUpdate();
+  const install = service.startInstall();
   await install.flowPromise;
-  await new Promise(r => setImmediate(r)); // pozwol 'exit' (setImmediate) sie rozliczyc
 
-  const status = service2.getStatusPayload();
+  const status = service.getStatusPayload();
   assert.equal(status.state, 'error');
-  assert.match(status.error, /kodem 1/);
+  assert.match(status.error, /nie uruchomil sie/);
   fs.rmSync(rootDir, { recursive: true, force: true });
-  fs.rmSync(updateRoot2, { recursive: true, force: true });
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+test('updateService: potwierdzony start aktualizatora (log sie pojawil) NIE generuje falszywego bledu', async () => {
+  const { service, rootDir, updateRoot } = makeInstallableService({
+    confirmUpdaterStarted: async () => true // log sie pojawil - naprawde ruszylo
+  });
+
+  await service.checkForUpdate();
+  const install = service.startInstall();
+  await install.flowPromise;
+
+  const status = service.getStatusPayload();
+  assert.equal(status.state, 'installing');
+  assert.equal(status.error, null);
+  fs.rmSync(rootDir, { recursive: true, force: true });
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+test('updateService: realConfirmUpdaterStarted (implementacja produkcyjna) rozpoznaje nowy log, a stary/brakujacy log odrzuca', async () => {
+  const { realConfirmUpdaterStarted } = require('../lib/updateService');
+  const dir = tempDir('scz-confirm-real-');
+  const logsDir = path.join(dir, 'logs');
+  fs.mkdirSync(logsDir, { recursive: true });
+
+  // Brak jakiegokolwiek logu.
+  assert.equal(await realConfirmUpdaterStarted({ updateRoot: dir, sinceMs: Date.now(), waitMs: 10 }), false);
+
+  // Stary log (starszy niz "sinceMs") - to np. log z POPRZEDNIEJ, juz
+  // zakonczonej aktualizacji, nie dowod ze TA aktualizacja ruszyla.
+  const staleLogPath = path.join(logsDir, 'update-stale.log');
+  fs.writeFileSync(staleLogPath, 'stary log');
+  const sinceMs = Date.now() + 200;
+  assert.equal(await realConfirmUpdaterStarted({ updateRoot: dir, sinceMs, waitMs: 10 }), false);
+
+  // Nowy log (mtime >= sinceMs) - to jest realny dowod, ze run-update.ps1
+  // zaczal dzialac.
+  await new Promise(r => setTimeout(r, 250));
+  fs.writeFileSync(path.join(logsDir, 'update-fresh.log'), 'nowy log');
+  assert.equal(await realConfirmUpdaterStarted({ updateRoot: dir, sinceMs, waitMs: 10 }), true);
+
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('cleanupUpdatesDir: zachowuje najwyzej 2 najnowsze wersje i usuwa pliki .partial', () => {
