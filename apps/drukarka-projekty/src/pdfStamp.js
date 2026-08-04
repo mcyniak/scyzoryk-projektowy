@@ -1,4 +1,4 @@
-// Stempel "DOKUMENTACJA POWYKONAWCZA" w prawym gornym rogu kazdej strony -
+// Stempel "DOKUMENTACJA POWYKONAWCZA" w lewym gornym rogu kazdej strony -
 // uzywane tylko gdy uzytkownik zaznaczy "Drukuj jako dokumentacje
 // powykonawcza" w drukarce projektow. Logika obliczania pozycji z
 // uwzglednieniem obrotu strony jest skopiowana/zaadaptowana z
@@ -11,11 +11,11 @@ const { PDFDocument, StandardFonts, rgb, degrees } = require("pdf-lib");
 
 const STAMP_LINES = ["DOKUMENTACJA", "POWYKONAWCZA"];
 const STAMP_COLOR = rgb(0, 0, 0); // czarny - drukarka docelowa jest czarno-biala
-const STAMP_LEFT_MARGIN_PCT = 4; // lewy brzeg boxu stempla (lewy gorny rog strony)
-const STAMP_WIDTH_PCT = 30;
+const STAMP_LEFT_MARGIN_PCT = 1.5; // lewy brzeg boxu stempla - blisko bocznej krawedzi kartki
+const STAMP_WIDTH_PCT = 20;
 const STAMP_TOP_MARGIN_PCT = 3;
 const STAMP_HEIGHT_PCT = 6;
-const MAX_FONT_SIZE = 11; // maly, nienarzucajacy sie napis - nie ma zasłaniac tresci dokumentu
+const MAX_FONT_SIZE = 9; // maly, nienarzucajacy sie napis - nie ma zasłaniac tresci dokumentu
 
 function visualPageSize(page) {
   const rotation = ((page.getRotation().angle % 360) + 360) % 360;
