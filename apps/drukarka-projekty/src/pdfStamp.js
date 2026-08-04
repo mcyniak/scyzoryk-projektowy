@@ -11,9 +11,9 @@ const { PDFDocument, StandardFonts, rgb, degrees } = require("pdf-lib");
 
 const STAMP_LINES = ["DOKUMENTACJA", "POWYKONAWCZA"];
 const STAMP_COLOR = rgb(0, 0, 0); // czarny - drukarka docelowa jest czarno-biala
-const STAMP_LEFT_MARGIN_PCT = 1.5; // lewy brzeg boxu stempla - blisko bocznej krawedzi kartki
+const STAMP_LEFT_MARGIN_PCT = 0; // lewy brzeg boxu stempla - dosuniety do samej bocznej krawedzi kartki
 const STAMP_WIDTH_PCT = 20;
-const STAMP_TOP_MARGIN_PCT = 3;
+const STAMP_TOP_MARGIN_PCT = 0.5; // dosuniety do samej gornej krawedzi kartki (rog, nie kawalek nizej)
 const STAMP_HEIGHT_PCT = 6;
 const MAX_FONT_SIZE = 9; // maly, nienarzucajacy sie napis - nie ma zasłaniac tresci dokumentu
 
