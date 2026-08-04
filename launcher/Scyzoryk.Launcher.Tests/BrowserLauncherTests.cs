@@ -17,7 +17,12 @@ public sealed class BrowserLauncherTests
         var logger = new FakeLauncherLogger();
         var browser = new BrowserLauncher(logger);
 
-        var exception = Record.Exception(() => browser.OpenDefaultBrowser("\0-nie-jest-to-uruchamialny-adres"));
+        // Pusty FileName gwarantowanie rzuca InvalidOperationException wewnatrz
+        // samego .NET (Process.Start), PRZED jakimkolwiek wywolaniem ShellExecute -
+        // deterministyczne na kazdej maszynie/Windows, w przeciwienstwie do
+        // "smieciowego" tekstu z bajtem \0, ktorego zachowanie przez ShellExecute
+        // jest niepewne (zlapane realnie: na CI Windows nie rzucalo wcale).
+        var exception = Record.Exception(() => browser.OpenDefaultBrowser(string.Empty));
 
         Assert.Null(exception);
         Assert.True(logger.HasEntryAt(LogLevel.Warning));

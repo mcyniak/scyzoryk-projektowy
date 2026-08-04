@@ -1,3 +1,4 @@
+using System.Threading;
 using Xunit;
 
 namespace Scyzoryk.Launcher.Tests;
@@ -24,12 +25,22 @@ public sealed class SingleInstanceGateTests
     {
         var mutexName = UniqueMutexName();
         using var owner = new SingleInstanceGate(mutexName);
-        using var contender = new SingleInstanceGate(mutexName);
-
         Assert.True(owner.TryAcquire(TimeSpan.FromSeconds(1)));
 
+        // Windows nazwane muteksy sa reentrantne per WATEK, nie per obiekt Mutex -
+        // gdyby "contender" probowal przejac muteks z TEGO SAMEGO watku, dostalby go
+        // natychmiast (bo ten wlasnie watek juz go "posiada" przez owner), co nie
+        // symuluje niczego zwiazanego z dwoma niezaleznymi procesami. Kontender MUSI
+        // dzialac na osobnym watku, zeby faktycznie sprawdzic wzajemne wykluczanie.
+        var acquired = true;
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var acquired = contender.TryAcquire(TimeSpan.FromMilliseconds(200));
+        var contenderThread = new Thread(() =>
+        {
+            using var contender = new SingleInstanceGate(mutexName);
+            acquired = contender.TryAcquire(TimeSpan.FromMilliseconds(200));
+        });
+        contenderThread.Start();
+        contenderThread.Join();
         sw.Stop();
 
         Assert.False(acquired);
