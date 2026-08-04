@@ -5,6 +5,7 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const { spawn } = require("child_process");
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
 const { sessionMiddleware } = require("./lib/sessionStore");
@@ -14,6 +15,7 @@ const wmFolder = require("./src/wmFolder");
 const printService = require("../../lib/printing");
 const { withPrintLease, PrintLeaseBusyError } = require("../../lib/printCoordinator");
 const pdfMerge = require("./src/pdfMerge");
+const pdfStamp = require("./src/pdfStamp");
 
 const app = express();
 const APP_DATA_ROOT = getAppDataDir("drukarka-projekty");
@@ -298,11 +300,15 @@ function isPathInsideFolder(filePath, folderPath) {
 
 function isMergedFile(filePath) {
   if (!filePath) return false;
-  const resolved = path.resolve(String(filePath));
-  const mergedDir = path.resolve(MERGED_DIR);
-  const normalized = resolved.toLowerCase();
-  const normalizedDir = mergedDir.toLowerCase();
-  return normalized === normalizedDir || normalized.startsWith(normalizedDir + path.sep);
+  const normalized = path.resolve(String(filePath)).toLowerCase();
+  // Obejmuje takze POWYKONAWCZA_DIR - kopie/konwersje PDF wytworzone przez
+  // tryb "dokumentacja powykonawcza" sa rownie tymczasowe jak polaczone PDF-y
+  // z MERGED_DIR i maja dzielic te sama sciezke czyszczenia
+  // (cleanupSessionMergedFiles / cleanupPrintedMergedFilesLater nizej).
+  return [MERGED_DIR, POWYKONAWCZA_DIR].some(dir => {
+    const normalizedDir = path.resolve(dir).toLowerCase();
+    return normalized === normalizedDir || normalized.startsWith(normalizedDir + path.sep);
+  });
 }
 
 function removeMergedFile(filePath) {
@@ -398,9 +404,138 @@ async function buildQueueFromGroups(req, groups) {
 
 const MERGED_DIR = path.join(DATA_DIR, "merged");
 if (!fs.existsSync(MERGED_DIR)) fs.mkdirSync(MERGED_DIR, { recursive: true });
+// Pliki robocze trybu "Drukuj jako dokumentacje powykonawcza" (kopie
+// oryginalnych PDF-ow do ostemplowania, DOCX przekonwertowane do PDF) -
+// tymczasowe jak MERGED_DIR, dlatego wspoldziela sprzatanie (isMergedFile
+// wyzej sprawdza oba katalogi).
+const POWYKONAWCZA_DIR = path.join(DATA_DIR, "powykonawcza");
+if (!fs.existsSync(POWYKONAWCZA_DIR)) fs.mkdirSync(POWYKONAWCZA_DIR, { recursive: true });
+const DOCX_TO_PDF_SCRIPT = path.join(__dirname, "scripts", "docx-to-pdf.ps1");
 {
   const { scheduleCleanup } = require("../../lib/hardening");
-  scheduleCleanup([MERGED_DIR], 6 * 60 * 60 * 1000, 60 * 60 * 1000);
+  scheduleCleanup([MERGED_DIR, POWYKONAWCZA_DIR], 6 * 60 * 60 * 1000, 60 * 60 * 1000);
+}
+
+function powykonawczaTempPath(req, idx, originalFullPath, forceExt) {
+  const base = path.basename(String(originalFullPath || "plik"));
+  const ext = forceExt || path.extname(base) || ".pdf";
+  const nameNoExt = base.slice(0, base.length - path.extname(base).length).replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
+  return path.join(POWYKONAWCZA_DIR, `${req.sid}_${Date.now()}_${idx}_${nameNoExt}${ext}`);
+}
+
+// Konwertuje paczke plikow DOCX do PDF przez jedna sesje Word COM
+// (scripts/docx-to-pdf.ps1) - identyczny, sprawdzony wzorzec nie-detached
+// spawn co apps/wnioski-powykonawcze/server.js:runConvertScript (bezpieczny
+// wobec bledu Windows/Node opisanego w run-update.ps1: detached:true zawsze
+// zglasza kod wyjscia 0 niezaleznie od rzeczywistego wyniku - tu w ogole nie
+// uzywamy detached, wiec problem nie dotyczy tego wywolania).
+async function convertDocxBatchToPdf(files) {
+  if (!files.length) return [];
+  const stamp = `${process.pid}_${Date.now()}`;
+  const inputJson = path.join(POWYKONAWCZA_DIR, `docx-to-pdf-in-${stamp}.json`);
+  const outputJson = path.join(POWYKONAWCZA_DIR, `docx-to-pdf-out-${stamp}.json`);
+  writeJsonFileNoBom(inputJson, { files });
+  // Ponizej domyslnego HTTP requestTimeout serwera (10 min, lib/hardening.js)
+  // - inaczej zerwanie polaczenia przez serwer wygladaloby jak zawieszenie,
+  // zamiast czytelnego bledu "Przekroczono limit czasu..." nizej.
+  const timeoutMs = Number(process.env.DRUKARKA_PROJEKTY_DOCX_TIMEOUT_MS || 5 * 60 * 1000);
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn("powershell.exe", [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", DOCX_TO_PDF_SCRIPT,
+        "-InputJson", inputJson, "-OutputJson", outputJson
+      ], { cwd: __dirname, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", chunk => { stderr += chunk.toString("utf8"); });
+      const timer = setTimeout(() => {
+        try { child.kill(); } catch (_) {}
+        reject(new Error(`Przekroczono limit czasu konwersji DOCX->PDF (${Math.round(timeoutMs / 60000)} min).`));
+      }, timeoutMs);
+      timer.unref();
+      child.on("error", err => { clearTimeout(timer); reject(err); });
+      child.on("close", code => {
+        clearTimeout(timer);
+        if (code === 0 || fs.existsSync(outputJson)) return resolve();
+        reject(new Error(stderr.trim() || `PowerShell (docx-to-pdf) zakonczyl sie kodem ${code}.`));
+      });
+    });
+    const output = readJsonFileNoBom(outputJson);
+    if (!output || output.ok !== true || !Array.isArray(output.results)) {
+      throw new Error((output && output.error) || "Konwersja DOCX->PDF nie zwrocila wynikow.");
+    }
+    return output.results;
+  } finally {
+    try { fs.rmSync(inputJson, { force: true }); } catch (_) {}
+    try { fs.rmSync(outputJson, { force: true }); } catch (_) {}
+  }
+}
+
+// Przygotowuje kolejke do druku jako "dokumentacja powykonawcza" - wolane w
+// /api/print, TUZ PRZED drukiem, na juz-zbudowanej session.queue (checkbox
+// zyje na kroku "Drukuj", PO tym jak kolejka/scalanie PDF-ow juz powstalo w
+// buildQueueFromGroups, wiec transformacja dziala na finalnych pozycjach
+// kolejki, nie na surowych grupach). Kazda pozycja konczy jako WLASNA kopia w
+// POWYKONAWCZA_DIR (nigdy oryginal klienta z folderu bazowego, ale juz-scalone
+// PDF-y z MERGED_DIR sa same tymczasowe, wiec stemplowane w miejscu bez
+// dodatkowej kopii), DOCX->PDF w jednej wspolnej sesji Word (szybciej niz
+// osobna sesja na plik), a potem kazda strona kazdego pliku dostaje stempel
+// przez pdfStamp.stampAllPages. Mutuje elementy queueItems w miejscu
+// (item.path/item.ext) - session.queue trzyma te same obiekty, wiec
+// printService i cleanupPrintedMergedFilesLater nizej widza juz nowe sciezki.
+async function applyPowykonawczaTransformToQueue(req, queueItems) {
+  if (!queueItems.length) return;
+
+  const docxJobs = [];
+  const toStamp = [];
+  let idx = 0;
+  for (const item of queueItems) {
+    idx += 1;
+    const itemPath = String(item.path || "");
+    if (itemPath.toLowerCase().endsWith(".pdf")) {
+      if (isMergedFile(itemPath)) {
+        toStamp.push(item);
+      } else {
+        const destPath = powykonawczaTempPath(req, idx, itemPath, ".pdf");
+        fs.copyFileSync(itemPath, destPath);
+        item.path = destPath;
+        toStamp.push(item);
+      }
+    } else if (itemPath.toLowerCase().endsWith(".docx")) {
+      const destPath = powykonawczaTempPath(req, idx, itemPath, ".pdf");
+      docxJobs.push({ inputPath: itemPath, outputPath: destPath, item });
+    }
+    // Inne typy (nie PDF, nie DOCX) nie da sie ostemplowac - zostaja bez
+    // zmian, ida do druku jak zwykle.
+  }
+
+  if (docxJobs.length) {
+    let results = [];
+    try {
+      results = await convertDocxBatchToPdf(docxJobs.map(j => ({ inputPath: j.inputPath, outputPath: j.outputPath })));
+    } catch (err) {
+      console.error("[drukarka-projekty] Konwersja DOCX->PDF (dokumentacja powykonawcza) nie powiodla sie:", err.message || err);
+    }
+    const byInput = new Map(results.map(r => [r.input, r]));
+    for (const job of docxJobs) {
+      const result = byInput.get(job.inputPath);
+      if (result && result.ok && fs.existsSync(job.outputPath)) {
+        job.item.path = job.outputPath;
+        job.item.ext = ".pdf";
+        toStamp.push(job.item);
+      }
+      // Jesli konwersja tego pliku sie nie powiodla, pozycja zostaje przy
+      // oryginalnej sciezce .docx (bez stempla) - wole niekompletnie
+      // ostemplowany pakiet niz calkowicie pominiety plik.
+    }
+  }
+
+  for (const item of toStamp) {
+    try {
+      await pdfStamp.stampAllPages(item.path);
+    } catch (err) {
+      console.error("[drukarka-projekty] Stemplowanie 'DOKUMENTACJA POWYKONAWCZA' nie powiodlo sie dla", item.path, "-", err.message || err);
+    }
+  }
 }
 
 function normalizeSessionPrinting(session) {
@@ -579,6 +714,17 @@ app.post("/api/print", async (req, res) => {
 
   if (!session.queue.length) return res.status(400).json({ ok: false, message: "Brak plikow w kolejce" });
 
+  // Checkbox "Drukuj jako dokumentacje powykonawcza" zyje na tym kroku (PO
+  // zbudowaniu kolejki), dlatego transformacja dziala na juz-gotowych
+  // pozycjach session.queue, a nie na surowych grupach w buildQueueFromGroups.
+  if (Boolean(req.body?.stampPowykonawcza)) {
+    try {
+      await applyPowykonawczaTransformToQueue(req, session.queue);
+    } catch (err) {
+      return res.status(400).json({ ok: false, message: "Nie udalo sie przygotowac dokumentacji powykonawczej: " + (err.message || err) });
+    }
+  }
+
   try {
     await withPrintLease({ app: "drukarka-projekty", sessionId: req.sessionID || null, printerName }, async () => {
       session.printing = true;
@@ -681,4 +827,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, "DRUKARKA_PROJEKTY");
 }
 
-module.exports = { buildQueueFromGroups };
+module.exports = { buildQueueFromGroups, applyPowykonawczaTransformToQueue, buildQueueItem };

@@ -703,7 +703,8 @@
           printerName: $("printerSelect").value || "",
           copyMode: "file",
           delaySeconds: 1,
-          groups
+          groups,
+          stampPowykonawcza: $("stampPowykonawczaCheckbox").checked
         })
       });
       pollStatus();

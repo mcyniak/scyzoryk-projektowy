@@ -21,6 +21,7 @@
     "test:group10": "node --test test/group10-updater.test.js",
     "test:group11": "node --test test/group11-karty-katalogowe.test.js",
     "test:group12": "node --test test/group12-pieczatki-pdf.test.js",
+    "test:group13": "node --test test/group13-drukarka-projekty-powykonawcza.test.js",
     "test:regressions": "node scripts/run-regression-tests.js",
     "security-smoke": "node scripts/security-smoke-test.js",
     "audit": "node scripts/check-project.js",
