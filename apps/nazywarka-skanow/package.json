@@ -1,0 +1,16 @@
+{
+  "name": "nazywarka-skanow-web",
+  "version": "1.0.0",
+  "description": "Lokalna aplikacja webowa do zmiany nazw zeskanowanych PDF-ow na sieciowym udziale skanera",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.5.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

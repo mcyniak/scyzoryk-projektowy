@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nazywarka skanów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="http://127.0.0.1:3000/">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-file"/></svg>
+          <strong>Nazywarka skanów</strong>
+        </div>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="http://127.0.0.1:3000">
+        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+        Panel główny
+      </a>
+    </header>
+
+    <section class="panel intro-panel">
+      <div class="intro-text">
+        <div class="kicker">Zmiana nazw skanów</div>
+        <h1>Otwórz folder skanów i nadaj nazwy</h1>
+        <p class="lead">Wpisz ścieżkę sieciową swojego folderu skanera, przejrzyj każdy plik i nadaj mu właściwą nazwę na podstawie adresu widocznego na stronie. Zmiana nazwy dzieje się od razu w miejscu, na tym samym udziale.</p>
+      </div>
+    </section>
+
+    <section class="panel" id="openPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Folder skanów</h2>
+          <p class="panel-desc">Ścieżkę trzeba wpisać za każdym razem od nowa (nie jest zapamiętywana).</p>
+        </div>
+      </div>
+      <div class="field-row">
+        <label class="option-field" style="grid-column: 1 / -1;">
+          <span class="option-label">Ścieżka UNC folderu</span>
+          <input id="folderPathInput" type="text" placeholder="\\192.168.99.251\skan\twoj_login" autocomplete="off" />
+        </label>
+      </div>
+      <div class="open-folder-row">
+        <button id="openFolderBtn" class="btn btn-primary" type="button">Otwórz folder</button>
+        <span id="openError" class="hint error-hint"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="emptyPanel" style="display:none;">
+      <div class="state">
+        <span class="state-icon"><svg class="icon icon-lg"><use href="/shared/icons.svg#i-file"/></svg></span>
+        <span>W tym folderze nie znaleziono żadnych plików PDF.</span>
+      </div>
+    </section>
+
+    <section class="panel" id="workPanel" style="display:none;">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Plik <span id="progressLabel">- / -</span></h2>
+          <p class="panel-desc" id="currentNameLabel"></p>
+        </div>
+        <div class="nav-actions">
+          <button id="prevBtn" class="btn btn-secondary" type="button">← Poprzedni</button>
+          <button id="nextBtn" class="btn btn-secondary" type="button">Następny →</button>
+        </div>
+      </div>
+
+      <div class="split workspace">
+        <div class="left">
+          <ul id="fileList" class="file-list"></ul>
+        </div>
+        <aside class="doc-viewer">
+          <div class="doc-viewer-toolbar">
+            <span class="preview-title">Podgląd PDF</span>
+            <span style="flex:1"></span>
+            <button id="zoomOutBtn" class="btn btn-icon" type="button" title="Pomniejsz" aria-label="Pomniejsz"><svg class="icon"><use href="/shared/icons.svg#i-zoom-out"/></svg></button>
+            <button id="zoomFitBtn" class="btn btn-icon" type="button" title="Dopasuj do szerokości" aria-label="Dopasuj do szerokości"><svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg></button>
+            <button id="zoomInBtn" class="btn btn-icon" type="button" title="Powiększ" aria-label="Powiększ"><svg class="icon"><use href="/shared/icons.svg#i-zoom-in"/></svg></button>
+            <span id="zoomLabel" class="zoom-label">Dopasuj</span>
+          </div>
+          <div class="doc-viewer-stage">
+            <iframe id="pdfPreview" title="Podgląd PDF"></iframe>
+            <div id="previewFallback" class="preview-fallback">Brak pliku do podglądu</div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="rename-bar">
+        <label class="option-field rename-field">
+          <span class="option-label">Nowa nazwa pliku</span>
+          <div class="rename-input-row">
+            <input id="newNameInput" type="text" autocomplete="off" placeholder="np. Kowalski, ul. Polna 5" />
+            <span class="rename-ext" id="extLabel">.pdf</span>
+          </div>
+        </label>
+        <button id="confirmRenameBtn" class="btn btn-primary btn-lg" type="button">Zatwierdź nazwę i dalej</button>
+      </div>
+      <div id="renameError" class="hint error-hint"></div>
+    </section>
+
+    <section class="panel" id="doneBanner" style="display:none;">
+      <div class="state state-success">
+        <span class="state-icon"><svg class="icon icon-lg"><use href="/shared/icons.svg#i-check-circle"/></svg></span>
+        <span>Wszystkie pliki w tym folderze mają nadaną nazwę. Możesz wrócić do dowolnego pliku z listy, żeby ją poprawić.</span>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -113,7 +113,8 @@ const apps = [
   { slug: 'wnioski-powykonawcze', name: 'Wnioski powykonawcze PDF', description: 'Zamiana wnioskow materialowych Word na dokumentacje powykonawcza PDF.', dir: path.join(ROOT, 'apps', 'wnioski-powykonawcze'), port: Number(process.env.WNIOSKI_PORT || 3005), healthPath: '/api/health' },
   { slug: 'karty-katalogowe', name: 'Karty katalogowe', description: 'Automatyczny dobor i kopiowanie kart katalogowych do folderow klientow na podstawie kolumny UID w Excelu.', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), port: Number(process.env.KARTY_PORT || 3006), healthPath: '/api/health' },
   { slug: 'drukarka-projekty', name: 'Drukarka projekty', description: 'Automatyczne przygotowanie i druk dokumentacji projektowej na podstawie arkusza inwestycji.', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), port: Number(process.env.DRUKARKA_PROJEKTY_PORT || 3010), healthPath: '/api/health' },
-  { slug: 'ocr-audytow', name: 'OCR audytów', description: 'Rozpoznawanie tekstu (w tym pisma recznego) na zeskanowanych audytach, z podzialem zbundlowanych plikow na adresy.', dir: path.join(ROOT, 'apps', 'ocr-audytow'), port: Number(process.env.OCR_AUDYTOW_PORT || 3011), healthPath: '/api/health' }
+  { slug: 'ocr-audytow', name: 'OCR audytów', description: 'Rozpoznawanie tekstu (w tym pisma recznego) na zeskanowanych audytach, z podzialem zbundlowanych plikow na adresy.', dir: path.join(ROOT, 'apps', 'ocr-audytow'), port: Number(process.env.OCR_AUDYTOW_PORT || 3011), healthPath: '/api/health' },
+  { slug: 'nazywarka-skanow', name: 'Nazywarka skanów', description: 'Zmiana nazw zeskanowanych PDF-ow w miejscu, na sieciowym udziale skanera.', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), port: Number(process.env.NAZYWARKA_SKANOW_PORT || 3007), healthPath: '/api/health' }
 ];
 
 
@@ -125,7 +126,8 @@ const dependencyChecks = [
   { slug: 'wnioski-powykonawcze', dir: path.join(ROOT, 'apps', 'wnioski-powykonawcze'), deps: ['express', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
   { slug: 'karty-katalogowe', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'express-rate-limit'] },
   { slug: 'drukarka-projekty', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), deps: ['express', 'multer', 'express-rate-limit', 'xlsx', 'mammoth', 'pdf-parse', 'pdf-lib', 'sanitize-filename'] },
-  { slug: 'ocr-audytow', dir: path.join(ROOT, 'apps', 'ocr-audytow'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib', '@pdf-lib/fontkit', 'pdf-parse', 'jimp', 'sanitize-filename', 'xlsx', '@google-cloud/documentai', 'exceljs'] }
+  { slug: 'ocr-audytow', dir: path.join(ROOT, 'apps', 'ocr-audytow'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib', '@pdf-lib/fontkit', 'pdf-parse', 'jimp', 'sanitize-filename', 'xlsx', '@google-cloud/documentai', 'exceljs'] },
+  { slug: 'nazywarka-skanow', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), deps: ['express', 'express-rate-limit'] }
 ];
 
 function appHasDependencies(app) {
