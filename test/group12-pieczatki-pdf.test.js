@@ -8,8 +8,8 @@ const assert = require('node:assert/strict');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { PDFDocument } = require('../apps/pieczatki-pdf/node_modules/pdf-lib');
-const { stampPdf, uniqueOutputPath, normalizeStampOptions } = require('../apps/pieczatki-pdf/server');
+const { PDFDocument, degrees } = require('../apps/pieczatki-pdf/node_modules/pdf-lib');
+const { stampPdf, uniqueOutputPath, normalizeStampOptions, drawPreparedStampOnPage, prepareStamp } = require('../apps/pieczatki-pdf/server');
 
 async function createTestPdf(filePath, pageCount = 2) {
   const doc = await PDFDocument.create();
@@ -99,4 +99,39 @@ test('stampPdf: poprawny zakres nadal dziala normalnie (brak regresji)', async (
   const outPath = await stampPdf({ path: pdfPath, originalname: 'test.pdf' }, stamps, dir);
   const outDoc = await PDFDocument.load(await fsp.readFile(outPath));
   assert.equal(outDoc.getPageCount(), 5);
+});
+
+test('drawPreparedStampOnPage: kotwica KAZDEJ linii tekstu stempla zostaje w granicach strony, nawet gdy strona jest obrocona o 90/270 st.', async (t) => {
+  // Ten sam blad co byl w apps/drukarka-projekty/src/pdfStamp.js (naprawiony
+  // 2026-08-04): centrowanie kazdej linii w poziomie ("Math.max(4,
+  // (stampWidth - textWidth) / 2)") dodawalo offset PROSTO do juz-
+  // zmapowanego mapped.x/mapped.y w przestrzeni PDF-a, zamiast policzyc
+  // pozycje w ukladzie WIZUALNYM i zmapowac na koniec. Dla stron bez rotacji
+  // dzialalo to przypadkiem, ale dla stron obroconych przesuwalo stempel w
+  // niewlasciwym kierunku (przy 90/270 st. nawet na inna os) - zweryfikowane
+  // na realnym pliku (rysunek PDF, strona obrocona 270 st.): pozycja tekstu
+  // przed napraw byla wyraznie inna (i mniej dokladna wzgledem yPct/xPct) niz
+  // po naprawie.
+  for (const rotation of [0, 90, 180, 270]) {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([595, 842]);
+    page.setRotation(degrees(rotation));
+    // Tekst musi byc WYRAZNIE wezszy niz stampWidth (30% strony), inaczej
+    // offset centrowania jest znikomo maly i test nie odrozni buga od
+    // naprawy (patrz realny przypadek z krotkim "TEST" w oryginalnym repro).
+    const preparedStamp = await prepareStamp(doc, { text: 'TEST' });
+    const opts = normalizeStampOptions({ stampText: 'TEST', xPct: 60, yPct: 80, widthPct: 30, heightPct: 10, fontSize: 20 }, 0);
+
+    const calls = [];
+    const originalDrawText = page.drawText.bind(page);
+    page.drawText = (text, options) => { calls.push({ text, x: options.x, y: options.y }); return originalDrawText(text, options); };
+
+    drawPreparedStampOnPage(page, preparedStamp, opts);
+
+    assert.ok(calls.length >= 1, `rotacja ${rotation}: powinna byc przynajmniej jedna linia tekstu`);
+    for (const call of calls) {
+      assert.ok(call.x >= -1 && call.x <= 596, `rotacja ${rotation}: x=${call.x} poza [0,595] dla "${call.text}"`);
+      assert.ok(call.y >= -1 && call.y <= 843, `rotacja ${rotation}: y=${call.y} poza [0,842] dla "${call.text}"`);
+    }
+  }
 });

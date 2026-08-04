@@ -419,18 +419,34 @@ function drawPreparedStampOnPage(page, preparedStamp, opts) {
   const fontSize = Math.max(6, Math.min(stampHeight / Math.max(lines.length, 1) * 0.55, stampWidth / 10, preparedStamp.fontSize || 28));
   const lineHeight = fontSize * 1.18;
   const totalHeight = lineHeight * lines.length;
-  const firstY = mapped.y + (stampHeight - totalHeight) / 2 + totalHeight - fontSize;
+  const firstVisualY = visualY + (stampHeight - totalHeight) / 2 + totalHeight - fontSize;
+  // WAZNE: dla stron obroconych (90/270 st.) "prawo"/"dol" w ukladzie
+  // wizualnym NIE sa tym samym co +x/-y w ukladzie PDF-a (patrz
+  // mapVisualBottomLeftToPdf). Centrowanie kazdej linii w poziomie (i
+  // ukladanie wierszy w pionie) NIE moze dodawac offsetu prosto do
+  // juz-zmapowanego mapped.x/mapped.y w przestrzeni PDF-a - dla stron z
+  // rotacja to przesuwa kotwice w niewlasciwym kierunku (przy 90/270 st.
+  // nawet na zupelnie inna os), co przy szerszym boxie niz sam tekst
+  // realnie przesuwa stempel poza zamierzone miejsce (potwierdzone tym samym
+  // bledem w apps/drukarka-projekty/src/pdfStamp.js - tekst byl niewidoczny
+  // na stronach "bokiem"). Naprawa: policz pozycje KAZDEJ linii w ukladzie
+  // WIZUALNYM, a mapowanie na PDF zrob jako ostatni krok, osobno dla kazdej
+  // linii (bo kazda ma inna szerokosc tekstu, wiec inny offset centrowania).
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
     const textWidth = preparedStamp.embedded.widthOfTextAtSize(line, fontSize);
+    const lineVisualX = visualX + Math.max(4, (stampWidth - textWidth) / 2);
+    const lineVisualY = firstVisualY - li * lineHeight;
+    const lineMapped = mapVisualBottomLeftToPdf(page, lineVisualX, lineVisualY);
+    const lineDrawRotation = (((lineMapped.rotation + opts.rotation) % 360) + 360) % 360;
     page.drawText(line, {
-      x: mapped.x + Math.max(4, (stampWidth - textWidth) / 2),
-      y: firstY - li * lineHeight,
+      x: lineMapped.x,
+      y: lineMapped.y,
       size: fontSize,
       font: preparedStamp.embedded,
       color: preparedStamp.color,
       opacity: opts.opacity,
-      rotate: degrees(drawRotation),
+      rotate: degrees(lineDrawRotation),
     });
   }
 }
@@ -571,4 +587,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, 'PIECZATKI');
 }
 
-module.exports = { stampPdf, uniqueOutputPath, parseCustomPages, normalizeStampOptions };
+module.exports = { stampPdf, uniqueOutputPath, parseCustomPages, normalizeStampOptions, drawPreparedStampOnPage, prepareStamp };
