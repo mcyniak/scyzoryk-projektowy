@@ -1,0 +1,115 @@
+using System.Security.Cryptography;
+using System.Text;
+
+namespace Scyzoryk.Launcher;
+
+/// <summary>
+/// Wszystkie sciezki i adresy, ktore launcher wyprowadza z wlasnego polozenia
+/// (AppContext.BaseDirectory) - nigdy ze sciezki wpisanej na twardo (np.
+/// C:\Users\...\ScyzorykProjektowy), zeby dzialalo identycznie w kazdej instalacji.
+/// </summary>
+public sealed class InstallPaths
+{
+    public string InstallDir { get; }
+    public string NodeExePath { get; }
+    public string ServerJsPath { get; }
+    public string Host { get; }
+    public int Port { get; }
+    public string PanelUrl { get; }
+    public string HealthUrl { get; }
+    public string LogFilePath { get; }
+    public string MutexName { get; }
+
+    private InstallPaths(
+        string installDir, string nodeExePath, string serverJsPath,
+        string host, int port, string panelUrl, string healthUrl,
+        string logFilePath, string mutexName)
+    {
+        InstallDir = installDir;
+        NodeExePath = nodeExePath;
+        ServerJsPath = serverJsPath;
+        Host = host;
+        Port = port;
+        PanelUrl = panelUrl;
+        HealthUrl = healthUrl;
+        LogFilePath = logFilePath;
+        MutexName = mutexName;
+    }
+
+    /// <summary>
+    /// Buduje InstallPaths z rzeczywistego polozenia launchera. Host/port sa
+    /// czytane z tych samych zmiennych srodowiskowych co server.js (PORT,
+    /// SCYZORYK_HOST - patrz server.js), zeby launcher nigdy nie "zgadywal"
+    /// innego adresu niz ten, na ktorym faktycznie wystartuje wlasnie spawnowany
+    /// serwer.
+    /// </summary>
+    public static InstallPaths FromBaseDirectory()
+    {
+        var installDir = AppContext.BaseDirectory.TrimEnd('\\', '/');
+        return FromInstallDir(installDir);
+    }
+
+    public static InstallPaths FromInstallDir(string installDir)
+    {
+        installDir = installDir.TrimEnd('\\', '/');
+        var nodeExePath = Path.Combine(installDir, "node-runtime", "node.exe");
+        var serverJsPath = Path.Combine(installDir, "server.js");
+
+        var host = Environment.GetEnvironmentVariable("SCYZORYK_HOST");
+        if (string.IsNullOrWhiteSpace(host)) host = "127.0.0.1";
+
+        var portRaw = Environment.GetEnvironmentVariable("PORT");
+        var port = 3000;
+        if (!string.IsNullOrWhiteSpace(portRaw) && int.TryParse(portRaw, out var parsedPort) && parsedPort > 0)
+        {
+            port = parsedPort;
+        }
+
+        var panelUrl = $"http://{host}:{port}";
+        var healthUrl = $"{panelUrl}/api/health";
+
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var logFilePath = Path.Combine(localAppData, "ScyzorykProjektowy", "logs", "launcher.log");
+
+        var mutexName = "Local\\ScyzorykLauncher_" + HashInstallDir(installDir);
+
+        return new InstallPaths(installDir, nodeExePath, serverJsPath, host, port, panelUrl, healthUrl, logFilePath, mutexName);
+    }
+
+    /// <summary>
+    /// Sprawdza, ze bundlowany Node i server.js faktycznie istnieja, zanim launcher
+    /// spróbuje cokolwiek odpalic. Zwraca po jednym brakujacym pliku na raz (kolejnosc:
+    /// Node przed server.js) - wystarczy do pokazania jednego, konkretnego bledu.
+    /// </summary>
+    public bool TryValidate(out string? missingFriendlyName, out string? missingFullPath)
+    {
+        if (!File.Exists(NodeExePath))
+        {
+            missingFriendlyName = "node-runtime\\node.exe";
+            missingFullPath = NodeExePath;
+            return false;
+        }
+
+        if (!File.Exists(ServerJsPath))
+        {
+            missingFriendlyName = "server.js";
+            missingFullPath = ServerJsPath;
+            return false;
+        }
+
+        missingFriendlyName = null;
+        missingFullPath = null;
+        return true;
+    }
+
+    private static string HashInstallDir(string installDir)
+    {
+        var normalized = Path.GetFullPath(installDir).ToLowerInvariant();
+        var bytes = Encoding.UTF8.GetBytes(normalized);
+        var hash = SHA256.HashData(bytes);
+        // 16 bajtow (32 znaki hex) - wystarczajaco unikalne dla nazwy muteksu, zeby
+        // dwie rozne instalacje (np. dev + zainstalowana) na tym samym komputerze
+        // nigdy nie trafily w ten sam obiekt.
+        return Convert.ToHexString(hash, 0, 16);
+    }
+}

@@ -8,7 +8,10 @@ const psFiles = [];
 
 function walk(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (['node_modules', 'uploads', 'output', 'tmp', 'data', 'logs'].includes(entry.name)) continue;
+    // 'bin'/'obj' to wyjscie dotnet build/publish w launcher\ (Scyzoryk.exe, C#) -
+    // nigdy nie zawieraja .js/.ps1, wiec pomijanie ich to tylko wydajnosc, nie
+    // poprawnosc (filtr rozszerzen nizej i tak by je odrzucil).
+    if (['node_modules', 'uploads', 'output', 'tmp', 'data', 'logs', 'bin', 'obj'].includes(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) walk(full);
     else if (entry.isFile() && entry.name.endsWith('.js')) jsFiles.push(full);

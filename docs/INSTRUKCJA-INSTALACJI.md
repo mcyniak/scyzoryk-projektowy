@@ -77,7 +77,7 @@ Dane użytkownika, ustawienia, wzory i pliki robocze są przechowywane oddzielni
 Uruchom skrót **Scyzoryk Projektowy** z pulpitu albo plik:
 
 ```text
-Uruchom-Scyzoryk.cmd
+Scyzoryk.exe
 ```
 
 Panel otworzy się pod adresem:

@@ -79,7 +79,7 @@ http://127.0.0.1:3000/instrukcja.html
 Uruchom skrót **Scyzoryk Projektowy** z pulpitu albo plik:
 
 ```text
-Uruchom-Scyzoryk.cmd
+Scyzoryk.exe
 ```
 
 Panel działa lokalnie pod adresem:

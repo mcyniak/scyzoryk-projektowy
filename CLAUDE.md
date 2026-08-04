@@ -25,7 +25,7 @@ ESM per-app, no bundler, no jest/mocha).
   registry, since some machines have a broken internal registry configured). Also installs the Playwright
   Chromium browser for `formularze-ecodan`.
 - `npm run check` / `node scripts/check-project.js` — the closest thing to a lint/test step: walks the
-  whole repo (skipping `node_modules`, `uploads`, `output`, `tmp`, `data`, `logs`) and runs `node --check`
+  whole repo (skipping `node_modules`, `uploads`, `output`, `tmp`, `data`, `logs`, `bin`, `obj`) and runs `node --check`
   on every `.js` file and a PowerShell parser check on every `.ps1` file. Run this after editing any JS or
   PS1 file.
 - `npm run security-smoke` / `node scripts/security-smoke-test.js` — smoke-tests a **running** instance:
@@ -173,6 +173,30 @@ new app, copy this rather than inventing a new one:
   `DRUKARKA_CLOSE_ACROBAT_AFTER_SECONDS` delayed-close behavior). Adobe Acrobat/Reader remains the
   deliberate last-resort fallback after SumatraPDF in `print-file.ps1` — some WSD/network printers
   (confirmed: Brother) have SumatraPDF silently report success while not physically printing.
+
+### Native launcher (`launcher/Scyzoryk.Launcher`, installed as `Scyzoryk.exe`)
+
+- C#/.NET 8, self-contained single-file, no console (`OutputType=WinExe`) — the **only** normal way to
+  start the installed app: desktop/Start Menu shortcuts, post-install "run now", autostart (Scheduled
+  Task), and the updater's post-update restart all invoke `{app}\Scyzoryk.exe` directly. It replaced a
+  chain of `Uruchom-Scyzoryk.cmd` → `is-panel-alive.ps1`/`stop-scyzoryk.ps1` → `cscript run-hidden.vbs` →
+  `STARTUJ-SCYZORYK-CICHO.cmd` → `node server.js` → `wait-and-open-panel.ps1`, which was flagged as
+  looking like a malware dropper to AV heuristics. Does **not** replace the panel UI (still the browser)
+  and does **not** remove the installer's own unsigned-EXE SmartScreen warning (separate, unaddressed
+  topic — no code signing implemented).
+- 4 CLI modes only: no args (ensure server running, open browser once), `--autostart` (ensure running,
+  never open browser, used by the Scheduled Task and by `run-update.ps1` post-update), `--stop` (kill
+  only this install's own `node-runtime\node.exe`, used by `[UninstallRun]` and `run-update.ps1`),
+  `--health` (single `/api/health` check, never starts anything). Single-instance coordination is a named
+  `Local\...` Mutex derived from a hash of the install path (`InstallPaths.cs`) — guards only the
+  "start the server" step, never held while opening the browser.
+- Built by `scripts/build-launcher.ps1` (checks .NET SDK 8, runs the launcher's own xUnit tests, `dotnet
+  publish`), called from `scripts/build-installer.ps1` before staging — treat "build the launcher" and
+  "stage it into the installer" as separate steps if you touch this, so a future Authenticode-signing
+  step can slot in between without restructuring either script. `dotnet`/`.NET SDK 8` was not available
+  in the sandbox this was originally built in — CI (`actions/setup-dotnet@v4` in all 3 installer
+  workflows) is the first real `dotnet build`/`dotnet test`/`dotnet publish` of this project; verify there
+  before trusting it compiles.
 
 ## Practical notes
 

@@ -145,8 +145,8 @@ function appHasDependencies(app) {
   // scripts/install-all.js) - np. jesli ten krok kiedys zawiodl/zostal przerwany, albo
   // Chromium zostal recznie usuniety. Bez tego sprawdzenia formularze-ecodan wygladaloby
   // na "zainstalowane" i auto-instalacja NIGDY by go nie naprawila - krytyczne przy
-  // cichym autostarcie (STARTUJ-SCYZORYK-CICHO.cmd), gdzie nikt nie zobaczy bledu na
-  // zywo, zeby recznie uruchomic NAPRAW-ZALEZNOSCI.cmd.
+  // cichym autostarcie (Scyzoryk.exe --autostart, patrz launcher/Scyzoryk.Launcher),
+  // gdzie nikt nie zobaczy bledu na zywo, zeby recznie uruchomic NAPRAW-ZALEZNOSCI.cmd.
   if (app.playwright) {
     try {
       const requireFromApp = createRequire(path.join(app.dir, 'server.js'));

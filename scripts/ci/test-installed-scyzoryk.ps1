@@ -41,8 +41,12 @@ function Run-Test {
 }
 
 function Stop-Scyzoryk {
-  if (Test-Path (Join-Path $InstallDir 'scripts\stop-scyzoryk.ps1')) {
-    powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'scripts\stop-scyzoryk.ps1')
+  # Scyzoryk.exe --stop jest tym samym mechanizmem, ktorego uzywa [UninstallRun]
+  # (patrz installer\scyzoryk.iss) - testujemy tu realna, uzytkownikowi widoczna
+  # sciezke zatrzymania, nie osobna, prywatna implementacje.
+  $launcherExe = Join-Path $InstallDir 'Scyzoryk.exe'
+  if (Test-Path $launcherExe) {
+    & $launcherExe --stop
   }
   if (Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false
@@ -86,6 +90,7 @@ Run-Test 'Instalacja na swiezym Windowsie' {
 
 Run-Test 'Kompletnosc zainstalowanej aplikacji' {
   $required = @(
+    'Scyzoryk.exe',
     'server.js','package.json','public\index.html','public\instrukcja.html','public\instrukcja.css',
     'node-runtime\node.exe','node-runtime\npm.cmd','unins000.exe',
     'apps\drukarka\node_modules\express',
@@ -206,28 +211,40 @@ Run-Test 'Utworzenie testowego PDF' {
   Assert-True ($LASTEXITCODE -eq 0 -and (Test-Path $pdf)) 'Nie utworzono testowego PDF.'
 }
 
-Run-Test 'Uruchomienie Scyzoryka bez globalnego Node.js' {
-  $nodeExe = Join-Path $InstallDir 'node-runtime\node.exe'
-  $outLog = Join-Path $LogsDir 'app-logs\panel-stdout.log'
-  $errLog = Join-Path $LogsDir 'app-logs\panel-stderr.log'
-  $launcher = Join-Path $LogsDir 'start-scyzoryk.ps1'
-  $restrictedPath = "$InstallDir\node-runtime;$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
-  $lines = @(
-    "`$env:PATH = '$restrictedPath'",
-    "`$env:PLAYWRIGHT_BROWSERS_PATH = '0'",
-    "Set-Location -LiteralPath '$InstallDir'",
-    "& '$nodeExe' server.js 1> '$outLog' 2> '$errLog'"
-  )
-  [IO.File]::WriteAllText($launcher, ($lines -join "`r`n"), [Text.UTF8Encoding]::new($true))
+Run-Test 'Uruchomienie Scyzoryka przez Scyzoryk.exe --autostart (bez globalnego Node.js)' {
+  $launcherExe = Join-Path $InstallDir 'Scyzoryk.exe'
+  Assert-True (Test-Path $launcherExe) "Brak $launcherExe - niekompletna instalacja."
 
   if (Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false
   }
-  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$launcher`""
+  # Dokladnie ta sama Akcja, jaka scripts\install-autostart.ps1 rejestruje na
+  # prawdziwej instalacji (Execute=Scyzoryk.exe, Argument=--autostart) - testujemy
+  # realny mechanizm autostartu. Scyzoryk.exe sam sobie ustawia PATH/env
+  # wewnetrznie (patrz ProcessManager.cs) - nie trzeba juz recznie ograniczac PATH.
+  $action = New-ScheduledTaskAction -Execute $launcherExe -Argument '--autostart'
   $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero)
   Register-ScheduledTask -TaskName $script:TaskName -Action $action -Principal $principal -Settings $settings | Out-Null
+
+  $script:AutostartTriggerTime = Get-Date
   Start-ScheduledTask -TaskName $script:TaskName
+}
+
+Run-Test 'Autostart nie tworzy cmd.exe/wscript.exe/cscript.exe (lancuch wygladajacy jak dropper)' {
+  # Audyt, ktory doprowadzil do powstania Scyzoryk.exe: normalny start NIE moze
+  # przechodzic przez CMD/VBS/dodatkowy PowerShell. Sprawdzamy calosc procesow w
+  # systemie powstalych PO wyzwoleniu zadania (nie tylko potomkow Scyzoryk.exe -
+  # sam launcher jest efemeryczny, konczy sie po odpaleniu serwera, wiec nie da
+  # sie juz sprawdzic jego wlasnych, minionych procesow potomnych).
+  Start-Sleep -Seconds 3
+  $forbiddenFilter = "Name='cmd.exe' OR Name='wscript.exe' OR Name='cscript.exe'"
+  $suspicious = @(Get-CimInstance Win32_Process -Filter $forbiddenFilter | Where-Object {
+    try { [Management.ManagementDateTimeConverter]::ToDateTime($_.CreationDate) -ge $script:AutostartTriggerTime }
+    catch { $true }
+  })
+  $details = ($suspicious | ForEach-Object { "$($_.Name) PID $($_.ProcessId)" }) -join ', '
+  Assert-True ($suspicious.Count -eq 0) "Wykryto procesy-powloki po autostarcie: $details"
 }
 
 Run-Test 'Health-check wszystkich narzedzi i stan OCR' {

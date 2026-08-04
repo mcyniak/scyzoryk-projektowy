@@ -56,8 +56,13 @@ Set-Content -Path $hostsPath -Value ($filtered + $newLine) -Encoding ASCII
 Write-Host "Dodano/odswiezono wpis."
 
 Write-Host "`n=== Rejestracja autostartu w Harmonogramie zadan Windows ==="
-$vbsPath = Join-Path $RepoRoot "scripts\run-hidden.vbs"
-$action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$vbsPath`""
+# Scyzoryk.exe --autostart zastapil lancuch wscript.exe -> run-hidden.vbs ->
+# STARTUJ-SCYZORYK-CICHO.cmd -> node server.js (patrz launcher\Scyzoryk.Launcher) -
+# ten sam efekt (start bez okna, bez przegladarki), bez CMD/PowerShell/VBS przy
+# kazdym logowaniu.
+$launcherExe = Join-Path $RepoRoot "Scyzoryk.exe"
+if (-not (Test-Path $launcherExe)) { throw "Brak $launcherExe - niekompletna instalacja, nie moge zarejestrowac autostartu." }
+$action = New-ScheduledTaskAction -Execute $launcherExe -Argument "--autostart"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable

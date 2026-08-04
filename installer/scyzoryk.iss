@@ -4,9 +4,12 @@
 ; przygotowal wczesniej katalog StagingDir zawierajacy:
 ;   - czysty eksport repo (git archive HEAD, ten sam zestaw plikow co scripts\build-package.js
 ;     produkuje dla ZIP-a, patrz .gitattributes/.gitignore - bez node_modules/danych/.claude/.serena),
+;   - Scyzoryk.exe - natywny launcher (C#/.NET 8, launcher\Scyzoryk.Launcher w repo, zbudowany
+;     przez scripts\build-launcher.ps1) - JEDYNY sposob normalnego startu aplikacji (skrot,
+;     autostart, restart po aktualizacji, zatrzymanie przy odinstalowaniu) - bez CMD/PowerShell/VBS,
 ;   - node-runtime\ - bundlowany, portable Node.js (Windows x64), zeby uzytkownik koncowy
 ;     NIE musial miec Node.js zainstalowanego globalnie na komputerze,
-;   - Uruchom-Scyzoryk.cmd i instaluj-zaleznosci.cmd (installer\ w repo) skopiowane do korzenia.
+;   - instaluj-zaleznosci.cmd (installer\ w repo) skopiowany do korzenia.
 ;
 ; Wywolanie: iscc scyzoryk.iss /DStagingDir="C:\sciezka\do\staging" /DAppVersion="1.2.3" /DOutputDir="C:\sciezka\do\release"
 
@@ -69,14 +72,18 @@ Name: "autostart"; Description: "Uruchamiaj Scyzoryka automatycznie przy logowan
 Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\Uruchom-Scyzoryk.cmd"; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 43
+; Filename wskazuje na Scyzoryk.exe (natywny launcher) - bez IconFilename/IconIndex,
+; zeby skrot i wpis na pasku zadan uzywaly tej samej, wbudowanej ikony samego EXE
+; (repo nie ma jeszcze dedykowanego .ico - patrz launcher\Scyzoryk.Launcher.csproj
+; i raport koncowy zadania "natywny launcher" - do zrobienia w przyszlosci).
+Name: "{group}\{#MyAppName}"; Filename: "{app}\Scyzoryk.exe"; WorkingDir: "{app}"
 Name: "{group}\Odinstaluj {#MyAppName}"; Filename: "{uninstallexe}"
 ; {userdesktop} (NIE {commondesktop}) - {commondesktop} to pulpit WSPOLNY wszystkich
 ; kont i wymaga uprawnien administratora do zapisu skrotu (IPersistFile::Save konczyl
 ; sie "Odmowa dostepu"/0x80070005 pod PrivilegesRequired=lowest - zlapane realnym
 ; testem instalacji, nie teoretycznie). {userdesktop} to pulpit BIEZACEGO uzytkownika,
 ; spojny z instalacja per-uzytkownik bez podnoszenia uprawnien.
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\Uruchom-Scyzoryk.cmd"; WorkingDir: "{app}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 43; Tasks: desktopicon
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\Scyzoryk.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\instaluj-zaleznosci.cmd"; WorkingDir: "{app}"; StatusMsg: "Instalowanie skladnikow Scyzoryka (wymaga internetu, moze potrwac kilka minut)..."; Flags: runhidden waituntilterminated
@@ -89,7 +96,9 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile
 ; Check: not IsScyzorykUpdate ponizej to dodatkowa (druga) warstwa obok
 ; skipifsilent - podczas /SCYZORYKUPDATE restart aplikacji robi WYLACZNIE
 ; scripts\run-update.ps1 (po zakonczeniu instalatora), nigdy ten krok.
-Filename: "{app}\Uruchom-Scyzoryk.cmd"; Description: "Uruchom Scyzoryka teraz"; Check: not IsScyzorykUpdate; Flags: postinstall skipifsilent nowait
+; Bez argumentow = tryb normalny Scyzoryk.exe (odpal jesli trzeba, poczekaj na
+; zdrowy serwer, otworz przegladarke raz) - patrz launcher\Scyzoryk.Launcher.
+Filename: "{app}\Scyzoryk.exe"; Description: "Uruchom Scyzoryka teraz"; Check: not IsScyzorykUpdate; Flags: postinstall skipifsilent nowait
 
 [UninstallRun]
 ; Wyrejestrowuje zadanie w Harmonogramie i wpis w hosts, JESLI byly zarejestrowane
@@ -97,9 +106,11 @@ Filename: "{app}\Uruchom-Scyzoryk.cmd"; Description: "Uruchom Scyzoryka teraz"; 
 ; zostawialoby osierocone zadanie wskazujace na usuniety folder. Musi isc PRZED
 ; usunieciem plikow (UninstallRun z definicji wykonuje sie przed [UninstallDelete]).
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-autostart.ps1"""; Flags: runhidden; RunOnceId: "UninstallAutostart"
-; Zatrzymuje TYLKO node.exe nalezacy do tej instalacji (patrz scripts\stop-scyzoryk.ps1),
-; zeby proces nie blokowal plikow podczas usuwania i zeby nie ubijac cudzych node.exe.
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\stop-scyzoryk.ps1"""; Flags: runhidden; RunOnceId: "StopScyzoryk"
+; Zatrzymuje TYLKO node.exe nalezacy do tej instalacji - Scyzoryk.exe --stop
+; replikuje dokladnie logike match-po-pelnej-sciezce z dawnego stop-scyzoryk.ps1
+; (patrz launcher\Scyzoryk.Launcher\ProcessManager.cs), zeby proces nie blokowal
+; plikow podczas usuwania i zeby nie ubijac cudzych node.exe.
+Filename: "{app}\Scyzoryk.exe"; Parameters: "--stop"; Flags: runhidden; RunOnceId: "StopScyzoryk"
 
 [Code]
 // Rozpoznaje ciche wywolanie z run-update.ps1 (patrz lib/updateService.js

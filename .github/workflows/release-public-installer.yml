@@ -65,6 +65,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Przygotuj .NET SDK (launcher Scyzoryk.exe)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
       - name: Sprawdz caly projekt (node --check + parser PowerShell)
         shell: pwsh
         run: npm run check
@@ -138,8 +143,8 @@ jobs:
           $forbidden = @(Get-ChildItem -Path $installDir -Recurse -File -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -eq 'service-account.json' -or $_.Name -eq 'document-ai.json' })
 
-          if (Test-Path (Join-Path $installDir 'scripts\stop-scyzoryk.ps1')) {
-            & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $installDir 'scripts\stop-scyzoryk.ps1')
+          if (Test-Path (Join-Path $installDir 'Scyzoryk.exe')) {
+            & (Join-Path $installDir 'Scyzoryk.exe') --stop
           }
           if (Test-Path (Join-Path $installDir 'unins000.exe')) {
             Start-Process -FilePath (Join-Path $installDir 'unins000.exe') -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru | Out-Null

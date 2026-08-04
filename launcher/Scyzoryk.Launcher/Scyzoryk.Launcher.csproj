@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Natywny launcher Scyzoryka: zastepuje lancuch CMD -> PowerShell -> VBS -> CMD -> Node
+    (patrz CLAUDE.md i pamiec projektu "scyzoryk launcher plan"). Wynikowy Scyzoryk.exe
+    jest self-contained/single-file, zeby nie wymagac .NET Runtime na komputerze
+    uzytkownika koncowego (ten sam duch co bundlowany node-runtime\node.exe).
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Scyzoryk.Launcher</RootNamespace>
+    <AssemblyName>Scyzoryk</AssemblyName>
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+
+    <!-- Wersja jest nadawana z zewnatrz (scripts\build-launcher.ps1 -p:Version=...),
+         zeby pokrywala sie z wersja z package.json/instalatora, a nie zyla wlasnym
+         zyciem w repo. 0.0.0.0 to tylko wartosc domyslna dla lokalnego "dotnet build"
+         bez podania -p:Version. -->
+    <Version Condition="'$(Version)' == ''">0.0.0.0</Version>
+    <FileVersion Condition="'$(FileVersion)' == ''">$(Version)</FileVersion>
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">0.0.0.0</AssemblyVersion>
+
+    <Product>Scyzoryk Projektowy</Product>
+    <Company>Dzial Projektowy Sanitarny</Company>
+    <Description>Launcher Scyzoryka Projektowego</Description>
+
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

@@ -2,6 +2,9 @@
 #
 # Produkuje jeden plik setup.exe, ktory:
 #   - kopiuje czysty eksport repo (git archive HEAD),
+#   - buduje i dolacza natywny launcher Scyzoryk.exe (C#/.NET 8, launcher\Scyzoryk.Launcher,
+#     przez scripts\build-launcher.ps1) - jedyny sposob normalnego startu aplikacji,
+#     bez CMD/PowerShell/VBS,
 #   - dolacza bundlowany, portable Node.js (Windows x64),
 #   - podczas instalacji doinstalowuje zaleznosci kazdej aplikacji i Chromium,
 #   - opcjonalnie dolacza gotowa konfiguracje Google Document AI przekazana
@@ -191,8 +194,16 @@ Copy-Item -Path $nodeSourceDir -Destination $nodeRuntimeDir -Recurse -Force
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $nodeExtractDir
 Write-Host "Bundlowany Node.js gotowy: $nodeRuntimeDir"
 
-# --- 4) Launcher + skrypt instalacji zaleznosci ---
-Copy-Item -Path (Join-Path $Root 'installer\Uruchom-Scyzoryk.cmd') -Destination $stagingDir -Force
+# --- 4) Natywny launcher (Scyzoryk.exe) + skrypt instalacji zaleznosci ---
+# Scyzoryk.exe jest wynikiem budowania (launcher\Scyzoryk.Launcher, C#/.NET 8),
+# NIE jest sciagany przez git archive jak reszta stagingu - build-launcher.ps1
+# uruchamia jego wlasne testy jednostkowe i publikuje self-contained/single-file
+# win-x64 EXE, ktory tu dopiero kopiujemy do stagingu.
+$launcherExePath = & (Join-Path $Root 'scripts\build-launcher.ps1') -Version $Version
+if ($LASTEXITCODE -ne 0 -or -not $launcherExePath -or -not (Test-Path $launcherExePath)) {
+  throw "Budowa launchera (Scyzoryk.exe) nie powiodla sie - build-launcher.ps1 nie zwrocil poprawnej sciezki."
+}
+Copy-Item -Path $launcherExePath -Destination (Join-Path $stagingDir 'Scyzoryk.exe') -Force
 Copy-Item -Path (Join-Path $Root 'installer\instaluj-zaleznosci.cmd') -Destination $stagingDir -Force
 
 # --- 5) Kompilacja instalatora ---

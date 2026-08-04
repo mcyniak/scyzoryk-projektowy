@@ -78,6 +78,20 @@ function Write-LastResult {
 # "..\node-runtime" obok siebie - stop-scyzoryk.ps1 liczy sciezke wzgledem
 # WLASNEGO polozenia, wiec skopiowanie go tutaj bez node-runtime dalej by nie
 # dzialalo. Zamiast tego uzywamy jawnie przekazanego $InstallDir.
+function Stop-ScyzorykOwnedProcessesInline {
+  param([string]$NodeExeFull)
+  Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+    Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $NodeExeFull) } |
+    ForEach-Object {
+      try {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+        Write-Log "Zatrzymano proces Scyzoryka PID $($_.ProcessId)."
+      } catch {
+        Write-Log "Nie udalo sie zatrzymac PID $($_.ProcessId): $($_.Exception.Message)"
+      }
+    }
+}
+
 function Stop-ScyzorykOwnedProcesses {
   param([string]$InstallDir)
   $nodeExe = Join-Path $InstallDir 'node-runtime\node.exe'
@@ -87,17 +101,27 @@ function Stop-ScyzorykOwnedProcesses {
   }
   $nodeExeFull = (Resolve-Path $nodeExe).Path
 
-  Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-    Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $nodeExeFull) } |
-    ForEach-Object {
-      try {
-        Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
-        Write-Log "Zatrzymano proces Scyzoryka PID $($_.ProcessId)."
-      } catch {
-        Write-Log "Nie udalo sie zatrzymac PID $($_.ProcessId): $($_.Exception.Message)"
-      }
+  # Scyzoryk.exe --stop replikuje dokladnie ta sama logike match-po-pelnej-sciezce
+  # (patrz launcher\Scyzoryk.Launcher\ProcessManager.cs) - preferujemy go jako jedno,
+  # wspolne miejsce tej logiki. Wbudowana wersja nizej zostaje jako zapasowa dla
+  # instalacji z wersji sprzed launchera (brak Scyzoryk.exe w {app}).
+  $launcherExe = Join-Path $InstallDir 'Scyzoryk.exe'
+  if (Test-Path $launcherExe) {
+    try {
+      Start-Process -FilePath $launcherExe -ArgumentList @('--stop') -Wait -WindowStyle Hidden
+      Write-Log "Wywolano $launcherExe --stop."
+    } catch {
+      Write-Log "Nie udalo sie wywolac $launcherExe --stop ($($_.Exception.Message)) - uzywam wbudowanej logiki zapasowej."
+      Stop-ScyzorykOwnedProcessesInline -NodeExeFull $nodeExeFull
     }
+  } else {
+    Write-Log "Brak $launcherExe (instalacja z wersji sprzed launchera) - uzywam wbudowanej logiki zapasowej."
+    Stop-ScyzorykOwnedProcessesInline -NodeExeFull $nodeExeFull
+  }
 
+  # Niezalezne potwierdzenie ponizej zostaje BEZ WZGLEDU na to, ktora sciezka
+  # powyzej zostala uzyta - ten skrypt dziala z Updates\<wersja>\ i nie moze ufac
+  # samemu sobie bez sprawdzenia realnego stanu procesow przed instalacja.
   $deadline = (Get-Date).AddSeconds(15)
   $remaining = @()
   do {
@@ -113,25 +137,19 @@ function Stop-ScyzorykOwnedProcesses {
   }
 }
 
-# Uruchamia Scyzoryka ponownie w ukryty sposob, korzystajac z istniejacego,
-# juz sprawdzonego mechanizmu autostartu (run-hidden.vbs -> STARTUJ-SCYZORYK-CICHO.cmd)
-# zamiast wynajdowac nowy sposob chowania okna.
+# Uruchamia Scyzoryka ponownie w ukryty sposob przez natywny launcher Scyzoryk.exe
+# --autostart (patrz launcher\Scyzoryk.Launcher) - bez okna, bez przegladarki,
+# bez CMD/PowerShell/VBS. Zastapilo dawny lancuch wscript.exe -> run-hidden.vbs ->
+# STARTUJ-SCYZORYK-CICHO.cmd.
 function Start-ScyzorykHidden {
   param([string]$InstallDir)
-  $vbsPath = Join-Path $InstallDir 'scripts\run-hidden.vbs'
-  if (Test-Path $vbsPath) {
-    Start-Process -FilePath 'wscript.exe' -ArgumentList @($vbsPath) -WindowStyle Hidden
-    Write-Log "Uruchomiono ponownie przez $vbsPath."
+  $launcherExe = Join-Path $InstallDir 'Scyzoryk.exe'
+  if (Test-Path $launcherExe) {
+    Start-Process -FilePath $launcherExe -ArgumentList @('--autostart') -WindowStyle Hidden
+    Write-Log "Uruchomiono ponownie przez $launcherExe --autostart."
     return
   }
-  Write-Log "Brak $vbsPath - probuje STARTUJ-SCYZORYK-CICHO.cmd wprost."
-  $cmdPath = Join-Path $InstallDir 'STARTUJ-SCYZORYK-CICHO.cmd'
-  if (Test-Path $cmdPath) {
-    Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $cmdPath) -WindowStyle Hidden
-    Write-Log "Uruchomiono ponownie przez $cmdPath."
-    return
-  }
-  Write-Log "BLAD: brak $vbsPath i $cmdPath - nie mozna automatycznie uruchomic Scyzoryka ponownie."
+  Write-Log "BLAD: brak $launcherExe - nie mozna automatycznie uruchomic Scyzoryka ponownie."
 }
 
 # Audyt v1.0.4, P0-8: druga linia obrony (pierwsza jest w lib/updateService.js,
