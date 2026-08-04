@@ -59,19 +59,20 @@ function drawStampOnPage(page, font) {
   const totalHeight = lineHeight * STAMP_LINES.length;
   const firstVisualY = visualBoxY + (stampHeight - totalHeight) / 2 + totalHeight - fontSize;
 
+  // Stempel jest w rogu, wiec kazda linia jest wyrownana do lewej (do
+  // visualBoxX), NIE centrowana w obrebie stampWidth - wczesniejsze
+  // centrowanie ("Math.max(0, (stampWidth - textWidth) / 2)") dawalo w
+  // praktyce ~20pt dodatkowego odstepu od krawedzi (potwierdzone realnym
+  // wyciagiem pozycji tekstu z PDF-a przez pdfjs-dist: x=25pt mimo
+  // STAMP_MARGIN_PT=3), bo box byl szerszy niz sam tekst.
+  //
   // WAZNE: dla stron obroconych (90/270 st.) "prawo"/"dol" w ukladzie
   // wizualnym NIE sa tym samym co +x/-y w ukladzie PDF-a (patrz
-  // mapVisualBottomLeftToPdf). Wczesniej centrowanie kazdej linii w poziomie
-  // dodawalo offset PROSTO do juz-zmapowanego mapped.x w przestrzeni PDF-a -
-  // dla stron z rotacja to przesuwalo kotwice w NIEWLASCIWYM kierunku i przy
-  // wystarczajaco duzym offsecie wypychalo caly tekst poza widoczna strone
-  // (niewidoczny stempel na stronach "bokiem", mimo poprawnej pozycji samego
-  // boxu). Naprawa: policz pozycje KAZDEJ linii w ukladzie WIZUALNYM
-  // (visualX/visualY), a mapowanie na PDF zrob jako ostatni krok, osobno dla
-  // kazdej linii (bo kazda ma inna szerokosc tekstu, wiec inny offset).
+  // mapVisualBottomLeftToPdf) - mapowanie na PDF robimy jako ostatni krok,
+  // osobno dla kazdej linii, na wspolrzednych policzonych w ukladzie
+  // WIZUALNYM (visualX/visualY).
   STAMP_LINES.forEach((line, li) => {
-    const textWidth = font.widthOfTextAtSize(line, fontSize);
-    const lineVisualX = visualBoxX + Math.max(0, (stampWidth - textWidth) / 2);
+    const lineVisualX = visualBoxX;
     const lineVisualY = firstVisualY - li * lineHeight;
     const mapped = mapVisualBottomLeftToPdf(page, lineVisualX, lineVisualY);
     page.drawText(line, {
