@@ -50,6 +50,14 @@ app.use(sessionMiddleware(() => ({
   queue: [],
   printing: false,
   lastBaseFolder: null,
+  // Audyt v1.0.8 P2: true dopiero PO calkowicie udanym przygotowaniu
+  // dokumentacji powykonawczej dla AKTUALNEJ zawartosci kolejki. Ponowna
+  // proba druku (np. po zajetej globalnej blokadzie) NIE moze wywolac
+  // transformacji jeszcze raz, inaczej kazdy plik dostalby drugi stempel.
+  // Resetowane w kazdym miejscu, ktore realnie zmienia ZAWARTOSC kolejki
+  // (queue/set-merged, queue/set, queue/clear) - nie w reorder/delete, bo te
+  // nie dotykaja tresci pozostalych pozycji.
+  queuePowykonawczaDone: false,
   status: { printing: false, message: "Gotowy", current: 0, total: 0, percent: 0, done: false, error: null }
 }), (expiredSessionData) => {
   // Sesja wygasa niezaleznie od tego, czy ktos zdazyl kliknac "drukuj" - bez
@@ -416,11 +424,18 @@ const DOCX_TO_PDF_SCRIPT = path.join(__dirname, "scripts", "docx-to-pdf.ps1");
   scheduleCleanup([MERGED_DIR, POWYKONAWCZA_DIR], 6 * 60 * 60 * 1000, 60 * 60 * 1000);
 }
 
-function powykonawczaTempPath(req, idx, originalFullPath, forceExt) {
+function newPowykonawczaOpDir(req) {
+  const opId = `${req.sid}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+  const dir = path.join(POWYKONAWCZA_DIR, opId);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function powykonawczaOpFilePath(opDir, idx, originalFullPath, forceExt) {
   const base = path.basename(String(originalFullPath || "plik"));
   const ext = forceExt || path.extname(base) || ".pdf";
   const nameNoExt = base.slice(0, base.length - path.extname(base).length).replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
-  return path.join(POWYKONAWCZA_DIR, `${req.sid}_${Date.now()}_${idx}_${nameNoExt}${ext}`);
+  return path.join(opDir, `${idx}_${nameNoExt}${ext}`);
 }
 
 // Konwertuje paczke plikow DOCX do PDF przez jedna sesje Word COM
@@ -429,11 +444,11 @@ function powykonawczaTempPath(req, idx, originalFullPath, forceExt) {
 // wobec bledu Windows/Node opisanego w run-update.ps1: detached:true zawsze
 // zglasza kod wyjscia 0 niezaleznie od rzeczywistego wyniku - tu w ogole nie
 // uzywamy detached, wiec problem nie dotyczy tego wywolania).
-async function convertDocxBatchToPdf(files) {
+async function convertDocxBatchToPdf(opDir, files) {
   if (!files.length) return [];
   const stamp = `${process.pid}_${Date.now()}`;
-  const inputJson = path.join(POWYKONAWCZA_DIR, `docx-to-pdf-in-${stamp}.json`);
-  const outputJson = path.join(POWYKONAWCZA_DIR, `docx-to-pdf-out-${stamp}.json`);
+  const inputJson = path.join(opDir, `docx-to-pdf-in-${stamp}.json`);
+  const outputJson = path.join(opDir, `docx-to-pdf-out-${stamp}.json`);
   writeJsonFileNoBom(inputJson, { files });
   // Ponizej domyslnego HTTP requestTimeout serwera (10 min, lib/hardening.js)
   // - inaczej zerwanie polaczenia przez serwer wygladaloby jak zawieszenie,
@@ -470,72 +485,105 @@ async function convertDocxBatchToPdf(files) {
   }
 }
 
-// Przygotowuje kolejke do druku jako "dokumentacja powykonawcza" - wolane w
-// /api/print, TUZ PRZED drukiem, na juz-zbudowanej session.queue (checkbox
-// zyje na kroku "Drukuj", PO tym jak kolejka/scalanie PDF-ow juz powstalo w
-// buildQueueFromGroups, wiec transformacja dziala na finalnych pozycjach
-// kolejki, nie na surowych grupach). Kazda pozycja konczy jako WLASNA kopia w
-// POWYKONAWCZA_DIR (nigdy oryginal klienta z folderu bazowego, ale juz-scalone
-// PDF-y z MERGED_DIR sa same tymczasowe, wiec stemplowane w miejscu bez
-// dodatkowej kopii), DOCX->PDF w jednej wspolnej sesji Word (szybciej niz
-// osobna sesja na plik), a potem kazda strona kazdego pliku dostaje stempel
-// przez pdfStamp.stampAllPages. Mutuje elementy queueItems w miejscu
-// (item.path/item.ext) - session.queue trzyma te same obiekty, wiec
-// printService i cleanupPrintedMergedFilesLater nizej widza juz nowe sciezki.
-async function applyPowykonawczaTransformToQueue(req, queueItems) {
-  if (!queueItems.length) return;
+// Audyt v1.0.8 P1/P2: przygotowanie paczki "dokumentacja powykonawcza" jest
+// operacja WSZYSTKO ALBO NIC. Wczesniej blad konwersji DOCX->PDF albo
+// stemplowania pojedynczego pliku byl tylko logowany (console.error), a
+// nieostemplowany/nieskonwertowany plik i tak szedl do druku razem z resztą
+// paczki - uzytkownik nie mial szans tego zauwazyc przed wyslaniem do
+// drukarki. Teraz KAZDY plik jest weryfikowany, a przy pierwszym
+// niepowodzeniu ZADEN plik z tej paczki nie idzie do druku (blad zawiera
+// liste WSZYSTKICH niepowodzen, nie tylko pierwszego, z nazwa pliku i
+// etapem: format / konwersja Word / stemplowanie / brak pliku na koncu).
+//
+// Retry-safety (P2): funkcja NIGDY nie mutuje sourceQueue (kopiuje kazdy
+// element) i ZAWSZE pracuje w NOWYM katalogu operacji (newPowykonawczaOpDir)
+// - nawet gdy dana pozycja jest juz plikiem tymczasowym z wczesniejszego
+// scalania (MERGED_DIR), dostaje swieza kopie, nigdy nie jest modyfikowana w
+// miejscu. Dzieki temu KAZDE wywolanie (w tym ponowna proba po zajetej
+// globalnej blokadzie druku - patrz uzycie w /api/print) zaczyna od tego
+// samego, nigdy-nie-stemplowanego punktu wyjscia: podwojny stempel jest
+// strukturalnie niemozliwy, bez potrzeby osobnego "czy to juz bylo
+// stemplowane" na poziomie pliku (na poziomie SESJI o to dba
+// session.queuePowykonawczaDone w /api/print).
+async function prepareStampedQueue(req, sourceQueue) {
+  const opDir = newPowykonawczaOpDir(req);
+  const errors = [];
+  const resultItems = sourceQueue.map(item => ({ ...item }));
 
   const docxJobs = [];
   const toStamp = [];
-  let idx = 0;
-  for (const item of queueItems) {
-    idx += 1;
+
+  resultItems.forEach((item, idx) => {
     const itemPath = String(item.path || "");
-    if (itemPath.toLowerCase().endsWith(".pdf")) {
-      if (isMergedFile(itemPath)) {
-        toStamp.push(item);
-      } else {
-        const destPath = powykonawczaTempPath(req, idx, itemPath, ".pdf");
+    const lower = itemPath.toLowerCase();
+    const label = item.label || item.originalName || itemPath;
+    if (lower.endsWith(".pdf")) {
+      const destPath = powykonawczaOpFilePath(opDir, idx, itemPath, ".pdf");
+      try {
         fs.copyFileSync(itemPath, destPath);
         item.path = destPath;
-        toStamp.push(item);
+        toStamp.push({ item, label });
+      } catch (err) {
+        errors.push({ label, stage: "kopiowanie PDF", message: err.message || String(err) });
       }
-    } else if (itemPath.toLowerCase().endsWith(".docx")) {
-      const destPath = powykonawczaTempPath(req, idx, itemPath, ".pdf");
-      docxJobs.push({ inputPath: itemPath, outputPath: destPath, item });
+    } else if (lower.endsWith(".docx")) {
+      const destPath = powykonawczaOpFilePath(opDir, idx, itemPath, ".pdf");
+      docxJobs.push({ inputPath: itemPath, outputPath: destPath, item, label });
+    } else {
+      errors.push({ label, stage: "format", message: `Nieobslugiwany format pliku (${path.extname(itemPath) || "brak rozszerzenia"}) - nie da sie ostemplowac "DOKUMENTACJA POWYKONAWCZA".` });
     }
-    // Inne typy (nie PDF, nie DOCX) nie da sie ostemplowac - zostaja bez
-    // zmian, ida do druku jak zwykle.
-  }
+  });
 
   if (docxJobs.length) {
-    let results = [];
+    let results = null;
+    let conversionError = null;
     try {
-      results = await convertDocxBatchToPdf(docxJobs.map(j => ({ inputPath: j.inputPath, outputPath: j.outputPath })));
+      results = await convertDocxBatchToPdf(opDir, docxJobs.map(j => ({ inputPath: j.inputPath, outputPath: j.outputPath })));
     } catch (err) {
-      console.error("[drukarka-projekty] Konwersja DOCX->PDF (dokumentacja powykonawcza) nie powiodla sie:", err.message || err);
+      conversionError = err;
     }
-    const byInput = new Map(results.map(r => [r.input, r]));
-    for (const job of docxJobs) {
-      const result = byInput.get(job.inputPath);
-      if (result && result.ok && fs.existsSync(job.outputPath)) {
-        job.item.path = job.outputPath;
-        job.item.ext = ".pdf";
-        toStamp.push(job.item);
+    if (conversionError) {
+      for (const job of docxJobs) {
+        errors.push({ label: job.label, stage: "konwersja DOCX->PDF (Word)", message: conversionError.message || String(conversionError) });
       }
-      // Jesli konwersja tego pliku sie nie powiodla, pozycja zostaje przy
-      // oryginalnej sciezce .docx (bez stempla) - wole niekompletnie
-      // ostemplowany pakiet niz calkowicie pominiety plik.
+    } else {
+      const byInput = new Map(results.map(r => [r.input, r]));
+      for (const job of docxJobs) {
+        const result = byInput.get(job.inputPath);
+        if (result && result.ok && fs.existsSync(job.outputPath)) {
+          job.item.path = job.outputPath;
+          job.item.ext = ".pdf";
+          toStamp.push({ item: job.item, label: job.label });
+        } else {
+          errors.push({
+            label: job.label,
+            stage: "konwersja DOCX->PDF (Word)",
+            message: (result && result.error) || "Konwersja nie powiodla sie - Word nie zwrocil wyniku dla tego pliku."
+          });
+        }
+      }
     }
   }
 
-  for (const item of toStamp) {
+  for (const { item, label } of toStamp) {
     try {
       await pdfStamp.stampAllPages(item.path);
+      if (!fs.existsSync(item.path)) {
+        errors.push({ label, stage: "stemplowanie", message: "Plik po stemplowaniu nie istnieje pod oczekiwana sciezka." });
+      }
     } catch (err) {
-      console.error("[drukarka-projekty] Stemplowanie 'DOKUMENTACJA POWYKONAWCZA' nie powiodlo sie dla", item.path, "-", err.message || err);
+      errors.push({ label, stage: "stemplowanie", message: err.message || String(err) });
     }
   }
+
+  if (errors.length) {
+    // Zaden plik z tej paczki nie idzie do druku - sprzatamy WSZYSTKIE
+    // pliki tymczasowe tej (nieudanej) proby, nie tylko te co zawiodly.
+    try { fs.rmSync(opDir, { recursive: true, force: true }); } catch (_) {}
+    return { ok: false, errors };
+  }
+
+  return { ok: true, items: resultItems, opDir };
 }
 
 function normalizeSessionPrinting(session) {
@@ -570,6 +618,7 @@ app.post("/api/queue/set-merged", async (req, res) => {
     return res.status(400).json({ ok: false, message: `Za duzo pozycji w kolejce (${built.length}). Limit: ${MAX_QUEUE}. Podziel na mniejsze paczki.` });
   }
   req.session.queue = built;
+  req.session.queuePowykonawczaDone = false;
   res.json({ ok: true, queue: req.session.queue });
 });
 
@@ -596,6 +645,7 @@ app.post("/api/queue/set", (req, res) => {
     return res.status(400).json({ ok: false, message: `Za duzo pozycji w kolejce (${built.length}). Limit: ${MAX_QUEUE}. Podziel na mniejsze paczki.` });
   }
   req.session.queue = built;
+  req.session.queuePowykonawczaDone = false;
   res.json({ ok: true, queue: req.session.queue });
 });
 
@@ -627,6 +677,7 @@ app.post("/api/queue/clear", (req, res) => {
   if (req.session.printing) return res.status(409).json({ ok: false, message: "Nie mozna czyscic podczas drukowania" });
   cleanupSessionMergedFiles(req.session);
   req.session.queue = [];
+  req.session.queuePowykonawczaDone = false;
   res.json({ ok: true, queue: req.session.queue });
 });
 
@@ -717,12 +768,27 @@ app.post("/api/print", async (req, res) => {
   // Checkbox "Drukuj jako dokumentacje powykonawcza" zyje na tym kroku (PO
   // zbudowaniu kolejki), dlatego transformacja dziala na juz-gotowych
   // pozycjach session.queue, a nie na surowych grupach w buildQueueFromGroups.
-  if (Boolean(req.body?.stampPowykonawcza)) {
-    try {
-      await applyPowykonawczaTransformToQueue(req, session.queue);
-    } catch (err) {
-      return res.status(400).json({ ok: false, message: "Nie udalo sie przygotowac dokumentacji powykonawczej: " + (err.message || err) });
+  //
+  // Audyt v1.0.8 P1/P2: WSZYSTKO ALBO NIC + zabezpieczenie przed podwojnym
+  // stemplem po ponowieniu. queuePowykonawczaDone=true oznacza, ze AKTUALNA
+  // zawartosc session.queue zostala JUZ RAZ w calosci (bez zadnego bledu)
+  // przygotowana - kolejna proba druku (np. po odrzuceniu z powodu zajetej
+  // globalnej blokady nizej) NIE moze przygotowac jej jeszcze raz, inaczej
+  // kazdy plik dostalby drugi stempel. Flaga jest resetowana wszedzie, gdzie
+  // ZAWARTOSC kolejki sie realnie zmienia (queue/set-merged, queue/set,
+  // queue/clear).
+  if (Boolean(req.body?.stampPowykonawcza) && !session.queuePowykonawczaDone) {
+    const prepared = await prepareStampedQueue(req, session.queue);
+    if (!prepared.ok) {
+      const details = prepared.errors.map(e => `- ${e.label} [${e.stage}]: ${e.message}`).join("\n");
+      return res.status(400).json({
+        ok: false,
+        message: `Nie udalo sie przygotowac dokumentacji powykonawczej - druk NIE zostal rozpoczety dla ZADNEGO pliku z tej paczki.\n${details}`,
+        errors: prepared.errors
+      });
     }
+    session.queue = prepared.items;
+    session.queuePowykonawczaDone = true;
   }
 
   try {
@@ -827,4 +893,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, "DRUKARKA_PROJEKTY");
 }
 
-module.exports = { app, buildQueueFromGroups, applyPowykonawczaTransformToQueue, buildQueueItem };
+module.exports = { app, buildQueueFromGroups, prepareStampedQueue, buildQueueItem, isMergedFile };

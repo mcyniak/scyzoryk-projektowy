@@ -86,6 +86,12 @@
 .success-panel { text-align: center; padding: var(--space-5); border-radius: var(--radius-lg); background: var(--success-50); border: 1px solid var(--success-100); color: var(--success-600); font-weight: 700; margin-top: var(--space-4); }
 .success-panel .big-check { font-size: 32px; display: block; margin-bottom: 6px; }
 
+/* Blad "dokumentacji powykonawczej" (audyt v1.0.8 P1) wysyla liste WSZYSTKICH
+   niepowodzen (plik + etap), jedno na linie - bez pre-wrap #statusText
+   pokazywalby to jako jeden nieczytelny ciag (domyslne white-space:normal
+   zwija znaki nowej linii). */
+#statusText { white-space: pre-wrap; }
+
 @media (max-width: 640px) {
   .step-label { display: none; }
   .stepper { padding: 10px; }

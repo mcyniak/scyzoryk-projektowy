@@ -6,7 +6,24 @@ const os = require('node:os');
 const path = require('node:path');
 const { PDFDocument, degrees, StandardFonts } = require('../apps/drukarka-projekty/node_modules/pdf-lib');
 const pdfStamp = require('../apps/drukarka-projekty/src/pdfStamp');
-const { buildQueueFromGroups, applyPowykonawczaTransformToQueue, buildQueueItem } = require('../apps/drukarka-projekty/server');
+const { app, buildQueueFromGroups, prepareStampedQueue, buildQueueItem, isMergedFile } = require('../apps/drukarka-projekty/server');
+const { withPrintLease } = require('../lib/printCoordinator');
+const printService = require('../lib/printing');
+
+async function countTextOccurrences(pdfBytes, needle) {
+  const pdfjsUrl = 'file:///' + path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.mjs').split(path.sep).join('/');
+  const pdfjsLib = await import(pdfjsUrl);
+  const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(pdfBytes), disableFontFace: true }).promise;
+  let count = 0;
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    for (const item of textContent.items) {
+      if (item.str && item.str.includes(needle)) count += 1;
+    }
+  }
+  return count;
+}
 
 async function createTestPdf(filePath, { rotate } = {}) {
   const doc = await PDFDocument.create();
@@ -91,7 +108,14 @@ test('pdfStamp: stampAllPages ostemplowuje kazda strone (rowna i obrocona o 90) 
   assert.ok(afterBytes.length > beforeSize, 'plik po stemplowaniu powinien byc wiekszy (dodany font/tekst)');
 });
 
-test('drukarka-projekty: applyPowykonawczaTransformToQueue kopiuje oryginal klienta przed stemplowaniem, nigdy nie modyfikuje go w miejscu', async (t) => {
+// =====================================================================
+// Audyt v1.0.8, Priorytet 1: prepareStampedQueue (dawniej
+// applyPowykonawczaTransformToQueue) jest teraz operacja WSZYSTKO ALBO NIC -
+// zaden blad pojedynczego pliku nie moze skoncyzc sie mieszana paczka
+// (czesc ze stemplem, czesc bez), ktora mimo to idzie do druku.
+// =====================================================================
+
+test('prepareStampedQueue: kopiuje KAZDY plik (rowniez juz-scalony PDF) do NOWEGO katalogu, nigdy nie modyfikuje zrodla w miejscu', async (t) => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-powyk-orig-'));
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
 
@@ -101,71 +125,240 @@ test('drukarka-projekty: applyPowykonawczaTransformToQueue kopiuje oryginal klie
 
   const item = buildQueueItem(originalPath, 'Rysunek');
   const fakeReq = { sid: 'test-sid-orig' };
-  await applyPowykonawczaTransformToQueue(fakeReq, [item]);
+  const result = await prepareStampedQueue(fakeReq, [item]);
+  t.after(() => { if (result.opDir) fs.rmSync(result.opDir, { recursive: true, force: true }); });
 
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
   // Oryginal klienta musi zostac bit-identyczny - stempel poszedl na kopii.
   const originalBytesAfter = await fsp.readFile(originalPath);
   assert.deepEqual(originalBytesAfter, originalBytesBefore);
+  // Wejsciowy item (i cala wejsciowa tablica) NIE sa mutowane - to jest
+  // podstawa bezpieczenstwa ponowien (P2): kazde wywolanie startuje od
+  // niezmienionego source, nigdy od wyniku poprzedniej proby.
+  assert.equal(item.path, originalPath);
 
-  assert.notEqual(item.path, originalPath);
-  assert.equal(path.basename(path.dirname(item.path)), 'powykonawcza');
-  assert.ok(fs.existsSync(item.path));
-  const stampedDoc = await PDFDocument.load(await fsp.readFile(item.path));
+  const resultItem = result.items[0];
+  assert.notEqual(resultItem.path, originalPath);
+  assert.ok(fs.existsSync(resultItem.path));
+  const stampedDoc = await PDFDocument.load(await fsp.readFile(resultItem.path));
   assert.equal(stampedDoc.getPageCount(), 1);
 });
 
-test('drukarka-projekty: applyPowykonawczaTransformToQueue stempluje juz-scalone PDF-y w miejscu (sciezka sie nie zmienia)', async (t) => {
-  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-powyk-merged-'));
+test('prepareStampedQueue: blad stemplowania JEDNEGO pliku PDF blokuje CALA paczke - zaden plik nie jest gotowy do druku', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-powyk-stampfail-'));
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
 
-  const pdfA = path.join(root, 'a.pdf');
-  const pdfB = path.join(root, 'b.pdf');
-  await createTestPdf(pdfA);
-  await createTestPdf(pdfB);
+  const goodPath = path.join(root, 'dobry.pdf');
+  const badPath = path.join(root, 'uszkodzony.pdf');
+  await createTestPdf(goodPath);
+  await fsp.writeFile(badPath, 'to-nie-jest-prawdziwy-pdf'); // stampAllPages rzuci przy PDFDocument.load
 
-  const fakeReq = { session: { lastBaseFolder: root }, sid: 'test-sid-merged' };
-  const groups = [{ label: 'Adres', items: [{ fullPath: pdfA }, { fullPath: pdfB }] }];
-  const { built } = await buildQueueFromGroups(fakeReq, groups);
-  assert.equal(built.length, 1);
-  assert.equal(path.basename(path.dirname(built[0].path)), 'merged');
-  const mergedPathBefore = built[0].path;
+  const goodBytesBefore = await fsp.readFile(goodPath);
+  const badBytesBefore = await fsp.readFile(badPath);
 
-  await applyPowykonawczaTransformToQueue(fakeReq, built);
+  const items = [buildQueueItem(goodPath, 'Dobry'), buildQueueItem(badPath, 'Uszkodzony')];
+  const fakeReq = { sid: 'test-sid-stampfail' };
+  const result = await prepareStampedQueue(fakeReq, items);
 
-  // Plik scalony jest juz tymczasowy - stemplowanie w miejscu, bez kolejnej kopii.
-  assert.equal(built[0].path, mergedPathBefore);
-  const stampedDoc = await PDFDocument.load(await fsp.readFile(built[0].path));
-  assert.equal(stampedDoc.getPageCount(), 2);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some(e => e.label === 'Uszkodzony' && e.stage === 'stemplowanie'));
+  // Oryginaly (OBA - takze ten, ktory sam w sobie by sie udal) zostaja
+  // nietkniete, bo caly druk jest odrzucony.
+  assert.deepEqual(await fsp.readFile(goodPath), goodBytesBefore);
+  assert.deepEqual(await fsp.readFile(badPath), badBytesBefore);
+  // Katalog roboczy tej (nieudanej) proby zostaje w calosci usuniety.
+  const opDirs = fs.readdirSync(path.join(require('../lib/appPaths').getAppDataDir('drukarka-projekty'), 'data', 'powykonawcza'));
+  for (const dirName of opDirs) {
+    assert.ok(!dirName.includes('test-sid-stampfail'), `katalog roboczy nieudanej proby powinien zostac usuniety: ${dirName}`);
+  }
 });
 
-test('drukarka-projekty: applyPowykonawczaTransformToQueue nie dotyka plikow, ktorych nie da sie ostemplowac (nie-PDF, nie-DOCX)', async (t) => {
+test('prepareStampedQueue: blad konwersji JEDNEGO DOCX blokuje CALA paczke (inne pliki tez sie nie stempluja)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-powyk-docxfail-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+
+  const goodPath = path.join(root, 'dobry.pdf');
+  await createTestPdf(goodPath);
+  const goodBytesBefore = await fsp.readFile(goodPath);
+
+  // ".docx", ktorego Word COM nie jest w stanie otworzyc (atrapa, nie
+  // prawdziwy plik Worda) - symuluje "nie da sie otworzyc" z audytu bez
+  // realnego zaleznienia od tego, czy maszyna testowa ma Worda.
+  const docxPath = path.join(root, 'zly.docx');
+  await fsp.writeFile(docxPath, 'to-nie-jest-prawdziwy-docx');
+
+  const items = [buildQueueItem(goodPath, 'Dobry'), buildQueueItem(docxPath, 'Zly DOCX')];
+  const fakeReq = { sid: 'test-sid-docxfail' };
+  const result = await prepareStampedQueue(fakeReq, items);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some(e => e.label === 'Zly DOCX' && e.stage === 'konwersja DOCX->PDF (Word)'), JSON.stringify(result.errors));
+  assert.deepEqual(await fsp.readFile(goodPath), goodBytesBefore);
+});
+
+test('prepareStampedQueue: nieobslugiwany format (nie-PDF, nie-DOCX) blokuje CALA paczke z czytelnym bledem', async (t) => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-powyk-other-'));
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
 
+  const goodPath = path.join(root, 'dobry.pdf');
+  await createTestPdf(goodPath);
   const txtPath = path.join(root, 'notatka.txt');
   await fsp.writeFile(txtPath, 'zawartosc');
-  const item = buildQueueItem(txtPath, 'Notatka');
-  const fakeReq = { sid: 'test-sid-other' };
-  await applyPowykonawczaTransformToQueue(fakeReq, [item]);
 
-  assert.equal(item.path, txtPath);
+  const items = [buildQueueItem(goodPath, 'Dobry'), buildQueueItem(txtPath, 'Notatka')];
+  const fakeReq = { sid: 'test-sid-format' };
+  const result = await prepareStampedQueue(fakeReq, items);
+
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some(e => e.label === 'Notatka' && e.stage === 'format'));
   assert.equal(await fsp.readFile(txtPath, 'utf8'), 'zawartosc');
 });
 
-test('drukarka-projekty: checkbox "dokumentacja powykonawcza" jest osobny od /api/wm/scan i podlaczony do /api/print', async () => {
-  const server = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'server.js'), 'utf8');
+test('prepareStampedQueue: prawidlowa paczka (same PDF-y) dziala normalnie - kazdy plik ostemplowany, brak bledow', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-powyk-ok-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+
+  const pathA = path.join(root, 'a.pdf');
+  const pathB = path.join(root, 'b.pdf');
+  await createTestPdf(pathA);
+  await createTestPdf(pathB);
+
+  const items = [buildQueueItem(pathA, 'A'), buildQueueItem(pathB, 'B')];
+  const fakeReq = { sid: 'test-sid-ok' };
+  const result = await prepareStampedQueue(fakeReq, items);
+  t.after(() => { if (result.opDir) fs.rmSync(result.opDir, { recursive: true, force: true }); });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.items.length, 2);
+  for (const resultItem of result.items) {
+    assert.ok(isMergedFile(resultItem.path), 'plik roboczy powinien lezec w MERGED_DIR/POWYKONAWCZA_DIR (do sprzatania)');
+    const doc = await PDFDocument.load(await fsp.readFile(resultItem.path));
+    assert.equal(doc.getPageCount(), 1);
+  }
+});
+
+test('drukarka-projekty: checkbox "dokumentacja powykonawcza" jest osobny od /api/wm/scan i podlaczony do /api/print, wszystko-albo-nic PRZED withPrintLease', async () => {
+  const serverSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'server.js'), 'utf8');
   const html = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'public', 'index.html'), 'utf8');
-  const app = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'public', 'app.js'), 'utf8');
+  const appJsSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'public', 'app.js'), 'utf8');
 
   // Nazwa flagi celowo inna niz req.body.powykonawczy z /api/wm/scan (tam
   // wybiera wariant strony tytulowej WM/dok.pod - inna funkcja).
-  assert.match(server, /Boolean\(req\.body\?\.stampPowykonawcza\)/);
-  assert.match(server, /await applyPowykonawczaTransformToQueue\(req, session\.queue\)/);
+  assert.match(serverSource, /Boolean\(req\.body\?\.stampPowykonawcza\)\s*&&\s*!session\.queuePowykonawczaDone/);
+  assert.match(serverSource, /const prepared = await prepareStampedQueue\(req, session\.queue\)/);
+  assert.match(serverSource, /session\.queuePowykonawczaDone = true/);
   assert.match(html, /id="stampPowykonawczaCheckbox"/);
-  assert.match(app, /stampPowykonawcza: \$\("stampPowykonawczaCheckbox"\)\.checked/);
+  assert.match(appJsSource, /stampPowykonawcza: \$\("stampPowykonawczaCheckbox"\)\.checked/);
+
+  // P1: przygotowanie (prepareStampedQueue) musi nastapic PRZED withPrintLease
+  // w kodzie /api/print - kolejnosc w zrodle jest tu bezposrednim dowodem,
+  // ze druk nie moze ruszyc przed pelnym sukcesem przygotowania.
+  const printRouteMatch = serverSource.match(/app\.post\("\/api\/print"[\s\S]*?\n\}\);/);
+  assert.ok(printRouteMatch, 'nie znaleziono trasy /api/print');
+  const prepareIndex = printRouteMatch[0].indexOf('prepareStampedQueue(req, session.queue)');
+  const leaseIndex = printRouteMatch[0].indexOf('withPrintLease(');
+  assert.ok(prepareIndex >= 0 && leaseIndex >= 0 && prepareIndex < leaseIndex, 'prepareStampedQueue musi wystapic PRZED withPrintLease w /api/print');
 
   // Konwersja DOCX->PDF musi uzywac nie-detached spawn (bezpieczny wobec
   // bledu Windows/Node: detached:true zawsze zglasza kod wyjscia 0).
-  assert.match(server, /DOCX_TO_PDF_SCRIPT/);
-  assert.doesNotMatch(server, /DOCX_TO_PDF_SCRIPT[\s\S]{0,400}detached:\s*true/);
+  assert.match(serverSource, /DOCX_TO_PDF_SCRIPT/);
+  assert.doesNotMatch(serverSource, /DOCX_TO_PDF_SCRIPT[\s\S]{0,400}detached:\s*true/);
+});
+
+// =====================================================================
+// Audyt v1.0.8, Priorytet 2: ponowienie /api/print po zajetej globalnej
+// blokadzie druku nie moze stemplowac paczki drugi raz.
+// =====================================================================
+
+test('drukarka-projekty: /api/print - ponowienie po zajetej globalnej blokadzie druku NIE stempluje ponownie (audyt v1.0.8 P2)', async (t) => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scyzoryk-print-retry-dataroot-'));
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  t.after(() => { if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT; else process.env.SCYZORYK_DATA_ROOT = previousDataRoot; });
+
+  // Zamockuj REALNY druk (SumatraPDF/Acrobat) - ten test sprawdza logike
+  // stemplowania/blokady, nie prawdziwy wydruk. printService jest tym samym
+  // obiektem modulu, ktorego uzywa apps/drukarka-projekty/server.js (cache
+  // require Node) - podmiana metody tutaj jest widoczna tam.
+  const originalPrintFileWindows = printService.printFileWindows;
+  const printedPaths = [];
+  printService.printFileWindows = async (filePath) => { printedPaths.push(filePath); };
+  t.after(() => { printService.printFileWindows = originalPrintFileWindows; });
+
+  const srcDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-retry-src-'));
+  t.after(() => fsp.rm(srcDir, { recursive: true, force: true }));
+  const addressDir = path.join(srcDir, '1 - Test Adres');
+  await fsp.mkdir(addressDir);
+  const pdfPath = path.join(addressDir, 'rysunek.pdf');
+  await createTestPdf(pdfPath);
+
+  const server = app.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  async function call(method, urlPath, { body, cookie } = {}) {
+    const headers = { 'X-Scyzoryk-Request': '1' };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (cookie) headers['Cookie'] = cookie;
+    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined
+    });
+    const setCookie = res.headers.get('set-cookie');
+    const nextCookie = setCookie ? setCookie.split(';')[0] : cookie;
+    const json = await res.json().catch(() => null);
+    return { status: res.status, json, cookie: nextCookie };
+  }
+
+  // Krok 1: /api/match ustawia session.lastBaseFolder (wymagane przez
+  // isPathInsideFolder w /api/queue/set) - dopasowanie samo w sobie moze
+  // byc niepewne, wazny jest tylko efekt uboczny (zaakceptowany baseFolder).
+  const matchRes = await call('POST', '/api/match', { body: { lpGmina: '1', baseFolder: srcDir } });
+  assert.equal(matchRes.status, 200, JSON.stringify(matchRes.json));
+  const cookie = matchRes.cookie;
+
+  const setRes = await call('POST', '/api/queue/set', { body: { items: [{ fullPath: pdfPath, label: 'Rysunek' }] }, cookie });
+  assert.equal(setRes.status, 200, JSON.stringify(setRes.json));
+
+  // Krok 2: zajmij globalna blokade druku Z INNEJ "aplikacji", zanim
+  // wywolamy /api/print - dokladnie scenariusz z audytu.
+  let releaseLease;
+  let leaseEntered;
+  const entered = new Promise(resolve => { leaseEntered = resolve; });
+  const holdUntilReleased = new Promise(resolve => { releaseLease = resolve; });
+  const otherLeaseHolder = withPrintLease({ app: 'inna-apka' }, async () => {
+    leaseEntered();
+    await holdUntilReleased;
+  });
+  await entered;
+
+  // Proba 1: blokada zajeta -> 409, druk NIE moze ruszyc dla zadnego pliku.
+  const printAttempt1 = await call('POST', '/api/print', { body: { stampPowykonawcza: true, printerName: '' }, cookie });
+  assert.equal(printAttempt1.status, 409);
+  assert.equal(printAttempt1.json.code, 'PRINT_LOCK_BUSY');
+  assert.equal(printedPaths.length, 0, 'nic nie mialo prawa zostac "wydrukowane" przy zajetej blokadzie');
+
+  releaseLease();
+  await otherLeaseHolder;
+
+  // Proba 2: ta sama sesja (to samo ciasteczko), ponownie stampPowykonawcza -
+  // blokada jest juz wolna, druk powinien sie powiesc, a stemplowanie NIE
+  // powinno wykonac sie drugi raz (queuePowykonawczaDone z proby 1).
+  const printAttempt2 = await call('POST', '/api/print', { body: { stampPowykonawcza: true, printerName: '' }, cookie });
+  assert.equal(printAttempt2.status, 200, JSON.stringify(printAttempt2.json));
+
+  const deadline = Date.now() + 5000;
+  while (printedPaths.length === 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
+  assert.equal(printedPaths.length, 1, 'powinien zostac "wydrukowany" dokladnie jeden plik');
+
+  const stampedBytes = await fsp.readFile(printedPaths[0]);
+  const stampedDoc = await PDFDocument.load(stampedBytes);
+  assert.equal(stampedDoc.getPageCount(), 1);
+  const occurrences = await countTextOccurrences(stampedBytes, 'DOKUMENTACJA');
+  assert.equal(occurrences, 1, `oczekiwano jednego stempla "DOKUMENTACJA", znaleziono ${occurrences} wystapien tekstu w PDF-ie`);
 });
