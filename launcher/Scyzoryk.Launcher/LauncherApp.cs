@@ -138,7 +138,7 @@ public sealed class LauncherApp
 
         _logger.Log(LogLevel.Info, "Inna instancja launchera juz odpala serwer - czekam na jej wynik, bez wlasnego spawnu.");
         var waiterOutcome = await _health.WaitForHealthyAsync(
-            _timings.WaiterTopUpTimeout, TimeSpan.Zero, () => false).ConfigureAwait(false);
+            _paths.HealthUrl, _timings.WaiterTopUpTimeout, TimeSpan.Zero, () => false).ConfigureAwait(false);
 
         return waiterOutcome == HealthWaitOutcome.Healthy
             ? EnsureResult.Ok()
@@ -173,7 +173,7 @@ public sealed class LauncherApp
 
         var startedAt = DateTime.UtcNow;
         var outcome = await _health.WaitForHealthyAsync(
-            _timings.BaseStartupTimeout, _timings.ExtendedStartupTimeout, () => _processManager.IsProcessStillAlive(spawn.Pid)).ConfigureAwait(false);
+            _paths.HealthUrl, _timings.BaseStartupTimeout, _timings.ExtendedStartupTimeout, () => _processManager.IsProcessStillAlive(spawn.Pid)).ConfigureAwait(false);
         var elapsedSeconds = (DateTime.UtcNow - startedAt).TotalSeconds;
 
         _logger.Log(LogLevel.Info, "Zakonczono oczekiwanie na zdrowy serwer.", new Dictionary<string, string>

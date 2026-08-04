@@ -45,7 +45,10 @@ public sealed class ProcessManager : IProcessManager
         };
         startInfo.ArgumentList.Add("server.js");
 
-        var existingPath = startInfo.EnvironmentVariables.TryGetValue("PATH", out var p) ? p : string.Empty;
+        // ProcessStartInfo.EnvironmentVariables to System.Collections.Specialized.StringDictionary
+        // (nie IDictionary<string,string>) - brak TryGetValue, ale indekser bezpiecznie
+        // zwraca null dla brakujacego klucza (nie rzuca).
+        var existingPath = startInfo.EnvironmentVariables["PATH"] ?? string.Empty;
         startInfo.EnvironmentVariables["PATH"] = string.IsNullOrEmpty(existingPath)
             ? nodeDir
             : $"{nodeDir};{existingPath}";
