@@ -280,14 +280,25 @@ Run-Test 'Health-check wszystkich narzedzi i stan OCR' {
   Assert-True ([bool]$ocr.ocrConfigured -eq [bool]$ExpectBundledOcr) "Nieprawidlowy stan ocrConfigured. Oczekiwano: $([bool]$ExpectBundledOcr)."
 }
 
-Run-Test 'Przyjazny adres http://scyzoryk.localhost:3000 dziala bez zadnej konfiguracji' {
-  # Domena .localhost (RFC 6761) rozwiazuje sie do loopbacku na poziomie systemu/
-  # przegladarki, wiec powinno to dzialac identycznie jak na prawdziwym komputerze
-  # uzytkownika - zero wpisu w hosts, zero uprawnien administratora.
-  $response = Invoke-WebRequest -Uri 'http://scyzoryk.localhost:3000/api/health' -UseBasicParsing -TimeoutSec 10
-  Assert-True ($response.StatusCode -eq 200) "http://scyzoryk.localhost:3000/api/health zwrocilo $($response.StatusCode) zamiast 200."
-  $payload = $response.Content | ConvertFrom-Json
-  Assert-True ([bool]$payload.ok) 'Odpowiedz /api/health przez scyzoryk.localhost nie ma ok=true.'
+Run-Test 'Przyjazny adres http://scyzoryk.localhost:3000 dziala w Chromium bez konfiguracji' {
+  # Invoke-WebRequest korzysta z systemowego resolvera Windows, ktory na runnerze
+  # GitHub Actions nie obsluguje subdomen *.localhost. Uzytkownik otwiera ten
+  # adres w Edge/Chrome, wiec test przechodzi przez prawdziwy silnik Chromium.
+  # Nie dodajemy wpisu hosts ani sztucznych reguł rozwiązywania nazw.
+  $hostsPath = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+  $hostsText = Get-Content $hostsPath -Raw -ErrorAction SilentlyContinue
+  Assert-True ($hostsText -notmatch '(?i)\bscyzoryk\.localhost\b') 'Testowy Windows ma wpis scyzoryk.localhost w hosts, wiec test nie sprawdza wariantu bez konfiguracji.'
+
+  $targetsPath = Join-Path $LogsDir 'friendly-localhost-target.json'
+  $targetJson = '[{"slug":"friendly-localhost-health","url":"http://scyzoryk.localhost:3000/api/health"}]'
+  [IO.File]::WriteAllText($targetsPath, $targetJson, [Text.UTF8Encoding]::new($false))
+
+  $env:NODE_PATH = Join-Path $InstallDir 'apps\formularze-ecodan\node_modules'
+  $env:PLAYWRIGHT_BROWSERS_PATH = '0'
+  $node = Join-Path $InstallDir 'node-runtime\node.exe'
+  $screenshotDir = Join-Path $LogsDir 'screenshots\friendly-localhost'
+  & $node (Join-Path $PSScriptRoot 'screenshot-all.js') $screenshotDir $targetsPath
+  Assert-True ($LASTEXITCODE -eq 0) 'Chromium nie otworzyl http://scyzoryk.localhost:3000/api/health bez wpisu w hosts.'
 }
 
 Run-Test 'build-info.json obecny i zgodny z wersja z /api/health' {
