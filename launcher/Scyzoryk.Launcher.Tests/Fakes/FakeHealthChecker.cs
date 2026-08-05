@@ -7,10 +7,12 @@ public sealed class FakeHealthChecker : IHealthChecker
     public bool RespondOnceResult { get; set; }
     public bool AlreadyRunningResult { get; set; }
     public HealthWaitOutcome WaitOutcomeResult { get; set; } = HealthWaitOutcome.Healthy;
+    public string? RunningVersionResult { get; set; }
 
     public int IsRespondingOnceCallCount { get; private set; }
     public int ProbeAlreadyRunningCallCount { get; private set; }
     public int WaitForHealthyCallCount { get; private set; }
+    public int GetRunningVersionCallCount { get; private set; }
     public List<bool> ObservedIsSpawnedProcessAlive { get; } = new();
 
     public Task<bool> IsRespondingOnceAsync(string healthUrl, TimeSpan timeout, CancellationToken ct = default)
@@ -30,5 +32,11 @@ public sealed class FakeHealthChecker : IHealthChecker
         WaitForHealthyCallCount++;
         ObservedIsSpawnedProcessAlive.Add(isSpawnedProcessAlive());
         return Task.FromResult(WaitOutcomeResult);
+    }
+
+    public Task<string?> GetRunningVersionAsync(string healthUrl, TimeSpan timeout, CancellationToken ct = default)
+    {
+        GetRunningVersionCallCount++;
+        return Task.FromResult(RunningVersionResult);
     }
 }

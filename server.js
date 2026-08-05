@@ -91,7 +91,6 @@ const updateService = createUpdateService({
   updateRoot: resolveUpdateRoot(),
   enabled: UPDATE_ENABLED,
   apiBaseUrl: process.env.SCYZORYK_UPDATE_API_BASE_URL || undefined,
-  port: PORT,
   log: diagnostics.log,
   deps: updateServiceDeps
 });

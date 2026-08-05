@@ -64,7 +64,7 @@ function Stop-Scyzoryk {
   # cichej instalacji potrafil jeszcze zobaczyc "Node.js JavaScript Runtime"
   # jako trzymajacy pliki i pod /SUPPRESSMSGBOXES automatycznie przerywal
   # instalacje (Setup.exe kod wyjscia 5) - dokladnie ten problem, przed
-  # ktorym scripts\run-update.ps1 (prawdziwy aktualizator) juz sie chroni
+  # ktorym Scyzoryk.exe --apply-update (prawdziwy aktualizator) juz sie chroni
   # wlasna petla potwierdzajaca zamkniecie procesow.
   $nodeExe = Join-Path $InstallDir 'node-runtime\node.exe'
   if (Test-Path $nodeExe) {

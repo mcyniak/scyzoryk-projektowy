@@ -184,12 +184,29 @@ new app, copy this rather than inventing a new one:
   looking like a malware dropper to AV heuristics. Does **not** replace the panel UI (still the browser)
   and does **not** remove the installer's own unsigned-EXE SmartScreen warning (separate, unaddressed
   topic — no code signing implemented).
-- 4 CLI modes only: no args (ensure server running, open browser once), `--autostart` (ensure running,
-  never open browser, used by the Scheduled Task and by `run-update.ps1` post-update), `--stop` (kill
-  only this install's own `node-runtime\node.exe`, used by `[UninstallRun]` and `run-update.ps1`),
-  `--health` (single `/api/health` check, never starts anything). Single-instance coordination is a named
+- 5 CLI modes only: no args (ensure server running, open browser once), `--autostart` (ensure running,
+  never open browser, used by the Scheduled Task and by `--apply-update` post-update), `--stop` (kill
+  only this install's own `node-runtime\node.exe`, used by `[UninstallRun]` and `--apply-update`),
+  `--health` (single `/api/health` check, never starts anything), `--apply-update <installerPath>
+  <expectedVersion>` (stop → run installer silently → restart → verify the new version actually
+  answers `/api/health` → write `Updates\last-result.json` — `UpdateApplier.cs`, ported 2026-08-05 from
+  the deleted `scripts/run-update.ps1`; see below for why). Single-instance coordination is a named
   `Local\...` Mutex derived from a hash of the install path (`InstallPaths.cs`) — guards only the
-  "start the server" step, never held while opening the browser.
+  "start the server" step, never held while opening the browser or during `--apply-update`.
+- The updater (`lib/updateService.js`) spawns a **copy of the already-installed `Scyzoryk.exe`** with
+  `--apply-update`, never PowerShell — this replaced a `powershell.exe -ExecutionPolicy Bypass
+  -WindowStyle Hidden -File run-update.ps1` chain after it was caught for real (2026-08-05, owner's
+  corporate laptop) being silently killed by the company's EDR: 0 bytes of stdout/stderr ever captured,
+  the process never showed up in `Get-Process`, and *nothing* logged locally (Defender operational log,
+  Protection History, AppLocker — all empty) — a textbook "hidden interpreter spawns another hidden
+  interpreter which runs an unsigned installer" dropper heuristic. Manually double-clicking the same
+  installer in the foreground never triggered it — confirming the shape of the process tree was the
+  trigger, not the installer file itself. `Scyzoryk.exe --apply-update` removes the interpreter hop
+  entirely (no window to begin with, since it's `OutputType=WinExe`); no guarantee it dodges every EDR,
+  but it matches how Chrome/VS Code/Slack self-update. `InstallPaths.UpdateRoot`/`DataRoot` mirror
+  `server.js`'s `resolveUpdateRoot()`/`lib/appPaths.js`'s `getDataRoot()` exactly, including the same
+  `SCYZORYK_UPDATE_ROOT`/`SCYZORYK_DATA_ROOT` override env vars (also used to isolate
+  `UpdateApplierTests.cs` from the real `%LOCALAPPDATA%`).
 - User-visible address is `http://scyzoryk.localhost:3000` (`InstallPaths.PanelUrl`, always this fixed
   label regardless of `SCYZORYK_HOST`) — `.localhost` is a reserved TLD (RFC 6761): every modern browser
   and Windows itself resolve any `*.localhost` name straight to loopback, with no hosts-file entry, no

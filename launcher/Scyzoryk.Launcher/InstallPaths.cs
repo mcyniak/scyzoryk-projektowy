@@ -19,11 +19,13 @@ public sealed class InstallPaths
     public string HealthUrl { get; }
     public string LogFilePath { get; }
     public string MutexName { get; }
+    public string UpdateRoot { get; }
+    public string DataRoot { get; }
 
     private InstallPaths(
         string installDir, string nodeExePath, string serverJsPath,
         string host, int port, string panelUrl, string healthUrl,
-        string logFilePath, string mutexName)
+        string logFilePath, string mutexName, string updateRoot, string dataRoot)
     {
         InstallDir = installDir;
         NodeExePath = nodeExePath;
@@ -34,6 +36,8 @@ public sealed class InstallPaths
         HealthUrl = healthUrl;
         LogFilePath = logFilePath;
         MutexName = mutexName;
+        UpdateRoot = updateRoot;
+        DataRoot = dataRoot;
     }
 
     /// <summary>
@@ -81,7 +85,22 @@ public sealed class InstallPaths
 
         var mutexName = "Local\\ScyzorykLauncher_" + HashInstallDir(installDir);
 
-        return new InstallPaths(installDir, nodeExePath, serverJsPath, host, port, panelUrl, healthUrl, logFilePath, mutexName);
+        // Te same sciezki co po stronie Node (server.js resolveUpdateRoot(),
+        // lib/appPaths.js getDataRoot()) - SCYZORYK_UPDATE_ROOT/SCYZORYK_DATA_ROOT
+        // respektowane identycznie (obie juz istnieja po stronie Node - nie sa
+        // to nowe zmienne wprowadzone tylko dla launchera), zeby oba swiaty
+        // liczyly te same katalogi niezaleznie, i zeby dalo sie to odizolowac
+        // w testach bez dotykania prawdziwego %LOCALAPPDATA%.
+        var updateRootOverride = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
+        var updateRoot = string.IsNullOrWhiteSpace(updateRootOverride)
+            ? Path.Combine(localAppData, "ScyzorykProjektowy", "Updates")
+            : Path.GetFullPath(updateRootOverride);
+        var dataRootOverride = Environment.GetEnvironmentVariable("SCYZORYK_DATA_ROOT");
+        var dataRoot = string.IsNullOrWhiteSpace(dataRootOverride)
+            ? Path.Combine(localAppData, "ScyzorykProjektowy", "Data")
+            : Path.GetFullPath(dataRootOverride);
+
+        return new InstallPaths(installDir, nodeExePath, serverJsPath, host, port, panelUrl, healthUrl, logFilePath, mutexName, updateRoot, dataRoot);
     }
 
     /// <summary>

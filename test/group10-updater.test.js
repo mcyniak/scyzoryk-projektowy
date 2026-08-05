@@ -397,8 +397,8 @@ test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready" -> "insta
   const hash = sha256Hex(bytes);
   const release = buildFakeRelease('9.9.9', bytes);
   const rootDir = tempDir('scz-svc-root-');
-  fs.mkdirSync(path.join(rootDir, 'scripts'), { recursive: true });
-  fs.writeFileSync(path.join(rootDir, 'scripts', 'run-update.ps1'), '# test');
+  fs.mkdirSync(rootDir, { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
 
   const { service, updateRoot, spawned } = makeTestService({
     rootDir,
@@ -424,12 +424,10 @@ test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready" -> "insta
   assert.equal(status.state, 'installing');
   assert.equal(status.percent, 100);
   assert.equal(spawned.length, 1);
-  // Pelna sciezka (nie samo "powershell.exe" polegajace na PATH) - patrz
-  // resolvePowerShellExe() w lib/updateService.js.
-  assert.match(spawned[0].exe, /powershell\.exe$/i);
-  assert.match(spawned[0].exe, /WindowsPowerShell/i);
-  assert.ok(spawned[0].args.includes('-File'));
-  assert.ok(spawned[0].args.some(a => a.endsWith('run-update.ps1')));
+  // Kopia juz zainstalowanego Scyzoryk.exe (nie PowerShell) - patrz
+  // buildUpdaterInvocation() w lib/updateService.js.
+  assert.match(spawned[0].exe, /Scyzoryk\.exe$/i);
+  assert.equal(spawned[0].args[0], '--apply-update');
   assert.ok(spawned[0].args.includes('9.9.9'));
 
   const installedExe = path.join(updateRoot, '9.9.9', release.installerAsset.name);
@@ -442,8 +440,8 @@ test('updateService: niezgodna suma SHA-256 - instalator jest odrzucony, nic nie
   const bytes = crypto.randomBytes(5000);
   const release = buildFakeRelease('3.0.0', bytes);
   const rootDir = tempDir('scz-svc-root2-');
-  fs.mkdirSync(path.join(rootDir, 'scripts'), { recursive: true });
-  fs.writeFileSync(path.join(rootDir, 'scripts', 'run-update.ps1'), '# test');
+  fs.mkdirSync(rootDir, { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
 
   const { service, spawned } = makeTestService({
     rootDir,
@@ -552,8 +550,8 @@ test('updateService: brak blokady druku (albo osierocony lock z martwym PID) nie
     const hash = sha256Hex(bytes);
     const release = buildFakeRelease('9.9.9', bytes);
     const rootDir = tempDir('scz-print-lock-root-');
-    fs.mkdirSync(path.join(rootDir, 'scripts'), { recursive: true });
-    fs.writeFileSync(path.join(rootDir, 'scripts', 'run-update.ps1'), '# test');
+    fs.mkdirSync(rootDir, { recursive: true });
+    fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
 
     const { service } = makeTestService({
       rootDir,
@@ -592,7 +590,7 @@ test('updateService: wylaczony (enabled: false) nigdy nie sprawdza i nigdy nie i
 
 // Real bug znaleziony na produkcyjnej maszynie (2026-08-03): uzytkownik
 // kliknal "zainstaluj", pobieranie+weryfikacja przeszly, ale sam proces
-// run-update.ps1 nigdy nie ruszyl (cichy blad odpalenia). Po restarcie
+// aktualizatora nigdy nie ruszyl (cichy blad odpalenia). Po restarcie
 // (recznym, przez uzytkownika) panel po prostu wracal do czystego stanu
 // "dostepna aktualizacja X" bez ZADNEJ wzmianki, ze cos juz probowano -
 // wygladalo jak zero postepu. Te dwa testy pilnuja odczytu stanu z dysku
@@ -687,8 +685,8 @@ function makeInstallableService({ confirmUpdaterStarted, spawnUpdaterProcess }) 
   const hash = sha256Hex(bytes);
   const release = buildFakeRelease('5.0.0', bytes);
   const rootDir = tempDir('scz-svc-root-confirm-');
-  fs.mkdirSync(path.join(rootDir, 'scripts'), { recursive: true });
-  fs.writeFileSync(path.join(rootDir, 'scripts', 'run-update.ps1'), '# test');
+  fs.mkdirSync(rootDir, { recursive: true });
+  fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
   const updateRoot = tempDir('scz-svc-root-confirm2-');
 
   const service = createUpdateService({
@@ -696,7 +694,6 @@ function makeInstallableService({ confirmUpdaterStarted, spawnUpdaterProcess }) 
     getInstalledVersion: () => ({ version: '1.0.0' }),
     repo: 'o/r',
     updateRoot,
-    port: 3000,
     log: () => {},
     deps: {
       fetchLatestRelease: async () => release,
@@ -766,8 +763,8 @@ test('updateService: realConfirmUpdaterStarted (implementacja produkcyjna) rozpo
   const sinceMs = Date.now() + 200;
   assert.equal(await realConfirmUpdaterStarted({ updateRoot: dir, sinceMs, waitMs: 10 }), false);
 
-  // Nowy log (mtime >= sinceMs) - to jest realny dowod, ze run-update.ps1
-  // zaczal dzialac.
+  // Nowy log (mtime >= sinceMs) - to jest realny dowod, ze proces
+  // aktualizatora zaczal dzialac.
   await new Promise(r => setTimeout(r, 250));
   fs.writeFileSync(path.join(logsDir, 'update-fresh.log'), 'nowy log');
   assert.equal(await realConfirmUpdaterStarted({ updateRoot: dir, sinceMs, waitMs: 10 }), true);

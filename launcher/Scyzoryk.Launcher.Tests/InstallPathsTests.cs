@@ -101,6 +101,51 @@ public sealed class InstallPathsTests
     }
 
     [Fact]
+    public void UpdateRootAndDataRoot_HonorOverrideEnvironmentVariables_LikeNode()
+    {
+        var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
+        var previousDataRoot = Environment.GetEnvironmentVariable("SCYZORYK_DATA_ROOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", @"C:\fake-updates");
+            Environment.SetEnvironmentVariable("SCYZORYK_DATA_ROOT", @"C:\fake-data");
+
+            var paths = InstallPaths.FromInstallDir(@"C:\ScyzorykProjektowy");
+
+            Assert.Equal(@"C:\fake-updates", paths.UpdateRoot);
+            Assert.Equal(@"C:\fake-data", paths.DataRoot);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", previousUpdateRoot);
+            Environment.SetEnvironmentVariable("SCYZORYK_DATA_ROOT", previousDataRoot);
+        }
+    }
+
+    [Fact]
+    public void UpdateRootAndDataRoot_DefaultUnderLocalAppData_WhenEnvVarsUnset()
+    {
+        var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
+        var previousDataRoot = Environment.GetEnvironmentVariable("SCYZORYK_DATA_ROOT");
+        try
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", null);
+            Environment.SetEnvironmentVariable("SCYZORYK_DATA_ROOT", null);
+
+            var paths = InstallPaths.FromInstallDir(@"C:\ScyzorykProjektowy");
+            var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            Assert.Equal(Path.Combine(localAppData, "ScyzorykProjektowy", "Updates"), paths.UpdateRoot);
+            Assert.Equal(Path.Combine(localAppData, "ScyzorykProjektowy", "Data"), paths.DataRoot);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", previousUpdateRoot);
+            Environment.SetEnvironmentVariable("SCYZORYK_DATA_ROOT", previousDataRoot);
+        }
+    }
+
+    [Fact]
     public void TryValidate_ReturnsFalse_AndNamesMissingFile_WhenNodeExeMissing()
     {
         using var dir = new TempInstallDir(includeNodeExe: false);

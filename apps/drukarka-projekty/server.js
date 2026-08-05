@@ -441,7 +441,7 @@ function powykonawczaOpFilePath(opDir, idx, originalFullPath, forceExt) {
 // Konwertuje paczke plikow DOCX do PDF przez jedna sesje Word COM
 // (scripts/docx-to-pdf.ps1) - identyczny, sprawdzony wzorzec nie-detached
 // spawn co apps/wnioski-powykonawcze/server.js:runConvertScript (bezpieczny
-// wobec bledu Windows/Node opisanego w run-update.ps1: detached:true zawsze
+// wobec bledu Windows/Node opisanego w lib/updateService.js: detached:true zawsze
 // zglasza kod wyjscia 0 niezaleznie od rzeczywistego wyniku - tu w ogole nie
 // uzywamy detached, wiec problem nie dotyczy tego wywolania).
 async function convertDocxBatchToPdf(opDir, files) {

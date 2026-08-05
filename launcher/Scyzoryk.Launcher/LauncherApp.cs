@@ -20,6 +20,7 @@ public sealed class LauncherApp
     private readonly ISingleInstanceGate _gate;
     private readonly ILauncherLogger _logger;
     private readonly IFatalErrorPresenter _errorPresenter;
+    private readonly IUpdateApplier _updateApplier;
     private readonly LauncherTimings _timings;
 
     public LauncherApp(
@@ -30,6 +31,7 @@ public sealed class LauncherApp
         ISingleInstanceGate gate,
         ILauncherLogger logger,
         IFatalErrorPresenter errorPresenter,
+        IUpdateApplier updateApplier,
         LauncherTimings? timings = null)
     {
         _paths = paths;
@@ -39,23 +41,25 @@ public sealed class LauncherApp
         _gate = gate;
         _logger = logger;
         _errorPresenter = errorPresenter;
+        _updateApplier = updateApplier;
         _timings = timings ?? LauncherTimings.Production;
     }
 
-    public async Task<int> RunAsync(LauncherMode mode)
+    public async Task<int> RunAsync(ParsedArgs args)
     {
         _logger.Log(LogLevel.Info, "Start launchera.", new Dictionary<string, string>
         {
-            ["mode"] = mode.ToString(),
+            ["mode"] = args.Mode.ToString(),
             ["installDir"] = _paths.InstallDir,
         });
 
-        return mode switch
+        return args.Mode switch
         {
             LauncherMode.Normal => await RunNormalAsync().ConfigureAwait(false),
             LauncherMode.Autostart => await RunAutostartAsync().ConfigureAwait(false),
             LauncherMode.Stop => await RunStopAsync().ConfigureAwait(false),
             LauncherMode.Health => await RunHealthAsync().ConfigureAwait(false),
+            LauncherMode.ApplyUpdate => await RunApplyUpdateAsync(args.InstallerPath!, args.ExpectedVersion!).ConfigureAwait(false),
             _ => LogUnknownArgumentAndExit(),
         };
     }
@@ -222,6 +226,41 @@ public sealed class LauncherApp
             ["healthy"] = healthy.ToString(),
         });
         return healthy ? ExitCodes.Ok : ExitCodes.HealthNotResponding;
+    }
+
+    /// <summary>
+    /// Zastepuje dawny scripts\run-update.ps1 (usuniety) - zlapane realnie
+    /// (2026-08-05): firmowy EDR na maszynie wlasciciela zabijal cichy
+    /// powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden odpalany przez
+    /// Node w ramach aktualizacji (0 bajtow stdout/stderr, proces nigdy nie
+    /// pojawial sie na liscie procesow, zero lokalnie widocznych sladow w
+    /// Defenderze/AppLockerze) - klasyczna sygnatura "living-off-the-land
+    /// dropper" (interpreter odpala ukryty interpreter, ktory uruchamia
+    /// niepodpisany .exe). Ten tryb usuwa PowerShella z lancucha calkowicie:
+    /// Node (lib/updateService.js) spawnuje TERAZ kopie tego samego, juz
+    /// zainstalowanego i zaufanego Scyzoryk.exe z argumentem --apply-update,
+    /// zamiast powershell.exe. Zawsze zwraca ExitCodes.Ok niezaleznie od
+    /// wyniku aktualizacji - dokladnie ten sam, juz udokumentowany wzorzec co
+    /// RunStopAsync: to krok wywolywany automatycznie z panelu w przegladarce,
+    /// nieudana (opcjonalna) aktualizacja nie moze pokazac uzytkownikowi
+    /// przerazajacego okna bledu - wynik i tak trafia do last-result.json,
+    /// ktore czyta panel.
+    /// </summary>
+    private async Task<int> RunApplyUpdateAsync(string installerPath, string expectedVersion)
+    {
+        try
+        {
+            await _updateApplier.ApplyAsync(installerPath, expectedVersion).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Error, "Nieobslugiwany wyjatek podczas --apply-update.", new Dictionary<string, string>
+            {
+                ["exception"] = ex.ToString(),
+            });
+        }
+
+        return ExitCodes.Ok;
     }
 
     private int LogUnknownArgumentAndExit()

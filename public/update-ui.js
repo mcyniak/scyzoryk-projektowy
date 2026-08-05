@@ -168,7 +168,7 @@
   // Po kliknieciu "Zaktualizuj i uruchom ponownie" serwer odpowiada szybko
   // (202) i sam kontynuuje w tle - postep sledzimy przez osobne, czeste
   // odpytywanie /api/update/status, az polaczenie zacznie zawodzic (serwer
-  // zostal zatrzymany przez run-update.ps1), a potem czekamy na powrot
+  // zostal zatrzymany przez Scyzoryk.exe --apply-update), a potem czekamy na powrot
   // /api/health, zeby bezpiecznie odswiezyc strone.
   async function trackProgressUntilServerStops(expectedVersion) {
     for (let i = 0; i < 600; i++) {

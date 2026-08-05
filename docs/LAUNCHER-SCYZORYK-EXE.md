@@ -148,3 +148,38 @@ Zweryfikowane od nowa, bez zakładania niczego ze starej notatki:
   uwierzytelnienia) — nie potwierdziłem samodzielnie, czy przebieg
   `release-public-installer.yml` dla `v1.0.13` faktycznie przeszedł na zielono.
   To wciąż wymaga wklejenia logu/wyniku przez użytkownika.
+
+## Usunięcie PowerShella z aktualizatora (2026-08-05, ten sam dzień)
+
+Realny bug report właściciela na firmowym laptopie: przycisk "Zaktualizuj i uruchom
+ponownie" zawsze kończył się błędem "Proces aktualizatora nie uruchomił się (brak
+nowego logu po uruchomieniu)". Diagnoza na żywo (Windows-MCP, bezpośredni dostęp do
+zainstalowanej kopii) wykluczyła po kolei: Historię ochrony Defendera (pusta), log
+operacyjny `Microsoft-Windows-Windows Defender/Operational` (zero wpisów o
+Scyzoryku), AppLocker (0 zdarzeń), politykę wykonywania skryptów (`-ExecutionPolicy
+Bypass` nadpisuje `RemoteSigned` na koncie). Dodanie przechwytywania stdout/stderr
+spawnowanego procesu do pliku (`lib/updateService.js`) i powtórzenie próby dało
+plik **0 bajtów** — proces `powershell.exe` był zabijany natychmiast, zanim zdążył
+cokolwiek zrobić, bez żadnego lokalnie widocznego śladu. Wniosek: firmowy EDR
+(raportuje tylko do centralnej konsoli IT), wychwytujący klasyczną sygnaturę
+"living-off-the-land dropper" (ukryty proces odpala ukryty PowerShell z
+`-ExecutionPolicy Bypass`, który uruchamia niepodpisany `.exe`).
+
+Rozwiązanie: cała logika `scripts/run-update.ps1` (zatrzymaj → zainstaluj cicho →
+uruchom ponownie → zweryfikuj wersję po restarcie → zapisz wynik) przeniesiona do
+nowego trybu `Scyzoryk.exe --apply-update` (`UpdateApplier.cs`) — Node teraz
+spawnuje kopię już zainstalowanego, zaufanego `Scyzoryk.exe` zamiast
+`powershell.exe`. Zero PowerShella, zero `-ExecutionPolicy Bypass`, zero
+`-WindowStyle Hidden` (WinExe nie ma okna z definicji) w całym łańcuchu. Kontrakt
+plikowy z Node (`update-<timestamp>.log`, `last-result.json`) pozostał identyczny,
+więc `lib/updateService.js`'s `confirmUpdaterStarted()`/`getStatusPayload()` nie
+wymagały żadnych zmian poza tym, co dokładnie jest spawnowane.
+`scripts/run-update.ps1` usunięty całkowicie (martwy kod, nic go już nie
+wywołuje). Zweryfikowane lokalnie: `dotnet build`/`dotnet test` (64/64 zielone,
+`.NET SDK 8` dostępne w tym środowisku via `$HOME/.dotnet/dotnet.exe` z
+wcześniejszej sesji) + `npm run check` + `node --test test/group10-updater.test.js`.
+
+**Brak gwarancji, że to faktycznie ominie ten konkretny firmowy EDR** — to
+najlepsze, uzasadnione architektonicznie posunięcie (ten sam wzorzec co
+self-update Chrome/VS Code/Slack), ale ostateczny dowód wymaga kolejnej żywej
+próby aktualizacji na tej samej maszynie właściciela.

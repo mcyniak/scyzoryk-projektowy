@@ -21,19 +21,22 @@ public static class Program
 
         try
         {
-            var mode = ArgsParser.Parse(args);
+            var parsedArgs = ArgsParser.Parse(args);
+            var health = new HealthChecker();
+            var processManager = new ProcessManager();
 
             using var gate = new SingleInstanceGate(paths.MutexName);
             var app = new LauncherApp(
                 paths,
-                new HealthChecker(),
-                new ProcessManager(),
+                health,
+                processManager,
                 new BrowserLauncher(logger),
                 gate,
                 logger,
-                new MessageBoxFatalErrorPresenter());
+                new MessageBoxFatalErrorPresenter(),
+                new UpdateApplier(processManager, health, paths, logger));
 
-            return app.RunAsync(mode).GetAwaiter().GetResult();
+            return app.RunAsync(parsedArgs).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {

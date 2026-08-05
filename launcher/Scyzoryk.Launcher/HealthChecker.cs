@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Text.Json;
 using System.Threading;
 
 namespace Scyzoryk.Launcher;
@@ -24,6 +25,13 @@ public interface IHealthChecker
     /// <summary>Czeka na zdrowy /api/health po wlasnie odpalonym serwerze - odpowiednik
     /// wait-and-open-panel.ps1 (baza + rozszerzenie, jesli spawnowany proces wciaz zyje).</summary>
     Task<HealthWaitOutcome> WaitForHealthyAsync(string healthUrl, TimeSpan baseTimeout, TimeSpan extendedTimeout, Func<bool> isSpawnedProcessAlive, CancellationToken ct = default);
+
+    /// <summary>Jedno zapytanie GET /api/health, zwraca pole "version" z odpowiedzi JSON
+    /// (null jesli zadanie sie nie powiodlo albo pole nie istnieje) - uzywane po
+    /// aktualizacji do potwierdzenia, ze faktycznie dziala nowa wersja, nie tylko
+    /// "cokolwiek odpowiada na porcie" (audyt v1.0.4, P0-8: Restart Manager potrafi po
+    /// cichu pominac zablokowany plik, dajac exitCode 0 instalatora mimo braku podmiany).</summary>
+    Task<string?> GetRunningVersionAsync(string healthUrl, TimeSpan timeout, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -103,6 +111,35 @@ public sealed class HealthChecker : IHealthChecker
             }
 
             await Task.Delay(PollInterval, ct).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<string?> GetRunningVersionAsync(string healthUrl, TimeSpan timeout, CancellationToken ct = default)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+        try
+        {
+            using var response = await Http.GetAsync(healthUrl, cts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var body = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("version", out var versionEl) && versionEl.ValueKind == JsonValueKind.String
+                ? versionEl.GetString()
+                : null;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return null;
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 }

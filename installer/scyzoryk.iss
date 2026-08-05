@@ -96,7 +96,7 @@ Filename: "{app}\instaluj-zaleznosci.cmd"; WorkingDir: "{app}"; StatusMsg: "Inst
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-autostart.ps1"""; WorkingDir: "{app}"; StatusMsg: "Rejestrowanie autostartu przy logowaniu..."; Tasks: autostart; Check: not IsScyzorykUpdate; Flags: runhidden waituntilterminated
 ; Check: not IsScyzorykUpdate ponizej to dodatkowa (druga) warstwa obok
 ; skipifsilent - podczas /SCYZORYKUPDATE restart aplikacji robi WYLACZNIE
-; scripts\run-update.ps1 (po zakonczeniu instalatora), nigdy ten krok.
+; Scyzoryk.exe --apply-update (po zakonczeniu instalatora), nigdy ten krok.
 ; Bez argumentow = tryb normalny Scyzoryk.exe (odpal jesli trzeba, poczekaj na
 ; zdrowy serwer, otworz przegladarke raz) - patrz launcher\Scyzoryk.Launcher.
 Filename: "{app}\Scyzoryk.exe"; Description: "Uruchom Scyzoryka teraz"; Check: not IsScyzorykUpdate; Flags: postinstall skipifsilent nowait
@@ -114,14 +114,15 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile
 Filename: "{app}\Scyzoryk.exe"; Parameters: "--stop"; Flags: runhidden; RunOnceId: "StopScyzoryk"
 
 [Code]
-// Rozpoznaje ciche wywolanie z run-update.ps1 (patrz lib/updateService.js
+// Rozpoznaje ciche wywolanie ze Scyzoryk.exe --apply-update (patrz
+// launcher\Scyzoryk.Launcher\UpdateApplier.cs i lib/updateService.js
 // buildUpdaterInvocation): "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
 // /SCYZORYKUPDATE /DIR=...". W tym trybie: bez kreatora (juz zapewnia
 // /VERYSILENT), bez ponownej rejestracji autostartu, bez
 // ponownego pytania o skrot na pulpicie, bez postinstall-autorun aplikacji -
-// restart robi wylacznie run-update.ps1 PO zakonczeniu tego instalatora.
-// Zwykla (pierwsza) instalacja nie przekazuje tego parametru, wiec dziala
-// dokladnie tak jak wczesniej.
+// restart robi wylacznie Scyzoryk.exe --apply-update PO zakonczeniu tego
+// instalatora. Zwykla (pierwsza) instalacja nie przekazuje tego parametru,
+// wiec dziala dokladnie tak jak wczesniej.
 function IsScyzorykUpdate(): Boolean;
 var
   I: Integer;
