@@ -17,8 +17,6 @@ on:
   push:
     tags:
       - 'v*.*.*'
-    branches:
-      - 'ui-redesign-v1'
   workflow_dispatch:
     inputs:
       tag:
@@ -30,7 +28,7 @@ permissions:
 
 concurrency:
   group: release-publiczny-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -49,13 +47,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tagRef = '${{ github.event.inputs.tag }}'
-          if ([string]::IsNullOrWhiteSpace($tagRef)) {
-            if ('${{ github.ref }}' -eq 'refs/heads/ui-redesign-v1') {
-              $tagRef = 'v1.1.0'
-            } else {
-              $tagRef = '${{ github.ref_name }}'
-            }
-          }
+          if ([string]::IsNullOrWhiteSpace($tagRef)) { $tagRef = '${{ github.ref_name }}' }
           if ($tagRef -notmatch '^v(\d+\.\d+\.\d+)$') {
             throw "Tag '$tagRef' nie ma formatu SemVer 'vMAJOR.MINOR.PATCH' (np. v1.2.0)."
           }
