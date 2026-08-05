@@ -30,7 +30,7 @@ permissions:
 
 concurrency:
   group: release-publiczny-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   release:
@@ -204,4 +204,4 @@ jobs:
           gh release create "$env:RELEASE_TAG" "$env:INSTALLER_PATH" "$env:SHA_PATH" `
             --title "Scyzoryk $env:RELEASE_VERSION" `
             --generate-notes
-          if ($LASTEXITCODE -ne 0) { throw "gh release create zakonczylo sie kodem $LASTEXITCODE."
+          if ($LASTEXITCODE -ne 0) { throw "gh release create zakonczylo sie kodem $LASTEXITCODE." }
