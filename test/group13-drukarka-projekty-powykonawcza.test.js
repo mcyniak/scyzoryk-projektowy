@@ -352,7 +352,13 @@ test('drukarka-projekty: /api/print - ponowienie po zajetej globalnej blokadzie 
   const printAttempt2 = await call('POST', '/api/print', { body: { stampPowykonawcza: true, printerName: '' }, cookie });
   assert.equal(printAttempt2.status, 200, JSON.stringify(printAttempt2.json));
 
-  const deadline = Date.now() + 5000;
+  // 5s okazalo sie za krotkie na wolniejszym/obciazonym runnerze CI (zlapane
+  // realnie: dokladnie ten sam test przeszedl czysto na tym samym CI 2.5h
+  // wczesniej, wiec to niestabilnosc czasowa asynchronicznego stemplowania,
+  // nie regresja logiki) - ten sam wniosek co przy naprawie testow launchera
+  // w v1.0.10-v1.0.13: rozne runnery/sandboxy maja rozna latencje nawet dla
+  // operacji lokalnych, wiec zapas musi byc duzo wiekszy niz "typowy" czas.
+  const deadline = Date.now() + 15000;
   while (printedPaths.length === 0 && Date.now() < deadline) await new Promise(r => setTimeout(r, 20));
   assert.equal(printedPaths.length, 1, 'powinien zostac "wydrukowany" dokladnie jeden plik');
 
