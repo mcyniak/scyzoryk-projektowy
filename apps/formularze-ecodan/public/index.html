@@ -55,7 +55,10 @@
         <div class="grid">
           <label>Plik Excel inwestycji
             <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
-            <span class="field-help">Wybierz plik .xlsx z inwestycją.</span>
+            <span class="field-help">Wybierz plik .xlsx z inwestycją, potem kliknij "Sprawdź adresy".</span>
+          </label>
+          <label style="align-self:end;">
+            <button type="button" id="checkAddresses">Sprawdź adresy</button>
           </label>
           <label>Nazwa inwestycji
             <input name="investmentName" id="investmentName" placeholder="np. Ślesin 2026" />

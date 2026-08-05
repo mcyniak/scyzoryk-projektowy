@@ -77,6 +77,12 @@ export function parseTank(tankValue, markerText) {
   return {
     raw: String(tankValue ?? ''),
     litres: r.value,
+    // present=false = komorka byla naprawde pusta (tabela w ogole nie zbiera
+    // zbiornika CWU dla tego typu adresow) - odrozniamy to od present=true
+    // + litres<=0 (ktos wpisal cos, co po scislym parsowaniu daje 0/ujemna/
+    // niejednoznaczna wartosc - to nadal ma blokowac, patrz decyzja
+    // wlasciciela nizej).
+    present: r.present,
     litresValid: r.valid,
     litresError: r.error ? `Nie rozumiem wielkości zbiornika CWU: ${r.error}.` : null,
     hasSolarMarker: text.includes('SOLAR'),
@@ -164,7 +170,14 @@ export function calculate(input) {
     errors.push('Brak udziału ogrzewania (puste pola "grzejniki" i "podłogówka") - uzupełnij dane przed doborem.');
   }
   if (tank.litresValid === false) errors.push(tank.litresError);
-  if (tank.litres <= 0 && tank.litresValid) {
+  // Wlasciciel (2026-08-05): gdy komorka zbiornika jest NAPRAWDE pusta (tabela
+  // w ogole nie zbiera tej danej dla tego typu adresow, np. "Kazimierz
+  // Biskupi"), NIE blokujemy - przyjmujemy domyslnie 200 l (tankLitres
+  // ponizej juz i tak ma ten sam fallback dla doboru urzadzenia, to tylko
+  // przestaje byc zablokowane bledem). Jesli komorka MA cos wpisane, ale po
+  // scislym parsowaniu wychodzi 0 (np. ktos jawnie wpisal "0"), to dalej
+  // blokuje - to realna, podejrzana wartosc, nie brak danych.
+  if (tank.present && tank.litres <= 0 && tank.litresValid) {
     errors.push(`Nie rozumiem wielkości zbiornika CWU: "${tank.raw}" - uzupełnij/popraw dane przed doborem.`);
   }
 

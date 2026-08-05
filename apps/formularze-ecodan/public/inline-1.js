@@ -9,8 +9,12 @@ let activeJob = null;
 
     document.querySelector('#scrollHelp')?.addEventListener('click', () => document.querySelector('#saveHelp')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
 
-    document.querySelector('#excelFile').addEventListener('change', () => loadAddressPreview());
-    document.querySelector('#location').addEventListener('change', () => { if (document.querySelector('#excelFile').files[0]) loadAddressPreview(); });
+    // Swiadomie BEZ auto-sprawdzania na 'change' pliku/lokalizacji (bylo:
+    // sprawdzanie odpalalo sie natychmiast po wybraniu pliku, zanim
+    // uzytkownik zdazyl np. wpisac/wyczyscic globalna lokalizacje) - teraz
+    // wylacznie na klikniecie #checkAddresses albo #reloadPreview, ten sam
+    // wzorzec co "Sprawdz tabele" w karty-katalogowe.
+    document.querySelector('#checkAddresses').addEventListener('click', () => loadAddressPreview());
     document.querySelector('#reloadPreview').addEventListener('click', () => loadAddressPreview());
     document.querySelector('#addressSearch').addEventListener('input', () => renderAddressRows());
     document.querySelector('#selectAllRecords').addEventListener('click', () => { selectedRows = new Set(previewRecords.map(row => row.rowNumber)); renderAddressRows(); });

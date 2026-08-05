@@ -184,7 +184,13 @@ export function rowToInput(row, globalLocation = '') {
   return {
     name: getCell(row, ['Imię i Nazwisko', 'Imie i Nazwisko', 'Imię nazwisko', 'Klient', 'Inwestor']),
     address: getCell(row, ['Adres', 'Adres inwestycji', 'Ulica']),
-    location: globalLocation || getCell(row, ['Miejscowość', 'Miejscowosc', 'Lokalizacja', 'Kod pocztowy']),
+    // Kolumna per-wiersz ma pierwszenstwo przed globalnym polem "Lokalizacja"
+    // (odwrotnie niz wczesniej) - tabele z realnym Obrebem/Miejscowoscia per
+    // adres (np. Kazimierz Biskupi: kazdy wiersz to inna wies w tej samej
+    // gminie) nie moga miec jednego wspolnego stempla dla calej partii.
+    // Globalne pole zostaje wylacznie fallbackiem dla tabel bez takiej
+    // kolumny (np. rodzina Slesin, gdzie caly plik to jeden kod pocztowy).
+    location: getCell(row, ['Miejscowość', 'Miejscowosc', 'Lokalizacja', 'Kod pocztowy', 'Obręb', 'Obreb']) || globalLocation,
     plotNumber: getCell(row, ['Numer działki', 'Numer dzialki', 'Działka', 'Dzialka']),
     pumpType: getCell(row, ['Rodzaj pompy', 'Typ pompy']),
     ozc: getCell(row, ['OZC', 'Obciążenie cieplne', 'Obciazenie cieplne']),
@@ -300,7 +306,12 @@ export async function readExcelRecords(filePath, globalLocation = '') {
     // niepowiazane liczby, np. numer dzialki, i falszywie wygladac na
     // niejednoznaczna wartosc zbiornika, gdyby parsowac je razem).
     const tankParsed = parseTank(input.cwuTankRaw, input.cwuTank);
-    if (!tankParsed.litresValid || tankParsed.litres <= 0) {
+    // Wlasciciel (2026-08-05): pusta komorka zbiornika (present=false) NIE
+    // odrzuca wiersza - dobor urzadzenia i tak domyslnie przyjmuje 200 l
+    // (patrz tankLitres w calculate(), rules.js). Nadal odrzucamy, gdy
+    // komorka MA cos wpisane, ale wychodzi niejednoznaczne/0 po scislym
+    // parsowaniu - to samo rozroznienie co w calculate().
+    if (!tankParsed.litresValid || (tankParsed.present && tankParsed.litres <= 0)) {
       skipped.missingTank += 1;
       return;
     }

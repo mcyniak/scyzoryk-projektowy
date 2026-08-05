@@ -44,7 +44,11 @@ test('pominiecie istniejacego raportu Ecodan nie modyfikuje/przycina pliku (audy
 // =====================================================================
 // Walidacja danych wejsciowych (audyt v1.0.4, P0-2): puste/niejednoznaczne
 // dane krytyczne dla doboru NIE moga po cichu isc dalej z domyslna wartoscia
-// (6 kW, Slesin, grzejniki, zbiornik 200 l) - musza zablokowac operacje.
+// (6 kW, Slesin, grzejniki) - musza zablokowac operacje. WYJATEK (wlasciciel,
+// 2026-08-05): zbiornik CWU - gdy KOMORKA jest naprawde pusta (present=false,
+// tabela w ogole nie zbiera tej danej dla danego typu adresow), dobor cicho
+// przyjmuje 200 l zamiast blokowac; jesli komorka MA cos wpisane i wychodzi
+// niejednoznaczne/0, nadal blokuje - patrz oba testy nizej.
 // =====================================================================
 
 const validInput = {
@@ -98,9 +102,17 @@ test('calculate(): brak udzialu ogrzewania blokuje, zamiast cicho wybrac grzejni
   assert.ok(result.calculated.errors.some(e => /udziału ogrzewania/.test(e)));
 });
 
-test('calculate(): brak zbiornika CWU blokuje, zamiast cicho przyjac 200 l', async () => {
+test('calculate(): brak KOMORKI zbiornika CWU (present=false) NIE blokuje - przyjmuje domyslnie 200 l (wlasciciel, 2026-08-05: tabele bez tej kolumny, np. Kazimierz Biskupi)', async () => {
   const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
   const result = calculate({ ...validInput, cwuTank: '' });
+  assert.equal(result.calculated.valid, true);
+  assert.equal(result.calculated.errors.some(e => /zbiornika CWU/.test(e)), false);
+  assert.equal(result.calculated.tankLitres, 200);
+});
+
+test('calculate(): zbiornik CWU jawnie wpisany jako "0" NADAL blokuje (odroznione od pustej komorki)', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = calculate({ ...validInput, cwuTank: '0', cwuTankRaw: '0' });
   assert.equal(result.calculated.valid, false);
   assert.ok(result.calculated.errors.some(e => /zbiornika CWU/.test(e)));
 });
@@ -243,7 +255,7 @@ test('readExcelRecords: pre-filtr uzywa scislych parserow (OZC/udziały/zbiornik
   assert.match(excelSource, /if \(!ozcParsed\.valid \|\| ozcParsed\.ozc <= 0\)/);
   assert.match(excelSource, /const radiatorsShareParsed = parseHeatingSharePercent/);
   assert.match(excelSource, /const tankParsed = parseTank\(input\.cwuTankRaw, input\.cwuTank\)/);
-  assert.match(excelSource, /if \(!tankParsed\.litresValid \|\| tankParsed\.litres <= 0\)/);
+  assert.match(excelSource, /if \(!tankParsed\.litresValid \|\| \(tankParsed\.present && tankParsed\.litres <= 0\)\)/);
 });
 
 test('indeks zadań i frontend obsługują restart oraz ostrzeżenie ścieżki', async () => {
