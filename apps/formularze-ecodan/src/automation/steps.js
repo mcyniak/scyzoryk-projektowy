@@ -557,10 +557,21 @@ async function goToPowerStepFromClimate(page) {
   // przycisku DALEJ. Wtedy przejście robi się przez pasek kroków u góry
   // (link /szacowanie-mocy). Dlatego DALEJ jest tylko pierwszą próbą,
   // a nie wymaganym elementem.
+  //
+  // Realny bug zlapany 2026-08-05 (zrzut ekranu z debug/*-error.png): sprawdzenie
+  // DALEJ bylo synchroniczne (count()/isVisible() natychmiast po zaladowaniu
+  // kroku), wiec jesli przycisk jeszcze nie zdazyl sie wyrenderowac, kod od razu
+  // uznawal "nie ma go" i szedl przez skrot linku w pasku krokow. Ten skrot
+  // WIZUALNIE przenosi dalej, ale NIE zapisuje ukonczenia kroku po stronie
+  // serwisu Ecodan - odkryte dopiero na kroku Raport ("ukoncz wszystkie
+  // poprzednie kroki", Strefa klimatyczna bez ptaszka). Powtorka tego samego
+  // adresu dzialala normalnie (przycisk zdazyl sie wyrenderowac), co potwierdza
+  // ze to wyscig czasowy, nie trwaly brak przycisku - dajemy mu wiec realna
+  // szanse (do 6s) zanim siegniemy po skrot.
   const nextButton = page.locator('button').filter({ hasText: /^\s*dalej\s*$/i }).last();
-  const hasNext = await nextButton.count().catch(() => 0);
+  const nextAppeared = await nextButton.waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false);
 
-  if (hasNext > 0 && await nextButton.isVisible().catch(() => false)) {
+  if (nextAppeared) {
     const disabled = await nextButton.evaluate(el => el.disabled || el.getAttribute('aria-disabled') === 'true' || /disabled/i.test(String(el.className || ''))).catch(() => false);
     if (!disabled) {
       await nextButton.scrollIntoViewIfNeeded().catch(() => {});
@@ -715,7 +726,22 @@ export async function downloadReport(page, result, input, outputDir) {
   await page.waitForTimeout(MEDIUM_WAIT);
 
   const downloadText = /Pobierz raport/i;
-  await page.getByText(downloadText).first().waitFor({ state: 'visible', timeout: 45000 });
+  try {
+    await page.getByText(downloadText).first().waitFor({ state: 'visible', timeout: 45000 });
+  } catch (err) {
+    // Diagnostyka zlapana 2026-08-05: "Pobierz raport" moze sie nie pojawic,
+    // bo strona uznaje jeden z wczesniejszych krokow (najczesciej Strefa
+    // klimatyczna - patrz goToPowerStepFromClimate) za nieukonczony, mimo ze
+    // automatyzacja formalnie na niego "przeszla" (skrotem przez pasek
+    // krokow, nie prawdziwym przyciskiem DALEJ). Zamiast surowego timeoutu,
+    // sprawdz czy to WLASNIE ten, juz rozpoznany przypadek, i podaj czytelny
+    // powod zamiast kazac szukac w zrzucie ekranu od zera.
+    const incompleteStepsVisible = await page.getByText(/uko[nń]cz wszystkie poprzednie kroki/i).first().isVisible().catch(() => false);
+    if (incompleteStepsVisible) {
+      throw new Error('Strona Ecodan nie pokazala "Pobierz raport", bo uznaje jeden z wczesniejszych krokow za nieukonczony ("ukoncz wszystkie poprzednie kroki") - zwykle Strefa klimatyczna nie zostala zapisana przez skrot nawigacji. Sprobuj wygenerowac ten adres jeszcze raz.');
+    }
+    throw err;
+  }
   const downloadPromise = page.waitForEvent('download', { timeout: 60000 });
   await page.getByText(downloadText).first().click({ timeout: 10000 });
   const download = await downloadPromise;
