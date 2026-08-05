@@ -102,13 +102,22 @@ public sealed class HealthCheckerTests
     {
         var port = FakeHealthServer.GetFreePort();
         var checker = new HealthChecker();
+        // Na niektorych sandboxach CI samo "connection refused" na loopbacku (bez
+        // zadnego listenera) bywa zauwazalnie wolniejsze niz na zwyklym komputerze
+        // (zlapane realnie: ~2s na jednym z runnerow GitHub Actions, niezaleznie od
+        // tego, czy adres to "localhost" czy literalne "127.0.0.1"). Zamiast
+        // sztywnego progu w sekundach, ktory latwo pada na wolniejszym srodowisku,
+        // uzywamy DUZO wiekszego extendedTimeout i sprawdzamy tylko, ze NIE
+        // czekalismy nigdzie blisko calej jego dlugosci - to jest realny cel tego
+        // testu ("brak rozszerzenia dla martwego procesu"), nie konkretna liczba ms.
+        var extendedTimeout = TimeSpan.FromSeconds(20);
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
-        var outcome = await checker.WaitForHealthyAsync($"http://127.0.0.1:{port}/api/health", TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(5), () => false);
+        var outcome = await checker.WaitForHealthyAsync($"http://127.0.0.1:{port}/api/health", TimeSpan.FromMilliseconds(300), extendedTimeout, () => false);
 
         sw.Stop();
         Assert.Equal(HealthWaitOutcome.TimedOutProcessDead, outcome);
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2), "proces martwy - NIE powinno czekac na cale rozszerzenie");
+        Assert.True(sw.Elapsed < extendedTimeout / 2, $"za dlugo ({sw.Elapsed}) - nie powinno czekac blisko calego rozszerzenia ({extendedTimeout})");
     }
 
     [Fact]
