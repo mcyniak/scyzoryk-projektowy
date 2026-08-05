@@ -65,8 +65,16 @@ public sealed class InstallPaths
             port = parsedPort;
         }
 
-        var panelUrl = $"http://{host}:{port}";
-        var healthUrl = $"{panelUrl}/api/health";
+        // PanelUrl (adres otwierany w przegladarce) uzywa stalej etykiety
+        // "scyzoryk.localhost" zamiast Host/127.0.0.1 - domena .localhost jest
+        // zarezerwowana (RFC 6761) i kazda przegladarka/system Windows rozwiazuje
+        // KAZDA nazwe konczaca sie na .localhost bezposrednio do loopbacku, bez
+        // zadnego wpisu w pliku hosts, bez DNS, bez uprawnien administratora.
+        // HealthUrl celowo zostaje na Host (domyslnie 127.0.0.1) - to wewnetrzny,
+        // wlasny health-check launchera, dla ktorego prosty adres IP jest bardziej
+        // niezawodny niz poleganie na rozwiazywaniu nazw.
+        var panelUrl = $"http://scyzoryk.localhost:{port}";
+        var healthUrl = $"http://{host}:{port}/api/health";
 
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var logFilePath = Path.Combine(localAppData, "ScyzorykProjektowy", "logs", "launcher.log");

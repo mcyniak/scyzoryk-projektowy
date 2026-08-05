@@ -7,7 +7,7 @@ function friendlyErrorMessage(message){
 
 
 // Wspolny powrot do panelu glownego w tej samej karcie.
-const scyzorykMainPanelUrl = window.location.protocol + '//' + window.location.hostname + ':3000';
+const scyzorykMainPanelUrl = 'http://scyzoryk.localhost:3000';
 document.querySelectorAll('[data-main-link]').forEach(link => { link.href = scyzorykMainPanelUrl; link.removeAttribute('target'); });
 
 const $ = s => document.querySelector(s);

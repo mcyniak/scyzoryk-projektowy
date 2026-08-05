@@ -34,6 +34,14 @@
     <Company>Dzial Projektowy Sanitarny</Company>
     <Description>Launcher Scyzoryka Projektowego</Description>
 
+    <!-- Ta sama ikona co logo w naglowku panelu (shared-styles/icons.svg#i-logo,
+         bialy scyzoryk na czerwonym tle) - wygenerowana z tego samego SVG przez
+         headless Chromium (Playwright) + recznie spakowana do wielorozdzielczosciowego
+         .ico (16-256px). Uzywana przez skrot na pulpicie/w Menu Start (patrz
+         installer\scyzoryk.iss [Icons] - oba wpisy poleu Filename na Scyzoryk.exe bez
+         IconFilename, wiec automatycznie dziedzicza te ikone z samego EXE). -->
+    <ApplicationIcon>AppIcon.ico</ApplicationIcon>
+
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 

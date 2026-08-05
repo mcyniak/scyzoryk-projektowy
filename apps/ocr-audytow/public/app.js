@@ -1,5 +1,5 @@
 (() => {
-  const mainPanelUrl = window.location.protocol + '//' + window.location.hostname + ':3000';
+  const mainPanelUrl = 'http://scyzoryk.localhost:3000';
   document.querySelectorAll('[data-main-link]').forEach((link) => { link.href = mainPanelUrl; link.removeAttribute('target'); });
 
   const form = document.getElementById('form');

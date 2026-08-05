@@ -44,7 +44,7 @@ public sealed class InstallPathsTests
 
             Assert.Equal("127.0.0.1", paths.Host);
             Assert.Equal(3000, paths.Port);
-            Assert.Equal("http://127.0.0.1:3000", paths.PanelUrl);
+            Assert.Equal("http://scyzoryk.localhost:3000", paths.PanelUrl);
             Assert.Equal("http://127.0.0.1:3000/api/health", paths.HealthUrl);
         }
         finally
@@ -67,11 +67,35 @@ public sealed class InstallPathsTests
             var paths = InstallPaths.FromInstallDir(@"C:\ScyzorykProjektowy");
 
             Assert.Equal(4123, paths.Port);
-            Assert.Equal("http://127.0.0.1:4123", paths.PanelUrl);
+            Assert.Equal("http://scyzoryk.localhost:4123", paths.PanelUrl);
+            Assert.Equal("http://127.0.0.1:4123/api/health", paths.HealthUrl);
         }
         finally
         {
             Environment.SetEnvironmentVariable("PORT", previousPort);
+            Environment.SetEnvironmentVariable("SCYZORYK_HOST", previousHost);
+        }
+    }
+
+    [Fact]
+    public void PanelUrl_AlwaysUsesScyzorykLocalhost_RegardlessOfHostOverride()
+    {
+        // PanelUrl (adres otwierany w przegladarce) jest celowo NIEZALEZNY od
+        // SCYZORYK_HOST - domena .localhost dziala bez wzgledu na to, jaki adres
+        // IP faktycznie sluchania; HealthUrl (wewnetrzny) nadal honoruje Host.
+        var previousHost = Environment.GetEnvironmentVariable("SCYZORYK_HOST");
+        try
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_HOST", "192.168.1.50");
+
+            var paths = InstallPaths.FromInstallDir(@"C:\ScyzorykProjektowy");
+
+            Assert.Equal("192.168.1.50", paths.Host);
+            Assert.StartsWith("http://scyzoryk.localhost:", paths.PanelUrl);
+            Assert.StartsWith("http://192.168.1.50:", paths.HealthUrl);
+        }
+        finally
+        {
             Environment.SetEnvironmentVariable("SCYZORYK_HOST", previousHost);
         }
     }

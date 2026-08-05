@@ -5,30 +5,19 @@
 # odizolowanej sesji 0 i stracilaby dostep do zmapowanego dysku Google Drive i
 # domyslnej drukarki uzytkownika, oba przypiete do jego interaktywnej sesji.
 #
-# Dopisuje tez przyjazna nazwe hosta do pliku hosts (127.0.0.1 -> scyzoryk.projektowy),
-# zeby nie trzeba bylo pamietac/wpisywac adresu 127.0.0.1:3000 w przegladarce.
-#
-# Edycja pliku hosts wymaga uprawnien administratora (plik chroniony systemowo) -
-# skrypt sam podnosi uprawnienia (jedno okno UAC), Zaplanowane zadanie jest
-# rejestrowane w TEJ SAMEJ podniesionej sesji, zeby uniknac niespojnego zachowania
-# Register-ScheduledTask na roznych wersjach Windows przy rejestracji zadania dla
-# biezacego uzytkownika bez elewacji.
+# Przyjazny adres w przegladarce to http://scyzoryk.localhost:3000 - domena
+# .localhost jest zarezerwowana (RFC 6761): kazda nazwa konczaca sie na
+# ".localhost" rozwiazuje sie bezposrednio do loopbacku w kazdej wspolczesnej
+# przegladarce i w samym Windows, bez zadnego wpisu w pliku hosts, bez DNS i
+# bez uprawnien administratora - dlatego ten skrypt (od 2026-08-05) NIE
+# podnosi juz uprawnien ani nie dotyka pliku hosts w ogole. Register-
+# ScheduledTask/Unregister-ScheduledTask dla WLASNEGO, biezacego uzytkownika
+# (RunLevel Limited) tez nie wymaga admina.
 $ErrorActionPreference = 'Stop'
-
-$currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "Wymagane uprawnienia administratora (jednorazowo, do wpisu w pliku hosts) - potwierdz w oknie UAC..."
-    # -Wait: bez tego ten (nie-podniesiony) proces konczylby sie natychmiast po
-    # wystartowaniu podniesionej kopii, wiec wywolujacy (np. instalator Inno Setup,
-    # ktory czeka na zakonczenie tego kroku przed pokazaniem "gotowe") nie
-    # doczekalby sie faktycznego zarejestrowania zadania/wpisu w hosts.
-    Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    exit
-}
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $TaskName = "Scyzoryk Projektowy - autostart"
-$Hostname = "scyzoryk.projektowy"
+$Hostname = "scyzoryk.localhost"
 $Port = 3000
 
 # Instalacje z instalatora (installer\scyzoryk.iss) maja bundlowany, przenosny
@@ -46,14 +35,6 @@ if ($LASTEXITCODE -ne 0) { throw "Instalacja zaleznosci nie powiodla sie - zobac
 & node scripts\check-project.js
 if ($LASTEXITCODE -ne 0) { throw "Sprawdzenie projektu nie powiodlo sie - zobacz bledy powyzej." }
 Pop-Location
-
-Write-Host "`n=== Wpis w pliku hosts ($Hostname -> 127.0.0.1) ==="
-$hostsPath = "$env:WINDIR\System32\drivers\etc\hosts"
-$hostsContent = @(Get-Content $hostsPath -ErrorAction SilentlyContinue)
-$filtered = $hostsContent | Where-Object { $_ -notmatch "\b$([regex]::Escape($Hostname))\b" }
-$newLine = "127.0.0.1`t$Hostname`t# Scyzoryk Projektowy (dodane automatycznie)"
-Set-Content -Path $hostsPath -Value ($filtered + $newLine) -Encoding ASCII
-Write-Host "Dodano/odswiezono wpis."
 
 Write-Host "`n=== Rejestracja autostartu w Harmonogramie zadan Windows ==="
 # Scyzoryk.exe --autostart zastapil lancuch wscript.exe -> run-hidden.vbs ->

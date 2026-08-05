@@ -123,3 +123,28 @@ Actions, ja analizuję i poprawiam.
 - **Testy z timingiem na CI potrzebują dużego zapasu i asercji względnych**, nie
   sztywnych progów w sekundach — różne runnery/sandboxy mają różną (czasem
   zaskakująco wysoką) latencję nawet dla operacji lokalnych/loopback.
+
+## Kontynuacja sesji (2026-08-05)
+
+Wznowiono pracę na branchu `ui-redesign-v1` (worktree
+`.claude/worktrees/fix-pieczatki-filenames`), HEAD nadal na `v1.0.13` (`b0ec8ac`),
+branch w pełni zsynchronizowany z `origin/ui-redesign-v1`, working tree czyste.
+Zweryfikowane od nowa, bez zakładania niczego ze starej notatki:
+
+- `git ls-remote --tags origin` potwierdza, że tag `v1.0.13` faktycznie dotarł na
+  GitHub (`bb89e87...` wskazuje na `b0ec8ac`) — nie tylko lokalnie.
+- `npm run check` (`node scripts/check-project.js`) przechodzi czysto: 109 plików JS
+  + 15 PS1, zero błędów.
+- Ponowne przeszukanie całego repo pod stare nazwy plików (`Uruchom-Scyzoryk.cmd`,
+  `is-panel-alive.ps1`, `wait-and-open-panel.ps1`, `run-hidden.vbs`,
+  `STARTUJ-SCYZORYK-CICHO.cmd`) — zero trafień, usunięcie się utrzymało.
+  `scripts/stop-scyzoryk.ps1` nadal obecny i celowo zachowany (dev-only
+  `start.cmd`/`STARTUJ-SCYZORYK.cmd`, poza zakresem tego zadania).
+- `dotnet` nadal niedostępny na tej maszynie deweloperskiej (brak SDK,
+  `Get-Command dotnet` puste) — jak poprzednio, jedyna realna weryfikacja
+  `dotnet build`/`dotnet test`/`dotnet publish` to GitHub Actions.
+- **Nadal nie mam w tym środowisku `gh` CLI ani dostępu do API prywatnego
+  repozytorium** (próba `WebFetch` na Actions dla prywatnego repo nie zadziała bez
+  uwierzytelnienia) — nie potwierdziłem samodzielnie, czy przebieg
+  `release-public-installer.yml` dla `v1.0.13` faktycznie przeszedł na zielono.
+  To wciąż wymaga wklejenia logu/wyniku przez użytkownika.

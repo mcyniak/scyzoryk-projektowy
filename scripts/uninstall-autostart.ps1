@@ -1,20 +1,13 @@
-# Cofa scripts/install-autostart.ps1: usuwa zaplanowane zadanie autostartu i wpis
-# w pliku hosts. Program dalej dziala - tylko trzeba go bedzie znow uruchamiac
-# recznie przez STARTUJ-SCYZORYK.cmd, a adres w przegladarce wraca do
-# http://127.0.0.1:3000.
+# Cofa scripts/install-autostart.ps1: usuwa zaplanowane zadanie autostartu.
+# Program dalej dziala - tylko trzeba go bedzie znow uruchamiac recznie
+# skrotem/plikiem Scyzoryk.exe. Nie dotyka pliku hosts (install-autostart.ps1
+# tez juz go nie dotyka od 2026-08-05 - adres http://scyzoryk.localhost:3000
+# dziala bez zadnego wpisu w hosts, patrz domena .localhost, RFC 6761) i nie
+# wymaga uprawnien administratora - Unregister-ScheduledTask dla WLASNEGO,
+# biezacego uzytkownika tego nie potrzebuje.
 $ErrorActionPreference = 'Stop'
 
-$currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "Wymagane uprawnienia administratora - potwierdz w oknie UAC..."
-    # -Wait: patrz komentarz w install-autostart.ps1 - bez tego wywolujacy (np.
-    # deinstalator Inno Setup) nie doczekalby sie faktycznego usuniecia zadania.
-    Start-Process powershell -Verb RunAs -Wait -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
-    exit
-}
-
 $TaskName = "Scyzoryk Projektowy - autostart"
-$Hostname = "scyzoryk.projektowy"
 
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -23,14 +16,4 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     Write-Host "Zadanie autostartu nie bylo zarejestrowane."
 }
 
-$hostsPath = "$env:WINDIR\System32\drivers\etc\hosts"
-$hostsContent = @(Get-Content $hostsPath -ErrorAction SilentlyContinue)
-$filtered = $hostsContent | Where-Object { $_ -notmatch "\b$([regex]::Escape($Hostname))\b" }
-if ($filtered.Count -ne $hostsContent.Count) {
-    Set-Content -Path $hostsPath -Value $filtered -Encoding ASCII
-    Write-Host "Usunieto wpis '$Hostname' z pliku hosts."
-} else {
-    Write-Host "Wpis '$Hostname' nie byl obecny w pliku hosts."
-}
-
-Write-Host "`nGotowe - Scyzoryk nie startuje juz automatycznie. Uruchamiaj go recznie przez STARTUJ-SCYZORYK.cmd (adres: http://127.0.0.1:3000)."
+Write-Host "`nGotowe - Scyzoryk nie startuje juz automatycznie. Uruchamiaj go recznie skrotem/plikiem Scyzoryk.exe (adres: http://scyzoryk.localhost:3000)."

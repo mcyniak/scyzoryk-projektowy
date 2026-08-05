@@ -290,18 +290,19 @@ function drainRequestBody(req, maxBytes = 65536) {
 }
 
 // Dozwolone originy dla mutujacych zadan panelu (aktualizacje) - lokalny
-// adres IP/localhost oraz skonfigurowana przyjazna nazwa hosta
-// (scyzoryk.projektowy, patrz scripts/install-autostart.ps1), zawsze na
-// porcie tego panelu. Brak naglowka Origin jest dopuszczony: przegladarka
-// wysylajaca POST z WLASNEJ strony panelu i tak nie moze dolozyc naglowka
-// X-Scyzoryk-Request bez wywolania CORS preflightu, ktorego ten serwer nigdy
-// nie potwierdza (brak Access-Control-Allow-*) - to jest glowna, samodzielnie
-// wystarczajaca ochrona; sprawdzenie Origin to dodatkowa warstwa.
+// adres IP/localhost oraz przyjazna nazwa hosta scyzoryk.localhost (domena
+// .localhost, RFC 6761 - zawsze rozwiazuje sie do loopbacku, bez pliku hosts,
+// patrz launcher\Scyzoryk.Launcher\InstallPaths.cs), zawsze na porcie tego
+// panelu. Brak naglowka Origin jest dopuszczony: przegladarka wysylajaca POST
+// z WLASNEJ strony panelu i tak nie moze dolozyc naglowka X-Scyzoryk-Request
+// bez wywolania CORS preflightu, ktorego ten serwer nigdy nie potwierdza
+// (brak Access-Control-Allow-*) - to jest glowna, samodzielnie wystarczajaca
+// ochrona; sprawdzenie Origin to dodatkowa warstwa.
 function isTrustedOrigin(origin) {
   if (!origin) return true;
   let host;
   try { host = new URL(origin).host.toLowerCase(); } catch (_) { return false; }
-  const allowed = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`, `scyzoryk.projektowy:${PORT}`]);
+  const allowed = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`, `scyzoryk.localhost:${PORT}`]);
   return allowed.has(host);
 }
 

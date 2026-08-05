@@ -43,6 +43,11 @@ apps/ocr-audytow/data/
 # Testy zawierajace prawdziwe dokumenty
 apps/drukarka-projekty/test/fixtures/
 
+# Artefakty budowania launchera (.NET) - wynik lokalnego dotnet build/publish,
+# nigdy nie powinny byc zacommitowane
+launcher/**/bin/
+launcher/**/obj/
+
 # Pliki tymczasowe
 ~$*
 *.bak

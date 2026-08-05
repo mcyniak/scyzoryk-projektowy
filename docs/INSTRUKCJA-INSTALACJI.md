@@ -6,7 +6,7 @@ Użytkownik końcowy nie pobiera repozytorium, nie instaluje Node.js i nie ustaw
 Ta sama instrukcja jest dostępna po uruchomieniu programu pod adresem:
 
 ```text
-http://127.0.0.1:3000/instrukcja.html
+http://scyzoryk.localhost:3000/instrukcja.html
 ```
 
 oraz przez przycisk **Pomoc** na panelu głównym.
@@ -56,7 +56,7 @@ Finalny artefakt jest publikowany dopiero po zainstalowaniu go na świeżym runn
 1. Uruchom instalator EXE.
 2. Przejdź przez kreator instalacji.
 3. Pozostaw zaznaczoną opcję utworzenia ikony na pulpicie.
-4. Autostart przy logowaniu jest opcjonalny. Może wyświetlić jednorazowe okno UAC związane z konfiguracją lokalnego adresu.
+4. Autostart przy logowaniu jest opcjonalny (nie wymaga żadnego dodatkowego okna ani uprawnień administratora).
 5. Poczekaj, aż instalator doinstaluje składniki. Nie zamykaj instalatora w trakcie tego kroku.
 6. Po zakończeniu uruchom Scyzoryk.
 
@@ -83,8 +83,11 @@ Scyzoryk.exe
 Panel otworzy się pod adresem:
 
 ```text
-http://127.0.0.1:3000
+http://scyzoryk.localhost:3000
 ```
+
+Ten adres działa automatycznie, bez żadnej konfiguracji ani uprawnień
+administratora (domena `.localhost` zawsze wskazuje na ten komputer).
 
 Status **gotowe** na kafelku oznacza, że narzędzie działa. Jeżeli przez dłuższy czas widoczny jest status uruchamiania lub restartu, zamknij Scyzoryk i uruchom ponownie skrótem.
 

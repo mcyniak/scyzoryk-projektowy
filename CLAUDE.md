@@ -190,6 +190,19 @@ new app, copy this rather than inventing a new one:
   `--health` (single `/api/health` check, never starts anything). Single-instance coordination is a named
   `Local\...` Mutex derived from a hash of the install path (`InstallPaths.cs`) — guards only the
   "start the server" step, never held while opening the browser.
+- User-visible address is `http://scyzoryk.localhost:3000` (`InstallPaths.PanelUrl`, always this fixed
+  label regardless of `SCYZORYK_HOST`) — `.localhost` is a reserved TLD (RFC 6761): every modern browser
+  and Windows itself resolve any `*.localhost` name straight to loopback, with no hosts-file entry, no
+  DNS, and no admin rights. This replaced an earlier `scyzoryk.projektowy` hosts-file entry
+  (2026-08-05) — that approach needed `scripts/install-autostart.ps1` to self-elevate via UAC once, just
+  to write `%WINDIR%\System32\drivers\etc\hosts`; `.localhost` needs none of that, so the elevation code
+  was deleted outright, not just disabled. The launcher's own internal health probe (`InstallPaths.HealthUrl`)
+  deliberately stays on `Host` (`127.0.0.1` by default) instead of the `.localhost` label — a plain IP is
+  more reliable for a same-process loopback check than depending on name resolution. Do not reintroduce
+  hosts-file editing or a custom TLD here without a real reason — `.localhost` was chosen specifically to
+  avoid both HTTPS/certificate complexity (tried and reverted the same day — self-signed certs trusted via
+  `CurrentUser\Root`, even through `certutil.exe -addstore -f`, still popped a native Windows "security
+  warning" dialog on this dev machine, breaking the "zero manual steps" goal) and hosts-file/UAC complexity.
 - Built by `scripts/build-launcher.ps1` (checks .NET SDK 8, runs the launcher's own xUnit tests, `dotnet
   publish`), called from `scripts/build-installer.ps1` before staging — treat "build the launcher" and
   "stage it into the installer" as separate steps if you touch this, so a future Authenticode-signing

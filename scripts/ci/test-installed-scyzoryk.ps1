@@ -280,6 +280,16 @@ Run-Test 'Health-check wszystkich narzedzi i stan OCR' {
   Assert-True ([bool]$ocr.ocrConfigured -eq [bool]$ExpectBundledOcr) "Nieprawidlowy stan ocrConfigured. Oczekiwano: $([bool]$ExpectBundledOcr)."
 }
 
+Run-Test 'Przyjazny adres http://scyzoryk.localhost:3000 dziala bez zadnej konfiguracji' {
+  # Domena .localhost (RFC 6761) rozwiazuje sie do loopbacku na poziomie systemu/
+  # przegladarki, wiec powinno to dzialac identycznie jak na prawdziwym komputerze
+  # uzytkownika - zero wpisu w hosts, zero uprawnien administratora.
+  $response = Invoke-WebRequest -Uri 'http://scyzoryk.localhost:3000/api/health' -UseBasicParsing -TimeoutSec 10
+  Assert-True ($response.StatusCode -eq 200) "http://scyzoryk.localhost:3000/api/health zwrocilo $($response.StatusCode) zamiast 200."
+  $payload = $response.Content | ConvertFrom-Json
+  Assert-True ([bool]$payload.ok) 'Odpowiedz /api/health przez scyzoryk.localhost nie ma ok=true.'
+}
+
 Run-Test 'build-info.json obecny i zgodny z wersja z /api/health' {
   $buildInfoPath = Join-Path $InstallDir 'build-info.json'
   Assert-True (Test-Path $buildInfoPath) 'Brak build-info.json w zainstalowanej wersji (patrz scripts\build-installer.ps1).'

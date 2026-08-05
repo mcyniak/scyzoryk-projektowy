@@ -71,7 +71,7 @@ Pełna instrukcja: [`docs/INSTRUKCJA-INSTALACJI.md`](docs/INSTRUKCJA-INSTALACJI.
 Po instalacji ta sama instrukcja jest dostępna z przycisku **Pomoc** na panelu głównym lub pod adresem:
 
 ```text
-http://127.0.0.1:3000/instrukcja.html
+http://scyzoryk.localhost:3000/instrukcja.html
 ```
 
 ## Uruchomienie po instalacji
@@ -85,8 +85,13 @@ Scyzoryk.exe
 Panel działa lokalnie pod adresem:
 
 ```text
-http://127.0.0.1:3000
+http://scyzoryk.localhost:3000
 ```
+
+Adres `scyzoryk.localhost` działa od razu, bez żadnej konfiguracji — domena
+`.localhost` jest zarezerwowana (RFC 6761) i każda przeglądarka oraz sam Windows
+rozwiązują ją bezpośrednio do tego komputera, bez wpisu w pliku `hosts` i bez
+uprawnień administratora.
 
 Każdy moduł działa jako osobny proces. Dłuższe zadanie w jednym narzędziu nie powinno blokować pozostałych.
 

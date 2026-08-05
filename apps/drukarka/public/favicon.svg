@@ -5,7 +5,10 @@
       <stop offset="1" stop-color="#7f1d1d"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="20" fill="url(#g)"/>
-  <rect x="14" y="27" width="36" height="10" rx="5" fill="#fff" transform="rotate(-35 32 32)"/>
-  <rect x="24" y="36" width="26" height="9" rx="4.5" fill="#fff" opacity=".92" transform="rotate(38 37 40)"/>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <g transform="translate(8,8) scale(2)">
+    <path d="M3.4 19 15.4 6.6a3 3 0 0 1 4.3 0 3 3 0 0 1 0 4.3L8.2 22.6" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M13.3 8.7 16.8 12.2" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round"/>
+    <path d="M3.4 19c1.5.35 2.8-.15 3.8-1.5" fill="none" stroke="#ffffff" stroke-width="2.1" stroke-linecap="round"/>
+  </g>
 </svg>
