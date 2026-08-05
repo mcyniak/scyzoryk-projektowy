@@ -1,0 +1,64 @@
+name: Jednorazowa poprawka oczekiwania na launcher v1.1.0
+
+on:
+  push:
+    branches:
+      - ui-redesign-v1
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-retag:
+    if: contains(github.event.head_commit.message, '[fix-v1.1.0]')
+    runs-on: windows-latest
+    steps:
+      - name: Pobierz galaz
+        uses: actions/checkout@v4
+        with:
+          ref: ui-redesign-v1
+          fetch-depth: 0
+
+      - name: Popraw test, usun ten workflow i przenies tag
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $path = 'scripts/ci/test-installed-scyzoryk.ps1'
+          $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+          $old = @"
+            `$launcherExe = Join-Path `$InstallDir 'Scyzoryk.exe'
+            if (Test-Path `$launcherExe) {
+              & `$launcherExe --stop
+            }
+          "@ -replace '(?m)^            ', ''
+          $new = @"
+            `$launcherExe = Join-Path `$InstallDir 'Scyzoryk.exe'
+            if (Test-Path `$launcherExe) {
+              # Scyzoryk.exe jest aplikacja WinExe. Bez Start-Process -Wait PowerShell
+              # moze przejsc dalej, zanim proces --stop zwolni plik EXE. Wtedy Restart
+              # Manager nadal widzi aplikacje Scyzoryk i cicha instalacja konczy sie
+              # kodem 5. Prawdziwy aktualizator uzywa tego samego oczekiwania.
+              `$stopProc = Start-Process -FilePath `$launcherExe -ArgumentList @('--stop') -Wait -PassThru -WindowStyle Hidden
+              Assert-True (`$stopProc.ExitCode -eq 0) "Scyzoryk.exe --stop zakonczyl sie kodem `$(`$stopProc.ExitCode)."
+            }
+          "@ -replace '(?m)^            ', ''
+          if (-not $text.Contains($old)) {
+            throw 'Nie znaleziono oczekiwanego bloku Stop-Scyzoryk; plik mogl sie zmienic.'
+          }
+          $updated = $text.Replace($old, $new)
+          [IO.File]::WriteAllText((Resolve-Path $path), $updated, [Text.UTF8Encoding]::new($true))
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm '.github/workflows/fix-stop-wait-v1.1.0.yml'
+          git add $path
+          git commit -m 'fix(ci): czekaj na zakonczenie Scyzoryk.exe --stop'
+          git push origin HEAD:ui-redesign-v1
+          if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie wypchnac poprawki.' }
+
+          $commit = git rev-parse HEAD
+          git tag -f v1.1.0 $commit
+          git push origin refs/tags/v1.1.0 --force
+          if ($LASTEXITCODE -ne 0) { throw 'Nie udalo sie przeniesc taga v1.1.0.' }
