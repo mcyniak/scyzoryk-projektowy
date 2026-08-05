@@ -46,7 +46,12 @@ function Stop-Scyzoryk {
   # sciezke zatrzymania, nie osobna, prywatna implementacje.
   $launcherExe = Join-Path $InstallDir 'Scyzoryk.exe'
   if (Test-Path $launcherExe) {
-    & $launcherExe --stop
+    # Scyzoryk.exe jest aplikacja WinExe. Bez Start-Process -Wait PowerShell
+    # moze przejsc dalej, zanim proces --stop zwolni plik EXE. Wtedy Restart
+    # Manager nadal widzi aplikacje Scyzoryk i cicha instalacja konczy sie
+    # kodem 5. Prawdziwy aktualizator uzywa tego samego oczekiwania.
+    $stopProc = Start-Process -FilePath $launcherExe -ArgumentList @('--stop') -Wait -PassThru -WindowStyle Hidden
+    Assert-True ($stopProc.ExitCode -eq 0) "Scyzoryk.exe --stop zakonczyl sie kodem $($stopProc.ExitCode)."
   }
   if (Get-ScheduledTask -TaskName $script:TaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $script:TaskName -Confirm:$false
