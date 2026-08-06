@@ -268,33 +268,39 @@ test('readExcelRecords: pre-filtr uzywa scislych parserow (OZC/udziały/zbiornik
 
 const LP_TEST_HEADER = ['LP', 'Imię i Nazwisko', 'Adres', 'OZC', 'Moc pompy z gminy', 'Udział ogrzew grzejnik', 'Udział ogrzew podłog', 'Wielkość zbiornika CWU'];
 
-async function writeLpTestSheet(dir, rows) {
+// read-excel-file trzyma uchwyt .xlsx otwarty chwile po odczycie - na
+// Windows (zwlaszcza CI, zlapane realnie na release v1.1.4) to potrafi
+// blokowac usuniecie katalogu przez WIELE SEKUND, nie milisekund - zwykly
+// krotki retry na fsp.rm nie wystarcza. Ten sam wzorzec co juz sprawdzony w
+// test/group11-karty-katalogowe.test.js: plik .xlsx zyje we WLASNYM,
+// ODDZIELNYM katalogu tymczasowym, sprzatanym w tle (best-effort, bez
+// czekania/failowania testu), zeby nic w tescie nigdy nie zalezalo od tego,
+// czy uchwyt zdazyl juz zostac zwolniony.
+function cleanupXlsxDirLater(dir) {
+  fsp.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {});
+}
+
+async function writeLpTestSheet(rows) {
   const XLSX = require(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'node_modules', 'xlsx'));
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-xlsx-'));
   const file = path.join(dir, 'dane.xlsx');
   const ws = XLSX.utils.aoa_to_sheet(rows);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Dane pompy');
   XLSX.writeFile(wb, file);
-  return file;
+  return { file, dir };
 }
 
 test('readExcelRecords: kolumna LP daje stabilny numer pliku, blokuje brakujacy/zduplikowany LP zamiast cicho spasc na numer wiersza (audyt rozdz. 14, P1)', async (t) => {
   const { readExcelRecords } = await import('../apps/formularze-ecodan/src/excel.js');
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-lp-'));
-  // read-excel-file trzyma uchwyt .xlsx otwarty chwile po odczycie - na
-  // Windows (zwlaszcza CI) to blokuje usuniecie katalogu (ENOTEMPTY) zanim
-  // system zdazy go zwolnic. Retry zamiast osobnego katalogu na plik (jak w
-  // test/group11-karty-katalogowe.test.js) - tu wystarczy, bo nic wiecej
-  // sie do tego katalogu nie odwoluje po odczycie.
-  t.after(() => fsp.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
-
-  const file = await writeLpTestSheet(dir, [
+  const { file, dir: xlsxDir } = await writeLpTestSheet([
     LP_TEST_HEADER,
     [5, 'Jan Kowalski', 'Testowa 1', '7,8', '9 kW', '60', '40', '200 l'],
     ['', 'Pusty LP', 'Testowa 2', '7,8', '9 kW', '60', '40', '200 l'],
     [5, 'Duplikat LP', 'Testowa 3', '7,8', '9 kW', '60', '40', '200 l'],
     [3, 'Anna Nowak', 'Testowa 4', '7,8', '9 kW', '60', '40', '200 l']
   ]);
+  t.after(() => cleanupXlsxDirLater(xlsxDir));
 
   const parsed = await readExcelRecords(file, '62-561 Ślesin');
   assert.equal(parsed.records.length, 2, 'tylko wiersze z poprawnym, unikalnym LP przechodza');
@@ -308,13 +314,11 @@ test('readExcelRecords: kolumna LP daje stabilny numer pliku, blokuje brakujacy/
 
 test('readExcelRecords: bez kolumny LP w arkuszu zostaje bezpieczny fallback na numer wiersza (zero regresji dla istniejacych arkuszy)', async (t) => {
   const { readExcelRecords } = await import('../apps/formularze-ecodan/src/excel.js');
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-nolp-'));
-  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
-
-  const file = await writeLpTestSheet(dir, [
+  const { file, dir: xlsxDir } = await writeLpTestSheet([
     LP_TEST_HEADER.slice(1),
     ['Jan Kowalski', 'Testowa 1', '7,8', '9 kW', '60', '40', '200 l']
   ]);
+  t.after(() => cleanupXlsxDirLater(xlsxDir));
 
   const parsed = await readExcelRecords(file, '62-561 Ślesin');
   assert.equal(parsed.records.length, 1);
