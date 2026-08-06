@@ -178,4 +178,102 @@ public sealed class UpdateApplierTests
         Assert.Equal(0, exitCode);
         Assert.Equal(1, process.StopOwnedProcessesCallCount);
     }
+
+    // =====================================================================
+    // Audyt rozdz. 26, P0/P1: dawny run-update.ps1 (i jego pierwszy port na
+    // C#) po limicie oczekiwania na koniec druku WYMUSZAL aktualizacje -
+    // zatrzymywal procesy i instalowal mimo aktywnego druku. Testy nizej
+    // uzywaja krotkiego, wstrzykniętego limitu/interwalu (konstruktor
+    // UpdateApplier), zeby nie czekac realnych 30s na kazde uruchomienie.
+    // =====================================================================
+
+    [Fact]
+    public async Task PrintingStillActiveAfterTimeout_DefersUpdate_NeverStopsOrInstalls()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var lockDir = Path.Combine(roots.DataRoot, "runtime", "printing");
+        Directory.CreateDirectory(lockDir);
+        // Wlasny PID procesu testowego - gwarantowanie "zywy" proces przez caly test.
+        File.WriteAllText(Path.Combine(lockDir, "active.lock"), $"{{\"pid\": {Environment.ProcessId}}}");
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            printWaitTimeout: TimeSpan.FromMilliseconds(50), printPollInterval: TimeSpan.FromMilliseconds(10));
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(-1, exitCode);
+        Assert.Equal(0, process.StopOwnedProcessesCallCount); // NIGDY nie zatrzymano procesow Scyzoryka
+        Assert.Equal(0, process.StartServerCallCount); // NIGDY nie uruchomiono ponownie - nic nie bylo zatrzymywane
+
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.False(result.GetProperty("ok").GetBoolean());
+        Assert.Contains("odlozona", result.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task UnreadableCorruptedPrintLock_TreatedConservativelyAsActive_DefersUpdate()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var lockDir = Path.Combine(roots.DataRoot, "runtime", "printing");
+        Directory.CreateDirectory(lockDir);
+        File.WriteAllText(Path.Combine(lockDir, "active.lock"), "{niepoprawny json");
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            printWaitTimeout: TimeSpan.FromMilliseconds(50), printPollInterval: TimeSpan.FromMilliseconds(10));
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(-1, exitCode);
+        Assert.Equal(0, process.StopOwnedProcessesCallCount);
+    }
+
+    [Fact]
+    public async Task InstallerSucceeds_ButHealthCheckNeverResponds_TreatedAsFailure()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = false };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode); // kod wyjscia instalatora zostaje 0...
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.False(result.GetProperty("ok").GetBoolean()); // ...ale ok jest false, bo panel nie odpowiedzial
+    }
+
+    [Fact]
+    public async Task InstallerSucceeds_HealthRespondsButNoVersion_TreatedAsFailure()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = null };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode);
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.False(result.GetProperty("ok").GetBoolean());
+    }
 }

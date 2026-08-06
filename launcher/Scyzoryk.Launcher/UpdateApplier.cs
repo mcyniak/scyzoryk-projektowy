@@ -25,15 +25,20 @@ public sealed class UpdateApplier : IUpdateApplier
     private readonly IHealthChecker _health;
     private readonly InstallPaths _paths;
     private readonly ILauncherLogger _logger;
+    private readonly TimeSpan _printWaitTimeout;
+    private readonly TimeSpan _printPollInterval;
 
     private string? _logFilePath;
 
-    public UpdateApplier(IProcessManager processManager, IHealthChecker health, InstallPaths paths, ILauncherLogger logger)
+    public UpdateApplier(IProcessManager processManager, IHealthChecker health, InstallPaths paths, ILauncherLogger logger,
+        TimeSpan? printWaitTimeout = null, TimeSpan? printPollInterval = null)
     {
         _processManager = processManager;
         _health = health;
         _paths = paths;
         _logger = logger;
+        _printWaitTimeout = printWaitTimeout ?? TimeSpan.FromSeconds(30);
+        _printPollInterval = printPollInterval ?? TimeSpan.FromSeconds(2);
     }
 
     public async Task<int> ApplyAsync(string installerPath, string expectedVersion)
@@ -46,24 +51,39 @@ public sealed class UpdateApplier : IUpdateApplier
         // "update-*.log" w tym katalogu, wiec nazwa MUSI zostac identyczna.
         _logFilePath = Path.Combine(logsDir, $"update-{DateTime.Now:yyyyMMddTHHmmss}.log");
 
+        WriteLog($"=== Start aktualizacji Scyzoryka Projektowego do wersji {expectedVersion} ===");
+        WriteLog($"InstallerPath = {installerPath}");
+        WriteLog($"InstallDir    = {_paths.InstallDir}");
+
+        // Krotka pauza, aby odpowiedz HTTP (202 z /api/update/install) zdazyla
+        // dojsc do przegladarki, zanim zaczniemy zatrzymywac serwer, ktory ja
+        // wysylal - identycznie jak dawny run-update.ps1.
+        WriteLog("Czekam 2s, aby odpowiedz HTTP dotarla do przegladarki...");
+        await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+
+        // Audyt rozdz. 26, P0: dawniej po limicie oczekiwania aktualizacja
+        // BYLA WYMUSZANA - procesy Scyzoryka zatrzymywane mimo trwajacego
+        // druku, co moglo przerwac serie w polowie i zostawic niekompletna,
+        // trudna do ustalenia dokumentacje. Teraz sprawdzamy PRZED
+        // jakimkolwiek zatrzymaniem procesow: jesli druk nadal trwa po
+        // limicie czasu, aktualizacja jest w calosci ODLOZONA (nie
+        // wymuszona) - nic nie jest zatrzymywane ani instalowane, wiec nie
+        // ma tez nic do przywracania w finally.
+        if (!await WaitForPrintingToFinishAsync().ConfigureAwait(false))
+        {
+            var deferMessage = "Aktualizacja odlozona - drukowanie nadal trwa po czasie oczekiwania. Sprobuj ponownie pozniej.";
+            WriteLog(deferMessage);
+            WriteLastResult(false, expectedVersion, -1, deferMessage);
+            WriteLog("=== Koniec aktualizacji (odlozona z powodu aktywnego druku) ===");
+            return -1;
+        }
+
         var exitCode = -1;
         var ok = false;
         var message = string.Empty;
 
         try
         {
-            WriteLog($"=== Start aktualizacji Scyzoryka Projektowego do wersji {expectedVersion} ===");
-            WriteLog($"InstallerPath = {installerPath}");
-            WriteLog($"InstallDir    = {_paths.InstallDir}");
-
-            // Krotka pauza, aby odpowiedz HTTP (202 z /api/update/install) zdazyla
-            // dojsc do przegladarki, zanim zaczniemy zatrzymywac serwer, ktory ja
-            // wysylal - identycznie jak dawny run-update.ps1.
-            WriteLog("Czekam 2s, aby odpowiedz HTTP dotarla do przegladarki...");
-            await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-
-            await WaitWhilePrintingActiveAsync().ConfigureAwait(false);
-
             WriteLog("Zatrzymuje procesy Scyzoryka...");
             var stopped = _processManager.StopOwnedProcesses(_paths.NodeExePath);
             WriteLog($"Zatrzymano {stopped.Count} procesow: {string.Join(",", stopped)}");
@@ -109,19 +129,30 @@ public sealed class UpdateApplier : IUpdateApplier
             }
             WriteLog($"Health-check po restarcie: {healthy}, wersja dzialajaca: {runningVersion ?? "(brak)"}");
 
-            // Audyt v1.0.4, P0-8: kod wyjscia instalatora (0 = "sukces") sam
-            // w sobie nie dowodzi, ze faktycznie dziala nowa wersja - Restart
-            // Manager potrafi po cichu pominac zablokowany plik. To jest
-            // jedyny prawdziwy test sukcesu z punktu widzenia uzytkownika.
-            if (ok && healthy && runningVersion is not null && runningVersion != expectedVersion)
+            // Audyt v1.0.4, P0-8 + audyt rozdz. 26, P1: kod wyjscia instalatora
+            // (0 = "sukces") sam w sobie nie dowodzi, ze faktycznie dziala nowa
+            // wersja - Restart Manager potrafi po cichu pominac zablokowany
+            // plik, panel moze w ogole nie wrocic, albo odpowiedziec bez
+            // wersji. Sukces wymaga WSZYSTKICH warunkow naraz: ok, healthy i
+            // runningVersion==expectedVersion - kazdy inny przypadek to
+            // niepowodzenie z czytelnym powodem, nie samo ostrzezenie w logu.
+            if (ok && !healthy)
+            {
+                ok = false;
+                message = "Instalator zakonczyl sie bez bledu, ale panel nie odpowiedzial na /api/health po restarcie.";
+                WriteLog(message);
+            }
+            else if (ok && runningVersion is null)
+            {
+                ok = false;
+                message = "Instalator zakonczyl sie bez bledu, ale nie udalo sie odczytac wersji z /api/health po restarcie - nie mozna potwierdzic aktualizacji.";
+                WriteLog(message);
+            }
+            else if (ok && runningVersion != expectedVersion)
             {
                 ok = false;
                 message = $"Instalator zakonczyl sie bez bledu, ale po restarcie nadal dziala wersja {runningVersion} (oczekiwano {expectedVersion}). Sprobuj ponownie.";
                 WriteLog(message);
-            }
-            else if (ok && healthy && runningVersion is null)
-            {
-                WriteLog("OSTRZEZENIE: nie udalo sie odczytac wersji z /api/health po restarcie - nie mozna w pelni potwierdzic aktualizacji.");
             }
 
             WriteLastResult(ok, expectedVersion, exitCode, message);
@@ -132,40 +163,76 @@ public sealed class UpdateApplier : IUpdateApplier
     }
 
     /// <summary>Odpowiednik Test-PrintingActive w dawnym run-update.ps1 - ten sam plik
-    /// blokady JSON {"pid": ...} zapisywany przez lib/printCoordinator.js, czekamy do
-    /// 30s zamiast przerywac aktywny wydruk na sile.</summary>
-    private async Task WaitWhilePrintingActiveAsync()
+    /// blokady JSON {"pid": ...} zapisywany przez lib/printCoordinator.js.
+    /// </summary>
+    /// <returns>true jesli mozna kontynuowac aktualizacje (druk sie zakonczyl albo
+    /// nigdy nie byl aktywny), false jesli druk nadal trwa po uplywie limitu czasu.</returns>
+    private async Task<bool> WaitForPrintingToFinishAsync()
     {
-        if (!IsPrintingActive()) return;
+        if (!IsPrintingActive()) return true;
 
-        WriteLog("Wykryto aktywne drukowanie - czekam do 30s przed zatrzymaniem procesow...");
-        var deadline = DateTime.UtcNow.AddSeconds(30);
+        WriteLog($"Wykryto aktywne drukowanie - czekam do {_printWaitTimeout.TotalSeconds}s przed kontynuacja aktualizacji...");
+        var deadline = DateTime.UtcNow.Add(_printWaitTimeout);
         while (IsPrintingActive() && DateTime.UtcNow < deadline)
         {
-            await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            await Task.Delay(_printPollInterval).ConfigureAwait(false);
         }
 
-        WriteLog(IsPrintingActive()
-            ? "OSTRZEZENIE: drukowanie nadal aktywne po 30s oczekiwania - kontynuuje mimo to (aktualizacja nie moze utknac w nieskonczonosc)."
-            : "Drukowanie zakonczone - kontynuuje aktualizacje.");
+        if (IsPrintingActive())
+        {
+            WriteLog("Drukowanie nadal aktywne po uplywie limitu czasu oczekiwania.");
+            return false;
+        }
+
+        WriteLog("Drukowanie zakonczone - kontynuuje aktualizacje.");
+        return true;
     }
 
     private bool IsPrintingActive()
     {
+        var lockPath = Path.Combine(_paths.DataRoot, "runtime", "printing", "active.lock");
+        if (!File.Exists(lockPath)) return false;
+
+        string content;
         try
         {
-            var lockPath = Path.Combine(_paths.DataRoot, "runtime", "printing", "active.lock");
-            if (!File.Exists(lockPath)) return false;
-
-            using var doc = JsonDocument.Parse(File.ReadAllText(lockPath));
-            if (!doc.RootElement.TryGetProperty("pid", out var pidEl) || pidEl.ValueKind != JsonValueKind.Number) return false;
-
-            using var proc = Process.GetProcessById(pidEl.GetInt32());
-            return true;
+            content = File.ReadAllText(lockPath);
         }
         catch
         {
-            return false;
+            // Audyt rozdz. 26, P1: plik istnieje, ale w tej chwili nie da sie go
+            // odczytac (np. wspolbiezny zapis przez printCoordinator.js) -
+            // traktujemy to ZACHOWAWCZO jako mozliwy aktywny druk, zamiast
+            // cicho zwracac "false" (ten sam wzorzec co
+            // lib/printCoordinator.js#readLock po stronie Node).
+            return true;
+        }
+
+        JsonDocument doc;
+        try
+        {
+            doc = JsonDocument.Parse(content);
+        }
+        catch
+        {
+            return true;
+        }
+
+        using (doc)
+        {
+            if (!doc.RootElement.TryGetProperty("pid", out var pidEl) || pidEl.ValueKind != JsonValueKind.Number) return true;
+
+            try
+            {
+                using var proc = Process.GetProcessById(pidEl.GetInt32());
+                return true;
+            }
+            catch
+            {
+                // PID z locka juz nie istnieje - druk faktycznie sie zakonczyl,
+                // to zwykly nieposprzatany (stary) lock, nie blad odczytu.
+                return false;
+            }
         }
     }
 
