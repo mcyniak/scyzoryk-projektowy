@@ -255,7 +255,14 @@
   });
 
   const CONFIDENT = new Set(["pewne", "słowo kluczowe"]);
-  const SETTLED = new Set([...CONFIDENT, "obcy adres - pominięte", "wariant - sprawdź ręcznie"]);
+  // Audyt rozdz. 11, P0/P1: "wariant - sprawdź ręcznie" NIE moze byc w SETTLED -
+  // ten status jednoczesnie oznacza pozycje wylaczona z druku (patrz
+  // EXCLUDE_FROM_PRINT nizej) i wymagajaca decyzji uzytkownika, ktory wariant
+  // (OT/ST) jest wlasciwy. Jesli SETTLED go zawiera, banner podsumowania i
+  // liczniki "do sprawdzenia" cicho pomijaja te pozycje - uzytkownik moze
+  // zobaczyc "Wszystko dopasowane" mimo ze dokument zostal po cichu
+  // wylaczony z kolejki druku bez jego jawnej decyzji.
+  const SETTLED = new Set([...CONFIDENT, "obcy adres - pominięte"]);
 
   function confidenceBadge(confidence) {
     if (CONFIDENT.has(confidence)) return `<span class="badge ok">${escapeHtml(confidence)}</span>`;

@@ -265,6 +265,24 @@ test('drukarka-projekty: checkbox "dokumentacja powykonawcza" jest osobny od /ap
   assert.doesNotMatch(serverSource, /DOCX_TO_PDF_SCRIPT[\s\S]{0,400}detached:\s*true/);
 });
 
+test('drukarka-projekty: "wariant - sprawdź ręcznie" NIE jest jednoczesnie SETTLED (rozstrzygniete) i wylaczone z druku (audyt rozdz. 11, P0/P1)', async () => {
+  const appJsSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'public', 'app.js'), 'utf8');
+
+  // "wariant - sprawdź ręcznie" musi zostac w EXCLUDE_FROM_PRINT (domyslnie
+  // odznaczone w kolejce druku - to poprawne), ale NIE w SETTLED - inaczej
+  // banner podsumowania i licznik "do sprawdzenia" po cichu pomijaja
+  // pozycje, ktora w rzeczywistosci wymaga jawnej decyzji uzytkownika, ktory
+  // wariant OT/ST jest wlasciwy, i ktora bez tej decyzji nigdy nie trafi do
+  // druku.
+  const excludeMatch = appJsSource.match(/const EXCLUDE_FROM_PRINT = new Set\(\[([\s\S]*?)\]\);/);
+  assert.ok(excludeMatch, 'nie znaleziono definicji EXCLUDE_FROM_PRINT');
+  assert.match(excludeMatch[1], /"wariant - sprawdź ręcznie"/);
+
+  const settledMatch = appJsSource.match(/const SETTLED = new Set\(\[([\s\S]*?)\]\);/);
+  assert.ok(settledMatch, 'nie znaleziono definicji SETTLED');
+  assert.doesNotMatch(settledMatch[1], /"wariant - sprawdź ręcznie"/);
+});
+
 // =====================================================================
 // Audyt v1.0.8, Priorytet 2: ponowienie /api/print po zajetej globalnej
 // blokadzie druku nie moze stemplowac paczki drugi raz.
