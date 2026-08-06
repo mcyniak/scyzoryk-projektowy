@@ -444,6 +444,15 @@ const server = http.createServer(async (req, res) => {
     const result = updateService.startInstall();
     return sendJson(res, result.statusCode, { ok: result.started, message: result.message });
   }
+  if (decodedPath === '/api/update/acknowledge-result') {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, message: 'Metoda niedozwolona.' });
+    try { await drainRequestBody(req); } catch (_) { return sendJson(res, 400, { ok: false, message: 'Nieprawidlowe zadanie.' }); }
+    if (!requireTrustedMutation(req, res)) return;
+    // Audyt rozdz. 4, P2: bez tego okno z wynikiem ostatniej proby
+    // aktualizacji wyskakiwalo ponownie po kazdym powrocie do panelu, mimo
+    // ze uzytkownik juz je zamknal - patrz lib/updateService.js.
+    return sendJson(res, 200, updateService.acknowledgeLastResult());
+  }
 
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
   if (decodedPath.startsWith('/shared/')) return readStaticFile(path.join(SHARED_DIR, decodedPath.slice('/shared/'.length)), res, SHARED_DIR);

@@ -790,6 +790,115 @@ test('cleanupUpdatesDir: zachowuje najwyzej 2 najnowsze wersje i usuwa pliki .pa
 });
 
 // =====================================================================
+// acknowledgeLastResult() - audyt rozdz. 4, P2: zapisany wynik ostatniej
+// proby aktualizacji ma wyskoczyc automatycznie tylko RAZ, nie przy kazdym
+// powrocie do panelu. Zlapane realnie przez wlasciciela: okno wyskakiwalo
+// ponownie mimo wczesniejszego zamkniecia.
+// =====================================================================
+
+test('acknowledgeLastResult: nieoznaczony wynik pokazuje lastResultAcknowledged=false, po potwierdzeniu true', () => {
+  const updateRoot = tempDir('scz-ack-basic-');
+  fs.writeFileSync(path.join(updateRoot, 'last-result.json'), JSON.stringify({
+    ok: false, version: '2.0.0', exitCode: 1, message: 'Instalacja nie powiodla sie.'
+  }));
+  const service = createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '1.0.0' }),
+    repo: 'o/r',
+    updateRoot,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+  });
+
+  const before = service.getStatusPayload();
+  assert.equal(before.lastResult.ok, false);
+  assert.equal(before.lastResultAcknowledged, false);
+
+  const ackResult = service.acknowledgeLastResult();
+  assert.equal(ackResult.ok, true);
+
+  const after = service.getStatusPayload();
+  assert.equal(after.lastResultAcknowledged, true);
+
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+test('acknowledgeLastResult: potwierdzenie przetrwa restart procesu (ten sam wynik nie wyskakuje ponownie)', () => {
+  const updateRoot = tempDir('scz-ack-restart-');
+  fs.writeFileSync(path.join(updateRoot, 'last-result.json'), JSON.stringify({
+    ok: false, version: '2.0.0', exitCode: 1, message: 'Instalacja nie powiodla sie.'
+  }));
+
+  const makeService = () => createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '1.0.0' }),
+    repo: 'o/r',
+    updateRoot,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+  });
+
+  const first = makeService();
+  first.acknowledgeLastResult();
+  assert.equal(first.getStatusPayload().lastResultAcknowledged, true);
+
+  // Symuluje restart procesu panelu (np. crash-restart niezwiazany z
+  // aktualizacja) - nowa instancja usluga czyta TEN SAM stan z dysku.
+  const second = makeService();
+  assert.equal(second.getStatusPayload().lastResultAcknowledged, true);
+
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+test('acknowledgeLastResult: NOWY wynik (kolejna proba aktualizacji) znowu wymaga potwierdzenia, mimo starego zapisu', () => {
+  const updateRoot = tempDir('scz-ack-new-result-');
+  fs.writeFileSync(path.join(updateRoot, 'last-result.json'), JSON.stringify({
+    ok: false, version: '2.0.0', exitCode: 1, message: 'Pierwsza nieudana proba.'
+  }));
+
+  const makeService = () => createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '1.0.0' }),
+    repo: 'o/r',
+    updateRoot,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+  });
+
+  const first = makeService();
+  first.acknowledgeLastResult();
+  assert.equal(first.getStatusPayload().lastResultAcknowledged, true);
+
+  // Kolejna (nowa, INNA) nieudana proba aktualizacji nadpisuje last-result.json.
+  fs.writeFileSync(path.join(updateRoot, 'last-result.json'), JSON.stringify({
+    ok: false, version: '2.0.1', exitCode: 1, message: 'Druga, inna nieudana proba.'
+  }));
+
+  const second = makeService();
+  const status = second.getStatusPayload();
+  assert.equal(status.lastResultAcknowledged, false);
+  assert.match(status.lastResult.message, /Druga/);
+
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+test('acknowledgeLastResult: brak lastResult - wywolanie jest bezpiecznym no-opem', () => {
+  const updateRoot = tempDir('scz-ack-noop-');
+  const service = createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '1.0.0' }),
+    repo: 'o/r',
+    updateRoot,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+  });
+  const result = service.acknowledgeLastResult();
+  assert.equal(result.ok, true);
+  assert.equal(service.getStatusPayload().lastResult, null);
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
+// =====================================================================
 // Bezpieczenstwo tras panelu (server.js) - prawdziwy proces, prawdziwe
 // zadania HTTP, bez uruchamiania osmiu aplikacji-dzieci.
 // =====================================================================
@@ -895,6 +1004,21 @@ test('trasy /api/update/* - bezpieczenstwo i kontrakt', async t => {
   const health = JSON.parse((await request(panelPort, { path: '/api/health' })).body);
   assert.equal(typeof health.version, 'string');
   assert.ok(isValidVersion(health.version));
+
+  // /api/update/acknowledge-result - ta sama ochrona co /install (audyt
+  // rozdz. 4, P2).
+  const ackGet = await request(panelPort, { path: '/api/update/acknowledge-result' });
+  assert.equal(ackGet.statusCode, 405);
+
+  const ackNoHeader = await request(panelPort, { path: '/api/update/acknowledge-result', method: 'POST' });
+  assert.equal(ackNoHeader.statusCode, 403);
+
+  const ackOk = await request(panelPort, {
+    path: '/api/update/acknowledge-result', method: 'POST',
+    headers: { 'X-Scyzoryk-Request': '1', Origin: `http://127.0.0.1:${panelPort}` }
+  });
+  assert.equal(ackOk.statusCode, 200);
+  assert.equal(JSON.parse(ackOk.body).ok, true);
 });
 
 // =====================================================================

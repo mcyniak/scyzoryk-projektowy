@@ -32,6 +32,17 @@
   let lastStatus = null;
   let installStarted = false;
   let openerElement = null;
+  // Audyt rozdz. 4, P2: ustawiane gdy modal zostal otwarty AUTOMATYCZNIE, bo
+  // zapisany wynik ostatniej proby aktualizacji nie byl jeszcze potwierdzony -
+  // przy zamknieciu wysylamy potwierdzenie do backendu, zeby to samo okno nie
+  // wyskakiwalo ponownie przy kazdym kolejnym powrocie do panelu.
+  let pendingResultAcknowledge = false;
+
+  function acknowledgeResultIfPending() {
+    if (!pendingResultAcknowledge) return;
+    pendingResultAcknowledge = false;
+    fetch('/api/update/acknowledge-result', { method: 'POST', headers: HEADERS }).catch(() => {});
+  }
 
   function hide(el) { if (el) el.classList.add('hidden'); }
   function show(el) { if (el) el.classList.remove('hidden'); }
@@ -97,6 +108,7 @@
     // Po rozpoczeciu instalacji modal nie da sie zamknac (Escape ani "Później")
     // - uzytkownik nie moze zgubic z oczu jedynego miejsca, gdzie zobaczy wynik.
     if (installStarted) return;
+    acknowledgeResultIfPending();
     modal.classList.remove('open');
     modal.setAttribute('aria-hidden', 'true');
     document.removeEventListener('keydown', onKeydown);
@@ -271,9 +283,13 @@
   setInterval(refreshFromStatus, STATUS_POLL_MS);
 
   // Jesli poprzednie uruchomienie Scyzoryka bylo NIEUDANA aktualizacja,
-  // pokazujemy to od razu po wczytaniu strony, bez czekania na klik.
+  // pokazujemy to od razu po wczytaniu strony, bez czekania na klik. Tylko
+  // gdy uzytkownik jeszcze tego NIE potwierdzil (audyt rozdz. 4, P2) - bez
+  // tego warunku okno wyskakiwalo ponownie przy kazdym kolejnym powrocie do
+  // panelu, nawet po zamknieciu.
   fetchStatus().then(status => {
-    if (status && status.lastResult && status.lastResult.ok === false) {
+    if (status && status.lastResult && status.lastResult.ok === false && !status.lastResultAcknowledged) {
+      pendingResultAcknowledge = true;
       renderModalData(status);
       showError('Scyzoryk został ponownie uruchomiony. Szczegóły zapisano w lokalnym dzienniku aktualizacji.');
       openModal();
