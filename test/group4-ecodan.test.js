@@ -281,7 +281,12 @@ async function writeLpTestSheet(dir, rows) {
 test('readExcelRecords: kolumna LP daje stabilny numer pliku, blokuje brakujacy/zduplikowany LP zamiast cicho spasc na numer wiersza (audyt rozdz. 14, P1)', async (t) => {
   const { readExcelRecords } = await import('../apps/formularze-ecodan/src/excel.js');
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-lp-'));
-  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  // read-excel-file trzyma uchwyt .xlsx otwarty chwile po odczycie - na
+  // Windows (zwlaszcza CI) to blokuje usuniecie katalogu (ENOTEMPTY) zanim
+  // system zdazy go zwolnic. Retry zamiast osobnego katalogu na plik (jak w
+  // test/group11-karty-katalogowe.test.js) - tu wystarczy, bo nic wiecej
+  // sie do tego katalogu nie odwoluje po odczycie.
+  t.after(() => fsp.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
 
   const file = await writeLpTestSheet(dir, [
     LP_TEST_HEADER,
