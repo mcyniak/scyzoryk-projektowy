@@ -397,7 +397,12 @@ async function processRecordWithWorker(record, recordIndex, worker, job, pdfDir,
     worker.recordsInCurrentSession = 0;
   }
 
-  const fileName = makePdfName(record.input, record.rowNumber);
+  // Audyt rozdz. 14, P1: nazwa pliku uzywa LP (stabilny, niezalezny od
+  // pozycji wiersza), gdy arkusz ma taka kolumne - readExcelRecords juz
+  // przefiltrowal wiersze z brakujacym/zduplikowanym LP, wiec kazdy record
+  // tutaj ma poprawna wartosc, jesli record.lp nie jest null. Bez kolumny LP
+  // w arkuszu (record.lp === null) zostaje dawny fallback na numer wiersza.
+  const fileName = makePdfName(record.input, record.lp || record.rowNumber);
   const runOptions = {
     rowNumber: record.rowNumber,
     fileName,

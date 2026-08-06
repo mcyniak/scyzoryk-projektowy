@@ -44,6 +44,10 @@ const HEADER_KEYWORDS = [
   'bufor', 'kotlownia', 'grzejnik', 'podlog', 'audytor', 'uwagi'
 ];
 
+// Audyt rozdz. 14, P1: stabilny numer porzadkowy do nazwy pliku, niezalezny
+// od pozycji wiersza w arkuszu - patrz readExcelRecords.
+const LP_VARIANTS = ['LP', 'L.p.', 'Lp.', 'Lp'];
+
 function headerScore(values) {
   const normalized = values.map(normalizeHeader).filter(Boolean);
   let score = 0;
@@ -161,6 +165,18 @@ export function getCell(row, variants) {
   return '';
 }
 
+// Czy arkusz w ogole MA taka kolumne (niezaleznie od tego, czy w TYM wierszu
+// jest pusta) - odrozniamy "arkusz nie uzywa LP" (bezpieczny fallback na
+// numer wiersza) od "arkusz uzywa LP, ale ta komorka jest pusta" (blad w
+// danych, nie wolno cicho spasc na numer wiersza).
+export function hasColumn(row, variants) {
+  const normalized = Object.keys(row || {}).map(normalizeHeader);
+  return variants.some(variant => {
+    const wanted = normalizeHeader(variant);
+    return normalized.some(norm => norm === wanted || (norm && (norm.includes(wanted) || wanted.includes(norm))));
+  });
+}
+
 export function rowHasAnyData(row) {
   return Object.values(row || {}).some(value => String(value ?? '').trim() !== '');
 }
@@ -229,8 +245,18 @@ export async function readExcelRecords(filePath, globalLocation = '') {
   const records = [];
   const skipped = {
     empty: 0, ground: 0, unknownPumpType: 0, missingAddress: 0, missingOzc: 0,
-    missingPower: 0, missingLocation: 0, missingHeatingShare: 0, missingTank: 0
+    missingPower: 0, missingLocation: 0, missingHeatingShare: 0, missingTank: 0,
+    missingLp: 0, duplicateLp: 0
   };
+  // Audyt rozdz. 14, P1: nazwa wygenerowanego pliku wczesniej opierala sie o
+  // surowa pozycje wiersza w arkuszu - po dodaniu/usunieciu/przesunieciu
+  // wiersza numer w nazwie przestawal odpowiadac wlasciwemu rekordowi.
+  // Kolumna LP (jesli arkusz ja ma) daje stabilny numer niezalezny od
+  // pozycji. Gdy arkusz NIE ma takiej kolumny wcale, zostaje bezpieczny
+  // fallback na numer wiersza (zeby nie zablokowac generowania dla
+  // istniejacych arkuszy bez LP) - ale skoro kolumna JEST, pusta/duplikat
+  // komorki w NIEJ blokuje dany wiersz zamiast cicho spasc na numer wiersza.
+  const seenLp = new Map();
 
   rows.forEach((row, index) => {
     const excelRowNumber = row.__excelRowNumber || index + 2;
@@ -316,7 +342,23 @@ export async function readExcelRecords(filePath, globalLocation = '') {
       return;
     }
 
-    records.push({ rowNumber: excelRowNumber, input });
+    let lp = null;
+    if (hasColumn(row, LP_VARIANTS)) {
+      const lpRaw = String(getCell(row, LP_VARIANTS) || '').trim();
+      if (!lpRaw) {
+        skipped.missingLp += 1;
+        return;
+      }
+      const lpKey = lpRaw.toLowerCase();
+      if (seenLp.has(lpKey)) {
+        skipped.duplicateLp += 1;
+        return;
+      }
+      seenLp.set(lpKey, excelRowNumber);
+      lp = lpRaw;
+    }
+
+    records.push({ rowNumber: excelRowNumber, lp, input });
   });
 
   return {

@@ -171,7 +171,8 @@ let activeJob = null;
         const skipLabels = {
           empty: 'puste wiersze', ground: 'pompa gruntowa', unknownPumpType: 'nierozpoznany typ pompy',
           missingAddress: 'brak adresu', missingOzc: 'brak OZC', missingPower: 'brak/niejednoznaczna moc',
-          missingLocation: 'brak lokalizacji', missingHeatingShare: 'brak udziału ogrzewania', missingTank: 'brak zbiornika CWU'
+          missingLocation: 'brak lokalizacji', missingHeatingShare: 'brak udziału ogrzewania', missingTank: 'brak zbiornika CWU',
+          missingLp: 'brak numeru LP', duplicateLp: 'zduplikowany numer LP'
         };
         const skipBreakdown = Object.entries(skipped)
           .filter(([, count]) => Number(count) > 0)
@@ -205,7 +206,7 @@ let activeJob = null;
         const details = [row.ozc ? `OZC: ${escapeHtml(row.ozc)}` : '', row.chosenPower ? `Moc dobrana: ${escapeHtml(row.chosenPower)}` : (row.municipalityPower ? `Moc: ${escapeHtml(row.municipalityPower)}` : '')].filter(Boolean).join(' · ');
         return `<tr class="record-row ${checked ? '' : 'unselected'}" data-row-number="${row.rowNumber}">`
           + `<td><input type="checkbox" ${checked ? 'checked' : ''} aria-label="Wybierz adres" /></td>`
-          + `<td>${row.rowNumber || ''}</td>`
+          + `<td>${escapeHtml(String(row.lp ?? row.rowNumber ?? ''))}</td>`
           + `<td>${escapeHtml(row.name || '')}</td>`
           + `<td><strong>${escapeHtml(row.address || '')}</strong>${row.location ? `<div class="small">${escapeHtml(row.location)}</div>` : ''}</td>`
           + `<td>${details || '<span class="small">-</span>'}</td>`

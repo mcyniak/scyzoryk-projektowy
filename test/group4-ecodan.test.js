@@ -258,6 +258,73 @@ test('readExcelRecords: pre-filtr uzywa scislych parserow (OZC/udziały/zbiornik
   assert.match(excelSource, /if \(!tankParsed\.litresValid \|\| \(tankParsed\.present && tankParsed\.litres <= 0\)\)/);
 });
 
+// =====================================================================
+// Audyt rozdz. 14, P1: nazwa generowanego pliku opierala sie o SUROWY numer
+// wiersza w arkuszu - po dodaniu/usunieciu/przesunieciu wiersza numer w
+// nazwie przestawal odpowiadac wlasciwemu rekordowi (ryzyko pomylenia
+// raportow miedzy adresami). Kolumna LP (jesli arkusz ja ma) daje stabilny,
+// niezalezny od pozycji numer.
+// =====================================================================
+
+const LP_TEST_HEADER = ['LP', 'Imię i Nazwisko', 'Adres', 'OZC', 'Moc pompy z gminy', 'Udział ogrzew grzejnik', 'Udział ogrzew podłog', 'Wielkość zbiornika CWU'];
+
+async function writeLpTestSheet(dir, rows) {
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'node_modules', 'xlsx'));
+  const file = path.join(dir, 'dane.xlsx');
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Dane pompy');
+  XLSX.writeFile(wb, file);
+  return file;
+}
+
+test('readExcelRecords: kolumna LP daje stabilny numer pliku, blokuje brakujacy/zduplikowany LP zamiast cicho spasc na numer wiersza (audyt rozdz. 14, P1)', async (t) => {
+  const { readExcelRecords } = await import('../apps/formularze-ecodan/src/excel.js');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-lp-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  const file = await writeLpTestSheet(dir, [
+    LP_TEST_HEADER,
+    [5, 'Jan Kowalski', 'Testowa 1', '7,8', '9 kW', '60', '40', '200 l'],
+    ['', 'Pusty LP', 'Testowa 2', '7,8', '9 kW', '60', '40', '200 l'],
+    [5, 'Duplikat LP', 'Testowa 3', '7,8', '9 kW', '60', '40', '200 l'],
+    [3, 'Anna Nowak', 'Testowa 4', '7,8', '9 kW', '60', '40', '200 l']
+  ]);
+
+  const parsed = await readExcelRecords(file, '62-561 Ślesin');
+  assert.equal(parsed.records.length, 2, 'tylko wiersze z poprawnym, unikalnym LP przechodza');
+  assert.equal(parsed.records[0].lp, '5');
+  assert.equal(parsed.records[0].input.name, 'Jan Kowalski');
+  assert.equal(parsed.records[1].lp, '3');
+  assert.equal(parsed.records[1].input.name, 'Anna Nowak');
+  assert.equal(parsed.skipped.missingLp, 1, 'pusta komorka LP w arkuszu KTORY MA te kolumne musi blokowac wiersz');
+  assert.equal(parsed.skipped.duplicateLp, 1, 'drugi wiersz z tym samym LP musi zostac zablokowany, nie cicho nadpisac pierwszego');
+});
+
+test('readExcelRecords: bez kolumny LP w arkuszu zostaje bezpieczny fallback na numer wiersza (zero regresji dla istniejacych arkuszy)', async (t) => {
+  const { readExcelRecords } = await import('../apps/formularze-ecodan/src/excel.js');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-nolp-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  const file = await writeLpTestSheet(dir, [
+    LP_TEST_HEADER.slice(1),
+    ['Jan Kowalski', 'Testowa 1', '7,8', '9 kW', '60', '40', '200 l']
+  ]);
+
+  const parsed = await readExcelRecords(file, '62-561 Ślesin');
+  assert.equal(parsed.records.length, 1);
+  assert.equal(parsed.records[0].lp, null, 'arkusz bez kolumny LP nie ma z czego jej wziac - fallback na numer wiersza zostaje w makePdfName');
+  assert.equal(parsed.records[0].rowNumber, 2);
+  assert.equal(parsed.skipped.missingLp, 0);
+});
+
+test('makePdfName: preferuje LP nad numerem wiersza, gdy oba sa dostepne', async () => {
+  const { makePdfName } = await import('../apps/formularze-ecodan/src/excel.js');
+  const input = { name: 'Jan Kowalski', address: 'Testowa 1' };
+  assert.match(makePdfName(input, '5'), /^005 - /);
+  assert.match(makePdfName(input, 42), /^042 - /);
+});
+
 test('indeks zadań i frontend obsługują restart oraz ostrzeżenie ścieżki', async () => {
   const jobsSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'formularze-ecodan', 'src', 'jobs.js'), 'utf8');
   const uiSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'formularze-ecodan', 'public', 'inline-1.js'), 'utf8');

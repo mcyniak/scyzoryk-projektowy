@@ -199,6 +199,7 @@ app.post('/api/batch/preview', heavyJobLimiter, (req, res, next) => {
       totalRows: parsed.totalRows,
       records: parsed.records.map(record => ({
         rowNumber: record.rowNumber,
+        lp: record.lp,
         name: record.input.name || '',
         address: record.input.address || '',
         location: record.input.location || '',
