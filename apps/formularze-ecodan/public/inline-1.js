@@ -361,7 +361,12 @@ let activeJob = null;
       const settings = {
         investmentName: form.investmentName.value || '',
         outputPath: form.outputPath.value || '',
-        location: form.location.value || '',
+        // Audyt rozdz. 14, P0/P1: lokalizacja NIE jest zapamietywana miedzy
+        // sesjami. To pole jest fallbackiem wylacznie dla wierszy bez wlasnej
+        // kolumny lokalizacji (patrz src/excel.js#rowToInput) - zapamietanie
+        // jej w localStorage znaczyloby, ze przy NASTEPNEJ, zupelnie innej
+        // inwestycji formularz cicho podstawia lokalizacje z POPRZEDNIEJ,
+        // dla kazdego wiersza, ktoremu przypadkiem zabraknie wlasnej danej.
         concurrency: form.concurrency.value || '1',
         skipExisting: form.skipExisting.checked
       };
@@ -374,7 +379,6 @@ let activeJob = null;
         const form = document.querySelector('#batchForm');
         if (settings.investmentName) form.investmentName.value = settings.investmentName;
         if (settings.outputPath) form.outputPath.value = settings.outputPath;
-        if (settings.location) form.location.value = settings.location;
         if (settings.concurrency) form.concurrency.value = settings.concurrency;
         if (typeof settings.skipExisting === 'boolean') form.skipExisting.checked = settings.skipExisting;
       } catch {}
