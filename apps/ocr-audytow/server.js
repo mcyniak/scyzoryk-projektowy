@@ -928,6 +928,24 @@ function validateBlocks(blocks, pageCount) {
   for (let i = 1; i < cleaned.length; i++) {
     if (cleaned[i].startPage <= cleaned[i - 1].endPage) throw new Error('Zakresy stron w podziale nakładają się.');
   }
+  // Audyt rozdz. 17, P0: brak nakladania nie oznacza pelnego pokrycia -
+  // luka miedzy blokami (np. blok1=0-2, blok2=5-7) przechodzila wczesniej
+  // walidacje bez zadnego bledu i CICHO gubila strony 3-4 z kazdego
+  // wynikowego PDF-a. /api/ocr/finalize przyjmuje blocks WPROST z cialem
+  // zadania (patrz wywolanie ponizej: "requested.blocks" ma pierwszenstwo
+  // przed fileEntry.blocks z sesji analizy) - normalny frontend (public/app.js
+  // #computeBlocks) zawsze konstruuje bloki bez luk z definicji (kazdy blok
+  // konczy sie dokladnie tam, gdzie zaczyna kolejny), wiec ta walidacja nigdy
+  // nie odrzuci prawdziwego, niezmienionego zadania - zamyka wylacznie
+  // przypadek zniekstalconego/recznie spreparowanego zadania.
+  if (cleaned[0].startPage !== 0 || cleaned[cleaned.length - 1].endPage !== pageCount - 1) {
+    throw new Error('Podzial stron nie pokrywa calego dokumentu (luka na poczatku albo koncu) - niektore strony zostalyby pominiete.');
+  }
+  for (let i = 1; i < cleaned.length; i++) {
+    if (cleaned[i].startPage !== cleaned[i - 1].endPage + 1) {
+      throw new Error(`Podzial stron ma luke miedzy strona ${cleaned[i - 1].endPage + 1} a ${cleaned[i].startPage + 1} - te strony zostalyby pominiete w wynikowych PDF-ach.`);
+    }
+  }
   return cleaned;
 }
 
@@ -1100,4 +1118,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, 'OCR-AUDYTOW');
 }
 
-module.exports = { dedupeOutPaths };
+module.exports = { dedupeOutPaths, validateBlocks };

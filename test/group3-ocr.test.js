@@ -226,6 +226,55 @@ test('dedupeOutPaths: identyczna etykieta dwoch blokow nie nadpisuje pliku (audy
   assert.deepEqual(distinct, [path.join(dir, 'a.pdf'), path.join(dir, 'b.pdf')]);
 });
 
+test('validateBlocks: pelne pokrycie bez luk przechodzi bez bledu (zero regresji dla normalnego frontendu)', () => {
+  const { validateBlocks } = require('../apps/ocr-audytow/server');
+  const cleaned = validateBlocks(
+    [
+      { startPage: 0, endPage: 2, label: 'Adres 1' },
+      { startPage: 3, endPage: 5, label: 'Adres 2' },
+      { startPage: 6, endPage: 7, label: 'Adres 3' }
+    ],
+    8
+  );
+  assert.equal(cleaned.length, 3);
+  assert.equal(cleaned[0].startPage, 0);
+  assert.equal(cleaned[cleaned.length - 1].endPage, 7);
+});
+
+test('validateBlocks: pojedynczy blok obejmujacy caly dokument przechodzi', () => {
+  const { validateBlocks } = require('../apps/ocr-audytow/server');
+  const cleaned = validateBlocks([{ startPage: 0, endPage: 4, label: 'Caly dokument' }], 5);
+  assert.equal(cleaned.length, 1);
+});
+
+test('validateBlocks: luka miedzy blokami jest odrzucana z komunikatem wskazujacym zgubione strony (audyt rozdz. 17, P0)', () => {
+  const { validateBlocks } = require('../apps/ocr-audytow/server');
+  assert.throws(
+    () => validateBlocks(
+      [
+        { startPage: 0, endPage: 2, label: 'Adres 1' },
+        { startPage: 5, endPage: 7, label: 'Adres 2' }
+      ],
+      8
+    ),
+    /luke miedzy strona 3 a 6/
+  );
+});
+
+test('validateBlocks: podzial nie zaczynajacy sie od strony 1 albo nie konczacy na ostatniej stronie jest odrzucany (audyt rozdz. 17, P0)', () => {
+  const { validateBlocks } = require('../apps/ocr-audytow/server');
+  // Brakuje poczatku dokumentu (strona 1 zgubiona).
+  assert.throws(
+    () => validateBlocks([{ startPage: 1, endPage: 4, label: 'Adres 1' }], 5),
+    /nie pokrywa calego dokumentu/
+  );
+  // Brakuje konca dokumentu (ostatnia strona zgubiona).
+  assert.throws(
+    () => validateBlocks([{ startPage: 0, endPage: 3, label: 'Adres 1' }], 5),
+    /nie pokrywa calego dokumentu/
+  );
+});
+
 test('globalny semafor OCR nie przekracza pięciu równoległych zadań', async () => {
   const { runWithGlobalOcrLimit } = require('../apps/ocr-audytow/src/ocrPipeline');
   let active = 0;
