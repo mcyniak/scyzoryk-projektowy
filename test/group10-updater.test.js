@@ -850,6 +850,38 @@ test('acknowledgeLastResult: potwierdzenie przetrwa restart procesu (ten sam wyn
   fs.rmSync(updateRoot, { recursive: true, force: true });
 });
 
+test('acknowledgeLastResult: potwierdzenie przetrwa restart TAKZE gdy sprawdzanie aktualizacji jest wylaczone (audyt v1.0.4, zlapane na prawdziwym serwerze)', () => {
+  // Zlapane realnie: odczyt state.json byl przypadkowo schowany za "if (enabled)",
+  // wiec na SCYZORYK_UPDATE_ENABLED=0/SCYZORYK_SKIP_CHILD_START=1 (dokladnie
+  // srodowisko testowe uzywane przy diagnozowaniu tego zgloszenia) potwierdzenie
+  // znikalo po kazdym restarcie procesu, mimo ze test z enabled:true (domyslnym)
+  // powyzej przechodzil bez zarzutu.
+  const updateRoot = tempDir('scz-ack-restart-disabled-');
+  fs.writeFileSync(path.join(updateRoot, 'last-result.json'), JSON.stringify({
+    ok: false, version: '2.0.0', exitCode: 1, message: 'Instalacja nie powiodla sie.'
+  }));
+
+  const makeService = () => createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '1.0.0' }),
+    repo: 'o/r',
+    updateRoot,
+    enabled: false,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+  });
+
+  const first = makeService();
+  assert.equal(first.getStatusPayload().enabled, false);
+  first.acknowledgeLastResult();
+  assert.equal(first.getStatusPayload().lastResultAcknowledged, true);
+
+  const second = makeService();
+  assert.equal(second.getStatusPayload().lastResultAcknowledged, true);
+
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
+
 test('acknowledgeLastResult: NOWY wynik (kolejna proba aktualizacji) znowu wymaga potwierdzenia, mimo starego zapisu', () => {
   const updateRoot = tempDir('scz-ack-new-result-');
   fs.writeFileSync(path.join(updateRoot, 'last-result.json'), JSON.stringify({
