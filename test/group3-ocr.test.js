@@ -369,3 +369,80 @@ test('klient używa wspólnej walidacji odpowiedzi przed zmianą kolejki', async
   assert.doesNotMatch(source, /await fetch\('\/api\/ocr\/resolve-field'/);
   assert.match(source, /EXCEL_ALREADY_EXISTS/);
 });
+
+// =====================================================================
+// Ekran "OCR zablokowany" - reczne wgranie klucza zamiast wbudowanego w
+// instalator sekretu (audyt rozdz. 22: nie wymaga prywatnego repo, dziala
+// per-komputer, przezywa aktualizacje - patrz lib/ocrConfigMigration.js).
+// =====================================================================
+
+test('POST /api/ocr/setup-credentials: poprawny klucz odblokowuje OCR, /api/health od razu widzi zmiane', async (t) => {
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousOcrEnv = ['OCR_DOCAI_KEY_FILE', 'OCR_DOCAI_PROJECT_ID', 'OCR_DOCAI_LOCATION', 'OCR_DOCAI_PROCESSOR_ID']
+    .map(key => [key, process.env[key]]);
+  const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ocr-http-'));
+  process.env.LOCALAPPDATA = localAppData;
+  // Srodowisko ma pierwszenstwo przed plikiem uzytkownika (patrz kolejnosc w
+  // documentAiEngine.js#getConfiguration) - musimy je wyczyscic, zeby ten
+  // test faktycznie sprawdzal sciezke z pliku, ktora testujemy, a nie
+  // przypadkowo zaliczal dzieki (byc moze niepelnym) zmiennym z otoczenia.
+  for (const [key] of previousOcrEnv) delete process.env[key];
+  // documentAiEngine.js oblicza USER_CONFIG_PATH RAZ, jako stala modulu, przy
+  // pierwszym require() - nie na nowo przy kazdym wywolaniu. Ten modul mogl
+  // juz zostac zaladowany wczesniej w tym samym procesie testow (np. przez
+  // test "resolveMimeType" wyzej) z PRAWDZIWYM LOCALAPPDATA sprzed override -
+  // trzeba wyczyscic cache obu modulow, zeby swiezy require() faktycznie
+  // przeliczyl sciezke z NOWYM process.env.LOCALAPPDATA ustawionym powyzej.
+  delete require.cache[require.resolve('../apps/ocr-audytow/server')];
+  delete require.cache[require.resolve('../apps/ocr-audytow/src/documentAiEngine')];
+  t.after(() => {
+    process.env.LOCALAPPDATA = previousLocalAppData;
+    for (const [key, value] of previousOcrEnv) { if (value !== undefined) process.env[key] = value; }
+    delete require.cache[require.resolve('../apps/ocr-audytow/server')];
+    delete require.cache[require.resolve('../apps/ocr-audytow/src/documentAiEngine')];
+    return fsp.rm(localAppData, { recursive: true, force: true });
+  });
+
+  const { app: ocrApp } = require('../apps/ocr-audytow/server');
+
+  const server = ocrApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const before = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
+  assert.equal(before.ocrConfigured, false);
+
+  const fakeKey = { type: 'service_account', project_id: 'test-projekt-http', client_email: 'a@b.iam.gserviceaccount.com', private_key: 'FAKE-NIE-PRAWDZIWY-KLUCZ' };
+  const formData = new FormData();
+  formData.append('keyFile', new Blob([JSON.stringify(fakeKey)], { type: 'application/json' }), 'service-account.json');
+  formData.append('location', 'eu');
+  formData.append('processorId', 'proc999');
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-credentials`, {
+    method: 'POST',
+    headers: { 'X-Scyzoryk-Request': '1' },
+    body: formData
+  });
+  const data = await res.json();
+  assert.equal(res.status, 200);
+  assert.deepEqual(data, { ok: true, projectId: 'test-projekt-http', location: 'eu', processorId: 'proc999' });
+
+  const after = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
+  assert.equal(after.ocrConfigured, true, 'juz uruchomiony proces musi widziec nowa konfiguracje bez restartu (czytana z dysku przy kazdym wywolaniu)');
+});
+
+test('POST /api/ocr/setup-credentials: bez naglowka X-Scyzoryk-Request dostaje 403 (ta sama ochrona co reszta mutujacych tras)', async (t) => {
+  const { app: ocrApp } = require('../apps/ocr-audytow/server');
+  const server = ocrApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-credentials`, { method: 'POST' });
+  assert.equal(res.status, 403);
+});

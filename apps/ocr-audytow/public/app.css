@@ -1,5 +1,9 @@
 /* OCR audytów - style specyficzne dla tego modulu (reszta: /shared/*.css) */
 
+#ocrUnlockStatus { margin-top: var(--space-3); font-weight: 700; font-size: var(--text-sm); }
+#ocrUnlockStatus.ok { color: var(--success-600); }
+#ocrUnlockStatus.err { color: var(--danger-600); }
+
 .file-list { margin-top: var(--space-4); border: 1px solid var(--border-default); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-surface); }
 .file-row { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--border-default); font-weight: 600; font-size: var(--text-sm); }
 .file-row:last-child { border-bottom: 0; }

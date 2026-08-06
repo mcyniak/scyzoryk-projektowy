@@ -18,7 +18,7 @@ const {
 const { assetFileName, findExactAsset, fetchLatestRelease } = require('../lib/updateGithub');
 const { downloadText, downloadToPartialFile, parseSha256File } = require('../lib/updateDownload');
 const { createUpdateService, cleanupUpdatesDir } = require('../lib/updateService');
-const { migrateOcrConfigIfNeeded, isCompleteConfig, userConfigPath } = require('../lib/ocrConfigMigration');
+const { migrateOcrConfigIfNeeded, isCompleteConfig, userConfigPath, saveUserOcrConfig } = require('../lib/ocrConfigMigration');
 
 function withEnvironment(values, body) {
   const previous = {};
@@ -1168,6 +1168,62 @@ test('OCR: brak wbudowanej konfiguracji w ogole (zwykla instalacja) - brak migra
   });
   fs.rmSync(localAppData, { recursive: true, force: true });
   fs.rmSync(appRoot, { recursive: true, force: true });
+});
+
+// =====================================================================
+// Reczne wgranie klucza OCR przez uzytkownika (lib/ocrConfigMigration.js#saveUserOcrConfig)
+// - alternatywa dla wbudowanego w instalator sekretu, ktora nie wymaga
+// prywatnego repo. Patrz apps/ocr-audytow POST /api/ocr/setup-credentials.
+// =====================================================================
+
+const VALID_SERVICE_ACCOUNT = { type: 'service_account', project_id: 'z-klucza-projekt', client_email: 'a@b.iam.gserviceaccount.com', private_key: 'TAJNY-KLUCZ-NIE-LOGOWAC' };
+
+test('saveUserOcrConfig: poprawny klucz + wszystkie pola zapisuje oba pliki i zwraca rozstrzygniete wartosci', () => {
+  const localAppData = tempDir('scz-ocr-manual-ok-');
+  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
+    const result = saveUserOcrConfig({
+      keyFileContent: JSON.stringify(VALID_SERVICE_ACCOUNT),
+      location: 'eu',
+      processorId: 'proc123',
+      projectId: 'recznie-podany-projekt'
+    });
+    assert.deepEqual(result, { projectId: 'recznie-podany-projekt', location: 'eu', processorId: 'proc123' });
+
+    const userPath = userConfigPath();
+    const userConfig = JSON.parse(fs.readFileSync(userPath, 'utf8'));
+    assert.equal(userConfig.projectId, 'recznie-podany-projekt', 'recznie podany projectId ma pierwszenstwo przed tym z pliku klucza');
+    assert.equal(userConfig.keyFile, 'service-account.json');
+    assert.equal(isCompleteConfig(userConfig, path.dirname(userPath)), true);
+
+    const savedKey = JSON.parse(fs.readFileSync(path.join(path.dirname(userPath), 'service-account.json'), 'utf8'));
+    assert.equal(savedKey.private_key, 'TAJNY-KLUCZ-NIE-LOGOWAC');
+  });
+  fs.rmSync(localAppData, { recursive: true, force: true });
+});
+
+test('saveUserOcrConfig: brak recznego projectId - uzywa project_id z pliku klucza', () => {
+  const localAppData = tempDir('scz-ocr-manual-autopid-');
+  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
+    const result = saveUserOcrConfig({
+      keyFileContent: JSON.stringify(VALID_SERVICE_ACCOUNT),
+      location: 'eu',
+      processorId: 'proc123'
+    });
+    assert.equal(result.projectId, 'z-klucza-projekt');
+  });
+  fs.rmSync(localAppData, { recursive: true, force: true });
+});
+
+test('saveUserOcrConfig: odrzuca niepoprawny JSON, brak type/private_key, brak location/processorId - nic nie zapisuje', () => {
+  const localAppData = tempDir('scz-ocr-manual-bad-');
+  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
+    assert.throws(() => saveUserOcrConfig({ keyFileContent: '{niepoprawny', location: 'eu', processorId: 'p' }), /nie jest poprawnym JSON/);
+    assert.throws(() => saveUserOcrConfig({ keyFileContent: JSON.stringify({ foo: 'bar' }), location: 'eu', processorId: 'p' }), /konta serwisowego/);
+    assert.throws(() => saveUserOcrConfig({ keyFileContent: JSON.stringify(VALID_SERVICE_ACCOUNT), processorId: 'p' }), /lokalizacje/);
+    assert.throws(() => saveUserOcrConfig({ keyFileContent: JSON.stringify(VALID_SERVICE_ACCOUNT), location: 'eu' }), /ID procesora/);
+    assert.equal(fs.existsSync(userConfigPath()), false, 'zaden z odrzuconych wywolan nie mogl nic zapisac na dysk');
+  });
+  fs.rmSync(localAppData, { recursive: true, force: true });
 });
 
 // =====================================================================

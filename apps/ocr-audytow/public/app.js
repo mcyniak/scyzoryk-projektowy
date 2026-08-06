@@ -51,6 +51,16 @@
   const resultList = document.getElementById('resultList');
   const excelResultNote = document.getElementById('excelResultNote');
 
+  const ocrLockedPanel = document.getElementById('ocrLockedPanel');
+  const ocrHeroSection = document.getElementById('ocrHeroSection');
+  const ocrUploadPanel = document.getElementById('ocrUploadPanel');
+  const ocrUnlockForm = document.getElementById('ocrUnlockForm');
+  const ocrKeyFileInput = document.getElementById('ocrKeyFileInput');
+  const ocrLocationInput = document.getElementById('ocrLocationInput');
+  const ocrProcessorIdInput = document.getElementById('ocrProcessorIdInput');
+  const ocrUnlockBtn = document.getElementById('ocrUnlockBtn');
+  const ocrUnlockStatus = document.getElementById('ocrUnlockStatus');
+
   const EXCEL_PATH_STORAGE_KEY = 'ocr-audytow-excel-path';
   const FAMILY_STORAGE_KEY = 'ocr-audytow-family';
   excelPathInput.value = localStorage.getItem(EXCEL_PATH_STORAGE_KEY) || '';
@@ -871,4 +881,61 @@
       `;
     }).join('');
   }
+
+  // Audyt rozdz. 22 (dystrybucja sekretu OCR): zamiast wypiekac klucz w
+  // instalatorze (co wymagaloby prywatnego repo i psulo publiczne
+  // aktualizacje), uzytkownik wgrywa klucz recznie RAZ na tym komputerze -
+  // ekran ponizej pokazuje sie zamiast normalnego formularza, dopoki
+  // /api/health zglasza ocrConfigured:false.
+  function setOcrLocked(locked) {
+    ocrLockedPanel.hidden = !locked;
+    ocrHeroSection.hidden = locked;
+    ocrUploadPanel.hidden = locked;
+  }
+
+  async function checkOcrConfigured() {
+    try {
+      const res = await fetch('/api/health');
+      const data = await res.json().catch(() => null);
+      setOcrLocked(Boolean(data?.ok) && data.ocrConfigured === false);
+    } catch {
+      // Brak odpowiedzi z wlasnego /api/health to problem innej natury
+      // (np. serwer wlasnie startuje) - nie chowamy normalnego UI z tego
+      // powodu, zwykle sciezki uzycia i tak zglosza swoj wlasny blad.
+    }
+  }
+  checkOcrConfigured();
+
+  ocrUnlockForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const file = ocrKeyFileInput.files[0];
+    if (!file) return;
+
+    ocrUnlockBtn.disabled = true;
+    ocrUnlockStatus.className = '';
+    ocrUnlockStatus.textContent = 'Zapisuję...';
+    try {
+      const formData = new FormData();
+      formData.append('keyFile', file);
+      formData.append('location', ocrLocationInput.value.trim());
+      formData.append('processorId', ocrProcessorIdInput.value.trim());
+      const res = await fetch('/api/ocr/setup-credentials', {
+        method: 'POST',
+        headers: { 'X-Scyzoryk-Request': '1' },
+        body: formData
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) throw new Error(data?.message || 'Nie udało się zapisać konfiguracji OCR.');
+
+      ocrUnlockStatus.className = 'ok';
+      ocrUnlockStatus.textContent = `Gotowe. Zapisano konfigurację (projekt: ${data.projectId}). Odblokowuję...`;
+      setOcrLocked(false);
+      ocrUnlockForm.reset();
+    } catch (err) {
+      ocrUnlockStatus.className = 'err';
+      ocrUnlockStatus.textContent = err.message || 'Nie udało się zapisać konfiguracji OCR.';
+    } finally {
+      ocrUnlockBtn.disabled = false;
+    }
+  });
 })();

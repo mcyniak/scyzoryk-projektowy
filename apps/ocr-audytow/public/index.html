@@ -28,7 +28,34 @@
       </a>
     </header>
 
-    <section class="hero">
+    <section class="panel" id="ocrLockedPanel" hidden>
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">🔒 OCR nie jest jeszcze skonfigurowany na tym komputerze</h2>
+          <p class="panel-desc">Wgraj plik klucza konta serwisowego Google Document AI (<code>service-account.json</code>), żeby odblokować rozpoznawanie tekstu. Robisz to raz na tym komputerze - ustawienie zostaje zapisane osobno od samej aplikacji i przetrwa kolejne aktualizacje Scyzoryka.</p>
+        </div>
+      </div>
+      <form id="ocrUnlockForm">
+        <div class="option-field">
+          <span class="option-label">Plik klucza (service-account.json)</span>
+          <input type="file" id="ocrKeyFileInput" accept=".json,application/json" required>
+        </div>
+        <div class="option-field" style="margin-top:12px">
+          <span class="option-label">Lokalizacja procesora Document AI</span>
+          <input type="text" id="ocrLocationInput" placeholder="np. eu">
+        </div>
+        <div class="option-field" style="margin-top:12px">
+          <span class="option-label">ID procesora Document AI</span>
+          <input type="text" id="ocrProcessorIdInput" placeholder="np. c8cea9ff6f6430c3">
+        </div>
+        <div class="hero-actions">
+          <button type="submit" id="ocrUnlockBtn" class="btn btn-primary">Zapisz i odblokuj</button>
+        </div>
+        <div id="ocrUnlockStatus"></div>
+      </form>
+    </section>
+
+    <section class="hero" id="ocrHeroSection">
       <div class="panel hero-main">
         <div class="kicker">Rozpoznawanie tekstu</div>
         <h1>OCR skanów audytów</h1>
@@ -45,7 +72,7 @@
       </aside>
     </section>
 
-    <section class="panel">
+    <section class="panel" id="ocrUploadPanel">
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">1</span>Dodaj pliki PDF</h2>

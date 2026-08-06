@@ -17,6 +17,7 @@ const { writeFreshRows, writeFamilyTemplateRows, validatePath: validateExcelPath
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
 const { loadTemplates, matchTemplate, extractFieldsFromTemplate, buildTemplateFromReview, harvestTemplateFields } = require('./src/templateEngine');
 const { validateOcrBatchInspections } = require('./src/ocrLimits');
+const { saveUserOcrConfig } = require('../../lib/ocrConfigMigration');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -69,6 +70,30 @@ app.use(express.json({ limit: '2mb' }));
 app.get('/api/health', async (req, res) => {
   const templates = await loadTemplates();
   res.json({ ok: true, name: 'ocr-audytow', ocrConfigured: isOcrConfigured(), templatesLoaded: templates.length });
+});
+
+// Ekran "OCR zablokowany" w public/index.html (pokazywany, gdy /api/health
+// zwraca ocrConfigured:false) pozwala uzytkownikowi wgrac klucz konta
+// serwisowego RECZNIE, bez potrzeby specjalnego instalatora z wbudowanym
+// sekretem - patrz saveUserOcrConfig w lib/ocrConfigMigration.js (ten sam
+// trwaly katalog %LOCALAPPDATA%\Scyzoryk co migracja z instalatora, wiec
+// przezyje kolejne aktualizacje bez ponownego wpisywania). memoryStorage -
+// plik klucza to kilka KB tekstu, nigdy nie musi dotknac dysku jako
+// posrednia kopia w UPLOAD_DIR.
+const credentialsUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 64 * 1024, files: 1 } });
+app.post('/api/ocr/setup-credentials', credentialsUpload.single('keyFile'), (req, res) => {
+  try {
+    if (!req.file) throw new Error('Wybierz plik klucza (service-account.json).');
+    const saved = saveUserOcrConfig({
+      keyFileContent: req.file.buffer.toString('utf8'),
+      location: req.body?.location,
+      processorId: req.body?.processorId,
+      projectId: req.body?.projectId
+    });
+    res.json({ ok: true, ...saved });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || 'Nie udało się zapisać konfiguracji OCR.' });
+  }
 });
 
 // Domyslnie 60/15min (typowy dla innych aplikacji Scyzoryka) jest za niskie dla TEGO
@@ -1118,4 +1143,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, 'OCR-AUDYTOW');
 }
 
-module.exports = { dedupeOutPaths, validateBlocks };
+module.exports = { app, dedupeOutPaths, validateBlocks };
