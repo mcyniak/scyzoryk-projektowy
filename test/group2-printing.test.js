@@ -214,3 +214,87 @@ test('skrypt nie dotyka cudzych okien i drukuje DOCX przez wlasny Word COM', () 
     assert.doesNotMatch(source, /closePdfAppsAfterBatch/);
   }
 });
+
+// Audyt rozdz. 10/11, P0: scalanie sasiadujacych PDF-ow przy druku
+// dwustronnym nie moze pozwolic, zeby pierwsza strona kolejnego dokumentu
+// wyladowala na odwrocie ostatniej strony poprzedniego.
+{
+  const { PDFDocument } = require('../apps/drukarka/node_modules/pdf-lib');
+
+  async function makeTempDir() {
+    return fs.promises.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-merge-'));
+  }
+
+  async function createPdf(filePath, pageCount, size = [400, 600]) {
+    const document = await PDFDocument.create();
+    for (let i = 0; i < pageCount; i += 1) document.addPage(size);
+    await fs.promises.writeFile(filePath, await document.save());
+  }
+
+  test('drukarka pdfMerge.mergePdfs: bez padOddPagesExceptLast zero regresji (stare zachowanie)', async (t) => {
+    const { mergePdfs } = require('../apps/drukarka/src/pdfMerge');
+    const dir = await makeTempDir();
+    t.after(() => fs.promises.rm(dir, { recursive: true, force: true }));
+
+    const a = path.join(dir, 'a.pdf');
+    const b = path.join(dir, 'b.pdf');
+    await createPdf(a, 3);
+    await createPdf(b, 2);
+
+    const out = path.join(dir, 'out.pdf');
+    await mergePdfs([a, b], out);
+    const merged = await PDFDocument.load(await fs.promises.readFile(out));
+    assert.equal(merged.getPageCount(), 5, 'bez flagi laczenie dziala jak wczesniej - brak pustych stron');
+  });
+
+  test('drukarka pdfMerge.mergePdfs: padOddPagesExceptLast wstawia pusta strone po nieparzystostronicowym pliku, ale nie na koncu (audyt rozdz. 10, P0)', async (t) => {
+    const { mergePdfs } = require('../apps/drukarka/src/pdfMerge');
+    const dir = await makeTempDir();
+    t.after(() => fs.promises.rm(dir, { recursive: true, force: true }));
+
+    const a = path.join(dir, 'a.pdf');
+    const b = path.join(dir, 'b.pdf');
+    await createPdf(a, 3, [300, 500]);
+    await createPdf(b, 2, [400, 600]);
+
+    const out = path.join(dir, 'out.pdf');
+    await mergePdfs([a, b], out, { padOddPagesExceptLast: true });
+    const merged = await PDFDocument.load(await fs.promises.readFile(out));
+    assert.equal(merged.getPageCount(), 6, 'plik "a" ma nieparzysta liczbe stron (3) i nie jest ostatni - dostaje jedna pusta strone');
+
+    const blankPage = merged.getPage(3);
+    assert.deepEqual([blankPage.getWidth(), blankPage.getHeight()], [300, 500], 'pusta strona ma rozmiar ostatniej strony poprzedniego pliku');
+  });
+
+  test('drukarka pdfMerge.mergePdfs: padOddPagesExceptLast NIE dodaje pustej strony po ostatnim pliku w run, nawet jesli ma nieparzysta liczbe stron', async (t) => {
+    const { mergePdfs } = require('../apps/drukarka/src/pdfMerge');
+    const dir = await makeTempDir();
+    t.after(() => fs.promises.rm(dir, { recursive: true, force: true }));
+
+    const a = path.join(dir, 'a.pdf');
+    const b = path.join(dir, 'b.pdf');
+    await createPdf(a, 2);
+    await createPdf(b, 3);
+
+    const out = path.join(dir, 'out.pdf');
+    await mergePdfs([a, b], out, { padOddPagesExceptLast: true });
+    const merged = await PDFDocument.load(await fs.promises.readFile(out));
+    assert.equal(merged.getPageCount(), 5, 'ostatni plik w run nigdy nie dostaje doklejonej pustej strony na koncu');
+  });
+
+  test('drukarka-projekty pdfMerge.mergePdfs: wstawia pusta strone bezwarunkowo (sideMode nieznany na etapie budowania kolejki - domyslnie dwustronnie w UI) (audyt rozdz. 11, P1)', async (t) => {
+    const { mergePdfs } = require('../apps/drukarka-projekty/src/pdfMerge');
+    const dir = await makeTempDir();
+    t.after(() => fs.promises.rm(dir, { recursive: true, force: true }));
+
+    const a = path.join(dir, 'a.pdf');
+    const b = path.join(dir, 'b.pdf');
+    await createPdf(a, 3);
+    await createPdf(b, 2);
+
+    const out = path.join(dir, 'out.pdf');
+    await mergePdfs([a, b], out);
+    const merged = await PDFDocument.load(await fs.promises.readFile(out));
+    assert.equal(merged.getPageCount(), 6);
+  });
+}

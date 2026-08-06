@@ -157,7 +157,8 @@ function validateUploadedDocument(file) {
 // druku - mniej osobnych zadan druku = szybciej i bez przerw miedzy plikami.
 // DOC/DOCX nie da sie polaczyc bez konwersji do PDF (ktorej ta apka nie robi),
 // wiec zostaja jako osobne zadania na swoim miejscu w kolejnosci.
-async function buildMergedPrintItems(items) {
+async function buildMergedPrintItems(items, options = {}) {
+  const { padOddPagesForDuplex = false } = options;
   const result = [];
   let i = 0;
   while (i < items.length) {
@@ -166,7 +167,7 @@ async function buildMergedPrintItems(items) {
       while (i < items.length && items[i].ext === ".pdf") { run.push(items[i]); i += 1; }
       if (run.length >= 2) {
         const mergedPath = path.join(MERGED_DIR, `${Date.now()}_${Math.round(Math.random() * 1e9)}_polaczone.pdf`);
-        await pdfMerge.mergePdfs(run.map(r => r.path), mergedPath);
+        await pdfMerge.mergePdfs(run.map(r => r.path), mergedPath, { padOddPagesExceptLast: padOddPagesForDuplex });
         result.push({ ...run[0], path: mergedPath, originalName: `Połączony PDF (${run.length} plików).pdf`, merged: true });
       } else {
         result.push(run[0]);
@@ -399,7 +400,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
         if (!mergeChangesCopySemantics && originalItems.filter(it => it.ext === ".pdf").length >= 2) {
           status.message = "Łączę sąsiadujące PDF-y w jeden plik, żeby drukować szybciej...";
           try {
-            itemsToPrint = await buildMergedPrintItems(originalItems);
+            itemsToPrint = await buildMergedPrintItems(originalItems, { padOddPagesForDuplex: sideMode === "two-sided" });
           } catch (mergeErr) {
             itemsToPrint = originalItems;
             status.warning = "Nie udało się połączyć PDF-ów w jeden plik - drukuję pojedynczo.";
