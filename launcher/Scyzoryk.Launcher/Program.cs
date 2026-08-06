@@ -15,13 +15,26 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
-        var paths = InstallPaths.FromBaseDirectory();
+        var initialPaths = InstallPaths.FromBaseDirectory();
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0.0";
-        var logger = new LauncherLogger(paths.LogFilePath, version);
+        var logger = new LauncherLogger(initialPaths.LogFilePath, version);
 
         try
         {
             var parsedArgs = ArgsParser.Parse(args);
+
+            // Incydent na zywo (2026-08-06): dla --apply-update ten proces to
+            // KOPIA Scyzoryk.exe uruchomiona z katalogu aktualizacji, nie z
+            // prawdziwego katalogu instalacji - FromBaseDirectory() dla tej
+            // kopii wskazywalby na katalog aktualizacji (node.exe/server.js
+            // szukane w zlym miejscu). Prawdziwy katalog instalacji przychodzi
+            // teraz jawnie jako argument (patrz ArgsParser) - LogFilePath nie
+            // zalezy od installDir, wiec initialPaths.LogFilePath uzyty wyzej
+            // pozostaje poprawny niezaleznie od trybu.
+            var paths = parsedArgs.Mode == LauncherMode.ApplyUpdate && !string.IsNullOrWhiteSpace(parsedArgs.RealInstallDir)
+                ? InstallPaths.FromInstallDir(parsedArgs.RealInstallDir!)
+                : initialPaths;
+
             var health = new HealthChecker();
             var processManager = new ProcessManager();
 
@@ -47,7 +60,7 @@ public static class Program
             });
 
             MessageBox.Show(
-                $"Scyzoryk Projektowy nie mogl sie uruchomic z powodu nieoczekiwanego bledu.\nSzczegoly: {paths.LogFilePath}",
+                $"Scyzoryk Projektowy nie mogl sie uruchomic z powodu nieoczekiwanego bledu.\nSzczegoly: {initialPaths.LogFilePath}",
                 "Scyzoryk Projektowy",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);

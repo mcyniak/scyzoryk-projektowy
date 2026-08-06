@@ -62,26 +62,32 @@ public sealed class ArgsParserTests
     }
 
     [Fact]
-    public void ApplyUpdate_WithInstallerPathAndVersion_Recognized()
+    public void ApplyUpdate_WithInstallerPathVersionAndInstallDir_Recognized()
     {
-        var parsed = ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3" });
+        var parsed = ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "C:\\fake\\install" });
 
         Assert.Equal(LauncherMode.ApplyUpdate, parsed.Mode);
         Assert.Equal("C:\\fake\\Setup-1.2.3.exe", parsed.InstallerPath);
         Assert.Equal("1.2.3", parsed.ExpectedVersion);
+        Assert.Equal("C:\\fake\\install", parsed.RealInstallDir);
     }
 
     [Fact]
     public void ApplyUpdate_MissingArguments_Unknown()
     {
+        // Incydent na zywo (2026-08-06): trzeci argument (prawdziwy katalog
+        // instalacji) jest TERAZ wymagany - bez niego --apply-update wracal do
+        // liczenia InstallDir z wlasnego (zlego dla tej kopii) polozenia.
         Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update" }).Mode);
         Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe" }).Mode);
+        Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3" }).Mode);
     }
 
     [Fact]
     public void ApplyUpdate_BlankArguments_Unknown()
     {
-        Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "  ", "1.2.3" }).Mode);
-        Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "  " }).Mode);
+        Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "  ", "1.2.3", "C:\\fake\\install" }).Mode);
+        Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "  ", "C:\\fake\\install" }).Mode);
+        Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "  " }).Mode);
     }
 }

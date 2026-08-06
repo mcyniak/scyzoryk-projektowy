@@ -17,7 +17,7 @@ const {
 } = require('../lib/updateVersion');
 const { assetFileName, findExactAsset, fetchLatestRelease } = require('../lib/updateGithub');
 const { downloadText, downloadToPartialFile, parseSha256File } = require('../lib/updateDownload');
-const { createUpdateService, cleanupUpdatesDir } = require('../lib/updateService');
+const { createUpdateService, cleanupUpdatesDir, buildUpdaterInvocation } = require('../lib/updateService');
 const { migrateOcrConfigIfNeeded, isCompleteConfig, userConfigPath, saveUserOcrConfig } = require('../lib/ocrConfigMigration');
 
 function withEnvironment(values, body) {
@@ -429,11 +429,34 @@ test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready" -> "insta
   assert.match(spawned[0].exe, /Scyzoryk\.exe$/i);
   assert.equal(spawned[0].args[0], '--apply-update');
   assert.ok(spawned[0].args.includes('9.9.9'));
+  // Incydent na zywo (2026-08-06): 4. argument musi byc PRAWDZIWY katalog
+  // instalacji (rootDir), nie katalog aktualizacji, w ktorym fizycznie lezy
+  // wlasnie spawnowana kopia Scyzoryk.exe (launcherExePath powyzej) - bez
+  // tego C#-owy InstallPaths.FromBaseDirectory() dla tej kopii wskazywalby
+  // na zly katalog i node.exe nigdy nie zostawal zatrzymany.
+  assert.equal(spawned[0].args[3], rootDir);
+  assert.notEqual(spawned[0].args[3], path.dirname(spawned[0].exe), 'katalog instalacji NIE moze byc tym samym katalogiem co kopia launchera uzyta do aktualizacji');
 
   const installedExe = path.join(updateRoot, '9.9.9', release.installerAsset.name);
   assert.equal(fs.existsSync(installedExe), true);
   assert.equal(fs.readFileSync(installedExe).equals(bytes), true);
   fs.rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('buildUpdaterInvocation: 4. argument to installDir (prawdziwy katalog instalacji), nie katalog kopii launchera (incydent na zywo 2026-08-06)', () => {
+  const invocation = buildUpdaterInvocation({
+    launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
+    installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+    updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
+    expectedVersion: '1.2.0',
+    installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+  });
+  assert.deepEqual(invocation.args, [
+    '--apply-update',
+    'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+    '1.2.0',
+    'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+  ]);
 });
 
 test('updateService: niezgodna suma SHA-256 - instalator jest odrzucony, nic nie jest odpalane', async () => {
