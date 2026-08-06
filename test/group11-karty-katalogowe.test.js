@@ -11,7 +11,7 @@ const path = require('node:path');
 // co test/group3-ocr.test.js requirujacy exceljs z node_modules ocr-audytow).
 const XLSX = require('../apps/drukarka-projekty/node_modules/xlsx');
 const readXlsxFile = require('../apps/karty-katalogowe/node_modules/read-excel-file/node');
-const { przetworzArkusz, adresPasujeDoFolderu } = require('../apps/karty-katalogowe/server');
+const { przetworzArkusz, adresPasujeDoFolderu, parseIdFolderu } = require('../apps/karty-katalogowe/server');
 
 const HEADER = ['LP gminy', 'Adres', 'UID', 'Rezygnacja'];
 
@@ -56,9 +56,37 @@ const WYMAGANE_KARTY = ['Grupa pompowa.pdf', 'Kolektor KSG 21GT.pdf', 'Zasobnik 
 test('adresPasujeDoFolderu: zgodny adres przechodzi, niezgodny (konflikt numeracji) odrzuca', () => {
   assert.equal(adresPasujeDoFolderu('ul. Spacerowa 5, Zarnow', '41 - Zarnow, ul. Spacerowa'), true);
   assert.equal(adresPasujeDoFolderu('ul. Kwiatowa 3, Kamiensk', '41 - Zarnow, ul. Spacerowa'), false);
-  // Pusty adres w Excelu - nie ma z czym porownac, nie blokujemy (zachowanie sprzed zmiany).
-  assert.equal(adresPasujeDoFolderu('', '41 - Zarnow, ul. Spacerowa'), true);
-  assert.equal(adresPasujeDoFolderu('   ', '41 - Zarnow, ul. Spacerowa'), true);
+  // Audyt rozdz. 16, P0/P1: pusty adres w Excelu juz NIE przepuszcza samego
+  // LP - odwrotnosc dawnego zachowania ("nie ma z czym porownac, ufam LP"),
+  // ktore pozwalalo skopiowac karty do niewlasciwego klienta.
+  assert.equal(adresPasujeDoFolderu('', '41 - Zarnow, ul. Spacerowa'), false);
+  assert.equal(adresPasujeDoFolderu('   ', '41 - Zarnow, ul. Spacerowa'), false);
+});
+
+test('adresPasujeDoFolderu: przy 2 tokenach sam numer domu nie wystarcza, sama nazwa ulicy - tak (audyt rozdz. 16, P0/P1)', () => {
+  // "15" jako jedyne trafienie (numer bez ulicy) - folder to zupelnie inny
+  // adres, ktory przypadkiem tez ma "15" gdzies w nazwie.
+  assert.equal(adresPasujeDoFolderu('Polna 15', '41 - Zarnow, Kwiatowa 15'), false);
+  // Sama nazwa ulicy trafiona (folder nie ma numeru domu w nazwie - typowy
+  // realny przypadek) - to musi dalej dzialac, inaczej wiekszosc prawdziwych
+  // folderow zaczelaby wymagac recznej kontroli bez powodu.
+  assert.equal(adresPasujeDoFolderu('Kwiatowa 15', '41 - Zarnow, ul. Kwiatowa'), true);
+  // Oba tokeny trafione - jednoznacznie ok.
+  assert.equal(adresPasujeDoFolderu('Kwiatowa 15', '41 - Zarnow, ul. Kwiatowa 15'), true);
+});
+
+test('parseIdFolderu: liczba calkowita (w tym zapisana jako X.0) przechodzi, prawdziwy ulamek (X.9) jest bledem (audyt rozdz. 16, P1)', () => {
+  assert.equal(parseIdFolderu(78), '78');
+  assert.equal(parseIdFolderu('78'), '78');
+  assert.equal(parseIdFolderu(78.0), '78');
+  assert.equal(parseIdFolderu('78.0'), '78');
+  // To jest sedno poprawki: 78.9 NIE moze cicho stac sie "78" (dopasowanie
+  // do niewlasciwego folderu).
+  assert.equal(parseIdFolderu(78.9), null);
+  assert.equal(parseIdFolderu('78.9'), null);
+  assert.equal(parseIdFolderu(''), null);
+  assert.equal(parseIdFolderu(null), null);
+  assert.equal(parseIdFolderu('abc'), null);
 });
 
 test('przetworzArkusz: konflikt numeracji miedzy inwestycjami - adres z Excela nie pasuje do znalezionego folderu -> blad, brak kopiowania', async (t) => {
@@ -110,4 +138,54 @@ test('przetworzArkusz: zgodny adres -> normalne kopiowanie, zero regresji', asyn
   const folderKlienta = path.join(projektyDir, '41 - Zarnow, ul. Spacerowa');
   const skopiowane = (await fsp.readdir(folderKlienta)).sort();
   assert.deepEqual(skopiowane, [...WYMAGANE_KARTY].sort());
+});
+
+test('przetworzArkusz: pusty adres w Excelu blokuje kopiowanie mimo trafionego LP (audyt rozdz. 16, P0/P1)', async (t) => {
+  const { root, projektyDir } = await przygotujRoot({
+    foldery: ['41 - Zarnow, ul. Spacerowa'],
+    kartyPliki: WYMAGANE_KARTY
+  });
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary Zarnow', [
+    [41, '', '2/250', ''] // adres pusty - tylko LP wskazuje na folder
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'blad');
+  assert.match(wyniki[0].komunikat, /brak adresu/);
+
+  const folderKlienta = path.join(projektyDir, '41 - Zarnow, ul. Spacerowa');
+  assert.deepEqual(await fsp.readdir(folderKlienta), []);
+});
+
+test('przetworzArkusz: brak JEDNEJ karty zrodlowej blokuje CALY komplet - zero czesciowego kopiowania (audyt rozdz. 16, P1)', async (t) => {
+  // Tylko 2 z 3 wymaganych kart faktycznie istnieja w folderze zrodlowym
+  // "karty" - brakuje "Zasobnik SGW(S)B 250.pdf".
+  const { root, projektyDir } = await przygotujRoot({
+    foldery: ['41 - Zarnow, ul. Spacerowa'],
+    kartyPliki: ['Grupa pompowa.pdf', 'Kolektor KSG 21GT.pdf']
+  });
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary Zarnow', [
+    [41, 'ul. Spacerowa 5, Zarnow', '2/250', '']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'blad');
+  assert.match(wyniki[0].komunikat, /brak plikow zrodlowych/);
+  assert.match(wyniki[0].komunikat, /Zasobnik SGW\(S\)B 250\.pdf/);
+
+  // Zaden z DWOCH istniejacych zrodel tez nie zostal skopiowany - komplet albo nic.
+  const folderKlienta = path.join(projektyDir, '41 - Zarnow, ul. Spacerowa');
+  assert.deepEqual(await fsp.readdir(folderKlienta), []);
 });

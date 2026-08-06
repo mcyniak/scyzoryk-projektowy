@@ -4,7 +4,9 @@ const STATUS_LABELS = {
   'pominieto-juz-sa': ['Już są', 'skip'],
   'pominieto-rezygnacja': ['Rezygnacja', 'skip'],
   'pominieto-brak-uid': ['Brak UID', 'skip'],
-  'czesciowo': ['Częściowo', 'warn'],
+  // Audyt rozdz. 16, P1: kopiowanie jest teraz komplet-albo-nic (patrz
+  // server.js#przetworzArkusz FAZA B) - stan "czesciowo" nie moze juz
+  // wystapic, usuniety stad.
   'blad': ['Błąd', 'err']
 };
 

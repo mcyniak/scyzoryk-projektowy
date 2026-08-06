@@ -139,12 +139,19 @@ function findColumn(headerRow, mustIncludeAll, mustNotInclude = []) {
 }
 
 function parseIdFolderu(value) {
-  // 'LP gminy' bywa liczba zmiennoprzecinkowa (78.0) - normalizujemy do zwyklego inta jako string.
+  // 'LP gminy' bywa zapisane w Excelu jako float (78.0) - to jest bezpieczne
+  // do sprowadzenia do zwyklego inta jako string. Audyt rozdz. 16, P1: NIE
+  // WOLNO tego robic przez Math.trunc() dla KAZDEJ wartosci - "78.9" tez
+  // przechodzilo przez Math.trunc do "78", cicho dopasowujac wiersz do
+  // NIEWLASCIWEGO folderu (numer 78, nie prawdziwa - nieistniejaca - wartosc
+  // 78.9). Number.isInteger tutaj poprawnie odroznia "78.0" (=== 78,
+  // integer) od prawdziwie ulamkowego "78.9" (nie jest integer) - drugie
+  // jest teraz twardym bledem (null), nie cichym zgadywaniem.
   // Uwaga: Number(null) === 0, wiec puste/brakujace pole trzeba odrzucic ZANIM przejdzie przez Number().
   if (value === null || value === undefined || value === '') return null;
   const num = Number(value);
-  if (!Number.isFinite(num)) return null;
-  return String(Math.trunc(num));
+  if (!Number.isFinite(num) || !Number.isInteger(num)) return null;
+  return String(num);
 }
 
 function parseRozmiarZUid(uidRaw) {
@@ -241,13 +248,39 @@ function tokenyAdresu(adres) {
 // jest on caly, przy 2 wystarczy jeden (folder czesto nie ma numeru domu w
 // nazwie), przy wiekszej liczbie - min. 60%. Tokeny sa juz czysto alfanumeryczne
 // (po normalizacji), wiec bezpieczne do wstawienia wprost w RegExp.
+//
+// Audyt rozdz. 16, P0/P1, dwie poprawki:
+//   1. Pusty adres w Excelu juz NIE przepuszcza dopasowania - zwraca false.
+//      Wczesniej "brak adresu" bylo traktowane jak "nie mam z czym porownac,
+//      wiec ufam samemu LP" - to pozwalalo skopiowac karty do NIEWLASCIWEGO
+//      klienta, gdy dwie inwestycje maja folder zaczynajacy sie od tego
+//      samego numeru (patrz test "konflikt numeracji"), a wiersz akurat nie
+//      mial wypelnionego adresu. przetworzArkusz zglasza to teraz jako
+//      OSOBNY, wczesniejszy blad ("brak adresu") z czytelniejszym
+//      komunikatem niz to "false" tutaj - to zostaje jako bezpieczny domysly
+//      wynik funkcji, gdyby byla kiedys wywolana skads indziej.
+//   2. Przy DOKLADNIE 2 tokenach adresu (typowo "ulica" + "numer") samo
+//      trafienie NUMERU juz nie wystarcza - krotkie numery (1-99) latwo
+//      przypadkiem pasuja do zupelnie innego adresu. Wymagane jest trafienie
+//      przynajmniej jednego tokenu TEKSTOWEGO (nazwy ulicy/miejscowosci) -
+//      to zachowuje tolerancje na foldery bez numeru domu w nazwie (real
+//      przypadek z produkcji), ale nie pozwala samemu numerowi "przepchnac"
+//      dopasowania.
 function adresPasujeDoFolderu(adres, folderNazwa) {
   const tokeny = tokenyAdresu(adres);
-  if (!tokeny.length) return true; // brak adresu w Excelu - nie ma z czym porownac, przepuszczamy jak dotychczas
+  if (!tokeny.length) return false;
+
   const folderNorm = normalizeAdresDoPorownania(folderNazwa);
-  const trafione = tokeny.filter(t => new RegExp(`(^|[^a-z0-9])${t}([^a-z0-9]|$)`).test(folderNorm)).length;
+  const trafioneTokeny = tokeny.filter(t => new RegExp(`(^|[^a-z0-9])${t}([^a-z0-9]|$)`).test(folderNorm));
+  const tekstoweWAdresie = tokeny.filter(t => !/^\d+$/.test(t));
+  const trafioneTekstowe = trafioneTokeny.filter(t => !/^\d+$/.test(t));
+
+  // Sam numer (bez zadnego trafionego tokenu tekstowego) nigdy nie wystarcza,
+  // o ile adres w ogole ma jakis token tekstowy do porownania.
+  if (tekstoweWAdresie.length > 0 && trafioneTekstowe.length === 0) return false;
+
   const wymagane = tokeny.length <= 1 ? tokeny.length : (tokeny.length === 2 ? 1 : Math.max(2, Math.ceil(tokeny.length * 0.6)));
-  return trafione >= wymagane;
+  return trafioneTokeny.length >= wymagane;
 }
 
 async function istniejacePlikiWFolderze(dirPath) {
@@ -364,6 +397,16 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
       continue;
     }
 
+    // Audyt rozdz. 16, P0/P1: pusty adres nie moze polegac wylacznie na LP -
+    // dwie rozne inwestycje moga miec folder zaczynajacy sie od tego samego
+    // numeru (patrz komentarz przy adresPasujeDoFolderu). Osobny, wczesniejszy
+    // blad z jasnym komunikatem zamiast myslacego "nie zawiera adresu"
+    // (ktore sugerowaloby, ze adres byl podany, tylko sie nie zgadzal).
+    if (!adres) {
+      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres: null, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak adresu w Excelu - nie mozna bezpiecznie potwierdzic, ze folder "${folderNazwa}" (dopasowany po samym numerze LP "${id}") faktycznie nalezy do tego wiersza. Uzupelnij adres i sprobuj ponownie.` };
+      continue;
+    }
+
     // Sam numer LP nie wystarcza (patrz komentarz przy adresPasujeDoFolderu) -
     // potwierdzamy adresem PRZED faza kopiowania (zadania.push nizej), zeby zla
     // para adres/folder nigdy tam nie dotarla.
@@ -399,40 +442,51 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
       return;
     }
 
-    const skopiowane = [];
-    const bledy = [];
+    // Audyt rozdz. 16, P1 - FAZA A: sprawdz KOMPLET zrodel PRZED
+    // skopiowaniem czegokolwiek. Wczesniej kazdy plik byl kopiowany
+    // niezaleznie w tej samej petli - brakujace jedno zrodlo konczylo sie
+    // statusem "czesciowo" z RESZTA kart juz lezaca w folderze klienta,
+    // czyli niekompletnym, mylacym zestawem dokumentacji.
+    // fs.existsSync tutaj blokowaloby caly proces (jeden watek Node) na
+    // czas odczytu z dysku - a to jest kod wewnatrz Promise.all po wielu
+    // adresach naraz (FAZA 2 nizej), wiec przy wiekszej paczce i/lub
+    // wolnym dysku sieciowym sumowalo sie to na tyle, ze health-check z
+    // panelu glownego dostawal timeout i apka przez chwile wygladala jak
+    // "uruchamianie sie", mimo ze dzialala.
+    const brakujaceZrodla = [];
     for (const nazwaPliku of doSkopiowania) {
-      const zrodlo = path.join(kartyDir, nazwaPliku);
-      const cel = path.join(folderKlienta, nazwaPliku);
-      // fs.existsSync tutaj blokowaloby caly proces (jeden watek Node) na
-      // czas odczytu z dysku - a to jest kod wewnatrz Promise.all po wielu
-      // adresach naraz (FAZA 2 nizej), wiec przy wiekszej paczce i/lub
-      // wolnym dysku sieciowym sumowalo sie to na tyle, ze health-check z
-      // panelu glownego dostawal timeout i apka przez chwile wygladala jak
-      // "uruchamianie sie", mimo ze dzialala.
-      const zrodloIstnieje = await fsp.access(zrodlo).then(() => true).catch(() => false);
-      if (!zrodloIstnieje) {
-        bledy.push(`Brak pliku zrodlowego: ${nazwaPliku}`);
-        continue;
-      }
-      if (!dryRun) {
-        try {
-          await fsp.copyFile(zrodlo, cel);
-          skopiowane.push(nazwaPliku);
-        } catch (err) {
-          bledy.push(`Nie udalo sie skopiowac ${nazwaPliku}: ${err.message}`);
-        }
-      } else {
-        skopiowane.push(nazwaPliku + ' (podglad)');
-      }
+      const istnieje = await fsp.access(path.join(kartyDir, nazwaPliku)).then(() => true).catch(() => false);
+      if (!istnieje) brakujaceZrodla.push(nazwaPliku);
+    }
+    if (brakujaceZrodla.length) {
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak plikow zrodlowych: ${brakujaceZrodla.join(', ')} - nie skopiowano ZADNEJ karty dla tego adresu (komplet albo nic).` };
+      return;
     }
 
-    if (bledy.length && skopiowane.length === 0) {
-      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: ${bledy.join('; ')}` };
-    } else if (bledy.length) {
-      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'czesciowo', komunikat: `Skopiowano: ${skopiowane.join(', ')}. Bledy: ${bledy.join('; ')}` };
-    } else {
-      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: dryRun ? 'do-skopiowania' : 'skopiowano', komunikat: `Pliki: ${skopiowane.join(', ')}` };
+    if (dryRun) {
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'do-skopiowania', komunikat: `Pliki: ${doSkopiowania.map(n => n + ' (podglad)').join(', ')}` };
+      return;
+    }
+
+    // FAZA B: kopiuj caly komplet. COPYFILE_EXCL chroni przed CICHYM
+    // nadpisaniem pliku, ktory pojawil sie w folderze klienta MIEDZY
+    // sprawdzeniem (istniejacePlikiWFolderze wyzej) a kopiowaniem - bez
+    // tego flaga druga osoba/inny przebieg tego samego narzedzia moglyby
+    // nadpisac sobie nawzajem karty w tej samej krotkiej chwili. Jesli
+    // KTOKOLWIEK plik zawiedzie, cofamy (usuwamy) to, co juz zdazylo sie
+    // skopiowac w TEJ probie - nigdy nie zostawiamy czesciowego kompletu.
+    const skopiowaneWTejProbie = [];
+    try {
+      for (const nazwaPliku of doSkopiowania) {
+        await fsp.copyFile(path.join(kartyDir, nazwaPliku), path.join(folderKlienta, nazwaPliku), fs.constants.COPYFILE_EXCL);
+        skopiowaneWTejProbie.push(nazwaPliku);
+      }
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'skopiowano', komunikat: `Pliki: ${doSkopiowania.join(', ')}` };
+    } catch (err) {
+      for (const nazwaPliku of skopiowaneWTejProbie) {
+        await fsp.unlink(path.join(folderKlienta, nazwaPliku)).catch(() => {});
+      }
+      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie udalo sie skopiowac kompletu kart (${err.message}) - zaden plik NIE zostal dodany do folderu klienta (komplet albo nic).` };
     }
   })));
 
@@ -503,4 +557,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, 'KK');
 }
 
-module.exports = { przetworzArkusz, adresPasujeDoFolderu };
+module.exports = { przetworzArkusz, adresPasujeDoFolderu, parseIdFolderu };
