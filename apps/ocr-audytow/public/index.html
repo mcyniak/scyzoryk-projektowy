@@ -22,17 +22,23 @@
           <strong>OCR audytów</strong>
         </div>
       </div>
-      <a class="btn btn-ghost btn-sm" href="#" data-main-link>
-        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
-        Panel główny
-      </a>
+      <div style="display:flex; gap:8px; align-items:center">
+        <button type="button" id="ocrChangeKeyBtn" class="btn btn-ghost btn-sm" hidden>
+          <svg class="icon"><use href="/shared/icons.svg#i-scan"/></svg>
+          Zmień klucz OCR
+        </button>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
     </header>
 
     <section class="panel" id="ocrLockedPanel" hidden>
       <div class="panel-header">
         <div>
-          <h2 class="panel-title">🔒 OCR nie jest jeszcze skonfigurowany na tym komputerze</h2>
-          <p class="panel-desc">Wgraj plik klucza konta serwisowego Google Document AI (<code>service-account.json</code>), żeby odblokować rozpoznawanie tekstu. Robisz to raz na tym komputerze - ustawienie zostaje zapisane osobno od samej aplikacji i przetrwa kolejne aktualizacje Scyzoryka.</p>
+          <h2 class="panel-title" id="ocrLockedTitle">🔒 OCR nie jest jeszcze skonfigurowany na tym komputerze</h2>
+          <p class="panel-desc">Wgraj plik klucza konta serwisowego Google Document AI (<code>service-account.json</code>), żeby odblokować rozpoznawanie tekstu. Robisz to raz na tym komputerze - ustawienie zostaje zapisane osobno od samej aplikacji i przetrwa kolejne aktualizacje Scyzoryka. Chcesz przełączyć się na inne konto Google (np. inny płatnik)? Wgraj tu po prostu nowy klucz - nadpisze poprzedni.</p>
         </div>
       </div>
       <form id="ocrUnlockForm">
@@ -50,6 +56,7 @@
         </div>
         <div class="hero-actions">
           <button type="submit" id="ocrUnlockBtn" class="btn btn-primary">Zapisz i odblokuj</button>
+          <button type="button" id="ocrUnlockCancelBtn" class="btn btn-secondary" hidden>Anuluj</button>
         </div>
         <div id="ocrUnlockStatus"></div>
       </form>

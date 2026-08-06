@@ -52,13 +52,16 @@
   const excelResultNote = document.getElementById('excelResultNote');
 
   const ocrLockedPanel = document.getElementById('ocrLockedPanel');
+  const ocrLockedTitle = document.getElementById('ocrLockedTitle');
   const ocrHeroSection = document.getElementById('ocrHeroSection');
   const ocrUploadPanel = document.getElementById('ocrUploadPanel');
+  const ocrChangeKeyBtn = document.getElementById('ocrChangeKeyBtn');
   const ocrUnlockForm = document.getElementById('ocrUnlockForm');
   const ocrKeyFileInput = document.getElementById('ocrKeyFileInput');
   const ocrLocationInput = document.getElementById('ocrLocationInput');
   const ocrProcessorIdInput = document.getElementById('ocrProcessorIdInput');
   const ocrUnlockBtn = document.getElementById('ocrUnlockBtn');
+  const ocrUnlockCancelBtn = document.getElementById('ocrUnlockCancelBtn');
   const ocrUnlockStatus = document.getElementById('ocrUnlockStatus');
 
   const EXCEL_PATH_STORAGE_KEY = 'ocr-audytow-excel-path';
@@ -886,18 +889,31 @@
   // instalatorze (co wymagaloby prywatnego repo i psulo publiczne
   // aktualizacje), uzytkownik wgrywa klucz recznie RAZ na tym komputerze -
   // ekran ponizej pokazuje sie zamiast normalnego formularza, dopoki
-  // /api/health zglasza ocrConfigured:false.
+  // /api/health zglasza ocrConfigured:false. "Zmień klucz OCR" w naglowku
+  // pozwala otworzyc ten sam formularz TAKZE gdy OCR juz dziala (np. zmiana
+  // na inne konto Google/platnika) - nowy klucz nadpisuje poprzedni.
+  let ocrIsConfigured = false;
+
   function setOcrLocked(locked) {
     ocrLockedPanel.hidden = !locked;
     ocrHeroSection.hidden = locked;
     ocrUploadPanel.hidden = locked;
+    // Anuluj ma sens tylko gdy OCR juz dziala (recznie otwarta zmiana klucza)
+    // - przy faktycznym braku konfiguracji nie ma "normalnego" stanu, do
+    // ktorego dałoby się wrocic.
+    ocrUnlockCancelBtn.hidden = !locked || !ocrIsConfigured;
+    ocrLockedTitle.textContent = ocrIsConfigured
+      ? '🔑 Zmień klucz OCR'
+      : '🔒 OCR nie jest jeszcze skonfigurowany na tym komputerze';
   }
 
   async function checkOcrConfigured() {
     try {
       const res = await fetch('/api/health');
       const data = await res.json().catch(() => null);
-      setOcrLocked(Boolean(data?.ok) && data.ocrConfigured === false);
+      ocrIsConfigured = Boolean(data?.ok) && data.ocrConfigured === true;
+      ocrChangeKeyBtn.hidden = !ocrIsConfigured;
+      if (!ocrIsConfigured) setOcrLocked(true);
     } catch {
       // Brak odpowiedzi z wlasnego /api/health to problem innej natury
       // (np. serwer wlasnie startuje) - nie chowamy normalnego UI z tego
@@ -905,6 +921,19 @@
     }
   }
   checkOcrConfigured();
+
+  ocrChangeKeyBtn.addEventListener('click', () => {
+    ocrUnlockStatus.className = '';
+    ocrUnlockStatus.textContent = '';
+    setOcrLocked(true);
+  });
+
+  ocrUnlockCancelBtn.addEventListener('click', () => {
+    ocrUnlockForm.reset();
+    ocrUnlockStatus.className = '';
+    ocrUnlockStatus.textContent = '';
+    setOcrLocked(false);
+  });
 
   ocrUnlockForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -929,6 +958,8 @@
 
       ocrUnlockStatus.className = 'ok';
       ocrUnlockStatus.textContent = `Gotowe. Zapisano konfigurację (projekt: ${data.projectId}). Odblokowuję...`;
+      ocrIsConfigured = true;
+      ocrChangeKeyBtn.hidden = false;
       setOcrLocked(false);
       ocrUnlockForm.reset();
     } catch (err) {
