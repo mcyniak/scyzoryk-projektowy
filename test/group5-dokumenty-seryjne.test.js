@@ -49,6 +49,38 @@ test('anulowanie zatrzymuje CALA paczke szablonow, nie tylko biezacy proces (aud
   assert.match(loopFn[0], /job\.status = cancelledEarly \? 'cancelled'/);
 });
 
+test('generate: kazde uruchomienie czysci poprzedni katalog wyjsciowy PO walidacji, przed faktycznym startem (audyt rozdz. 12, P0/P1)', async () => {
+  const source = await fsp.readFile(serverPath, 'utf8');
+  const generateRoute = source.match(/app\.post\('\/api\/generate\/:jobId'[\s\S]*?\n\}\);/);
+  assert.ok(generateRoute, "nie znaleziono trasy /api/generate/:jobId");
+  const body = generateRoute[0];
+
+  // Czyszczenie musi istniec i uzywac rm z recursive/force (nie zwykle
+  // unlink - job.outputDir moze zawierac podkatalogi, np. logi debug).
+  assert.match(body, /for \(const entry of await fsp\.readdir\(job\.outputDir\)\.catch\(\(\) => \[\]\)\) \{/);
+  assert.match(body, /fsp\.rm\(path\.join\(job\.outputDir, entry\), \{ recursive: true, force: true \}\)/);
+
+  // Kolejnosc w zrodle jest bezposrednim dowodem: walidacje (brakujace
+  // kolumny, brak zadan) MUSZA wystapic PRZED czyszczeniem - nieudana proba
+  // (np. zle dobrany arkusz) nie moze skasowac wynikow poprzedniego, udanego
+  // uruchomienia. Czyszczenie z kolei MUSI wystapic PRZED wordQueue.run -
+  // inaczej nowe pliki tworzone przez biezace uruchomienie zostalyby same
+  // skasowane zaraz po powstaniu.
+  const missingColumnsIndex = body.indexOf('missingColumns.length) {');
+  const tasksLengthIndex = body.indexOf('!tasks.length) return');
+  const cleanupIndex = body.indexOf('for (const entry of await fsp.readdir(job.outputDir)');
+  const wordQueueRunIndex = body.indexOf('wordQueue.run(() => runMultiTemplateGeneration');
+  assert.ok(missingColumnsIndex >= 0 && tasksLengthIndex >= 0 && cleanupIndex >= 0 && wordQueueRunIndex >= 0);
+  assert.ok(missingColumnsIndex < cleanupIndex, 'walidacja kolumn musi byc przed czyszczeniem');
+  assert.ok(tasksLengthIndex < cleanupIndex, 'walidacja zadan musi byc przed czyszczeniem');
+  assert.ok(cleanupIndex < wordQueueRunIndex, 'czyszczenie musi byc przed faktycznym startem generowania');
+
+  // job.result tez musi zostac wyzerowany - inaczej stary wynik (odnoszacy
+  // sie do wlasnie skasowanych plikow) zostalby pokazany az do zakonczenia
+  // nowego uruchomienia.
+  assert.match(body, /job\.result = null;[\s\S]{0,40}job\.status = 'queued';/);
+});
+
 test('frontend pobiera wszystkie strony rekordów przed renderowaniem', async () => {
   const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'public', 'inline-1.js'), 'utf8');
   assert.match(source, /async function loadAllRows/);

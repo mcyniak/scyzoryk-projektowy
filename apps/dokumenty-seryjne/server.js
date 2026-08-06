@@ -1102,6 +1102,18 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
       tasks = [{ templatePath: job.template.path, templateOriginalName: job.template.originalName, rowRecords: selectedRowRecords.length ? selectedRowRecords : (selectedSheet.rows || []).map(r => Number(r._record)) }];
     }
 
+    // Audyt rozdz. 12, P0/P1: kolejne "Generuj" na tym samym jobId pisalo do
+    // TEGO SAMEGO job.outputDir - PDF-y z POPRZEDNIEGO uruchomienia
+    // zostawaly na dysku, wiec ZIP/pobieranie moglo zawierac pliki spoza
+    // aktualnego wyboru (np. najpierw wygenerowano A+B, potem zmieniono
+    // wybor na samo C -> wynik zawieral A+B+C). Czyscimy katalog wyjsciowy
+    // TUZ PRZED faktycznym startem - po wszystkich synchronicznych
+    // walidacjach powyzej - zeby nieudana proba (np. brakujace kolumny) NIE
+    // kasowala wynikow poprzedniego, udanego uruchomienia bez potrzeby.
+    for (const entry of await fsp.readdir(job.outputDir).catch(() => [])) {
+      await fsp.rm(path.join(job.outputDir, entry), { recursive: true, force: true }).catch(() => {});
+    }
+    job.result = null;
     job.status = 'queued';
     persistJobsIndex();
     setProgress(job, { phase: 'queued', message: 'Zadanie czeka w kolejce Word. Word robi tylko jeden dokument naraz.', queue: wordQueue.getState() });
@@ -1276,7 +1288,14 @@ app.use((err, req, res, next) => {
   next();
 });
 
-const server = app.listen(PORT, HOST, () => {
-  console.log(`Dokumenty seryjne: http://${HOST}:${PORT}`);
-});
-applyHttpTimeouts(server, 'SERYJNE');
+// require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany
+// bezposrednio (node server.js), nie przy require() z testow (patrz ten sam
+// wzorzec w apps/drukarka-projekty/server.js i apps/wnioski-powykonawcze/server.js).
+if (require.main === module) {
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`Dokumenty seryjne: http://${HOST}:${PORT}`);
+  });
+  applyHttpTimeouts(server, 'SERYJNE');
+}
+
+module.exports = { app, jobs, getJob };
