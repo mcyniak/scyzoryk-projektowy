@@ -116,46 +116,66 @@ jobs:
           $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $found) { choco install innosetup --no-progress -y }
 
-      - name: Zbuduj publiczny instalator (bez OCR, wersja z package.json)
+      - name: Zbuduj publiczne instalatory (pelny + aktualizacyjny, bez OCR, wersja z package.json)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           npm run build-installer
-          $installer = Get-ChildItem release\*.exe | Select-Object -First 1
-          if (-not $installer) { throw 'Nie powstal instalator EXE.' }
-          $expectedName = "ScyzorykProjektowy-Setup-$env:RELEASE_VERSION.exe"
-          if ($installer.Name -ne $expectedName) {
-            throw "Nazwa instalatora ($($installer.Name)) nie zgadza sie z oczekiwana ($expectedName) - AppVersion Inno Setup rozjechal sie z wersja wydania."
-          }
-          "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
-          "INSTALLER_NAME=$($installer.Name)" >> $env:GITHUB_ENV
 
-      - name: Sprawdz, ze publiczny instalator NIE zawiera zadnej konfiguracji OCR
+          # Audyt 2026-08-06: od teraz DWA pliki .exe - pelny (offline, z
+          # node_modules/Chromium) i maly aktualizacyjny (bez nich, patrz
+          # scripts\build-installer.ps1/installer\scyzoryk.iss). Nazwy
+          # znajdujemy jawnie, nigdy przez "pierwszy pasujacy plik" - kolejnosc
+          # alfabetyczna to przypadek, nie kontrakt.
+          $fullPath = Join-Path 'release' "ScyzorykProjektowy-Setup-$env:RELEASE_VERSION.exe"
+          $updatePath = Join-Path 'release' "ScyzorykProjektowy-Update-$env:RELEASE_VERSION.exe"
+          $fingerprintPath = Join-Path 'release' 'runtime-fingerprint.txt'
+          if (-not (Test-Path $fullPath)) { throw "Brak pelnego instalatora: $fullPath" }
+          if (-not (Test-Path $updatePath)) { throw "Brak instalatora aktualizacyjnego: $updatePath" }
+          if (-not (Test-Path $fingerprintPath)) { throw "Brak runtime-fingerprint.txt: $fingerprintPath" }
+
+          "FULL_INSTALLER_PATH=$((Resolve-Path $fullPath).Path)" >> $env:GITHUB_ENV
+          "FULL_INSTALLER_NAME=$(Split-Path -Leaf $fullPath)" >> $env:GITHUB_ENV
+          "UPDATE_INSTALLER_PATH=$((Resolve-Path $updatePath).Path)" >> $env:GITHUB_ENV
+          "UPDATE_INSTALLER_NAME=$(Split-Path -Leaf $updatePath)" >> $env:GITHUB_ENV
+          "FINGERPRINT_PATH=$((Resolve-Path $fingerprintPath).Path)" >> $env:GITHUB_ENV
+
+      - name: Sprawdz, ze ZADEN publiczny instalator nie zawiera konfiguracji OCR
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Sprawdzenie Sekretow'
-          $proc = Start-Process -FilePath $env:INSTALLER_PATH -ArgumentList @(
-            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart', "/DIR=`"$installDir`""
-          ) -Wait -PassThru
-          if ($proc.ExitCode -ne 0) { throw "Instalacja testowa (sprawdzenie sekretow) zakonczyla sie kodem $($proc.ExitCode)." }
 
-          $forbidden = @(Get-ChildItem -Path $installDir -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -eq 'service-account.json' -or $_.Name -eq 'document-ai.json' })
+          function Test-NoOcrSecret([string]$InstallerPath, [string]$Label) {
+            $installDir = Join-Path $env:RUNNER_TEMP "Scyzoryk Sprawdzenie Sekretow $Label"
+            $proc = Start-Process -FilePath $InstallerPath -ArgumentList @(
+              '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart', "/DIR=`"$installDir`""
+            ) -Wait -PassThru
+            if ($proc.ExitCode -ne 0) { throw "Instalacja testowa ($Label, sprawdzenie sekretow) zakonczyla sie kodem $($proc.ExitCode)." }
 
-          if (Test-Path (Join-Path $installDir 'Scyzoryk.exe')) {
-            & (Join-Path $installDir 'Scyzoryk.exe') --stop
+            $forbidden = @(Get-ChildItem -Path $installDir -Recurse -File -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -eq 'service-account.json' -or $_.Name -eq 'document-ai.json' })
+
+            if (Test-Path (Join-Path $installDir 'Scyzoryk.exe')) {
+              & (Join-Path $installDir 'Scyzoryk.exe') --stop
+            }
+            if (Test-Path (Join-Path $installDir 'unins000.exe')) {
+              Start-Process -FilePath (Join-Path $installDir 'unins000.exe') -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru | Out-Null
+            }
+
+            if ($forbidden.Count -gt 0) {
+              throw "Publiczny instalator ($Label) zawiera zabronione pliki sekretne: $($forbidden.FullName -join ', ')"
+            }
+            Write-Host "Potwierdzono ($Label): brak konfiguracji OCR."
           }
-          if (Test-Path (Join-Path $installDir 'unins000.exe')) {
-            Start-Process -FilePath (Join-Path $installDir 'unins000.exe') -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru | Out-Null
-          }
 
-          if ($forbidden.Count -gt 0) {
-            throw "Publiczny instalator zawiera zabronione pliki sekretne: $($forbidden.FullName -join ', ')"
-          }
-          Write-Host 'Potwierdzono: publiczny instalator nie zawiera zadnej konfiguracji OCR.'
+          # Wariant "update" NIE ma node_modules, ale konfiguracja OCR (jesli
+          # w ogole by trafila do stagingu) idzie przez ta sama, wspolna
+          # sekcje [Files] co reszta kodu aplikacji - musi byc sprawdzony
+          # rownie dokladnie jak pelny.
+          Test-NoOcrSecret -InstallerPath $env:FULL_INSTALLER_PATH -Label 'full'
+          Test-NoOcrSecret -InstallerPath $env:UPDATE_INSTALLER_PATH -Label 'update'
 
-      - name: Zainstaluj i w pelni przetestuj publiczny instalator na swiezym Windows
+      - name: Zainstaluj i w pelni przetestuj oba publiczne instalatory na swiezym Windows
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -163,7 +183,8 @@ jobs:
           $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-release-logs'
           New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
           & '.\scripts\ci\test-installed-scyzoryk.ps1' `
-            -InstallerPath $env:INSTALLER_PATH `
+            -InstallerPath $env:FULL_INSTALLER_PATH `
+            -UpdateInstallerPath $env:UPDATE_INSTALLER_PATH `
             -InstallDir $installDir `
             -LogsDir $logsDir
 
@@ -176,24 +197,38 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Oblicz SHA-256 i utworz plik .sha256
+      - name: Oblicz SHA-256 obu instalatorow i utworz pliki .sha256
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $hash = (Get-FileHash -Algorithm SHA256 -Path $env:INSTALLER_PATH).Hash
-          $shaLine = "$hash  $env:INSTALLER_NAME"
-          $shaPath = "$($env:INSTALLER_PATH).sha256"
-          [IO.File]::WriteAllText($shaPath, "$shaLine`n", [Text.ASCIIEncoding]::new())
-          Write-Host $shaLine
-          "SHA_PATH=$shaPath" >> $env:GITHUB_ENV
 
-      - name: Utworz GitHub Release i dodaj instalator + sume kontrolna
+          function New-ShaFile([string]$InstallerPath, [string]$InstallerName) {
+            $hash = (Get-FileHash -Algorithm SHA256 -Path $InstallerPath).Hash
+            $shaLine = "$hash  $InstallerName"
+            $shaPath = "$InstallerPath.sha256"
+            [IO.File]::WriteAllText($shaPath, "$shaLine`n", [Text.ASCIIEncoding]::new())
+            Write-Host $shaLine
+            return $shaPath
+          }
+
+          $fullSha = New-ShaFile -InstallerPath $env:FULL_INSTALLER_PATH -InstallerName $env:FULL_INSTALLER_NAME
+          $updateSha = New-ShaFile -InstallerPath $env:UPDATE_INSTALLER_PATH -InstallerName $env:UPDATE_INSTALLER_NAME
+          "FULL_SHA_PATH=$fullSha" >> $env:GITHUB_ENV
+          "UPDATE_SHA_PATH=$updateSha" >> $env:GITHUB_ENV
+
+      - name: Utworz GitHub Release i dodaj oba instalatory + sumy kontrolne + fingerprint runtime
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          gh release create "$env:RELEASE_TAG" "$env:INSTALLER_PATH" "$env:SHA_PATH" `
+          # runtime-fingerprint.txt jako WLASNY, maly asset - lib/updateService.js
+          # go pobiera osobno, zeby zdecydowac czy wystarczy maly instalator
+          # aktualizacyjny, bez pobierania ktoregokolwiek z duzych plikow .exe.
+          gh release create "$env:RELEASE_TAG" `
+            "$env:FULL_INSTALLER_PATH" "$env:FULL_SHA_PATH" `
+            "$env:UPDATE_INSTALLER_PATH" "$env:UPDATE_SHA_PATH" `
+            "$env:FINGERPRINT_PATH" `
             --title "Scyzoryk $env:RELEASE_VERSION" `
             --generate-notes
           if ($LASTEXITCODE -ne 0) { throw "gh release create zakonczylo sie kodem $LASTEXITCODE." }

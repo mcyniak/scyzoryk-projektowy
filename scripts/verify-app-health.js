@@ -57,7 +57,13 @@ async function main() {
   child.stderr.on('data', chunk => { output += chunk.toString('utf8'); });
 
   try {
-    const deadline = Date.now() + 20000;
+    // 20s bylo zbyt ciasne pod realnym obciazeniem maszyny budujacej (np.
+    // rownolegly dotnet build/pobieranie Chromium podczas budowania
+    // instalatora, patrz scripts\build-installer.ps1) - zlapane realnie:
+    // ocr-audytow (najciezszy require() lancuch, @google-cloud/documentai +
+    // exceljs + jimp) potrafil odpowiedziec zdrowo w 3s przy nieobciazonej
+    // maszynie, ale nie zdazyl w 20s podczas pelnego builda instalatora.
+    const deadline = Date.now() + 45000;
     while (Date.now() < deadline) {
       if (child.exitCode !== null) {
         throw new Error(`Proces ${expectedName} zakonczyl sie kodem ${child.exitCode}.\n${output}`);

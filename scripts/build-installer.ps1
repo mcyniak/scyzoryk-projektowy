@@ -250,6 +250,11 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $fingerprintPath)) {
 }
 $runtimeFingerprint = (Get-Content -Raw -Path $fingerprintPath).Trim()
 Write-Host "Runtime fingerprint: $runtimeFingerprint"
+# Kopia do OutputDir - workflow release'owy publikuje ten plik jako
+# WLASNY, maly asset wydania (obok obu instalatorow), zeby
+# lib/updateService.js moglo sprawdzic zgodnosc runtime BEZ pobierania
+# ktoregokolwiek z duzych plikow .exe.
+Copy-Item -Path $fingerprintPath -Destination (Join-Path $OutputDir 'runtime-fingerprint.txt') -Force
 
 # --- 7) Kompilacja obu wariantow instalatora z tego samego stagingu ---
 $issPath = Join-Path $Root 'installer\scyzoryk.iss'

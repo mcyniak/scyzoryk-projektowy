@@ -52,18 +52,20 @@ jobs:
           $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $found) { choco install innosetup --no-progress -y }
 
-      - name: Zbuduj instalator deweloperski
+      - name: Zbuduj instalatory deweloperskie (pelny + aktualizacyjny)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           npm run build-installer
           Get-ChildItem release | Format-Table Name, Length
 
-      - name: Przekaz instalator do testu
+      - name: Przekaz instalatory i fingerprint runtime do testu
         uses: actions/upload-artifact@v4
         with:
           name: techniczny-instalator-bez-ocr-${{ github.run_id }}
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/runtime-fingerprint.txt
           if-no-files-found: error
           retention-days: 1
 
@@ -86,21 +88,29 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem 'artifact\*.exe' | Select-Object -First 1
-          if (-not $installer) { throw 'Nie znaleziono instalatora.' }
+          # release/ zawiera teraz DWA instalatory (pelny "Setup" + maly
+          # aktualizacyjny "Update", patrz scripts\build-installer.ps1) -
+          # ten test ma zawsze instalowac od zera z PELNEGO, nigdy nie
+          # polegac na przypadkowej kolejnosci alfabetycznej.
+          $installer = Get-ChildItem 'artifact\ScyzorykProjektowy-Setup-*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'Nie znaleziono pelnego instalatora (ScyzorykProjektowy-Setup-*.exe).' }
+          $updateInstaller = Get-ChildItem 'artifact\ScyzorykProjektowy-Update-*.exe' | Select-Object -First 1
+          if (-not $updateInstaller) { throw 'Nie znaleziono instalatora aktualizacyjnego (ScyzorykProjektowy-Update-*.exe).' }
           $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Test swieza instalacja bez OCR'
           $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-test-logs-bez-ocr'
           New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
           "INSTALLER_FILE=$($installer.FullName)" >> $env:GITHUB_ENV
+          "UPDATE_INSTALLER_FILE=$($updateInstaller.FullName)" >> $env:GITHUB_ENV
           "INSTALL_DIR=$installDir" >> $env:GITHUB_ENV
           "LOGS_DIR=$logsDir" >> $env:GITHUB_ENV
 
-      - name: Zainstaluj i przetestuj caly Scyzoryk bez OCR
+      - name: Zainstaluj i przetestuj caly Scyzoryk bez OCR (w tym maly instalator aktualizacyjny)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           & '.\scripts\ci\test-installed-scyzoryk.ps1' `
             -InstallerPath $env:INSTALLER_FILE `
+            -UpdateInstallerPath $env:UPDATE_INSTALLER_FILE `
             -InstallDir $env:INSTALL_DIR `
             -LogsDir $env:LOGS_DIR
 

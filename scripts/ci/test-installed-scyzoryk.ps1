@@ -3,13 +3,20 @@
   [Parameter(Mandatory = $true)][string]$InstallDir,
   [Parameter(Mandatory = $true)][string]$LogsDir,
   [switch]$ExpectBundledOcr,
-  [switch]$TestLiveOcr
+  [switch]$TestLiveOcr,
+  # Audyt 2026-08-06 - opcjonalny maly instalator aktualizacyjny (bez
+  # node-runtime/node_modules, patrz scripts\build-installer.ps1). Gdy podany,
+  # dodatkowy test naklada go na juz zainstalowana (przez $InstallerPath,
+  # pelna) kopie i sprawdza, ze runtime przetrwal nietkniety. Pominiety, gdy
+  # nie podano - InstallerPath sam w sobie zawsze musi byc PELNYM instalatorem.
+  [string]$UpdateInstallerPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $InstallerPath = (Resolve-Path $InstallerPath).Path
+if ($UpdateInstallerPath) { $UpdateInstallerPath = (Resolve-Path $UpdateInstallerPath).Path }
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:TaskName = 'Scyzoryk CI test instalatora'
 
@@ -457,6 +464,59 @@ Run-Test 'Ponowna instalacja' {
   } else {
     Assert-True (-not (Test-Path $configPath)) 'Reinstalacja dodala konfiguracje OCR.'
     Assert-True (-not (Test-Path $keyPath)) 'Reinstalacja dodala klucz OCR.'
+  }
+}
+
+if ($UpdateInstallerPath) {
+  Run-Test 'Maly instalator aktualizacyjny NIE dotyka node-runtime/node_modules i aplikacja dalej dziala (audyt 2026-08-06)' {
+    # To jest sedno calej zmiany: aktualizacja NIE moze pobierac/nadpisywac
+    # ~1,2 GB node_modules/Chromium. Dowod: hash i czas modyfikacji
+    # node-runtime\node.exe musza byc identyczne PRZED i PO nalozeniu
+    # instalatora aktualizacyjnego na juz istniejaca (pelna) instalacje -
+    # gdyby Inno Setup w ogole "dotknal" tego pliku (nawet zapisujac
+    # identyczna zawartosc), mtime by sie zmienil.
+    $nodeExe = Join-Path $InstallDir 'node-runtime\node.exe'
+    Assert-True (Test-Path $nodeExe) 'Brak node-runtime\node.exe przed testem instalatora aktualizacyjnego.'
+    $beforeHash = (Get-FileHash -Algorithm SHA256 -Path $nodeExe).Hash
+    $beforeWriteTime = (Get-Item $nodeExe).LastWriteTimeUtc
+
+    $sampleAppNodeModules = Join-Path $InstallDir 'apps\ocr-audytow\node_modules'
+    Assert-True (Test-Path $sampleAppNodeModules) 'Brak apps\ocr-audytow\node_modules przed testem instalatora aktualizacyjnego.'
+    $beforeFileCount = (Get-ChildItem $sampleAppNodeModules -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    Assert-True ($beforeFileCount -gt 0) 'apps\ocr-audytow\node_modules jest puste przed testem - test bylby bez sensu.'
+
+    Stop-Scyzoryk
+    $log = Join-Path $LogsDir 'install\update-variant.log'
+    $args = @(
+      '/VERYSILENT', '/SUPPRESSMSG', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart',
+      "/DIR=`"$InstallDir`"", "/LOG=`"$log`""
+    )
+    $proc = Start-Process -FilePath $UpdateInstallerPath -ArgumentList $args -Wait -PassThru
+    Assert-True ($proc.ExitCode -eq 0) "Instalator aktualizacyjny zakonczyl sie kodem $($proc.ExitCode)."
+
+    $afterHash = (Get-FileHash -Algorithm SHA256 -Path $nodeExe).Hash
+    $afterWriteTime = (Get-Item $nodeExe).LastWriteTimeUtc
+    Assert-True ($afterHash -eq $beforeHash) 'node-runtime\node.exe zmienil sie po instalatorze aktualizacyjnym - runtime NIE powinien byc dotykany.'
+    Assert-True ($afterWriteTime -eq $beforeWriteTime) 'Czas modyfikacji node-runtime\node.exe zmienil sie po instalatorze aktualizacyjnym - Inno Setup dotknal pliku, ktorego nie powinno byc w tym wariancie.'
+
+    $afterFileCount = (Get-ChildItem $sampleAppNodeModules -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
+    Assert-True ($afterFileCount -eq $beforeFileCount) "Liczba plikow w apps\ocr-audytow\node_modules zmienila sie ($beforeFileCount -> $afterFileCount) po instalatorze aktualizacyjnym."
+
+    # Aplikacja musi nadal normalnie dzialac po "malej" aktualizacji - nie
+    # wystarczy, ze pliki runtime przetrwaly, musi tez realnie wystartowac.
+    $launcherExe = Join-Path $InstallDir 'Scyzoryk.exe'
+    Start-Process -FilePath $launcherExe -WindowStyle Hidden | Out-Null
+    $deadline = (Get-Date).AddSeconds(90)
+    $healthy = $false
+    while ((Get-Date) -lt $deadline) {
+      try {
+        $response = Invoke-WebRequest -Uri 'http://127.0.0.1:3000/api/apps' -UseBasicParsing -TimeoutSec 3
+        $payload = $response.Content | ConvertFrom-Json
+        if ($response.StatusCode -eq 200 -and @($payload.apps | Where-Object { -not $_.health.ok }).Count -eq 0) { $healthy = $true; break }
+      } catch {}
+      Start-Sleep -Seconds 2
+    }
+    Assert-True $healthy 'Panel/aplikacje nie wystartowaly poprawnie po instalatorze aktualizacyjnym.'
   }
 }
 
