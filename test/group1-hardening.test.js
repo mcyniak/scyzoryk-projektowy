@@ -79,6 +79,33 @@ test('blokada pojedynczej instancji: zywy PID przejety przez inny proces (recydy
   }
 });
 
+test('blokada pojedynczej instancji: pusty (w trakcie zapisu) lock NIE jest cicho przejmowany (audyt rozdz. 28, P1)', () => {
+  // claim() tworzy pusty plik przez 'wx', a dopiero POTEM zapisuje tresc
+  // (tmp+rename) - miedzy tymi dwoma krokami inny proces moze zobaczyc
+  // istniejacy, ale pusty plik. Symulujemy dokladnie ten moment recznie -
+  // bez ponowien z retry w readLockSync taki plik wygladalby jak "brak
+  // locka" i zostalby cicho skasowany/przejety w trakcie, gdy prawdziwy
+  // wlasciciel wlasnie konczy start.
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scyzoryk-lock-empty-'));
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = tempRoot;
+
+  try {
+    const lockDir = path.join(tempRoot, 'ScyzorykProjektowy', 'Data', 'runtime');
+    const lockFile = path.join(lockDir, 'panel.lock');
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(lockFile, '');
+
+    const result = acquireSingleInstanceLock();
+    assert.equal(result.acquired, false, 'pusty lock nie moze byc cicho przejety - moze byc w trakcie zapisu przez prawdziwego wlasciciela');
+    assert.equal(result.unreadable, true);
+  } finally {
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocalAppData;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('circuit breaker otwiera sie po pieciu awariach w oknie dziesieciu minut', () => {
   const meta = { failureTimestamps: [], circuitOpen: false, circuitReason: null };
   const startedAt = Date.now();

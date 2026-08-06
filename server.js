@@ -461,7 +461,10 @@ const server = http.createServer(async (req, res) => {
 
 const instanceLock = acquireSingleInstanceLock();
 if (!instanceLock.acquired) {
-  console.error(`Scyzoryk juz dziala (PID ${instanceLock.existingPid}). Otwieram przegladarke zamiast startowac druga instancje.`);
+  const reason = instanceLock.unreadable
+    ? 'blokada instancji jest chwilowo nieczytelna (prawdopodobnie inny proces wlasnie startuje)'
+    : `PID ${instanceLock.existingPid}`;
+  console.error(`Scyzoryk juz dziala (${reason}). Otwieram przegladarke zamiast startowac druga instancje.`);
   process.exit(0);
 }
 process.on('exit', () => instanceLock.release());
