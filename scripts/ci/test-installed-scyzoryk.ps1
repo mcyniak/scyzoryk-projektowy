@@ -460,6 +460,42 @@ Run-Test 'Ponowna instalacja' {
   }
 }
 
+Run-Test 'Zaznaczony autostart podczas instalacji tworzy dzialajace zadanie bez PowerShella (audyt 2026-08-06)' {
+  # Kazdy wczesniejszy test w tym pliku uzywa /MERGETASKS=!autostart (autostart
+  # ODZNACZONY) - ta sciezka (Scyzoryk.exe --register-autostart przez natywny
+  # schtasks.exe, patrz launcher\Scyzoryk.Launcher\AutostartManager.cs, ktory
+  # zastapil ukrytego "powershell.exe -ExecutionPolicy Bypass" flagowanego przez
+  # Chrome/AV jako wirus) nigdy dotad nie byla realnie wykonana w CI. Testujemy
+  # tu wprost, ze zaznaczenie zadania "autostart" faktycznie tworzy poprawne
+  # zadanie w Harmonogramie.
+  Stop-Scyzoryk
+
+  $autostartTaskName = 'Scyzoryk Projektowy - autostart'
+  if (Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $autostartTaskName -Confirm:$false
+  }
+
+  $log = Join-Path $LogsDir 'install\autostart-enabled.log'
+  $args = @(
+    '/VERYSILENT', '/SUPPRESSMSG', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=autostart',
+    "/DIR=`"$InstallDir`"", "/LOG=`"$log`""
+  )
+  $proc = Start-Process -FilePath $InstallerPath -ArgumentList $args -Wait -PassThru
+  Assert-True ($proc.ExitCode -eq 0) "Instalacja z zaznaczonym autostartem zakonczyla sie kodem $($proc.ExitCode)."
+
+  $task = Get-ScheduledTask -TaskName $autostartTaskName -ErrorAction SilentlyContinue
+  Assert-True ($null -ne $task) 'Instalator z zaznaczonym autostartem nie zarejestrowal zadania w Harmonogramie.'
+
+  $action = $task.Actions | Select-Object -First 1
+  $expectedExe = Join-Path $InstallDir 'Scyzoryk.exe'
+  Assert-True ($action.Execute -ieq $expectedExe) "Akcja zadania wskazuje '$($action.Execute)', oczekiwano '$expectedExe'."
+  Assert-True ($action.Arguments -eq '--autostart') "Argumenty zadania to '$($action.Arguments)', oczekiwano '--autostart'."
+  Assert-True ($task.Principal.RunLevel -eq 'Limited') "RunLevel zadania to '$($task.Principal.RunLevel)', oczekiwano 'Limited' (bez podnoszenia uprawnien)."
+
+  Unregister-ScheduledTask -TaskName $autostartTaskName -Confirm:$false
+  Stop-Scyzoryk
+}
+
 Run-Test 'Odinstalowanie' {
   Stop-Scyzoryk
   $uninstaller = Join-Path $InstallDir 'unins000.exe'

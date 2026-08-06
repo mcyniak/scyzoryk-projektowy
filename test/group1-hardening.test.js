@@ -41,6 +41,44 @@ test('blokada pojedynczej instancji odrzuca drugi proces i przejmuje osierocony 
   }
 });
 
+test('blokada pojedynczej instancji: zywy PID przejety przez inny proces (recydywa 2026-08-06) jest wciaz uznany za osierocony po utracie heartbeatu', async () => {
+  // Realny incydent: po restarcie Windows przydzielil PID martwego
+  // wlasciciela locka zupelnie innemu, dzialajacemu procesowi
+  // (msedgewebview2.exe) - "PID zyje" wygladalo na prawde, wiec launcher w
+  // kolko odmawial startu mimo ze nic faktycznie nie dzialalo. Symulujemy to
+  // tutaj realnym, dzialajacym procesem podszywajacym sie pod stary lock ze
+  // starym (nieodswiezanym) heartbeatem.
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scyzoryk-lock-pidreuse-'));
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = tempRoot;
+  let impostor;
+
+  try {
+    impostor = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });
+    await new Promise(resolve => impostor.once('spawn', resolve));
+
+    const lockDir = path.join(tempRoot, 'ScyzorykProjektowy', 'Data', 'runtime');
+    const lockFile = path.join(lockDir, 'panel.lock');
+    fs.mkdirSync(lockDir, { recursive: true });
+    const staleHeartbeat = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    fs.writeFileSync(lockFile, JSON.stringify({
+      pid: impostor.pid,
+      token: 'stary-wlasciciel-juz-nie-zyje',
+      startedAt: staleHeartbeat,
+      heartbeatAt: staleHeartbeat
+    }));
+
+    const result = acquireSingleInstanceLock();
+    assert.equal(result.acquired, true);
+    result.release();
+  } finally {
+    if (impostor) impostor.kill();
+    if (previousLocalAppData === undefined) delete process.env.LOCALAPPDATA;
+    else process.env.LOCALAPPDATA = previousLocalAppData;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('circuit breaker otwiera sie po pieciu awariach w oknie dziesieciu minut', () => {
   const meta = { failureTimestamps: [], circuitOpen: false, circuitReason: null };
   const startedAt = Date.now();

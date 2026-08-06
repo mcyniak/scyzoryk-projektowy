@@ -25,6 +25,8 @@ public static class ArgsParser
             case "--autostart": return new ParsedArgs(LauncherMode.Autostart);
             case "--stop": return new ParsedArgs(LauncherMode.Stop);
             case "--health": return new ParsedArgs(LauncherMode.Health);
+            case "--register-autostart": return new ParsedArgs(LauncherMode.RegisterAutostart);
+            case "--unregister-autostart": return new ParsedArgs(LauncherMode.UnregisterAutostart);
             case "--apply-update":
                 // Wymaga dokladnie dwoch dodatkowych argumentow (sciezka
                 // instalatora, oczekiwana wersja) - bez nich albo z pustym

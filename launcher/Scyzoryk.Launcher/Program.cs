@@ -34,7 +34,8 @@ public static class Program
                 gate,
                 logger,
                 new MessageBoxFatalErrorPresenter(),
-                new UpdateApplier(processManager, health, paths, logger));
+                new UpdateApplier(processManager, health, paths, logger),
+                new AutostartManager());
 
             return app.RunAsync(parsedArgs).GetAwaiter().GetResult();
         }

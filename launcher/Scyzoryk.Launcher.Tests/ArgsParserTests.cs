@@ -29,6 +29,18 @@ public sealed class ArgsParserTests
     }
 
     [Fact]
+    public void DashDashRegisterAutostart_RegisterAutostart()
+    {
+        Assert.Equal(LauncherMode.RegisterAutostart, ArgsParser.Parse(new[] { "--register-autostart" }).Mode);
+    }
+
+    [Fact]
+    public void DashDashUnregisterAutostart_UnregisterAutostart()
+    {
+        Assert.Equal(LauncherMode.UnregisterAutostart, ArgsParser.Parse(new[] { "--unregister-autostart" }).Mode);
+    }
+
+    [Fact]
     public void UnknownFlag_Unknown()
     {
         Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--totally-made-up" }).Mode);

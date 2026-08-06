@@ -1,20 +1,33 @@
+const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
+const TEST_DIR = path.join(ROOT, 'test');
+
+// Audyt rozdz. 9 (P1): ta lista kiedys byla trzymana recznie i rozjechala
+// sie z package.json - nowe grupy (10-15) istnialy jako pliki i skrypty
+// test:groupN, ale ten runner (a wiec i zainstalowana wersja, ktora go
+// wywoluje) nigdy ich nie uruchamial. Zamiast pielegnowac druga, latwo
+// przestarzala liste - wykrywamy wszystkie test/group*.test.js automatycznie,
+// posortowane numerycznie po numerze grupy, zeby kolejnosc byla stabilna i
+// czytelna w logach.
+function discoverGroupTestFiles() {
+  const entries = fs.readdirSync(TEST_DIR).filter(name => /^group\d+.*\.test\.js$/.test(name));
+  entries.sort((a, b) => {
+    const numA = parseInt(a.match(/^group(\d+)/)[1], 10);
+    const numB = parseInt(b.match(/^group(\d+)/)[1], 10);
+    if (numA !== numB) return numA - numB;
+    return a.localeCompare(b);
+  });
+  if (!entries.length) {
+    throw new Error(`Brak plikow test/group*.test.js w ${TEST_DIR} - runner nie znalazl niczego do uruchomienia.`);
+  }
+  return entries.map(name => path.join('test', name));
+}
+
 const tests = [
-  ['--test',
-    'test/group1-hardening.test.js',
-    'test/group1-supervisor.test.js',
-    'test/group2-printing.test.js',
-    'test/group3-ocr.test.js',
-    'test/group4-ecodan.test.js',
-    'test/group5-dokumenty-seryjne.test.js',
-    'test/group6-workflows.test.js',
-    'test/group7-data-paths.test.js',
-    'test/group8-ready-installer.test.js',
-    'test/group9-dependency-check.test.js'
-  ],
+  ['--test', ...discoverGroupTestFiles()],
   ['apps/drukarka-projekty/test-sorting-regression.js']
 ];
 

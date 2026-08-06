@@ -5,7 +5,7 @@ namespace Scyzoryk.Launcher.Tests;
 
 public sealed class LauncherAppTests
 {
-    private static (LauncherApp App, FakeHealthChecker Health, FakeProcessManager Process, FakeBrowserLauncher Browser, FakeSingleInstanceGate Gate, FakeLauncherLogger Logger, FakeFatalErrorPresenter ErrorPresenter, FakeUpdateApplier UpdateApplier)
+    private static (LauncherApp App, FakeHealthChecker Health, FakeProcessManager Process, FakeBrowserLauncher Browser, FakeSingleInstanceGate Gate, FakeLauncherLogger Logger, FakeFatalErrorPresenter ErrorPresenter, FakeUpdateApplier UpdateApplier, FakeAutostartManager AutostartManager)
         CreateApp(InstallPaths paths)
     {
         var health = new FakeHealthChecker();
@@ -15,8 +15,9 @@ public sealed class LauncherAppTests
         var logger = new FakeLauncherLogger();
         var errorPresenter = new FakeFatalErrorPresenter();
         var updateApplier = new FakeUpdateApplier();
-        var app = new LauncherApp(paths, health, process, browser, gate, logger, errorPresenter, updateApplier, TestTimings.Fast);
-        return (app, health, process, browser, gate, logger, errorPresenter, updateApplier);
+        var autostartManager = new FakeAutostartManager();
+        var app = new LauncherApp(paths, health, process, browser, gate, logger, errorPresenter, updateApplier, autostartManager, TestTimings.Fast);
+        return (app, health, process, browser, gate, logger, errorPresenter, updateApplier, autostartManager);
     }
 
     private static ParsedArgs Args(LauncherMode mode) => new(mode);
@@ -25,7 +26,7 @@ public sealed class LauncherAppTests
     public async Task AlreadyRunning_NormalMode_OpensBrowserOnce_NoSpawn()
     {
         using var dir = new TempInstallDir();
-        var (app, health, process, browser, gate, _, _, _) = CreateApp(dir.Paths);
+        var (app, health, process, browser, gate, _, _, _, _) = CreateApp(dir.Paths);
         health.AlreadyRunningResult = true;
 
         var code = await app.RunAsync(Args(LauncherMode.Normal));
@@ -41,7 +42,7 @@ public sealed class LauncherAppTests
     public async Task AlreadyRunning_AutostartMode_NoBrowserOpen_NoSpawn()
     {
         using var dir = new TempInstallDir();
-        var (app, health, process, browser, gate, _, _, _) = CreateApp(dir.Paths);
+        var (app, health, process, browser, gate, _, _, _, _) = CreateApp(dir.Paths);
         health.AlreadyRunningResult = true;
 
         var code = await app.RunAsync(Args(LauncherMode.Autostart));
@@ -56,7 +57,7 @@ public sealed class LauncherAppTests
     public async Task NotRunning_NormalMode_SpawnsThenOpensBrowserOnce()
     {
         using var dir = new TempInstallDir();
-        var (app, health, process, browser, gate, _, _, _) = CreateApp(dir.Paths);
+        var (app, health, process, browser, gate, _, _, _, _) = CreateApp(dir.Paths);
         health.AlreadyRunningResult = false;
         health.RespondOnceResult = false;
         health.WaitOutcomeResult = HealthWaitOutcome.Healthy;
@@ -77,7 +78,7 @@ public sealed class LauncherAppTests
     public async Task NotRunning_AutostartMode_SpawnsAndNeverOpensBrowser()
     {
         using var dir = new TempInstallDir();
-        var (app, health, process, browser, gate, _, _, _) = CreateApp(dir.Paths);
+        var (app, health, process, browser, gate, _, _, _, _) = CreateApp(dir.Paths);
         health.AlreadyRunningResult = false;
         health.RespondOnceResult = false;
         health.WaitOutcomeResult = HealthWaitOutcome.Healthy;
@@ -96,7 +97,7 @@ public sealed class LauncherAppTests
     public async Task MissingNodeExe_NormalMode_NoSpawnAttempted_ReturnsNonZero_LogsReadableError()
     {
         using var dir = new TempInstallDir(includeNodeExe: false);
-        var (app, health, process, browser, gate, logger, errorPresenter, _) = CreateApp(dir.Paths);
+        var (app, health, process, browser, gate, logger, errorPresenter, _, _) = CreateApp(dir.Paths);
 
         var code = await app.RunAsync(Args(LauncherMode.Normal));
 
@@ -115,7 +116,7 @@ public sealed class LauncherAppTests
     public async Task MissingServerJs_NormalMode_NoSpawnAttempted_ReturnsNonZero()
     {
         using var dir = new TempInstallDir(includeNodeExe: true, includeServerJs: false);
-        var (app, health, process, _, _, _, errorPresenter, _) = CreateApp(dir.Paths);
+        var (app, health, process, _, _, _, errorPresenter, _, _) = CreateApp(dir.Paths);
 
         var code = await app.RunAsync(Args(LauncherMode.Normal));
 
@@ -129,7 +130,7 @@ public sealed class LauncherAppTests
     public async Task MissingNodeExe_StopMode_StillReturnsZero()
     {
         using var dir = new TempInstallDir(includeNodeExe: false);
-        var (app, _, process, _, _, _, _, _) = CreateApp(dir.Paths);
+        var (app, _, process, _, _, _, _, _, _) = CreateApp(dir.Paths);
 
         var code = await app.RunAsync(Args(LauncherMode.Stop));
 
@@ -145,12 +146,12 @@ public sealed class LauncherAppTests
         var health1 = new FakeHealthChecker { AlreadyRunningResult = false, RespondOnceResult = false, WaitOutcomeResult = HealthWaitOutcome.Healthy };
         var gate1 = new FakeSingleInstanceGate { AcquireResult = true };
         var process1 = new FakeProcessManager { SpawnResultToReturn = SpawnResult.Ok(111) };
-        var app1 = new LauncherApp(dir.Paths, health1, process1, new FakeBrowserLauncher(), gate1, new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), TestTimings.Fast);
+        var app1 = new LauncherApp(dir.Paths, health1, process1, new FakeBrowserLauncher(), gate1, new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(), TestTimings.Fast);
 
         var health2 = new FakeHealthChecker { AlreadyRunningResult = false, WaitOutcomeResult = HealthWaitOutcome.Healthy };
         var gate2 = new FakeSingleInstanceGate { AcquireResult = false };
         var process2 = new FakeProcessManager();
-        var app2 = new LauncherApp(dir.Paths, health2, process2, new FakeBrowserLauncher(), gate2, new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), TestTimings.Fast);
+        var app2 = new LauncherApp(dir.Paths, health2, process2, new FakeBrowserLauncher(), gate2, new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(), TestTimings.Fast);
 
         var code1 = await app1.RunAsync(Args(LauncherMode.Autostart));
         var code2 = await app2.RunAsync(Args(LauncherMode.Autostart));
@@ -165,7 +166,7 @@ public sealed class LauncherAppTests
     public async Task SecondLaunch_FirstNeverSucceeds_ReturnsReadableErrorNotHang()
     {
         using var dir = new TempInstallDir();
-        var (app, health, process, _, gate, _, errorPresenter, _) = CreateApp(dir.Paths);
+        var (app, health, process, _, gate, _, errorPresenter, _, _) = CreateApp(dir.Paths);
         health.AlreadyRunningResult = false;
         gate.AcquireResult = false;
         health.WaitOutcomeResult = HealthWaitOutcome.TimedOutProcessAlive;
@@ -182,7 +183,7 @@ public sealed class LauncherAppTests
     public async Task StartupTimeout_ReturnsNonZero_LogsError_DoesNotRespawnOrKillAgain()
     {
         using var dir = new TempInstallDir();
-        var (app, health, process, browser, gate, logger, errorPresenter, _) = CreateApp(dir.Paths);
+        var (app, health, process, browser, gate, logger, errorPresenter, _, _) = CreateApp(dir.Paths);
         health.AlreadyRunningResult = false;
         health.RespondOnceResult = false;
         health.WaitOutcomeResult = HealthWaitOutcome.TimedOutProcessAlive;
@@ -204,7 +205,7 @@ public sealed class LauncherAppTests
     public async Task StopMode_AlwaysReturnsZero_RegardlessOfStopResult()
     {
         using var dir = new TempInstallDir();
-        var (app, _, process, _, _, _, _, _) = CreateApp(dir.Paths);
+        var (app, _, process, _, _, _, _, _, _) = CreateApp(dir.Paths);
         process.StopResultToReturn = new[] { 111, 222 };
 
         var code = await app.RunAsync(Args(LauncherMode.Stop));
@@ -215,10 +216,51 @@ public sealed class LauncherAppTests
     }
 
     [Fact]
+    public async Task RegisterAutostartMode_CallsAutostartManagerWithLauncherExePath_AlwaysReturnsZero()
+    {
+        using var dir = new TempInstallDir();
+        var (app, _, _, _, _, logger, _, _, autostartManager) = CreateApp(dir.Paths);
+
+        var code = await app.RunAsync(Args(LauncherMode.RegisterAutostart));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal(1, autostartManager.RegisterCallCount);
+        Assert.Equal(0, autostartManager.UnregisterCallCount);
+        Assert.Equal(Path.Combine(dir.Paths.InstallDir, "Scyzoryk.exe"), autostartManager.LastExePath);
+        Assert.True(logger.HasEntryAt(LogLevel.Info));
+    }
+
+    [Fact]
+    public async Task RegisterAutostartMode_FailureStillReturnsZero_ButLogsWarning()
+    {
+        using var dir = new TempInstallDir();
+        var (app, _, _, _, _, logger, _, _, autostartManager) = CreateApp(dir.Paths);
+        autostartManager.RegisterResultToReturn = AutostartResult.Failed("brak uprawnien do Harmonogramu Zadan");
+
+        var code = await app.RunAsync(Args(LauncherMode.RegisterAutostart));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.True(logger.HasEntryAt(LogLevel.Warning));
+    }
+
+    [Fact]
+    public async Task UnregisterAutostartMode_CallsAutostartManager_AlwaysReturnsZero()
+    {
+        using var dir = new TempInstallDir();
+        var (app, _, _, _, _, _, _, _, autostartManager) = CreateApp(dir.Paths);
+
+        var code = await app.RunAsync(Args(LauncherMode.UnregisterAutostart));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal(1, autostartManager.UnregisterCallCount);
+        Assert.Equal(0, autostartManager.RegisterCallCount);
+    }
+
+    [Fact]
     public async Task HealthMode_Responding_ReturnsZero_NeverSpawnsNeverOpensBrowser()
     {
         using var dir = new TempInstallDir();
-        var (app, health, process, browser, _, _, _, _) = CreateApp(dir.Paths);
+        var (app, health, process, browser, _, _, _, _, _) = CreateApp(dir.Paths);
         health.RespondOnceResult = true;
 
         var code = await app.RunAsync(Args(LauncherMode.Health));
@@ -234,7 +276,7 @@ public sealed class LauncherAppTests
     public async Task HealthMode_NotResponding_ReturnsNonZero_NeverSpawnsNeverOpensBrowser()
     {
         using var dir = new TempInstallDir();
-        var (app, _, process, browser, _, _, _, _) = CreateApp(dir.Paths);
+        var (app, _, process, browser, _, _, _, _, _) = CreateApp(dir.Paths);
 
         var code = await app.RunAsync(Args(LauncherMode.Health));
 
@@ -247,7 +289,7 @@ public sealed class LauncherAppTests
     public async Task UnrecognizedArgument_NoSideEffects_ReturnsNonZero()
     {
         using var dir = new TempInstallDir();
-        var (app, health, process, browser, gate, logger, errorPresenter, _) = CreateApp(dir.Paths);
+        var (app, health, process, browser, gate, logger, errorPresenter, _, _) = CreateApp(dir.Paths);
         var parsed = ArgsParser.Parse(new[] { "--not-a-real-flag" });
         Assert.Equal(LauncherMode.Unknown, parsed.Mode);
 
@@ -266,7 +308,7 @@ public sealed class LauncherAppTests
     public async Task ApplyUpdateMode_DelegatesToUpdateApplier_AlwaysReturnsZero_EvenOnFailure()
     {
         using var dir = new TempInstallDir();
-        var (app, _, _, _, _, _, _, updateApplier) = CreateApp(dir.Paths);
+        var (app, _, _, _, _, _, _, updateApplier, _) = CreateApp(dir.Paths);
         updateApplier.ExitCodeToReturn = 1; // instalator "nieudany" - i tak Ok na poziomie launchera
 
         var code = await app.RunAsync(new ParsedArgs(LauncherMode.ApplyUpdate, "C:\\fake\\Setup-1.2.3.exe", "1.2.3"));
@@ -281,7 +323,7 @@ public sealed class LauncherAppTests
     public async Task ApplyUpdateMode_UpdateApplierThrows_StillReturnsZero_NeverPropagates()
     {
         using var dir = new TempInstallDir();
-        var (app, _, _, _, _, logger, _, updateApplier) = CreateApp(dir.Paths);
+        var (app, _, _, _, _, logger, _, updateApplier, _) = CreateApp(dir.Paths);
         updateApplier.ExceptionToThrow = new InvalidOperationException("boom");
 
         var code = await app.RunAsync(new ParsedArgs(LauncherMode.ApplyUpdate, "C:\\fake\\Setup-1.2.3.exe", "1.2.3"));

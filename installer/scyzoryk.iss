@@ -89,11 +89,20 @@ Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\Scyzoryk.exe"; WorkingDir: 
 
 [Run]
 Filename: "{app}\instaluj-zaleznosci.cmd"; WorkingDir: "{app}"; StatusMsg: "Instalowanie skladnikow Scyzoryka (wymaga internetu, moze potrwac kilka minut)..."; Flags: runhidden waituntilterminated
-; install-autostart.ps1 nie wymaga juz podnoszenia uprawnien (adres
-; scyzoryk.localhost dziala bez pliku hosts) - ten krok uruchamia go zwyczajnie,
-; bez elewacji. Pomijany calkowicie jesli uzytkownik odznaczyl zadanie
-; (Tasks: autostart) - w tym rowniez przy /VERYSILENT bez jawnego /MERGETASKS=autostart.
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\install-autostart.ps1"""; WorkingDir: "{app}"; StatusMsg: "Rejestrowanie autostartu przy logowaniu..."; Tasks: autostart; Check: not IsScyzorykUpdate; Flags: runhidden waituntilterminated
+; Audyt 2026-08-06 + realny incydent: ten krok kiedys wolal ukrytego
+; "powershell.exe -ExecutionPolicy Bypass -File install-autostart.ps1" - ta
+; sama sygnatura (interpreter cicho odpalajacy interpreter z ominieciem
+; polityki wykonania) byla juz raz zlapana przez firmowy EDR w lancuchu
+; aktualizacji (patrz launcher\Scyzoryk.Launcher\LauncherApp.RunApplyUpdateAsync)
+; i jest czestym powodem falszywych alarmow "wirus" w Chrome/Windows Defender/AV
+; dla niepodpisanych, nowych plikow - potwierdzone realnie: pobranie tego
+; instalatora bylo flagowane jako wirus na czesci komputerow. Zamiast
+; PowerShella, Scyzoryk.exe --register-autostart rejestruje zadanie natywnie
+; przez schtasks.exe (patrz launcher\Scyzoryk.Launcher\AutostartManager.cs) -
+; zero PowerShella w tej sciezce. Nie wymaga podniesienia uprawnien. Pomijany
+; calkowicie jesli uzytkownik odznaczyl zadanie (Tasks: autostart) - w tym
+; rowniez przy /VERYSILENT bez jawnego /MERGETASKS=autostart.
+Filename: "{app}\Scyzoryk.exe"; Parameters: "--register-autostart"; WorkingDir: "{app}"; StatusMsg: "Rejestrowanie autostartu przy logowaniu..."; Tasks: autostart; Check: not IsScyzorykUpdate; Flags: runhidden waituntilterminated
 ; Check: not IsScyzorykUpdate ponizej to dodatkowa (druga) warstwa obok
 ; skipifsilent - podczas /SCYZORYKUPDATE restart aplikacji robi WYLACZNIE
 ; Scyzoryk.exe --apply-update (po zakonczeniu instalatora), nigdy ten krok.
@@ -102,11 +111,13 @@ Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile
 Filename: "{app}\Scyzoryk.exe"; Description: "Uruchom Scyzoryka teraz"; Check: not IsScyzorykUpdate; Flags: postinstall skipifsilent nowait
 
 [UninstallRun]
-; Wyrejestrowuje zadanie w Harmonogramie, JESLI bylo zarejestrowane (skrypt sam
-; sprawdza i nie robi nic jesli nie) - bez tego odinstalowanie zostawialoby
-; osierocone zadanie wskazujace na usuniety folder. Musi isc PRZED usunieciem
-; plikow (UninstallRun z definicji wykonuje sie przed [UninstallDelete]).
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\uninstall-autostart.ps1"""; Flags: runhidden; RunOnceId: "UninstallAutostart"
+; Wyrejestrowuje zadanie w Harmonogramie, JESLI bylo zarejestrowane (Unregister
+; sam sprawdza i nie robi nic jesli nie - patrz AutostartManager.Unregister) -
+; bez tego odinstalowanie zostawialoby osierocone zadanie wskazujace na
+; usuniety folder. Musi isc PRZED usunieciem plikow (UninstallRun z definicji
+; wykonuje sie przed [UninstallDelete]). Bez PowerShella - patrz uzasadnienie
+; przy --register-autostart w [Run] powyzej.
+Filename: "{app}\Scyzoryk.exe"; Parameters: "--unregister-autostart"; Flags: runhidden; RunOnceId: "UninstallAutostart"
 ; Zatrzymuje TYLKO node.exe nalezacy do tej instalacji - Scyzoryk.exe --stop
 ; replikuje dokladnie logike match-po-pelnej-sciezce z dawnego stop-scyzoryk.ps1
 ; (patrz launcher\Scyzoryk.Launcher\ProcessManager.cs), zeby proces nie blokowal

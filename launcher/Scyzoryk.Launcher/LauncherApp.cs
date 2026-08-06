@@ -21,6 +21,7 @@ public sealed class LauncherApp
     private readonly ILauncherLogger _logger;
     private readonly IFatalErrorPresenter _errorPresenter;
     private readonly IUpdateApplier _updateApplier;
+    private readonly IAutostartManager _autostartManager;
     private readonly LauncherTimings _timings;
 
     public LauncherApp(
@@ -32,6 +33,7 @@ public sealed class LauncherApp
         ILauncherLogger logger,
         IFatalErrorPresenter errorPresenter,
         IUpdateApplier updateApplier,
+        IAutostartManager autostartManager,
         LauncherTimings? timings = null)
     {
         _paths = paths;
@@ -42,6 +44,7 @@ public sealed class LauncherApp
         _logger = logger;
         _errorPresenter = errorPresenter;
         _updateApplier = updateApplier;
+        _autostartManager = autostartManager;
         _timings = timings ?? LauncherTimings.Production;
     }
 
@@ -60,6 +63,8 @@ public sealed class LauncherApp
             LauncherMode.Stop => await RunStopAsync().ConfigureAwait(false),
             LauncherMode.Health => await RunHealthAsync().ConfigureAwait(false),
             LauncherMode.ApplyUpdate => await RunApplyUpdateAsync(args.InstallerPath!, args.ExpectedVersion!).ConfigureAwait(false),
+            LauncherMode.RegisterAutostart => RunRegisterAutostart(),
+            LauncherMode.UnregisterAutostart => RunUnregisterAutostart(),
             _ => LogUnknownArgumentAndExit(),
         };
     }
@@ -216,6 +221,42 @@ public sealed class LauncherApp
         // zatrzymanie sie nie udalo (juz obsluzone/zalogowane wewnatrz ProcessManager) -
         // jedynym sposobem na kod niezerowy jest siatka bezpieczenstwa w Program.cs.
         return Task.FromResult(ExitCodes.Ok);
+    }
+
+    /// <summary>
+    /// Zastepuje dawne installer\scyzoryk.iss [Run]: "powershell.exe
+    /// -ExecutionPolicy Bypass -File install-autostart.ps1" (Flags: runhidden) -
+    /// zlapane realnie 2026-08-06: dokladnie ten wzorzec (ukryty interpreter
+    /// odpalany z ominieciem polityki wykonania) byl powodem, dla ktorego Chrome/AV
+    /// flagowaly pobrany instalator jako wirus na czesci komputerow. Zawsze zwraca
+    /// ExitCodes.Ok, tak jak RunStopAsync - nieudana rejestracja autostartu (np.
+    /// brak uprawnien do Harmonogramu Zadan) nie moze przerwac calej instalacji,
+    /// uzytkownik moze zarejestrowac autostart pozniej recznie.
+    /// </summary>
+    private int RunRegisterAutostart()
+    {
+        var exePath = Path.Combine(_paths.InstallDir, "Scyzoryk.exe");
+        var result = _autostartManager.Register(exePath);
+        _logger.Log(result.Success ? LogLevel.Info : LogLevel.Warning, "Rejestracja autostartu (--register-autostart).", new Dictionary<string, string>
+        {
+            ["success"] = result.Success.ToString(),
+            ["error"] = result.ErrorMessage ?? string.Empty,
+        });
+        return ExitCodes.Ok;
+    }
+
+    /// <summary>Zastepuje dawne installer\scyzoryk.iss [Run]: "powershell.exe
+    /// -ExecutionPolicy Bypass -File uninstall-autostart.ps1" - patrz
+    /// RunRegisterAutostart dla pelnego uzasadnienia.</summary>
+    private int RunUnregisterAutostart()
+    {
+        var result = _autostartManager.Unregister();
+        _logger.Log(result.Success ? LogLevel.Info : LogLevel.Warning, "Wyrejestrowanie autostartu (--unregister-autostart).", new Dictionary<string, string>
+        {
+            ["success"] = result.Success.ToString(),
+            ["error"] = result.ErrorMessage ?? string.Empty,
+        });
+        return ExitCodes.Ok;
     }
 
     private async Task<int> RunHealthAsync()
