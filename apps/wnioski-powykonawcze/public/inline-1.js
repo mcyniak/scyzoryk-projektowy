@@ -218,21 +218,42 @@ const $ = s => document.querySelector(s);
       renderFiles();
       showStatus(`Gotowe. Utworzono PDF-y: ${(job.files || []).length}.`, job.status === 'finished-with-errors' ? '' : 'ok');
       const failed = failedList.length ? `<p class="status err">Niektóre pliki miały błąd: ${escapeHtml(failedList.map(x => x.error).join(' | '))}</p>` : '';
-      const downloads = job.zipUrl
+      const downloadsHtml = job.zipUrl
         ? `<a class="button primary" href="${job.zipUrl}">Pobierz ZIP z PDF-ami</a>`
         : (job.files || []).map(item => `<a class="button primary" href="${escapeHtml(item.url)}">Pobierz ${escapeHtml(item.file)}</a>`).join('');
-      resultBox.innerHTML = `${failed}${downloads}${renderChangesSummary(job.files || [])}`;
+      const summary = renderChangesSummary(job.files || []);
+
+      if (!summary.hasChanges) {
+        resultBox.innerHTML = `${failed}${downloadsHtml}`;
+        return;
+      }
+
+      // Audyt rozdz. 13, P0/P1: gdy jest cokolwiek do sprawdzenia (podmienione
+      // daty albo usunieta sekcja), przyciski pobierania NIE renderuja sie od
+      // razu - dopiero po jawnym kliknieciu "Rozumiem, pokaż pobieranie".
+      // Bez tego bylo latwo pobrac plik obok zwinietego podsumowania, nigdy
+      // go nie otwierajac.
+      resultBox.innerHTML = `${failed}${summary.html}`
+        + `<button type="button" class="button secondary" id="wmConfirmReviewBtn" style="margin-top:10px;">Rozumiem, pokaż pobieranie</button>`;
+      $('#wmConfirmReviewBtn').addEventListener('click', () => {
+        resultBox.innerHTML = `${failed}${summary.html}${downloadsHtml}`;
+      });
     }
 
     // Widocznosc tego, co skrypt faktycznie zmienil w kazdym dokumencie
-    // (audyt v1.0.4, P0-3/P0-4) - zamiana wszystkich dat na jedna wartosc i
-    // usuwanie od markera "ZATWIERDZAM..." do konca dokumentu nadal nie maja
-    // bezpiecznej, precyzyjnej granicy (wymaga realnego szablonu WM), wiec
-    // dopoki jej nie ma, pokazujemy uzytkownikowi co zostalo zmienione/usuniete,
-    // zeby dalo sie to zauwazyc i sprawdzic w PDF-ie przed wyslaniem dalej.
+    // (audyt v1.0.4, P0-3/P0-4; rozdz. 13 biezacego audytu) - zamiana
+    // wszystkich dat na jedna wartosc i usuwanie od markera "ZATWIERDZAM..."
+    // do konca dokumentu nadal nie maja bezpiecznej, precyzyjnej granicy
+    // (wymaga realnego szablonu WM), wiec dopoki jej nie ma, pokazujemy
+    // uzytkownikowi co zostalo zmienione/usuniete. Wczesniej byl to zwiniety
+    // <details> obok JUZ aktywnych przyciskow pobierania - latwo bylo pobrac
+    // plik bez otwarcia go w ogole. Teraz podsumowanie jest zawsze rozwiniete
+    // (nie do przeoczenia), a w trybie recznym (patrz gateDownloadsBehindReview
+    // ponizej) przyciski pobierania w ogole nie renderuja sie, dopoki
+    // uzytkownik jawnie nie potwierdzi, ze je zobaczyl.
     function renderChangesSummary(files) {
       const withChanges = files.filter(f => f.deletedSection || (f.dateReplacements || []).length);
-      if (!withChanges.length) return '';
+      if (!withChanges.length) return { html: '', hasChanges: false };
       const rows = withChanges.map(f => {
         const dateLines = (f.dateReplacements || [])
           .map(d => `${escapeHtml(d.from)} → ${escapeHtml(d.to)}`)
@@ -245,7 +266,11 @@ const $ = s => document.querySelector(s);
           + (deletionLine ? `<div class="small">${deletionLine}</div>` : '')
           + `</li>`;
       }).join('');
-      return `<details style="margin-top:10px;"><summary>Sprawdź, co zostało zmienione (zalecane przed wysłaniem dalej)</summary><ul>${rows}</ul></details>`;
+      const html = `<div class="status" style="margin-top:10px;">`
+        + `<div>Sprawdź, co zostało zmienione przed wysłaniem dalej:</div>`
+        + `<ul style="margin:8px 0 0;padding-left:20px;font-weight:400;">${rows}</ul>`
+        + `</div>`;
+      return { html, hasChanges: true };
     }
 
     function stopManualPolling() {
@@ -423,7 +448,10 @@ const $ = s => document.querySelector(s);
         showWmConvertStatus(`Gotowe. Utworzono i zapisano w folderach: ${data.created}.`, failedList.length ? '' : 'ok');
         const okLines = (data.files || []).map(f => `<div class="row ok"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.file)}</small></div></div>`).join('');
         const failLines = failedList.map(f => `<div class="row err"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.error)}</small></div></div>`).join('');
-        wmConvertResult.innerHTML = `<div class="list">${okLines}${failLines}</div>${renderChangesSummary(data.files || [])}`;
+        // Tryb folderowy zapisuje pliki bezposrednio w docelowych folderach -
+        // nie ma tu przyciskow pobierania do bramkowania (patrz komentarz przy
+        // renderChangesSummary), wiec uzywamy samego .html, zawsze rozwinietego.
+        wmConvertResult.innerHTML = `<div class="list">${okLines}${failLines}</div>${renderChangesSummary(data.files || []).html}`;
       } catch (err) {
         showWmConvertStatus(err.message || 'Błąd przerabiania dokumentów.', 'err');
       } finally {
