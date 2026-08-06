@@ -9,9 +9,28 @@
 ;     autostart, restart po aktualizacji, zatrzymanie przy odinstalowaniu) - bez CMD/PowerShell/VBS,
 ;   - node-runtime\ - bundlowany, portable Node.js (Windows x64), zeby uzytkownik koncowy
 ;     NIE musial miec Node.js zainstalowanego globalnie na komputerze,
-;   - instaluj-zaleznosci.cmd (installer\ w repo) skopiowany do korzenia.
+;   - apps\*\node_modules\ - zaleznosci KAZDEJ aplikacji juz zainstalowane (npm install + Chromium
+;     dla Playwrighta) - build-installer.ps1 robi to RAZ, przed pakowaniem, nie uzytkownik koncowy,
+;   - runtime-fingerprint.txt (scripts\generate-runtime-fingerprint.js) - odcisk "ktory dokladnie
+;     runtime (wersja Node + wszystkie package-lock.json) jest w tym stagingu".
 ;
-; Wywolanie: iscc scyzoryk.iss /DStagingDir="C:\sciezka\do\staging" /DAppVersion="1.2.3" /DOutputDir="C:\sciezka\do\release"
+; Audyt 2026-08-06 (blokada pobierania przez Chrome/AV na czesci komputerow) + zastrzezenie
+; wlasciciela ("node_modules nie moze byc pobierany przy kazdej aktualizacji", ~1,2 GB): instalator
+; wystepuje w DWOCH wariantach, sterowanych parametrem BuildVariant przekazanym do ISCC:
+;   - "full"   - wszystko powyzej, w tym node-runtime i node_modules kazdej apki (~600-900 MB).
+;                Jedyny wariant zdolny do PIERWSZEJ instalacji (albo pelnej naprawy).
+;   - "update" - BEZ node-runtime i BEZ node_modules (~150-160 MB) - zaklada, ze runtime juz
+;                istnieje na dysku z wczesniejszej pelnej instalacji. lib/updateService.js
+;                wybiera ten wariant, gdy runtime-fingerprint.txt zainstalowany lokalnie zgadza
+;                sie z tym opublikowanym w nowym wydaniu (czyli Node/zaleznosci npm sie NIE
+;                zmienily - typowa poprawka bledu w kodzie jednej z 9 aplikacji).
+; Oba warianty NIE uruchamiaja juz "npm install"/Playwright na komputerze uzytkownika w ogole -
+; to byl dawny krok instaluj-zaleznosci.cmd (usuniety), ukryty CMD pobierajacy pakiety podczas
+; instalacji - jedno z podejrzen audytu AV (Podejrzenie B), domkniete przez to samo posuniecie,
+; ktore rozwiazuje problem rozmiaru aktualizacji.
+;
+; Wywolanie: iscc scyzoryk.iss /DStagingDir="C:\sciezka\do\staging" /DAppVersion="1.2.3"
+;   /DOutputDir="C:\sciezka\do\release" /DBuildVariant="full"
 
 #ifndef StagingDir
   #define StagingDir "..\release\_staging"
@@ -21,6 +40,12 @@
 #endif
 #ifndef OutputDir
   #define OutputDir "..\release"
+#endif
+#ifndef BuildVariant
+  #define BuildVariant "full"
+#endif
+#if (BuildVariant != "full") && (BuildVariant != "update")
+  #error BuildVariant musi byc "full" albo "update"
 #endif
 
 #define MyAppName "Scyzoryk Projektowy"
@@ -41,7 +66,11 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 DisableWelcomePage=no
 OutputDir={#OutputDir}
+#if BuildVariant == "full"
 OutputBaseFilename=ScyzorykProjektowy-Setup-{#AppVersion}
+#else
+OutputBaseFilename=ScyzorykProjektowy-Update-{#AppVersion}
+#endif
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -69,7 +98,34 @@ Name: "desktopicon"; Description: "Utworz ikone na pulpicie"; GroupDescription: 
 Name: "autostart"; Description: "Uruchamiaj Scyzoryka automatycznie przy logowaniu (zalecane)"; GroupDescription: "Uruchamianie:"; Check: not IsScyzorykUpdate
 
 [Files]
-Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Kod aplikacji, launcher, skrypty, runtime-fingerprint.txt - wspolne dla obu
+; wariantow. node-runtime i node_modules kazdej apki sa wylaczone stad i
+; dolaczane osobno TYLKO w wariancie "full" ponizej (patrz uzasadnienie na
+; gorze pliku). Sprawdzone realnie (nie zgadywane): Inno Setup NIE wspiera
+; "*" jako dowolnego segmentu w SRODKU wzorca Source (np. "apps\*\node_modules\*"
+; nie kompiluje sie - "No files found matching...") - dlatego kazda apka ma
+; swoja jawna linie Source nizej zamiast jednego wzorca. Excludes NATOMIAST
+; wspiera taki wzorzec poprawnie.
+Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "\node-runtime\*,\apps\*\node_modules\*"
+
+#if BuildVariant == "full"
+; Runtime (portable Node + node_modules kazdej aplikacji, w tym Chromium dla
+; Playwrighta) - wylacznie w wariancie pelnym. Kazda apka ma wlasna, jawna
+; linie (patrz komentarz powyzej - Inno nie wspiera wzorca na cala liste
+; aplikacji na raz). Nowa aplikacja pod apps/ wymaga dopisania tu wpisu -
+; ten sam duch co rejestrowanie nowej apki w kilku miejscach root server.js
+; (patrz CLAUDE.md).
+Source: "{#StagingDir}\node-runtime\*"; DestDir: "{app}\node-runtime"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\dokumenty-seryjne\node_modules\*"; DestDir: "{app}\apps\dokumenty-seryjne\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\drukarka\node_modules\*"; DestDir: "{app}\apps\drukarka\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\drukarka-projekty\node_modules\*"; DestDir: "{app}\apps\drukarka-projekty\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\formularze-ecodan\node_modules\*"; DestDir: "{app}\apps\formularze-ecodan\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\karty-katalogowe\node_modules\*"; DestDir: "{app}\apps\karty-katalogowe\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\nazywarka-skanow\node_modules\*"; DestDir: "{app}\apps\nazywarka-skanow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\ocr-audytow\node_modules\*"; DestDir: "{app}\apps\ocr-audytow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\pieczatki-pdf\node_modules\*"; DestDir: "{app}\apps\pieczatki-pdf\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\wnioski-powykonawcze\node_modules\*"; DestDir: "{app}\apps\wnioski-powykonawcze\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+#endif
 
 [Icons]
 ; Filename wskazuje na Scyzoryk.exe (natywny launcher) - bez IconFilename/IconIndex,
@@ -88,7 +144,16 @@ Name: "{group}\Odinstaluj {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\Scyzoryk.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\instaluj-zaleznosci.cmd"; WorkingDir: "{app}"; StatusMsg: "Instalowanie skladnikow Scyzoryka (wymaga internetu, moze potrwac kilka minut)..."; Flags: runhidden waituntilterminated
+; Audyt 2026-08-06: dawny pierwszy krok tutaj byl "instaluj-zaleznosci.cmd" -
+; ukryty CMD uruchamiajacy npm install + pobranie Chromium NA KOMPUTERZE
+; UZYTKOWNIKA (Podejrzenie B audytu AV: niepodpisany instalator po cichu
+; odpalajacy CMD, ktory pobiera i uruchamia kod pakietow, wyglada jak
+; downloader/dropper). Usuniety calkowicie - node_modules kazdej apki (w tym
+; Chromium) sa teraz zainstalowane RAZ, w CI, przed zbudowaniem instalatora
+; (patrz scripts\build-installer.ps1) i dolaczone bezposrednio do wariantu
+; "full" (sekcja [Files] powyzej). Wariant "update" w ogole ich nie potrzebuje -
+; zaklada, ze juz sa na dysku z wczesniejszej pelnej instalacji. Instalator
+; (oba warianty) nie wymaga juz internetu podczas [Run] w ogole.
 ; Audyt 2026-08-06 + realny incydent: ten krok kiedys wolal ukrytego
 ; "powershell.exe -ExecutionPolicy Bypass -File install-autostart.ps1" - ta
 ; sama sygnatura (interpreter cicho odpalajacy interpreter z ominieciem
@@ -150,9 +215,12 @@ begin
 end;
 
 [UninstallDelete]
-; [Files] wie tylko o plikach ktore SAM instalator skopiowal - node_modules kazdej
-; aplikacji (i Chromium dla Playwrighta) powstaja PO instalacji (sekcja [Run],
-; instaluj-zaleznosci.cmd), a foldery robocze (apps\*\data, uploads, output, logs)
-; powstaja dopiero przy pierwszym uzyciu apki. Bez tego wpisu odinstalowanie
-; zostawialoby wszystkie te gigabajty danych na dysku. Usuwa caly folder instalacji.
+; Od 2026-08-06 wariant "full" ma node_modules/node-runtime w [Files], wiec
+; Inno Setup formalnie "wie" o nich - ALE instalacja typowego uzytkownika
+; przechodzi przez oba warianty naprzemiennie w czasie (full -> kilka update ->
+; kolejny full po zmianie zaleznosci), a foldery robocze (apps\*\data, uploads,
+; output, logs) i tak powstaja dopiero przy pierwszym uzyciu apki, wiec
+; nigdy nie sa czescia [Files] zadnego wariantu. Zostawiamy to jako
+; bezwarunkowa siatke bezpieczenstwa - usuwa caly folder instalacji, nie
+; tylko to, co formalnie zainstalowal ostatnio uruchomiony wariant.
 Type: filesandordirs; Name: "{app}"

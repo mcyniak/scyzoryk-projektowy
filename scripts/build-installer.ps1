@@ -1,15 +1,28 @@
-# Buduje prawdziwy instalator Windows (.exe, Inno Setup) dla Scyzoryka Projektowego.
+# Buduje prawdziwe instalatory Windows (.exe, Inno Setup) dla Scyzoryka Projektowego.
 #
-# Produkuje jeden plik setup.exe, ktory:
-#   - kopiuje czysty eksport repo (git archive HEAD),
-#   - buduje i dolacza natywny launcher Scyzoryk.exe (C#/.NET 8, launcher\Scyzoryk.Launcher,
+# Audyt 2026-08-06 (Chrome/AV flagowaly pobrany instalator jako wirus na czesci
+# komputerow + zastrzezenie wlasciciela: aktualizacje nie moga za kazdym razem
+# pobierac ~1,2 GB node_modules/Chromium) - produkuje DWA pliki .exe z jednego
+# przebiegu:
+#   - ScyzorykProjektowy-Setup-<wersja>.exe  ("full")   - kompletny, offline
+#     instalator: kod aplikacji, Scyzoryk.exe, portable Node.js ORAZ node_modules
+#     wszystkich 9 aplikacji (w tym przegladarka Chromium dla Playwrighta) juz
+#     zainstalowane. Zero pobierania/instalowania pakietow na komputerze
+#     uzytkownika - npm install robi TEN skrypt, raz, przed spakowaniem.
+#     Jedyny wariant zdolny do pierwszej instalacji/pelnej naprawy.
+#   - ScyzorykProjektowy-Update-<wersja>.exe ("update") - to samo, ale BEZ
+#     node-runtime i BEZ node_modules (~1/6 rozmiaru) - zaklada, ze runtime juz
+#     jest na dysku z wczesniejszej pelnej instalacji. lib/updateService.js
+#     wybiera ten wariant do zwyklych aktualizacji, gdy runtime-fingerprint.txt
+#     (patrz scripts\generate-runtime-fingerprint.js) sie nie zmienil.
+# Oba warianty:
+#   - kopiuja czysty eksport repo (git archive HEAD),
+#   - buduja i dolaczaja natywny launcher Scyzoryk.exe (C#/.NET 8, launcher\Scyzoryk.Launcher,
 #     przez scripts\build-launcher.ps1) - jedyny sposob normalnego startu aplikacji,
 #     bez CMD/PowerShell/VBS,
-#   - dolacza bundlowany, portable Node.js (Windows x64),
-#   - podczas instalacji doinstalowuje zaleznosci kazdej aplikacji i Chromium,
-#   - opcjonalnie dolacza gotowa konfiguracje Google Document AI przekazana
+#   - opcjonalnie dolaczaja gotowa konfiguracje Google Document AI przekazana
 #     wyłącznie przez zmienne srodowiskowe procesu budowania,
-#   - instaluje sie per-uzytkownik, bez wymogu stalego konta administratora.
+#   - instaluja sie per-uzytkownik, bez wymogu stalego konta administratora.
 #
 # Opcjonalna konfiguracja OCR podczas budowania:
 #   OCR_DOCAI_CREDENTIALS_B64 - JSON konta serwisowego zakodowany Base64
@@ -194,7 +207,7 @@ Copy-Item -Path $nodeSourceDir -Destination $nodeRuntimeDir -Recurse -Force
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $nodeExtractDir
 Write-Host "Bundlowany Node.js gotowy: $nodeRuntimeDir"
 
-# --- 4) Natywny launcher (Scyzoryk.exe) + skrypt instalacji zaleznosci ---
+# --- 4) Natywny launcher (Scyzoryk.exe) ---
 # Scyzoryk.exe jest wynikiem budowania (launcher\Scyzoryk.Launcher, C#/.NET 8),
 # NIE jest sciagany przez git archive jak reszta stagingu - build-launcher.ps1
 # uruchamia jego wlasne testy jednostkowe i publikuje self-contained/single-file
@@ -204,25 +217,65 @@ if ($LASTEXITCODE -ne 0 -or -not $launcherExePath -or -not (Test-Path $launcherE
   throw "Budowa launchera (Scyzoryk.exe) nie powiodla sie - build-launcher.ps1 nie zwrocil poprawnej sciezki."
 }
 Copy-Item -Path $launcherExePath -Destination (Join-Path $stagingDir 'Scyzoryk.exe') -Force
-Copy-Item -Path (Join-Path $Root 'installer\instaluj-zaleznosci.cmd') -Destination $stagingDir -Force
 
-# --- 5) Kompilacja instalatora ---
+# --- 5) Zaleznosci kazdej aplikacji (npm install + Chromium dla Playwrighta) ---
+# Audyt 2026-08-06 (Podejrzenie B): to kiedys robil ukryty CMD na komputerze
+# UZYTKOWNIKA (installer\instaluj-zaleznosci.cmd, usuniety z [Run] w
+# scyzoryk.iss). Ten sam efekt koncowy (node_modules kazdej apki gotowe),
+# ale wykonany RAZ, tutaj, przy budowaniu - instalator juz nic nie pobiera.
+# Uzywamy WLASNEJ, wlasnie skopiowanej kopii bundlowanego node-runtime (nie
+# globalnego "node" z PATH maszyny budujacej) i WLASNYCH kopii
+# scripts\install-all.js/check-project.js z tego samego stagingu (git archive
+# juz je tam skopiowal w kroku 1) - __dirname w tych skryptach wskazuje wtedy
+# na staging, wiec dzialaja dokladnie na apps\* w stagingu, nie w repo.
+$stagingNodeExe = Join-Path $nodeRuntimeDir 'node.exe'
+$env:PLAYWRIGHT_BROWSERS_PATH = '0'
+Write-Host "`nInstaluje zaleznosci wszystkich aplikacji do stagingu (moze potrwac kilka minut)..."
+& $stagingNodeExe (Join-Path $stagingDir 'scripts\install-all.js')
+if ($LASTEXITCODE -ne 0) { throw "Instalacja zaleznosci do stagingu nie powiodla sie (kod $LASTEXITCODE)." }
+& $stagingNodeExe (Join-Path $stagingDir 'scripts\check-project.js')
+if ($LASTEXITCODE -ne 0) { throw "Sprawdzenie projektu w stagingu nie powiodlo sie (kod $LASTEXITCODE)." }
+Write-Host "Zaleznosci gotowe w stagingu."
+
+# --- 6) Fingerprint runtime (Node + wszystkie package-lock.json) ---
+# Uzywany przez lib/updateService.js do wyboru miedzy pelnym a aktualizacyjnym
+# instalatorem - patrz scripts\generate-runtime-fingerprint.js. Liczony z
+# WLASNEJ kopii skryptu w stagingu (ten sam powod co krok 5), ale wynik jest
+# identyczny z policzonym z repo - package-lock.json sa kopiowane 1:1 przez
+# git archive, npm install ich nie modyfikuje.
+$fingerprintPath = Join-Path $stagingDir 'runtime-fingerprint.txt'
+& $stagingNodeExe (Join-Path $stagingDir 'scripts\generate-runtime-fingerprint.js') $NodeVersion $fingerprintPath
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $fingerprintPath)) {
+  throw "Wygenerowanie runtime-fingerprint.txt nie powiodlo sie (kod $LASTEXITCODE)."
+}
+$runtimeFingerprint = (Get-Content -Raw -Path $fingerprintPath).Trim()
+Write-Host "Runtime fingerprint: $runtimeFingerprint"
+
+# --- 7) Kompilacja obu wariantow instalatora z tego samego stagingu ---
 $issPath = Join-Path $Root 'installer\scyzoryk.iss'
-& $iscc $issPath "/DStagingDir=$stagingDir" "/DAppVersion=$Version" "/DOutputDir=$OutputDir"
-$isccExit = $LASTEXITCODE
+$results = @()
+foreach ($variant in @('full', 'update')) {
+  Write-Host "`n=== Kompiluje wariant: $variant ==="
+  & $iscc $issPath "/DStagingDir=$stagingDir" "/DAppVersion=$Version" "/DOutputDir=$OutputDir" "/DBuildVariant=$variant"
+  if ($LASTEXITCODE -ne 0) {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stagingDir
+    Write-Error "Kompilacja instalatora (wariant $variant) nie powiodla sie (ISCC kod $LASTEXITCODE)."
+    exit $LASTEXITCODE
+  }
+  $prefix = if ($variant -eq 'full') { 'Setup' } else { 'Update' }
+  $results += Join-Path $OutputDir "ScyzorykProjektowy-$prefix-$Version.exe"
+}
 
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stagingDir
 
-if ($isccExit -ne 0) {
-  Write-Error "Kompilacja instalatora nie powiodla sie (ISCC kod $isccExit)."
-  exit $isccExit
+$ocrLabel = if ($ocrIncluded) { 'z gotowym OCR' } else { 'bez wbudowanego OCR' }
+Write-Host "`nGotowe ($ocrLabel):"
+foreach ($outputExe in $results) {
+  if (Test-Path $outputExe) {
+    $sizeMb = [math]::Round((Get-Item $outputExe).Length / 1MB, 1)
+    Write-Host "  $outputExe ($sizeMb MB)"
+  } else {
+    Write-Warning "ISCC zakonczyl sie sukcesem, ale nie znalazlem oczekiwanego pliku wyjsciowego: $outputExe"
+  }
 }
-
-$outputExe = Join-Path $OutputDir "ScyzorykProjektowy-Setup-$Version.exe"
-if (Test-Path $outputExe) {
-  $sizeMb = [math]::Round((Get-Item $outputExe).Length / 1MB, 1)
-  $ocrLabel = if ($ocrIncluded) { 'z gotowym OCR' } else { 'bez wbudowanego OCR' }
-  Write-Host "`nGotowe ($sizeMb MB, $ocrLabel): $outputExe"
-} else {
-  Write-Warning "ISCC zakonczyl sie sukcesem, ale nie znalazlem oczekiwanego pliku wyjsciowego: $outputExe"
-}
+Write-Host "Runtime fingerprint tego wydania: $runtimeFingerprint"
