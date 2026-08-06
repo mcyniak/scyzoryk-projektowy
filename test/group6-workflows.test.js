@@ -18,6 +18,7 @@ const { isTruthyMark } = require('../apps/drukarka-projekty/src/excelInvestment'
 const { buildQueueFromGroups } = require('../apps/drukarka-projekty/server');
 const { isAffirmativeFlag } = require('../lib/businessFlags');
 const { normalizeDate } = require('../apps/wnioski-powykonawcze/src/dateValidation');
+const { app: wmApp, isPathInsideFolder: wmIsPathInsideFolder } = require('../apps/wnioski-powykonawcze/server');
 const { PDFDocument } = require('../apps/drukarka-projekty/node_modules/pdf-lib');
 
 async function createTestPdf(filePath) {
@@ -114,6 +115,87 @@ test('wnioski powykonawcze używają szybkiego modelu zadaniowego z anulowaniem'
   assert.doesNotMatch(server, /app\.post\('\/api\/convert'/);
   assert.match(frontend, /setInterval\(pollManualJob/);
   assert.match(frontend, /res\.status === 404/);
+});
+
+test('wnioski powykonawcze: isPathInsideFolder odrzuca sciezki spoza folderu, akceptuje sciezki wewnatrz (audyt rozdz. 13, P0/P1)', () => {
+  const root = path.join('C:', 'Projekty', 'Zarnow');
+  assert.equal(wmIsPathInsideFolder(path.join(root, '41', 'WM Pompa.docx'), root), true);
+  assert.equal(wmIsPathInsideFolder(root, root), true);
+  assert.equal(wmIsPathInsideFolder(path.join('C:', 'Projekty', 'ZarnowInny', 'plik.docx'), root), false, 'prefiks folderu bez separatora nie moze przejsc');
+  assert.equal(wmIsPathInsideFolder(path.join('C:', 'Windows', 'System32', 'cmd.exe'), root), false);
+  assert.equal(wmIsPathInsideFolder('', root), false);
+  assert.equal(wmIsPathInsideFolder(root, ''), false);
+});
+
+test('wnioski powykonawcze: /api/wm-folder/convert odrzuca sourcePath/folderPath spoza przeskanowanego folderu, nawet z prawidlowym scanToken (audyt rozdz. 13, P0/P1)', async (t) => {
+  const scannedRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-wm-scan-'));
+  t.after(() => fsp.rm(scannedRoot, { recursive: true, force: true }));
+  const categoryDir = path.join(scannedRoot, '41 - Zarnow');
+  await fsp.mkdir(categoryDir);
+  await fsp.writeFile(path.join(categoryDir, 'WM Pompa ciepla.docx'), 'tresc');
+
+  const outsideRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-wm-outside-'));
+  t.after(() => fsp.rm(outsideRoot, { recursive: true, force: true }));
+  const outsideDocx = path.join(outsideRoot, 'inny-plik.docx');
+  await fsp.writeFile(outsideDocx, 'tresc');
+
+  const server = wmApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  async function post(urlPath, body) {
+    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+      body: JSON.stringify(body)
+    });
+    return { status: res.status, json: await res.json() };
+  }
+
+  // Brak scanToken (albo nieprawidlowy) - konwersja musi byc odrzucona,
+  // zanim w ogole spojrzy na sourcePath/folderPath.
+  const noToken = await post('/api/wm-folder/convert', {
+    items: [{ sourcePath: outsideDocx, folderPath: outsideRoot, category: 'x' }],
+    date: '2026-01-15'
+  });
+  assert.equal(noToken.status, 400);
+  assert.match(noToken.json.message, /Sesja skanowania/);
+
+  const scan = await post('/api/wm-folder/scan', { folderPath: scannedRoot });
+  assert.equal(scan.status, 200);
+  assert.ok(scan.json.scanToken, 'scan musi zwrocic scanToken');
+
+  // Prawidlowy scanToken, ale sourcePath/folderPath spoza scannedRoot -
+  // dokladnie scenariusz z audytu: klient podmienia sciezki w ciele
+  // zadania na dowolny plik/folder na dysku.
+  const outsideAttempt = await post('/api/wm-folder/convert', {
+    items: [{ sourcePath: outsideDocx, folderPath: outsideRoot, category: 'x' }],
+    date: '2026-01-15',
+    scanToken: scan.json.scanToken
+  });
+  assert.equal(outsideAttempt.status, 400);
+  assert.match(outsideAttempt.json.message, /poza przeskanowanym folderem/);
+  assert.ok(!fs.existsSync(path.join(outsideRoot, 'WM dok.pod Pompa ciepla.pdf')), 'nic nie moglo zostac zapisane poza przeskanowanym folderem');
+
+  // Mieszany atak: sourcePath prawidlowy (wewnatrz scannedRoot), ale
+  // folderPath (miejsce zapisu PDF-a) podmieniony na folder spoza -
+  // tez musi zostac odrzucony.
+  const mixedAttempt = await post('/api/wm-folder/convert', {
+    items: [{ sourcePath: path.join(categoryDir, 'WM Pompa ciepla.docx'), folderPath: outsideRoot, category: 'x' }],
+    date: '2026-01-15',
+    scanToken: scan.json.scanToken
+  });
+  assert.equal(mixedAttempt.status, 400);
+  assert.match(mixedAttempt.json.message, /poza przeskanowanym folderem/);
+});
+
+test('wnioski powykonawcze: frontend zapamietuje scanToken ze skanu i wysyla go przy konwersji (audyt rozdz. 13, P0/P1)', async () => {
+  const frontend = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'public', 'inline-1.js'), 'utf8');
+  assert.match(frontend, /wmScanToken\s*=\s*data\.scanToken/);
+  assert.match(frontend, /scanToken:\s*wmScanToken/);
 });
 
 test('drukarka-projekty: isTruthyMark (audyt P1-4) uzywa bialej listy zamiast wykluczac prawie wszystko', () => {

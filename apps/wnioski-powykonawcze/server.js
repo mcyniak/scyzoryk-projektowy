@@ -427,6 +427,35 @@ app.get('/api/jobs/:id/download', (req, res) => {
   return res.status(404).send('Nie znaleziono gotowego pliku do pobrania.');
 });
 
+// Audyt rozdz. 13, P0/P1: /api/wm-folder/convert dawniej przyjmowal
+// sourcePath/folderPath dla kazdej pozycji WPROST z ciala zadania, bez
+// zadnej weryfikacji, ze te sciezki pochodza z faktycznie przeskanowanego
+// folderu - klient mogl wskazac dowolny plik DOCX na dysku i dowolny
+// istniejacy folder docelowy. scanToken wiaze convert z konkretnym,
+// niedawno przeskanowanym rootPath (zwracanym tylko z /api/wm-folder/scan),
+// a kazda sciezka z convert jest ponownie sprawdzana pod katem containment
+// wzgledem tego rootPath.
+const wmScans = new Map();
+const WM_SCAN_TTL_MS = 30 * 60 * 1000;
+function cleanupOldWmScans() {
+  const now = Date.now();
+  for (const [token, scan] of wmScans) {
+    if (now - scan.createdAt > WM_SCAN_TTL_MS) wmScans.delete(token);
+  }
+}
+setInterval(cleanupOldWmScans, 10 * 60 * 1000).unref();
+
+function isPathInsideFolder(filePath, folderPath) {
+  if (!filePath || !folderPath) return false;
+  try {
+    const resolved = path.resolve(String(filePath)).toLowerCase();
+    const resolvedFolder = path.resolve(String(folderPath)).toLowerCase();
+    return resolved === resolvedFolder || resolved.startsWith(resolvedFolder + path.sep);
+  } catch (_) {
+    return false;
+  }
+}
+
 // Automatyczny tryb "caly folder WM": uzytkownik podaje tylko sciezke
 // nadrzednego folderu (np. folderu inwestycji zawierajacego podfoldery WM),
 // a aplikacja sama znajduje w kazdym podfolderze plik "WM ..." do przerobienia.
@@ -440,7 +469,9 @@ app.post('/api/wm-folder/scan', async (req, res) => {
   }
   try {
     const result = await wmFolderScan.scanWmFolder(folderPath);
-    res.json({ ok: true, ...result });
+    const scanToken = crypto.randomUUID();
+    wmScans.set(scanToken, { folderPath, createdAt: Date.now() });
+    res.json({ ok: true, scanToken, ...result });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Nie udało się przeskanować folderu WM.' });
   }
@@ -454,6 +485,12 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
   const items = Array.isArray(req.body?.items) ? req.body.items : [];
   if (!items.length) return res.status(400).json({ ok: false, message: 'Wybierz przynajmniej jedną kategorię do przerobienia.' });
   if (items.length > MAX_FILES) return res.status(400).json({ ok: false, message: `Za dużo pozycji na raz (limit ${MAX_FILES}).` });
+
+  const scanToken = String(req.body?.scanToken || '');
+  const scan = wmScans.get(scanToken);
+  if (!scan) {
+    return res.status(400).json({ ok: false, message: 'Sesja skanowania folderu wygasła lub jest nieprawidłowa - przeskanuj folder ponownie.' });
+  }
 
   let dateText;
   let prefix;
@@ -472,6 +509,12 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
     const manifestFiles = items.map(item => {
       const sourcePath = String(item.sourcePath || '');
       const folderPath = String(item.folderPath || '');
+      if (!isPathInsideFolder(sourcePath, scan.folderPath)) {
+        throw new Error('Plik źródłowy leży poza przeskanowanym folderem: ' + sourcePath);
+      }
+      if (!isPathInsideFolder(folderPath, scan.folderPath)) {
+        throw new Error('Folder docelowy leży poza przeskanowanym folderem: ' + folderPath);
+      }
       let sourceStat;
       try { sourceStat = fs.statSync(sourcePath); } catch (_) { sourceStat = null; }
       if (!sourceStat || !sourceStat.isFile() || path.extname(sourcePath).toLowerCase() !== '.docx') {
@@ -539,5 +582,12 @@ app.use((err, req, res, next) => {
   res.status(400).json({ ok: false, message: err.message || 'Błąd przetwarzania.' });
 });
 
-const server = app.listen(PORT, HOST, () => console.log(`Wnioski powykonawcze: http://${HOST}:${PORT}`));
-applyHttpTimeouts(server, 'WM');
+// require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany
+// bezposrednio (node server.js), nie przy require() z testow (patrz ten sam
+// wzorzec w apps/drukarka-projekty/server.js).
+if (require.main === module) {
+  const server = app.listen(PORT, HOST, () => console.log(`Wnioski powykonawcze: http://${HOST}:${PORT}`));
+  applyHttpTimeouts(server, 'WM');
+}
+
+module.exports = { app, isPathInsideFolder };

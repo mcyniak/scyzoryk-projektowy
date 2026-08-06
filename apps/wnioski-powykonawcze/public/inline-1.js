@@ -325,6 +325,10 @@ const $ = s => document.querySelector(s);
     const wmConvertResult = $('#wmConvertResult');
     wmFolderDateInput.value = today.toISOString().slice(0, 10);
     let wmScanItems = [];
+    // Audyt rozdz. 13, P0/P1: /api/wm-folder/convert teraz wymaga tokena z
+    // ostatniego /api/wm-folder/scan - bez niego serwer odrzuca konwersje
+    // (patrz containment check w server.js).
+    let wmScanToken = null;
 
     function setWmFolderDateMode(monthOnly) {
       if (monthOnly) {
@@ -395,6 +399,7 @@ const $ = s => document.querySelector(s);
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się przeskanować folderu.');
         wmScanItems = data.items || [];
+        wmScanToken = data.scanToken || null;
         const toConvert = wmScanItems.filter(i => i.status === 'do-przerobienia');
         const already = wmScanItems.filter(i => i.status === 'juz-istnieje');
         const missing = wmScanItems.filter(i => i.status === 'brak-docx');
@@ -439,7 +444,8 @@ const $ = s => document.querySelector(s);
           body: JSON.stringify({
             items: items.map(i => ({ sourcePath: i.sourcePath, folderPath: i.folderPath, category: i.category })),
             date: dateValue,
-            prefix: wmFolderPrefixInput.value
+            prefix: wmFolderPrefixInput.value,
+            scanToken: wmScanToken
           })
         });
         const data = await res.json().catch(() => ({}));
