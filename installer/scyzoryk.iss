@@ -224,3 +224,12 @@ end;
 ; bezwarunkowa siatke bezpieczenstwa - usuwa caly folder instalacji, nie
 ; tylko to, co formalnie zainstalowal ostatnio uruchomiony wariant.
 Type: filesandordirs; Name: "{app}"
+; Audyt rozdz. 22/23: klucz konta serwisowego OCR (Document AI) zyje w
+; OSOBNYM katalogu poza {app} - %LOCALAPPDATA%\Scyzoryk (patrz
+; lib/ocrConfigMigration.js#userConfigPath), NIE %LOCALAPPDATA%\ScyzorykProjektowy
+; (zwykle dane robocze aplikacji). Bez tego wpisu prywatny klucz zostawal na
+; dysku uzytkownika po odinstalowaniu bez jego wiedzy. [UninstallDelete]
+; wykonuje sie WYLACZNIE przy prawdziwym odinstalowaniu (Dodaj/Usun programy),
+; nigdy przy wlasnej aktualizacji (Scyzoryk.exe --apply-update wola instalator
+; z /SCYZORYKUPDATE, nie odpala unins000.exe) - bezpiecznie usuwac bezwarunkowo.
+Type: filesandordirs; Name: "{localappdata}\Scyzoryk"

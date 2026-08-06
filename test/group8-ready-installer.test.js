@@ -21,6 +21,34 @@ test('OCR odczytuje konfigurację w kolejności env, użytkownik, instalator', a
   assert.match(source, /BUNDLED_CONFIG_PATH/);
 });
 
+test('odinstalowanie usuwa klucz OCR z osobnego katalogu %LOCALAPPDATA%\\Scyzoryk (audyt rozdz. 22/23, P1)', async () => {
+  // Klucz konta serwisowego OCR migruje do %LOCALAPPDATA%\Scyzoryk (patrz
+  // lib/ocrConfigMigration.js#userConfigPath) - OSOBNEGO katalogu niz zwykle
+  // dane robocze aplikacji (%LOCALAPPDATA%\ScyzorykProjektowy). Bez wpisu w
+  // [UninstallDelete] prywatny klucz zostawal na dysku uzytkownika po
+  // odinstalowaniu, niewidoczny i nieusuwany.
+  const source = await read('installer/scyzoryk.iss');
+  const migrationSource = await read('lib/ocrConfigMigration.js');
+
+  // Wycinamy tresc sekcji recznie (nie jednym zachlannym regexem z $) -
+  // "^...$" z flaga /m dopasowuje $ na KAZDYM koncu linii, wiec lazy
+  // [\s\S]*? zatrzymywalby sie natychmiast po nagłówku. Trzeba tez zaczac
+  // dokladnie od naglowka sekcji na poczatku linii, nie od przypadkowego
+  // wystapienia tekstu "[UninstallDelete]" w komentarzu gdzie indziej w
+  // pliku (np. w [UninstallRun] jest taki komentarz).
+  const startMatch = source.match(/^\[UninstallDelete\]\r?\n/m);
+  assert.ok(startMatch, 'nie znaleziono sekcji [UninstallDelete]');
+  const rest = source.slice(startMatch.index + startMatch[0].length);
+  const nextSectionMatch = rest.match(/^\[/m);
+  const section = nextSectionMatch ? rest.slice(0, nextSectionMatch.index) : rest;
+
+  assert.match(section, /Type:\s*filesandordirs;\s*Name:\s*"\{localappdata\}\\Scyzoryk"/);
+  // {localappdata}\ScyzorykProjektowy to INNY, zwykly katalog danych - nie
+  // wolno pomylic tych dwoch sciezek w tescie ani w skrypcie.
+  assert.doesNotMatch(section, /"\{localappdata\}\\ScyzorykProjektowy"/);
+  assert.match(migrationSource, /path\.join\(base, 'Scyzoryk', 'ocr-document-ai\.json'\)/, 'sciezka w tescie musi nadal zgadzac sie z lib/ocrConfigMigration.js');
+});
+
 test('build instalatora bierze sekret OCR tylko ze środowiska i dodaje go do stagingu', async () => {
   const source = await read('scripts/build-installer.ps1');
   const gitignore = await read('.gitignore');
