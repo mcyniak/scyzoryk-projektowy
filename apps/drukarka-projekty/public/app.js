@@ -46,7 +46,30 @@
   function enablePanel(id) { $(id).classList.remove("disabled"); }
   function disablePanel(id) { $(id).classList.add("disabled"); }
 
-  function setMode(mode) {
+  async function setMode(mode) {
+    // Audyt rozdz. 11, P0/P1: kolejka po stronie serwera (session.queue) i
+    // panel "Drukuj" sa WSPOLNE dla obu trybow - dawniej przelaczenie trybu
+    // tylko chowalo/pokazywalo UI, wiec kolejka przygotowana w POPRZEDNIM
+    // trybie zostawala aktywna i mozna ja bylo wydrukowac z panelu, ktory
+    // wygladal jak nowy tryb. Nie czyscimy state.batchResults/wmGroups (to
+    // one dostarczaja obietnicy "pamieta oba tryby" z ekranu wyboru - DOM
+    // drugiego trybu i tak nie jest niszczony przy przelaczeniu, patrz
+    // renderAddressGroups nizej) - czyscimy WYLACZNIE wspolna, drukowalna
+    // kolejke po stronie serwera, i to tylko po jawnym potwierdzeniu, zeby
+    // przypadkowe kliknieccie drugiego trybu nie zgubilo cichaczem
+    // przygotowanej pracy.
+    if (state.mode && state.mode !== mode) {
+      const hasActiveQueue = !$("panelPrint").classList.contains("disabled");
+      if (hasActiveQueue) {
+        const proceed = window.confirm(
+          "Kolejka druku jest wspólna dla obu trybów. Przełączenie trybu wyczyści aktualnie przygotowaną kolejkę (wyniki dopasowania/skanu w tym trybie zostaną zachowane, ale kolejkę do druku trzeba będzie zbudować ponownie). Kontynuować?"
+        );
+        if (!proceed) return;
+        try { await api("/api/queue/clear", { method: "POST" }); } catch {}
+        updateQueueStatus("Kolejka jest pusta.");
+        disablePanel("panelPrint");
+      }
+    }
     state.mode = mode;
     $("flowProjekty").style.display = mode === "projekty" ? "" : "none";
     $("flowWm").style.display = mode === "wm" ? "" : "none";

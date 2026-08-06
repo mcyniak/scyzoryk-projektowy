@@ -283,6 +283,26 @@ test('drukarka-projekty: "wariant - sprawdź ręcznie" NIE jest jednoczesnie SET
   assert.doesNotMatch(settledMatch[1], /"wariant - sprawdź ręcznie"/);
 });
 
+test('drukarka-projekty: przelaczenie trybu projekty/WM czysci kolejke serwera zamiast tylko chowac UI (audyt rozdz. 11, P0/P1)', async () => {
+  const appJsSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'public', 'app.js'), 'utf8');
+
+  const setModeMatch = appJsSource.match(/async function setMode\(mode\) \{[\s\S]*?\n  \}/);
+  assert.ok(setModeMatch, 'nie znaleziono definicji setMode');
+  const body = setModeMatch[0];
+
+  // Zmiana trybu (state.mode juz ustawiony i inny niz nowy) - gdy jest
+  // aktywna kolejka - musi zapytac o potwierdzenie, a dopiero po nim
+  // wyczyscic kolejke PO STRONIE SERWERA (session.queue jest wspolna dla
+  // obu trybow) i zablokowac panel "Drukuj", zanim uzytkownik zdazy
+  // wydrukowac kolejke przygotowana w poprzednim trybie. Brak potwierdzenia
+  // (window.confirm zwraca false) musi przerwac przelaczenie bez czyszczenia.
+  assert.match(body, /state\.mode\s*&&\s*state\.mode\s*!==\s*mode/);
+  assert.match(body, /window\.confirm\(/);
+  assert.match(body, /if\s*\(!proceed\)\s*return;/);
+  assert.match(body, /api\(["']\/api\/queue\/clear["'],\s*\{\s*method:\s*["']POST["']\s*\}\)/);
+  assert.match(body, /disablePanel\(["']panelPrint["']\)/);
+});
+
 // =====================================================================
 // Audyt v1.0.8, Priorytet 2: ponowienie /api/print po zajetej globalnej
 // blokadzie druku nie moze stemplowac paczki drugi raz.
