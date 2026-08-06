@@ -368,3 +368,91 @@ test('drukarka-projekty: /api/print - ponowienie po zajetej globalnej blokadzie 
   const occurrences = await countTextOccurrences(stampedBytes, 'DOKUMENTACJA');
   assert.equal(occurrences, 1, `oczekiwano jednego stempla "DOKUMENTACJA", znaleziono ${occurrences} wystapien tekstu w PDF-ie`);
 });
+
+// =====================================================================
+// Audyt rozdz. 11, P0: /api/print nie moze cicho odbudowac PUSTEJ kolejki
+// z req.body.groups po zakonczonym druku (kolejka jest czyszczona po kazdym
+// zakonczonym zadaniu - patrz finally w /api/print) - inaczej klikniecie
+// "Drukuj" drugi raz na tej samej, nieodswiezonej karcie (frontend zawsze
+// wysyla groups obok /api/print, patrz public/app.js#printBtn) drukuje cala
+// paczke jeszcze raz.
+// =====================================================================
+
+test('drukarka-projekty: /api/print NIE odbudowuje pustej kolejki z groups po zakonczonym druku (audyt rozdz. 11, P0)', async (t) => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scyzoryk-print-reprint-dataroot-'));
+  t.after(() => fs.rmSync(dataRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  t.after(() => { if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT; else process.env.SCYZORYK_DATA_ROOT = previousDataRoot; });
+
+  const originalPrintFileWindows = printService.printFileWindows;
+  const printedPaths = [];
+  printService.printFileWindows = async (filePath) => { printedPaths.push(filePath); };
+  t.after(() => { printService.printFileWindows = originalPrintFileWindows; });
+
+  const srcDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-reprint-src-'));
+  t.after(() => fsp.rm(srcDir, { recursive: true, force: true }));
+  const addressDir = path.join(srcDir, '1 - Test Adres');
+  await fsp.mkdir(addressDir);
+  const pdfPath = path.join(addressDir, 'rysunek.pdf');
+  await createTestPdf(pdfPath);
+
+  const server = app.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  async function call(method, urlPath, { body, cookie } = {}) {
+    const headers = { 'X-Scyzoryk-Request': '1' };
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (cookie) headers['Cookie'] = cookie;
+    const res = await fetch(`http://127.0.0.1:${port}${urlPath}`, {
+      method, headers, body: body !== undefined ? JSON.stringify(body) : undefined
+    });
+    const setCookie = res.headers.get('set-cookie');
+    const nextCookie = setCookie ? setCookie.split(';')[0] : cookie;
+    const json = await res.json().catch(() => null);
+    return { status: res.status, json, cookie: nextCookie };
+  }
+
+  const matchRes = await call('POST', '/api/match', { body: { lpGmina: '1', baseFolder: srcDir } });
+  assert.equal(matchRes.status, 200, JSON.stringify(matchRes.json));
+  const cookie = matchRes.cookie;
+
+  const setRes = await call('POST', '/api/queue/set', { body: { items: [{ fullPath: pdfPath, label: 'Rysunek' }] }, cookie });
+  assert.equal(setRes.status, 200, JSON.stringify(setRes.json));
+
+  // Pierwszy, legalny druk - musi sie powiesc i faktycznie "wydrukowac" plik.
+  const printAttempt1 = await call('POST', '/api/print', { body: { printerName: '' }, cookie });
+  assert.equal(printAttempt1.status, 200, JSON.stringify(printAttempt1.json));
+
+  // Czekamy na status.done, NIE tylko na printedPaths.length - po
+  // "wydrukowaniu" pliku serwer nadal czeka delaySeconds (min. 1s, patrz
+  // Math.max w /api/print) i dopiero POTEM (finally) czysci session.queue i
+  // session.printing. Zbyt wczesne drugie wywolanie /api/print trafiloby w
+  // "Drukowanie juz trwa" (409), nie w test, ktory ten test faktycznie chce
+  // sprawdzic (pusta kolejka PO zakonczeniu).
+  const deadline = Date.now() + 15000;
+  let done = false;
+  while (!done && Date.now() < deadline) {
+    const statusRes = await call('GET', '/api/status', { cookie });
+    done = Boolean(statusRes.json?.done);
+    if (!done) await new Promise(r => setTimeout(r, 50));
+  }
+  assert.equal(done, true, 'pierwszy druk nie zakonczyl sie (status.done) w oczekiwanym czasie');
+  assert.equal(printedPaths.length, 1, 'pierwszy druk powinien "wydrukowac" dokladnie jeden plik');
+
+  // Drugie klikniecie "Drukuj" na tej samej, nieodswiezonej karcie - frontend
+  // (public/app.js#printBtn) ZAWSZE wysyla groups obok /api/print, wiec
+  // symulujemy dokladnie to: te sama grupa/plik co za pierwszym razem,
+  // BEZ ponownego wywolania /api/queue/set (dokladnie jak przy nieodswiezonej
+  // karcie z zaznaczonymi checkboxami sprzed pierwszego druku).
+  const groups = [{ label: 'Test Adres', items: [{ fullPath: pdfPath, label: 'Rysunek' }] }];
+  const printAttempt2 = await call('POST', '/api/print', { body: { printerName: '', groups }, cookie });
+
+  assert.equal(printAttempt2.status, 400, 'drugie klikniecie z pusta kolejka NIE moze cicho odbudowac jej z groups i wydrukowac ponownie');
+  assert.match(printAttempt2.json.message, /Kolejka jest pusta/);
+  assert.equal(printedPaths.length, 1, 'plik NIE moze zostac "wydrukowany" drugi raz');
+});

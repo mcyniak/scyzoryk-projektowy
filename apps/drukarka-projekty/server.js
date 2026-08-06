@@ -729,18 +729,20 @@ app.post("/api/print", async (req, res) => {
   const session = req.session;
   normalizeSessionPrinting(session);
   if (session.printing) return res.status(409).json({ ok: false, message: "Drukowanie juz trwa" });
+  // Audyt rozdz. 11, P0: to kiedys cicho ODBUDOWYWALO pusta kolejke z
+  // req.body.groups (stan, ktory frontend i tak zawsze wysyla obok /api/print,
+  // patrz public/app.js#printBtn). session.queue jest teraz czyszczona PO
+  // KAZDYM zakonczonym druku (patrz finally nizej) - to znaczy, ze po
+  // zakonczeniu tego samego zadania kolejny klik "Drukuj" z tej samej,
+  // nieodswiezonej karty (te same zaznaczone checkboxy w state.wmGroups) trafial
+  // WLASNIE w ta galaz i cicho drukowal cala paczke jeszcze raz. Kolejka MUSI
+  // byc jawnie przygotowana od nowa (powrot do kroku wyboru i ponowne "Dodaj
+  // zaznaczone do kolejki druku") - /api/print nigdy jej sam nie odbudowuje.
   if (!Array.isArray(session.queue) || !session.queue.length) {
-    const groups = Array.isArray(req.body?.groups) ? req.body.groups : [];
-    if (!groups.length) {
-      return res.status(400).json({ ok: false, message: "Kolejka jest pusta. Najpierw dodaj pliki do kolejki." });
-    }
-    try {
-      const { built, missing } = await buildQueueFromGroups(req, groups);
-      if (!built.length) return res.status(400).json({ ok: false, message: "Nie utworzono żadnych pozycji w kolejce. Brak plików do dodania.", missing });
-      session.queue = built;
-    } catch (err) {
-      return res.status(400).json({ ok: false, message: "Nie udalo sie utworzyc kolejki przed drukiem: " + (err.message || err) });
-    }
+    return res.status(400).json({
+      ok: false,
+      message: "Kolejka jest pusta (np. poprzedni druk juz sie zakonczyl). Wroc do wyboru plikow i ponownie dodaj je do kolejki przed drukiem."
+    });
   }
 
   // Patrz analogiczny komentarz w apps/drukarka/server.js - bez

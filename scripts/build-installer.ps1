@@ -150,7 +150,16 @@ if (-not $Version) {
 }
 Write-Host "Wersja instalatora: $Version (commit $commitHash)"
 
-$stagingDir = Join-Path $env:TEMP ("scyzoryk-installer-staging-" + [guid]::NewGuid().ToString('N'))
+# Krotki prefiks celowo - zlapane realnie w CI (GitHub Actions windows-latest,
+# 2026-08-06): pelny wariant instalatora dolacza node_modules kazdej apki, w
+# tym Chromium dla Playwrighta (glebokie, dlugie sciezki plikow) - dlugi
+# prefiks stagingu ("scyzoryk-installer-staging-" + pelny GUID, prawie 60
+# znakow ponad juz i tak dlugi $env:TEMP na runnerze) wystarczyl, zeby
+# pojedyncze pliki przekroczyly limit Windows MAX_PATH (260 znakow), co ISCC
+# zglaszal jako nieczytelne "the system cannot find the path specified" przy
+# zupelnie innym, kolejnym Source (patrz walidacja node_modules ponizej,
+# ktora teraz lapie to WCZESNIEJ, z czytelnym komunikatem).
+$stagingDir = Join-Path $env:TEMP ("sct-" + [guid]::NewGuid().ToString('N').Substring(0, 10))
 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 
 $archiveZip = Join-Path $env:TEMP ("scyzoryk-archive-" + [guid]::NewGuid().ToString('N') + '.zip')
@@ -256,7 +265,25 @@ Write-Host "Runtime fingerprint: $runtimeFingerprint"
 # ktoregokolwiek z duzych plikow .exe.
 Copy-Item -Path $fingerprintPath -Destination (Join-Path $OutputDir 'runtime-fingerprint.txt') -Force
 
-# --- 7) Kompilacja obu wariantow instalatora z tego samego stagingu ---
+# --- 7) Walidacja stagingu PRZED wywolaniem ISCC ---
+# Zlapane realnie w CI: gdy ktoregokolwiek apps\*\node_modules zabraknie albo
+# jest pusty, ISCC zglasza nieczytelne "the system cannot find the path
+# specified" przy zupelnie innym, NASTEPNYM Source w [Files] (bo kompiluje
+# je w kolejnosci) - bez zwiazku z prawdziwa przyczyna. Sprawdzamy to tutaj
+# jawnie, dla kazdej apki osobno, z czytelnym komunikatem.
+$appsWithMissingModules = @()
+foreach ($appDir in Get-ChildItem (Join-Path $stagingDir 'apps') -Directory) {
+  $nm = Join-Path $appDir.FullName 'node_modules'
+  $hasFiles = (Test-Path $nm) -and @(Get-ChildItem $nm -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1).Count -gt 0
+  if (-not $hasFiles) { $appsWithMissingModules += $appDir.Name }
+}
+if ($appsWithMissingModules.Count -gt 0) {
+  Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stagingDir
+  throw "Brak/pusty node_modules w stagingu dla: $($appsWithMissingModules -join ', ') - instalacja zaleznosci (krok 5) nie powiodla sie po cichu dla tych aplikacji."
+}
+Write-Host "Walidacja node_modules w stagingu OK."
+
+# --- 8) Kompilacja obu wariantow instalatora z tego samego stagingu ---
 $issPath = Join-Path $Root 'installer\scyzoryk.iss'
 $results = @()
 foreach ($variant in @('full', 'update')) {
