@@ -80,6 +80,11 @@ public sealed class UpdateApplierTests
         Assert.Equal(0, exitCode);
         Assert.Equal(1, process.StopOwnedProcessesCallCount);
         Assert.Equal(1, process.StartServerCallCount);
+        // Rezydentna ikona w zasobniku (jesli aktywna) musi byc zamknieta PRZED
+        // uruchomieniem instalatora, inaczej trzymalaby otwarty wlasny Scyzoryk.exe,
+        // ktory instalator wlasnie probuje nadpisac.
+        Assert.Equal(1, process.StopResidentTrayProcessesCallCount);
+        Assert.Equal(paths.ScyzorykExePath, process.LastExpectedScyzorykExeFullPath);
 
         var result = ReadLastResult(roots.UpdateRoot);
         Assert.True(result.GetProperty("ok").GetBoolean());

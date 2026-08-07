@@ -22,7 +22,18 @@ public sealed class LauncherApp
     private readonly IFatalErrorPresenter _errorPresenter;
     private readonly IUpdateApplier _updateApplier;
     private readonly IAutostartManager _autostartManager;
+    private readonly ITrayIconHost _tray;
     private readonly LauncherTimings _timings;
+
+    /// <summary>Domyslny "brak ikony" - TryRunResident zawsze zwraca false (nigdy nie
+    /// blokuje, nigdy nie dotyka realnego WinForms). Uzywany wylacznie gdy wywolujacy
+    /// nie poda wlasnego ITrayIconHost - istniejace testy/wywolania sprzed wprowadzenia
+    /// ikony w zasobniku dalej dzialaja dokladnie tak jak wczesniej (Program.cs
+    /// zawsze jawnie podaje prawdziwy NotifyIconTrayHost).</summary>
+    private sealed class NullTrayIconHost : ITrayIconHost
+    {
+        public bool TryRunResident(Action onOpenPanel, Action onQuit) => false;
+    }
 
     public LauncherApp(
         InstallPaths paths,
@@ -34,7 +45,8 @@ public sealed class LauncherApp
         IFatalErrorPresenter errorPresenter,
         IUpdateApplier updateApplier,
         IAutostartManager autostartManager,
-        LauncherTimings? timings = null)
+        LauncherTimings? timings = null,
+        ITrayIconHost? tray = null)
     {
         _paths = paths;
         _health = health;
@@ -46,6 +58,7 @@ public sealed class LauncherApp
         _updateApplier = updateApplier;
         _autostartManager = autostartManager;
         _timings = timings ?? LauncherTimings.Production;
+        _tray = tray ?? new NullTrayIconHost();
     }
 
     public async Task<int> RunAsync(ParsedArgs args)
@@ -114,6 +127,18 @@ public sealed class LauncherApp
         {
             ["openedBrowser"] = openBrowserOnSuccess.ToString(),
         });
+
+        // Ikona w zasobniku - widoczny znak, ze Scyzoryk dziala, z prostym menu do
+        // otwarcia panelu albo zamkniecia. TryRunResident sam sprawdza, czy inny
+        // rezydentny proces juz ma ikone (patrz InstallPaths.TrayMutexName) - jesli
+        // tak, wraca od razu (dokladnie dawne zachowanie, bez blokowania). Jesli
+        // zostajemy wlascicielem, BLOKUJE tutaj az do wybrania "Zamknij Scyzoryka" -
+        // dotyczy zarowno zwyklego startu, jak i --autostart (logowanie tez ma dostac
+        // widoczna ikone, nie tylko klikniecie skrotu).
+        _tray.TryRunResident(
+            onOpenPanel: () => _browser.OpenDefaultBrowser(_paths.PanelUrl),
+            onQuit: () => _processManager.StopOwnedProcesses(_paths.NodeExePath));
+
         return ExitCodes.Ok;
     }
 

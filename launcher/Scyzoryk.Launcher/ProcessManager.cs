@@ -21,6 +21,15 @@ public interface IProcessManager
     /// procesow (moze byc pusta lista).</summary>
     IReadOnlyList<int> StopOwnedProcesses(string expectedNodeExeFullPath);
 
+    /// <summary>Analogiczne do StopOwnedProcesses, ale dla rezydentnych procesow
+    /// Scyzoryk.exe (te z otwarta ikona w zasobniku, patrz ITrayIconHost) tej
+    /// konkretnej instalacji. UpdateApplier wola to PRZED uruchomieniem instalatora
+    /// aktualizacji - inaczej rezydentny proces trzymalby otwarty wlasny plik .exe,
+    /// ktory instalator wlasnie probuje nadpisac. Dopasowanie po pelnej sciezce (jak
+    /// wyzej), wiec kopia uruchomiona z katalogu aktualizacji (--apply-update, inna
+    /// sciezka) nigdy nie zabija sama siebie.</summary>
+    IReadOnlyList<int> StopResidentTrayProcesses(string expectedScyzorykExeFullPath);
+
     bool IsProcessStillAlive(int pid);
 }
 
@@ -75,14 +84,23 @@ public sealed class ProcessManager : IProcessManager
     }
 
     public IReadOnlyList<int> StopOwnedProcesses(string expectedNodeExeFullPath)
+        => StopProcessesByNameAndPath("node", expectedNodeExeFullPath);
+
+    public IReadOnlyList<int> StopResidentTrayProcesses(string expectedScyzorykExeFullPath)
+        => StopProcessesByNameAndPath("Scyzoryk", expectedScyzorykExeFullPath);
+
+    /// <summary>Wspolna implementacja dla StopOwnedProcesses/StopResidentTrayProcesses -
+    /// jedyna roznica miedzy nimi to nazwa procesu do wyszukania
+    /// (Process.GetProcessesByName nie bierze rozszerzenia .exe).</summary>
+    private static IReadOnlyList<int> StopProcessesByNameAndPath(string processName, string expectedFullPathRaw)
     {
         var stopped = new List<int>();
-        var expectedFull = Path.GetFullPath(expectedNodeExeFullPath);
+        var expectedFull = Path.GetFullPath(expectedFullPathRaw);
 
         Process[] candidates;
         try
         {
-            candidates = Process.GetProcessesByName("node");
+            candidates = Process.GetProcessesByName(processName);
         }
         catch
         {

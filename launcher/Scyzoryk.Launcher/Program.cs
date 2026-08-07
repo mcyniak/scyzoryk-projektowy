@@ -48,7 +48,8 @@ public static class Program
                 logger,
                 new MessageBoxFatalErrorPresenter(),
                 new UpdateApplier(processManager, health, paths, logger),
-                new AutostartManager());
+                new AutostartManager(),
+                tray: new NotifyIconTrayHost(paths.TrayMutexName, logger));
 
             return app.RunAsync(parsedArgs).GetAwaiter().GetResult();
         }

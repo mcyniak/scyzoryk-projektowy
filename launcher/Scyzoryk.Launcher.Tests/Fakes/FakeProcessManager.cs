@@ -11,6 +11,9 @@ public sealed class FakeProcessManager : IProcessManager
     public string? LastNodeExePath { get; private set; }
     public int StopOwnedProcessesCallCount { get; private set; }
     public string? LastExpectedNodeExeFullPath { get; private set; }
+    public int StopResidentTrayProcessesCallCount { get; private set; }
+    public string? LastExpectedScyzorykExeFullPath { get; private set; }
+    public IReadOnlyList<int> StopResidentTrayResultToReturn { get; set; } = Array.Empty<int>();
 
     public SpawnResult StartServer(string installDir, string nodeExePath)
     {
@@ -25,6 +28,13 @@ public sealed class FakeProcessManager : IProcessManager
         StopOwnedProcessesCallCount++;
         LastExpectedNodeExeFullPath = expectedNodeExeFullPath;
         return StopResultToReturn;
+    }
+
+    public IReadOnlyList<int> StopResidentTrayProcesses(string expectedScyzorykExeFullPath)
+    {
+        StopResidentTrayProcessesCallCount++;
+        LastExpectedScyzorykExeFullPath = expectedScyzorykExeFullPath;
+        return StopResidentTrayResultToReturn;
     }
 
     public bool IsProcessStillAlive(int pid) => ProcessAliveResult;

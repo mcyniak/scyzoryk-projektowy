@@ -93,6 +93,105 @@ public sealed class LauncherAppTests
         Assert.Equal(1, gate.ReleaseCallCount);
     }
 
+    // =====================================================================
+    // Ikona w zasobniku (ITrayIconHost) - dodane razem z NotifyIconTrayHost.
+    // Testy tutaj konstruuja LauncherApp bezposrednio (nie przez CreateApp,
+    // ktory nie zna tray) z FakeTrayIconHost, zeby nigdy nie dotykac realnego
+    // WinForms/petli komunikatow w testach jednostkowych.
+    // =====================================================================
+
+    [Fact]
+    public async Task SuccessfulStart_NormalMode_CallsTryRunResident_WithWorkingCallbacks()
+    {
+        using var dir = new TempInstallDir();
+        var health = new FakeHealthChecker { AlreadyRunningResult = true };
+        var process = new FakeProcessManager();
+        var browser = new FakeBrowserLauncher();
+        var tray = new FakeTrayIconHost { BecomeOwner = true };
+        var app = new LauncherApp(dir.Paths, health, process, browser, new FakeSingleInstanceGate(),
+            new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(),
+            TestTimings.Fast, tray);
+
+        var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal(1, tray.TryRunResidentCallCount);
+
+        // Callbacki przekazane do TryRunResident faktycznie robia to, co maja -
+        // "Otworz panel" otwiera przegladarke na PanelUrl, "Zamknij Scyzoryka"
+        // zatrzymuje node.exe (nie samo Scyzoryk.exe - to robi UpdateApplier
+        // osobno przy aktualizacji, patrz UpdateApplierTests).
+        var browserOpensBefore = browser.OpenCallCount;
+        tray.SimulateOpenPanelClicked();
+        Assert.Equal(browserOpensBefore + 1, browser.OpenCallCount);
+        Assert.Equal(dir.Paths.PanelUrl, browser.LastUrl);
+
+        tray.SimulateQuitClicked();
+        Assert.Equal(1, process.StopOwnedProcessesCallCount);
+        Assert.Equal(dir.Paths.NodeExePath, process.LastExpectedNodeExeFullPath);
+    }
+
+    [Fact]
+    public async Task SuccessfulStart_AutostartMode_AlsoCallsTryRunResident()
+    {
+        // Audyt: logowanie (--autostart) tez ma dostac widoczna ikone, nie tylko
+        // recznie klikniety skrot - obie sciezki ida przez ta sama
+        // RunEnsureAndReportAsync.
+        using var dir = new TempInstallDir();
+        var health = new FakeHealthChecker { AlreadyRunningResult = true };
+        var tray = new FakeTrayIconHost { BecomeOwner = false };
+        var app = new LauncherApp(dir.Paths, health, new FakeProcessManager(), new FakeBrowserLauncher(), new FakeSingleInstanceGate(),
+            new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(),
+            TestTimings.Fast, tray);
+
+        var code = await app.RunAsync(Args(LauncherMode.Autostart));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal(1, tray.TryRunResidentCallCount);
+    }
+
+    [Fact]
+    public async Task AnotherResidentAlreadyOwnsTray_TryRunResidentReturnsFalse_StillReturnsOk()
+    {
+        // Gdy inny rezydentny proces juz ma ikone, TryRunResident wraca false bez
+        // blokowania - RunEnsureAndReportAsync i tak konczy sie normalnie Ok.
+        using var dir = new TempInstallDir();
+        var health = new FakeHealthChecker { AlreadyRunningResult = true };
+        var tray = new FakeTrayIconHost { BecomeOwner = false };
+        var app = new LauncherApp(dir.Paths, health, new FakeProcessManager(), new FakeBrowserLauncher(), new FakeSingleInstanceGate(),
+            new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(),
+            TestTimings.Fast, tray);
+
+        var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal(1, tray.TryRunResidentCallCount);
+    }
+
+    [Fact]
+    public async Task StartupFailed_NeverCallsTryRunResident()
+    {
+        // Nieudany start (serwer sie nie odpowiada) nie moze pokazac ikony -
+        // nie ma nic "dzialajacego" do reprezentowania.
+        using var dir = new TempInstallDir();
+        var health = new FakeHealthChecker
+        {
+            AlreadyRunningResult = false,
+            RespondOnceResult = false,
+            WaitOutcomeResult = HealthWaitOutcome.TimedOutProcessAlive
+        };
+        var gate = new FakeSingleInstanceGate { AcquireResult = true };
+        var tray = new FakeTrayIconHost { BecomeOwner = true };
+        var app = new LauncherApp(dir.Paths, health, new FakeProcessManager(), new FakeBrowserLauncher(), gate,
+            new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(),
+            TestTimings.Fast, tray);
+
+        var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+        Assert.Equal(ExitCodes.StartupFailed, code);
+        Assert.Equal(0, tray.TryRunResidentCallCount);
+    }
+
     [Fact]
     public async Task MissingNodeExe_NormalMode_NoSpawnAttempted_ReturnsNonZero_LogsReadableError()
     {

@@ -31,6 +31,35 @@ public sealed class InstallPathsTests
     }
 
     [Fact]
+    public void TrayMutexName_DiffersFromMutexName_ButAlsoStartsWithLocalPrefix()
+    {
+        // Osobny muteks od MutexName - patrz komentarz w InstallPaths.FromInstallDir
+        // (rezydentny wlasciciel ikony trzymalby MutexName przez cala swoja
+        // zywotnosc, blokujac arbitraz startu node.exe dla kazdej pozniejszej proby).
+        var paths = InstallPaths.FromInstallDir(@"C:\ScyzorykProjektowy");
+
+        Assert.StartsWith("Local\\ScyzorykTray_", paths.TrayMutexName);
+        Assert.NotEqual(paths.MutexName, paths.TrayMutexName);
+    }
+
+    [Fact]
+    public void TrayMutexNameDerivation_DifferentInstallPaths_ProduceDifferentNames()
+    {
+        var a = InstallPaths.FromInstallDir(@"C:\ScyzorykProjektowy");
+        var b = InstallPaths.FromInstallDir(@"C:\Users\test\AppData\Local\Programs\ScyzorykProjektowy");
+
+        Assert.NotEqual(a.TrayMutexName, b.TrayMutexName);
+    }
+
+    [Fact]
+    public void ScyzorykExePath_IsScyzorykExeDirectlyUnderInstallDir()
+    {
+        var paths = InstallPaths.FromInstallDir(@"C:\ScyzorykProjektowy");
+
+        Assert.Equal(Path.Combine(@"C:\ScyzorykProjektowy", "Scyzoryk.exe"), paths.ScyzorykExePath);
+    }
+
+    [Fact]
     public void PortAndHost_DefaultTo127001And3000_WhenEnvVarsUnset()
     {
         var previousPort = Environment.GetEnvironmentVariable("PORT");

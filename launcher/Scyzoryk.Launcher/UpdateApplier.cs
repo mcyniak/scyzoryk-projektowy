@@ -88,6 +88,16 @@ public sealed class UpdateApplier : IUpdateApplier
             var stopped = _processManager.StopOwnedProcesses(_paths.NodeExePath);
             WriteLog($"Zatrzymano {stopped.Count} procesow: {string.Join(",", stopped)}");
 
+            // Rezydentna ikona w zasobniku (patrz ITrayIconHost) trzyma otwarty
+            // WLASNY plik .exe caly czas, gdy jest aktywna - ten sam plik, ktory
+            // instalator zaraz probuje nadpisac. _paths tutaj to PRAWDZIWY katalog
+            // instalacji (patrz Program.cs/ArgsParser dla --apply-update), wiec to
+            // NIGDY nie zamyka tej wlasnie dzialajacej kopii-aktualizatora (ta zyje
+            // w oddzielnym katalogu Updates\<wersja>\, inna sciezka).
+            WriteLog("Zamykam rezydentna ikone w zasobniku (jesli aktywna)...");
+            var closedTray = _processManager.StopResidentTrayProcesses(_paths.ScyzorykExePath);
+            WriteLog($"Zamknieto {closedTray.Count} rezydentnych procesow Scyzoryk.exe: {string.Join(",", closedTray)}");
+
             WriteLog($"Uruchamiam instalator cicho: {installerPath}");
             exitCode = RunInstaller(installerPath, _paths.InstallDir);
             WriteLog($"Instalator zakonczony kodem wyjscia: {exitCode}");

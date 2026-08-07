@@ -13,29 +13,33 @@ public sealed class InstallPaths
     public string InstallDir { get; }
     public string NodeExePath { get; }
     public string ServerJsPath { get; }
+    public string ScyzorykExePath { get; }
     public string Host { get; }
     public int Port { get; }
     public string PanelUrl { get; }
     public string HealthUrl { get; }
     public string LogFilePath { get; }
     public string MutexName { get; }
+    public string TrayMutexName { get; }
     public string UpdateRoot { get; }
     public string DataRoot { get; }
 
     private InstallPaths(
-        string installDir, string nodeExePath, string serverJsPath,
+        string installDir, string nodeExePath, string serverJsPath, string scyzorykExePath,
         string host, int port, string panelUrl, string healthUrl,
-        string logFilePath, string mutexName, string updateRoot, string dataRoot)
+        string logFilePath, string mutexName, string trayMutexName, string updateRoot, string dataRoot)
     {
         InstallDir = installDir;
         NodeExePath = nodeExePath;
         ServerJsPath = serverJsPath;
+        ScyzorykExePath = scyzorykExePath;
         Host = host;
         Port = port;
         PanelUrl = panelUrl;
         HealthUrl = healthUrl;
         LogFilePath = logFilePath;
         MutexName = mutexName;
+        TrayMutexName = trayMutexName;
         UpdateRoot = updateRoot;
         DataRoot = dataRoot;
     }
@@ -58,6 +62,7 @@ public sealed class InstallPaths
         installDir = installDir.TrimEnd('\\', '/');
         var nodeExePath = Path.Combine(installDir, "node-runtime", "node.exe");
         var serverJsPath = Path.Combine(installDir, "server.js");
+        var scyzorykExePath = Path.Combine(installDir, "Scyzoryk.exe");
 
         var host = Environment.GetEnvironmentVariable("SCYZORYK_HOST");
         if (string.IsNullOrWhiteSpace(host)) host = "127.0.0.1";
@@ -84,6 +89,12 @@ public sealed class InstallPaths
         var logFilePath = Path.Combine(localAppData, "ScyzorykProjektowy", "logs", "launcher.log");
 
         var mutexName = "Local\\ScyzorykLauncher_" + HashInstallDir(installDir);
+        // Osobny muteks od mutexName powyzej - ten arbitruje WYLACZNIE "kto pokazuje
+        // ikone w zasobniku" (patrz TrayIconHost), nie "kto odpala node.exe". Trzymany
+        // przez cala rezydentna zywotnosc procesu (nie tylko na chwile jak MutexName),
+        // wiec musi byc osobnym obiektem - inaczej rezydentny wlasciciel ikony
+        // blokowalby tez arbitraz startu serwera dla kazdej pozniejszej proby.
+        var trayMutexName = "Local\\ScyzorykTray_" + HashInstallDir(installDir);
 
         // Te same sciezki co po stronie Node (server.js resolveUpdateRoot(),
         // lib/appPaths.js getDataRoot()) - SCYZORYK_UPDATE_ROOT/SCYZORYK_DATA_ROOT
@@ -100,7 +111,7 @@ public sealed class InstallPaths
             ? Path.Combine(localAppData, "ScyzorykProjektowy", "Data")
             : Path.GetFullPath(dataRootOverride);
 
-        return new InstallPaths(installDir, nodeExePath, serverJsPath, host, port, panelUrl, healthUrl, logFilePath, mutexName, updateRoot, dataRoot);
+        return new InstallPaths(installDir, nodeExePath, serverJsPath, scyzorykExePath, host, port, panelUrl, healthUrl, logFilePath, mutexName, trayMutexName, updateRoot, dataRoot);
     }
 
     /// <summary>
