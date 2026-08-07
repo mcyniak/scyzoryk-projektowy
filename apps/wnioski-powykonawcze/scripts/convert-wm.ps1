@@ -449,16 +449,47 @@ try {
   $word = $null
   $oldSecurity = $null
   try {
+    # Audyt v1.1.7: PID-y PRZED utworzeniem obiektu COM, zeby po starcie
+    # jednoznacznie wskazac WLASNIE NOWY proces (nie jakis inny, juz otwarty
+    # recznie przez uzytkownika Word) - patrz obnizenie priorytetu nizej.
+    $priorWinwordPids = @(Get-CimInstance Win32_Process -Filter "Name='WINWORD.EXE'" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ProcessId)
     $word = New-Object -ComObject Word.Application
     if ($null -eq $word) { throw "Nie udalo sie uruchomic Microsoft Word." }
     $word.Visible = [bool]$config.visibleWord
     $word.DisplayAlerts = 0
+
+    # Obnizamy priorytet PROCESU WINWORD.EXE (nie calego skryptu - COM
+    # aktywowany serwer Worda NIE dziedziczy priorytetu z PowerShella) do
+    # BelowNormal, zeby konwersja wielu plikow z rzedu nie "dusila" reszty
+    # komputera uzytkownika (zgloszone realnie). Brak sukcesu nigdy nie
+    # przerywa konwersji - to tylko optymalizacja, nie wymog.
+    try {
+      Start-Sleep -Milliseconds 300
+      $newWinwordPid = Get-CimInstance Win32_Process -Filter "Name='WINWORD.EXE'" -ErrorAction SilentlyContinue |
+        Where-Object { $priorWinwordPids -notcontains $_.ProcessId } |
+        Select-Object -First 1 -ExpandProperty ProcessId
+      if ($newWinwordPid) {
+        $winwordProc = Get-Process -Id $newWinwordPid -ErrorAction SilentlyContinue
+        if ($null -ne $winwordProc) { $winwordProc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal }
+      }
+    } catch {}
     try { $oldSecurity = $word.AutomationSecurity; $word.AutomationSecurity = 3 } catch {}
     try { $word.Options.UpdateLinksAtOpen = $false } catch {}
     try { $word.Options.ConfirmConversions = $false } catch {}
 
     foreach ($item in $config.files) {
       $doc = $null
+      # Audyt v1.1.7 (zlapane realnie na produkcji w analogicznym skrypcie
+      # mailmerge-to-pdf.ps1): kilka udokumentowanych HRESULT-ow oznacza
+      # PRZEJSCIOWA zajetosc/niedostepnosc serwera COM Worda - pojedynczy
+      # odrzucony call potrafi zerwac kanal na tyle, ze KOLEJNE pliki w tej
+      # samej petli tez zawodza, zanim kanal sam sie odzyska. Retry z
+      # krotkim opoznieniem naprawia to bez realnej straty czasu.
+      $maxAttempts = 3
+      $attempt = 0
+      $itemDone = $false
+      while (-not $itemDone -and $attempt -lt $maxAttempts) {
+        $attempt++
       try {
         $inputPath = [string]$item.inputPath
         $pdfPath = [string]$item.pdfPath
@@ -483,11 +514,21 @@ try {
           deletedSection=$changeReport.deletedSection; deletedCharCount=$changeReport.deletedCharCount
           deletedPreview=$changeReport.deletedPreview; dateReplacements=$changeReport.dateReplacements
         }) | Out-Null
+        $itemDone = $true
       } catch {
         if ($null -ne $doc) {
           try { $doc.Close($false) } catch {}
+          $doc = $null
         }
-        $results.Add([pscustomobject]@{ ok=$false; input=[string]$item.inputPath; error=(Get-ErrorMessage $_) }) | Out-Null
+        $errMsg = Get-ErrorMessage $_
+        $isTransientComBusy = ($errMsg -match "0x80010001" -or $errMsg -match "0x8001010A" -or $errMsg -match "0x8001010B" -or $errMsg -match "0x800706BA" -or $errMsg -match "0x80080005" -or $errMsg -match "RPC_E_" -or $errMsg -match "null-valued expression")
+        if ($isTransientComBusy -and $attempt -lt $maxAttempts) {
+          Start-Sleep -Seconds (1.5 * $attempt)
+          continue
+        }
+        $results.Add([pscustomobject]@{ ok=$false; input=[string]$item.inputPath; error=$errMsg }) | Out-Null
+        $itemDone = $true
+      }
       }
     }
   } finally {

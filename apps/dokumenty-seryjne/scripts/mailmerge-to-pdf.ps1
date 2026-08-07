@@ -711,10 +711,40 @@ try {
   })
 
   Write-Event "word-start" "Uruchamiam Microsoft Word."
+  # Audyt v1.1.7: automatyzacja dziesiatek rekordow z rzedu potrafi mocno
+  # obciazyc CPU, utrudniajac normalna prace na tym samym komputerze w tym
+  # czasie (zgloszone realnie przez uzytkownika). Zapamietujemy PID-y
+  # WINWORD.EXE PRZED utworzeniem obiektu COM, zeby po jego starcie
+  # jednoznacznie wskazac WLASNIE TEN nowy proces (nie jakis inny, juz
+  # otwarty przez uzytkownika recznie Word).
+  $priorWinwordPids = @(Get-CimInstance Win32_Process -Filter "Name='WINWORD.EXE'" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ProcessId)
   $word = New-Object -ComObject Word.Application
   $script:word = $word
   $word.Visible = [bool]$VisibleWord
   $word.DisplayAlerts = 0
+
+  # Obnizamy priorytet PROCESU WINWORD.EXE (nie calego skryptu - COM
+  # aktywowany serwer Worda NIE dziedziczy priorytetu z PowerShella, DCOM
+  # uruchamia go jako zupelnie osobny proces) do BelowNormal, zeby scheduler
+  # Windows preferowal aktywne, pierwszoplanowe aplikacje uzytkownika -
+  # generowanie PDF-ow potrwa odrobine dluzej, ale przestaje "dusic" reszte
+  # komputera. Brak sukcesu (np. proces jeszcze nie zdazyl sie zarejestrowac)
+  # nigdy nie przerywa generowania - to tylko optymalizacja, nie wymog.
+  try {
+    Start-Sleep -Milliseconds 300
+    $newWinwordPid = Get-CimInstance Win32_Process -Filter "Name='WINWORD.EXE'" -ErrorAction SilentlyContinue |
+      Where-Object { $priorWinwordPids -notcontains $_.ProcessId } |
+      Select-Object -First 1 -ExpandProperty ProcessId
+    if ($newWinwordPid) {
+      $winwordProc = Get-Process -Id $newWinwordPid -ErrorAction SilentlyContinue
+      if ($null -ne $winwordProc) {
+        $winwordProc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+        Write-Log "info" "Obnizono priorytet procesu WINWORD.EXE do BelowNormal." ([pscustomobject]@{ pid = $newWinwordPid })
+      }
+    }
+  } catch {
+    Write-Log "warn" "Nie udalo sie obnizyc priorytetu WINWORD.EXE (nie blokuje generowania)." ([pscustomobject]@{ error = $_.Exception.Message })
+  }
   try { $oldSecurity = $word.AutomationSecurity; $word.AutomationSecurity = 3 } catch {}
   try { $word.Options.UpdateLinksAtOpen = $false } catch {}
   try { $word.Options.ConfirmConversions = $false } catch {}
@@ -752,6 +782,25 @@ try {
       try { $rowNumber = [int](Get-RecordValue $record "_record") } catch {}
       if ($rowNumber -lt 1) { $rowNumber = $index }
       $mergedDoc = $null
+
+      # Audyt v1.1.7 (zlapane realnie na produkcji, prawdziwy plik logu
+      # uzytkownika): RPC_E_CALL_REJECTED (0x80010001, "Wywolanie zostalo
+      # odrzucone przez wywolywanego") to DOBRZE ZNANY, PRZEJSCIOWY objaw
+      # zajetego kanalu COM do Worda (Word akurat konczy poprzednia
+      # operacje, np. malowanie ekranu po SaveAs2) - nie prawdziwy blad
+      # danych rekordu. Zlapane realnie: pojedynczy odrzucony call na
+      # jednym rekordzie ZRYWAL kanal COM na tyle, ze $word.Documents
+      # zwracalo $null przez KOLEJNYCH 10 rekordow ("You cannot call a
+      # method on a null-valued expression"), zanim kanal sam sie
+      # odzyskal - 10 utraconych PDF-ow z jednej chwilowej "zajetosci"
+      # Worda. Retry z krotkim opoznieniem (dajac Wordowi szanse dokonczyc,
+      # co akurat robil) naprawia to bez zadnej realnej straty czasu -
+      # w prawdziwym logu kanal sam wrocil do zycia w niecala sekunde.
+      $maxAttempts = 3
+      $attempt = 0
+      $recordDone = $false
+      while (-not $recordDone -and $attempt -lt $maxAttempts) {
+        $attempt++
       try {
         $address = Get-RecordValue $record $AddressColumn
         if ([string]::IsNullOrWhiteSpace($address)) { $address = "rekord_$rowNumber" }
@@ -827,11 +876,32 @@ try {
           path = $pdfPath
         }) | Out-Null
         Write-Event "record-done" "Gotowy PDF $($index)/$($total): $($address)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($pdfPath) })
+        $recordDone = $true
       } catch {
         $msg = $_.Exception.Message
-        if ($null -ne $mergedDoc) { try { $mergedDoc.Close($false) } catch {}; Release-ComObject $mergedDoc }
+        if ($null -ne $mergedDoc) { try { $mergedDoc.Close($false) } catch {}; Release-ComObject $mergedDoc; $mergedDoc = $null }
+
+        # Kilka udokumentowanych HRESULT-ow oznaczajacych PRZEJSCIOWA
+        # zajetosc/niedostepnosc serwera COM Worda (nie prawdziwy blad
+        # danych rekordu), plus objawy WTORNE tego samego zerwania kanalu
+        # (kolejne wywolania na obiekcie, ktory nagle stal sie null) - patrz
+        # komentarz przy $maxAttempts wyzej.
+        #   0x80010001 RPC_E_CALL_REJECTED         - wywolanie odrzucone
+        #   0x8001010A RPC_E_SERVERCALL_RETRYLATER - serwer: "sprobuj pozniej"
+        #   0x8001010B RPC_E_SERVERCALL_REJECTED   - jw., inny wariant
+        #   0x800706BA RPC_S_SERVER_UNAVAILABLE    - serwer chwilowo niedostepny
+        #   0x80080005 CO_E_SERVER_EXEC_FAILURE    - poprzedni WINWORD.EXE jeszcze nie zdazyl w pelni zakonczyc
+        $isTransientComBusy = ($msg -match "0x80010001" -or $msg -match "0x8001010A" -or $msg -match "0x8001010B" -or $msg -match "0x800706BA" -or $msg -match "0x80080005" -or $msg -match "RPC_E_" -or $msg -match "null-valued expression")
+        if ($isTransientComBusy -and $attempt -lt $maxAttempts) {
+          Write-Log "warn" "Word byl chwilowo zajety (proba $attempt/$maxAttempts) - ponawiam rekord $rowNumber za $(1.5 * $attempt)s." ([pscustomobject]@{ row = $rowNumber; attempt = $attempt; error = $msg })
+          Start-Sleep -Seconds (1.5 * $attempt)
+          continue
+        }
+
         $errors.Add([pscustomobject]@{ row = $rowNumber; message = $msg }) | Out-Null
         Write-Event "record-error" "Blad przy rekordzie $($rowNumber): $($msg)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; error = $msg })
+        $recordDone = $true
+      }
       }
     }
   } else {

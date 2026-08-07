@@ -130,14 +130,57 @@ function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
   $word = $null
   $doc = $null
   try {
+    # Audyt v1.1.7: PID-y PRZED utworzeniem obiektu COM, zeby po starcie
+    # jednoznacznie wskazac WLASNIE NOWY proces (nie jakis inny, juz otwarty
+    # recznie przez uzytkownika Word) - patrz obnizenie priorytetu nizej.
+    $priorWinwordPids = @(Get-CimInstance Win32_Process -Filter "Name='WINWORD.EXE'" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty ProcessId)
     $word = New-Object -ComObject Word.Application
     $word.Visible = $false
     $word.DisplayAlerts = 0
     $word.AutomationSecurity = 3
 
-    $doc = $word.Documents.Open($FilePath, [ref]$false, [ref]$true)
-    if ($PrinterName) { $word.ActivePrinter = $PrinterName }
-    $doc.PrintOut()
+    # Obnizamy priorytet PROCESU WINWORD.EXE (nie calego skryptu - COM
+    # aktywowany serwer Worda NIE dziedziczy priorytetu z PowerShella) do
+    # BelowNormal, zeby druk serii dokumentow nie "dusil" reszty komputera
+    # uzytkownika (zgloszone realnie). Brak sukcesu nigdy nie przerywa druku -
+    # to tylko optymalizacja, nie wymog.
+    try {
+      Start-Sleep -Milliseconds 300
+      $newWinwordPid = Get-CimInstance Win32_Process -Filter "Name='WINWORD.EXE'" -ErrorAction SilentlyContinue |
+        Where-Object { $priorWinwordPids -notcontains $_.ProcessId } |
+        Select-Object -First 1 -ExpandProperty ProcessId
+      if ($newWinwordPid) {
+        $winwordProc = Get-Process -Id $newWinwordPid -ErrorAction SilentlyContinue
+        if ($null -ne $winwordProc) { $winwordProc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::BelowNormal }
+      }
+    } catch {}
+
+    # Audyt v1.1.7 (zlapane realnie na produkcji w analogicznym skrypcie
+    # mailmerge-to-pdf.ps1): kilka udokumentowanych HRESULT-ow oznacza
+    # PRZEJSCIOWA zajetosc/niedostepnosc serwera COM Worda - retry z krotkim
+    # opoznieniem naprawia to bez realnej straty czasu.
+    $maxAttempts = 3
+    $attempt = 0
+    $openedAndPrinted = $false
+    while (-not $openedAndPrinted -and $attempt -lt $maxAttempts) {
+      $attempt++
+      try {
+        if ($null -ne $doc) { try { $doc.Close([ref]$false) } catch {}; $doc = $null }
+        $doc = $word.Documents.Open($FilePath, [ref]$false, [ref]$true)
+        if ($PrinterName) { $word.ActivePrinter = $PrinterName }
+        $doc.PrintOut()
+        $openedAndPrinted = $true
+      } catch {
+        $errMsg = $_.Exception.Message
+        $isTransientComBusy = ($errMsg -match "0x80010001" -or $errMsg -match "0x8001010A" -or $errMsg -match "0x8001010B" -or $errMsg -match "0x800706BA" -or $errMsg -match "0x80080005" -or $errMsg -match "RPC_E_" -or $errMsg -match "null-valued expression")
+        if ($isTransientComBusy -and $attempt -lt $maxAttempts) {
+          Write-PrintLog "Word byl chwilowo zajety przy druku przez COM (proba $attempt/$maxAttempts) - ponawiam: $errMsg"
+          Start-Sleep -Seconds (1.5 * $attempt)
+          continue
+        }
+        throw
+      }
+    }
 
     # Czekamy, az utworzona przez nas instancja Worda przekaze zadanie do spoolera.
     # Audyt v1.0.4, P1-10: petla nie miala zadnego limitu czasu - zawieszony
