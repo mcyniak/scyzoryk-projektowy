@@ -183,7 +183,21 @@
   // zostal zatrzymany przez Scyzoryk.exe --apply-update), a potem czekamy na powrot
   // /api/health, zeby bezpiecznie odswiezyc strone.
   async function trackProgressUntilServerStops(expectedVersion) {
-    for (let i = 0; i < 600; i++) {
+    // Audyt v1.1.7: zlapane live na produkcji - stary (osierocony) proces
+    // potrafil PRZETRWAC zabicie i dalej normalnie odpowiadac na
+    // /api/update/status z wlasnym, nigdy-juz-nieaktualizowanym stanem
+    // "installing" w nieskonczonosc (fetchStatus() nigdy nie rzucal, bo
+    // polaczenie realnie nigdy nie padalo) - uzytkownik siedzial na 85% bez
+    // konca, bez zadnego bledu. Prawdziwa aktualizacja konczy sie w
+    // kilkanascie sekund (patrz UpdateApplier.cs), wiec jesli stan siedzi w
+    // "installing"/"restarting" NADAL POLACZONY (nie: polaczenie padlo -
+    // to normalny, oczekiwany przypadek ponizej) dluzej niz
+    // STUCK_INSTALLING_THRESHOLD_MS, traktujemy to jako realne utkniecie i
+    // pokazujemy blad z instrukcja, zamiast czekac w nieskonczonosc.
+    const STUCK_INSTALLING_THRESHOLD_MS = 45000;
+    let installingSinceMs = null;
+
+    for (let i = 0; i < 90; i++) {
       await sleep(PROGRESS_POLL_MS);
       let status;
       try {
@@ -193,11 +207,19 @@
         return waitForRestart(expectedVersion);
       }
       if (status.state === 'downloading') {
+        installingSinceMs = null;
         const downloadPercent = status.percent == null ? 0 : status.percent;
         setProgress(`Pobieranie aktualizacji… ${downloadPercent}%`, Math.round((downloadPercent / 100) * PHASE_DOWNLOAD_MAX));
       } else if (status.state === 'ready') {
+        installingSinceMs = null;
         setProgress('Sprawdzanie pobranego pliku…', PHASE_READY);
       } else if (status.state === 'installing' || status.state === 'restarting') {
+        if (installingSinceMs === null) installingSinceMs = Date.now();
+        if (Date.now() - installingSinceMs > STUCK_INSTALLING_THRESHOLD_MS) {
+          showError('Aktualizacja utknęła (Scyzoryk cały czas odpowiada na starej wersji). Zamknij tę kartę, poczekaj chwilę i odśwież panel ręcznie - jeśli to nie pomoże, uruchom Scyzoryka ponownie.');
+          resetInstallControls();
+          return;
+        }
         setProgress('Zamykanie Scyzoryka…', PHASE_CLOSING);
       } else if (status.state === 'error') {
         showError(status.error || 'Aktualizacja nie powiodła się.');
@@ -211,7 +233,11 @@
   async function waitForRestart(expectedVersion) {
     let percent = PHASE_RESTART_START;
     setProgress('Instalowanie aktualizacji…', percent);
-    for (let i = 0; i < 150; i++) {
+    // Audyt v1.1.7: skrocone ze 150 (5 min) - prawdziwy restart konczy sie w
+    // kilkanascie sekund (patrz UpdateApplier.cs), 2 minuty to i tak spory
+    // zapas na wolniejsze komputery/antywirusa, a nie zostawia uzytkownika
+    // czekajacego bez zadnej informacji przez kwadrans.
+    for (let i = 0; i < 60; i++) {
       await sleep(HEALTH_POLL_MS);
       try {
         const res = await fetch('/api/health', { cache: 'no-store' });
