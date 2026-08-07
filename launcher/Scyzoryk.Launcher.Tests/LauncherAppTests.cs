@@ -235,6 +235,10 @@ public sealed class LauncherAppTests
 
         Assert.Equal(ExitCodes.Ok, code);
         Assert.Equal(0, process.StopOwnedProcessesCallCount);
+        // Audyt v1.1.6: rezydentna ikona (Scyzoryk.exe) jest calkowicie niezalezna
+        // od obecnosci node-runtime\node.exe - --stop musi ja zamknac nawet gdy
+        // node.exe brakuje.
+        Assert.Equal(1, process.StopResidentTrayProcessesCallCount);
     }
 
     [Fact]
@@ -312,6 +316,25 @@ public sealed class LauncherAppTests
         Assert.Equal(ExitCodes.Ok, code);
         Assert.Equal(1, process.StopOwnedProcessesCallCount);
         Assert.Equal(dir.Paths.NodeExePath, process.LastExpectedNodeExeFullPath);
+    }
+
+    [Fact]
+    public async Task StopMode_AlsoClosesResidentTrayIcon_RealBugCaughtOnCI()
+    {
+        // Audyt v1.1.6: zlapane realnie na CI (test instalatora, tryb
+        // /SCYZORYKUPDATE) - --stop zatrzymywal TYLKO node.exe, nigdy rezydentnej
+        // ikony w zasobniku. Instalator probujacy nadpisac zablokowany
+        // (wciaz-otwarty przez rezydentny proces) Scyzoryk.exe dostawal
+        // Abort-Retry-Ignore i konczyl sie kodem 5. --stop jest kanonicznym
+        // "wygaś Scyzoryka calkowicie", wiec musi zamykac OBA procesy.
+        using var dir = new TempInstallDir();
+        var (app, _, process, _, _, _, _, _, _) = CreateApp(dir.Paths);
+
+        var code = await app.RunAsync(Args(LauncherMode.Stop));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.Equal(1, process.StopResidentTrayProcessesCallCount);
+        Assert.Equal(dir.Paths.ScyzorykExePath, process.LastExpectedScyzorykExeFullPath);
     }
 
     [Fact]

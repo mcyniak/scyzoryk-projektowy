@@ -96,6 +96,14 @@ public sealed class ProcessManager : IProcessManager
     {
         var stopped = new List<int>();
         var expectedFull = Path.GetFullPath(expectedFullPathRaw);
+        // Audyt v1.1.6 (zlapane na CI): "Scyzoryk" jako processName pasuje TAKZE do
+        // procesu, ktory WLASNIE WYKONUJE to wywolanie (--stop jest samo trybem
+        // Scyzoryk.exe, uruchomionym z tej samej sciezki instalacji co rezydentna
+        // ikona) - bez tego wykluczenia proces zabijalby SAM SIEBIE w polowie
+        // wykonania --stop. StopOwnedProcesses (nazwa "node") nigdy nie trafia w
+        // ten przypadek, ale wykluczenie jest tu uniwersalne (nie tylko dla trybu
+        // tray), zeby przyszle wywolania tej funkcji byly bezpieczne z zalozenia.
+        var currentPid = Environment.ProcessId;
 
         Process[] candidates;
         try
@@ -111,6 +119,8 @@ public sealed class ProcessManager : IProcessManager
         {
             using (proc)
             {
+                if (proc.Id == currentPid) continue;
+
                 string? mainModulePath;
                 try
                 {

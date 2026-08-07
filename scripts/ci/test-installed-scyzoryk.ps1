@@ -93,7 +93,7 @@ function Stop-Scyzoryk {
 Run-Test 'Instalacja na swiezym Windowsie' {
   $log = Join-Path $LogsDir 'install\install.log'
   $args = @(
-    '/VERYSILENT', '/SUPPRESSMSG', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart',
+    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart',
     "/DIR=`"$InstallDir`"", "/LOG=`"$log`""
   )
   $proc = Start-Process -FilePath $InstallerPath -ArgumentList $args -Wait -PassThru
@@ -450,7 +450,7 @@ Run-Test 'Ponowna instalacja' {
   Stop-Scyzoryk
   $log = Join-Path $LogsDir 'install\reinstall.log'
   $args = @(
-    '/VERYSILENT', '/SUPPRESSMSG', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart',
+    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart',
     "/DIR=`"$InstallDir`"", "/LOG=`"$log`""
   )
   $proc = Start-Process -FilePath $InstallerPath -ArgumentList $args -Wait -PassThru
@@ -488,7 +488,7 @@ if ($UpdateInstallerPath) {
     Stop-Scyzoryk
     $log = Join-Path $LogsDir 'install\update-variant.log'
     $args = @(
-      '/VERYSILENT', '/SUPPRESSMSG', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart',
+      '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart',
       "/DIR=`"$InstallDir`"", "/LOG=`"$log`""
     )
     $proc = Start-Process -FilePath $UpdateInstallerPath -ArgumentList $args -Wait -PassThru
@@ -537,7 +537,7 @@ Run-Test 'Zaznaczony autostart podczas instalacji tworzy dzialajace zadanie bez 
 
   $log = Join-Path $LogsDir 'install\autostart-enabled.log'
   $args = @(
-    '/VERYSILENT', '/SUPPRESSMSG', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=autostart',
+    '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=autostart',
     "/DIR=`"$InstallDir`"", "/LOG=`"$log`""
   )
   $proc = Start-Process -FilePath $InstallerPath -ArgumentList $args -Wait -PassThru
@@ -561,7 +561,7 @@ Run-Test 'Odinstalowanie' {
   $uninstaller = Join-Path $InstallDir 'unins000.exe'
   Assert-True (Test-Path $uninstaller) 'Brak deinstalatora.'
   $log = Join-Path $LogsDir 'install\uninstall.log'
-  $proc = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT','/SUPPRESSMSG','/NORESTART',"/LOG=`"$log`"") -Wait -PassThru
+  $proc = Start-Process -FilePath $uninstaller -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$log`"") -Wait -PassThru
   Assert-True ($proc.ExitCode -eq 0) "Deinstalacja zakonczyla sie kodem $($proc.ExitCode)."
 }
 

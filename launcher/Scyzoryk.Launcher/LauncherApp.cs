@@ -229,17 +229,36 @@ public sealed class LauncherApp
 
     private Task<int> RunStopAsync()
     {
-        if (!File.Exists(_paths.NodeExePath))
+        if (File.Exists(_paths.NodeExePath))
         {
-            _logger.Log(LogLevel.Info, "Brak node-runtime\\node.exe - nic do zatrzymania.");
-            return Task.FromResult(ExitCodes.Ok);
+            var stopped = _processManager.StopOwnedProcesses(_paths.NodeExePath);
+            _logger.Log(LogLevel.Info, "Zatrzymano procesy Scyzoryka (--stop).", new Dictionary<string, string>
+            {
+                ["count"] = stopped.Count.ToString(),
+                ["pids"] = string.Join(",", stopped),
+            });
+        }
+        else
+        {
+            _logger.Log(LogLevel.Info, "Brak node-runtime\\node.exe - pomijam zatrzymywanie node.exe.");
         }
 
-        var stopped = _processManager.StopOwnedProcesses(_paths.NodeExePath);
-        _logger.Log(LogLevel.Info, "Zatrzymano procesy Scyzoryka (--stop).", new Dictionary<string, string>
+        // Audyt v1.1.6 (zlapane na CI, exit code 5 przy cichej aktualizacji): --stop
+        // jest kanonicznym "wygaś Scyzoryka calkowicie" - uzywanym przez
+        // [UninstallRun] i przez reczna ciche uruchomienie instalatora z
+        // /SCYZORYKUPDATE (bez przejscia przez Scyzoryk.exe --apply-update, ktore
+        // samo juz zamyka rezydentna ikone przed instalacja). Rezydentna ikona w
+        // zasobniku trzyma otwarty WLASNY plik Scyzoryk.exe przez cala swoja
+        // zywotnosc - bez tego wywolania instalator/deinstalator dostawal
+        // Abort-Retry-Ignore przy probie nadpisania/usuniecia zablokowanego pliku.
+        // Wywolywane ZAWSZE, niezaleznie od obecnosci node.exe - to dwa niezalezne
+        // pliki/procesy (patrz tez wykluczenie wlasnego PID w ProcessManager, zeby
+        // to wywolanie nie zabilo samo siebie).
+        var closedTray = _processManager.StopResidentTrayProcesses(_paths.ScyzorykExePath);
+        _logger.Log(LogLevel.Info, "Zamknieto rezydentna ikone w zasobniku (--stop).", new Dictionary<string, string>
         {
-            ["count"] = stopped.Count.ToString(),
-            ["pids"] = string.Join(",", stopped),
+            ["count"] = closedTray.Count.ToString(),
+            ["pids"] = string.Join(",", closedTray),
         });
 
         // --stop zawsze zwraca 0, nawet jesli nic nie dzialalo lub pojedyncze
