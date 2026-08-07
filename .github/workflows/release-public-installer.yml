@@ -64,6 +64,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          # Audyt v1.1.7: cache npm keyowany hashem WSZYSTKICH lockfilow w
+          # repo (root + kazda apps/*) - kiedy zaden lockfile sie nie zmienil
+          # (typowy przypadek dla releasu, ktory zmienia tylko kod aplikacji),
+          # `npm ci` w install-all.js ciagnie paczki z lokalnego cache
+          # zamiast na nowo z sieci. Nie przyspiesza samego pobrania Chromium
+          # przez Playwright (PLAYWRIGHT_BROWSERS_PATH=0 wiazie je wewnatrz
+          # node_modules, ktore `npm ci` i tak zawsze czysci i buduje od
+          # nowa) - to zostaje najwiekszym pojedynczym kosztem czasowym.
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            apps/*/package-lock.json
 
       - name: Przygotuj .NET SDK (launcher Scyzoryk.exe)
         uses: actions/setup-dotnet@v4
@@ -86,22 +98,17 @@ jobs:
           npm run install-all
           if ($LASTEXITCODE -ne 0) { throw 'Instalacja zaleznosci aplikacji nie powiodla sie.' }
 
-      - name: Uruchom wszystkie istniejace testy jednostkowe (test:groupN)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $pkg = Get-Content -Raw 'package.json' | ConvertFrom-Json
-          $groupScripts = @($pkg.scripts.PSObject.Properties.Name | Where-Object { $_ -match '^test:group\d+$' } | Sort-Object)
-          foreach ($scriptName in $groupScripts) {
-            Write-Host "=== npm run $scriptName ==="
-            npm run $scriptName
-            if ($LASTEXITCODE -ne 0) { throw "$scriptName nie powiodl sie (kod $LASTEXITCODE)." }
-          }
-
       - name: Uruchom testy regresyjne
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # Audyt v1.1.7: ten krok kiedys szedl PO osobnej petli "npm run
+          # test:groupN" dla kazdej grupy z osobna - test:regressions
+          # (scripts/run-regression-tests.js) i tak automatycznie odkrywa i
+          # uruchamia WSZYSTKIE test/group*.test.js (plus dodatkowo
+          # regresje sortowania drukarki-projekty), wiec caly zestaw
+          # testow byl uruchamiany DWA RAZY z rzedu bez zadnej dodatkowej
+          # wartosci - czysta strata czasu w kazdym releasie.
           npm run test:regressions
           if ($LASTEXITCODE -ne 0) { throw 'Testy regresyjne nie powiodly sie.' }
 
