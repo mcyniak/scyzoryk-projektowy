@@ -93,23 +93,38 @@
   setStep(1);
   setStep(1, "stepperWm");
 
+  // Ten sam sentinel co server.js (SAVE_AS_PDF_SENTINEL) - nigdy nie trafia
+  // do prawdziwej listy drukarek (dopisywany tu, po stronie klienta), wiec
+  // dostepny jest nawet gdy listPrinters() nie znajdzie zadnej fizycznej
+  // drukarki.
+  const SAVE_AS_PDF_OPTION = `<option value="__SAVE_AS_PDF__">💾 Zapisz jako PDF (bez drukowania)</option>`;
+
   async function loadPrinters() {
     const select = $("printerSelect");
     try {
       const data = await api("/api/printers");
       const printers = data.printers || [];
-      if (!printers.length) {
-        select.innerHTML = `<option value="">Drukarka domyślna systemu</option>`;
-        return;
-      }
-      select.innerHTML = printers.map(p =>
+      const printerOptions = printers.map(p =>
         `<option value="${escapeHtml(p.name)}"${p.isDefault ? " selected" : ""}>${escapeHtml(p.name)}${p.isDefault ? " (domyślna)" : ""}</option>`
       ).join("");
+      select.innerHTML = (printerOptions || `<option value="">Drukarka domyślna systemu</option>`) + SAVE_AS_PDF_OPTION;
     } catch (err) {
-      select.innerHTML = `<option value="">Drukarka domyślna systemu</option>`;
+      select.innerHTML = `<option value="">Drukarka domyślna systemu</option>` + SAVE_AS_PDF_OPTION;
     }
+    updatePrintOptionsVisibility();
   }
   loadPrinters();
+
+  // Kopie/strony/tryb kopiowania nie maja znaczenia przy zapisie do PDF (nie
+  // ma fizycznej drukarki ani duplexu) - ukrywamy je, zeby nie sugerowac, ze
+  // cokolwiek robia w tym trybie. Checkbox "dokumentacja powykonawcza" zostaje
+  // widoczny/aktywny - stemplowanie dziala identycznie w obu trybach.
+  function updatePrintOptionsVisibility() {
+    const isSaveAsPdf = $("printerSelect").value === "__SAVE_AS_PDF__";
+    $("printOnlyOptionsRow").style.display = isSaveAsPdf ? "none" : "";
+    $("printBtn").textContent = isSaveAsPdf ? "Zapisz jako PDF" : "Drukuj";
+  }
+  $("printerSelect").addEventListener("change", updatePrintOptionsVisibility);
 
   $("excelInput").addEventListener("change", async (e) => {
     const file = e.target.files[0];
@@ -754,7 +769,12 @@
           clearInterval(timer);
           $("printBtn").disabled = false;
           if (s.done && !s.error) {
-            $("statusText").innerHTML = `<div class="success-panel"><span class="big-check">✅</span>Wysłano do druku. Sprawdź drukarkę.</div>`;
+            if (s.savedFolder) {
+              $("statusText").innerHTML = `<div class="success-panel"><span class="big-check">✅</span>Zapisano pliki PDF. Otwieram folder...</div>`;
+              api("/api/open-saved-pdf-folder", { method: "POST" }).catch(() => {});
+            } else {
+              $("statusText").innerHTML = `<div class="success-panel"><span class="big-check">✅</span>Wysłano do druku. Sprawdź drukarkę.</div>`;
+            }
           }
         }
       } catch (_) {

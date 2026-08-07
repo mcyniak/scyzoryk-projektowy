@@ -126,6 +126,16 @@ app.get("/api/printers", async (req, res) => {
   }
 });
 
+// Otwiera WYLACZNIE staly, wewnetrzny katalog wyjsciowy "Zapisz jako PDF"
+// (SAVE_AS_PDF_OUTPUT_DIR jest zdefiniowany nizej jako stala, nigdy sciezka
+// od klienta) - explorer.exe bez powloki/interpretera posrednika, zeby nie
+// powtorzyc wzorca z incydentu opisanego przy RunApplyUpdateAsync w
+// launcherze (ukryty interpreter uruchamiajacy kolejny proces).
+app.post("/api/open-saved-pdf-folder", (req, res) => {
+  spawn("explorer.exe", [SAVE_AS_PDF_OUTPUT_DIR], { detached: true, stdio: "ignore" }).unref();
+  res.json({ ok: true });
+});
+
 app.post("/api/excel/upload", excelUpload.single("file"), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, message: "Brak pliku." });
@@ -306,6 +316,19 @@ function isPathInsideFolder(filePath, folderPath) {
   }
 }
 
+// Audyt: "Zapisz jako PDF" (patrz /api/print, printerName === SAVE_AS_PDF_SENTINEL)
+// scala CALA grupe (adres) w jeden plik wynikowy, bez wzgledu na to, ile
+// sasiadujacych PDF-ow/DOCX-ow ja tworzy - nie ma tu zadnej fizycznej
+// drukarki/duplexu, ktoremu bylby potrzebny podzial run-ow jak w
+// buildQueueFromGroups. Sentinel nigdy nie trafia do prawdziwej listy
+// drukarek (lib/printing.js) - front-end dopisuje go recznie do <select>.
+const SAVE_AS_PDF_SENTINEL = "__SAVE_AS_PDF__";
+
+function sanitizeForFileName(name, maxLen) {
+  const safe = String(name || "").replace(/[<>:"/\\|?*]/g, "_").trim();
+  return safe.slice(0, maxLen || 80) || "plik";
+}
+
 function isMergedFile(filePath) {
   if (!filePath) return false;
   const normalized = path.resolve(String(filePath)).toLowerCase();
@@ -390,7 +413,13 @@ async function buildQueueFromGroups(req, groups) {
     let i = 0;
     while (i < resolved.length) {
       if (!resolved[i].isPdf) {
-        built.push(buildQueueItem(resolved[i].fullPath, resolved[i].label || group.label || ""));
+        // groupLabel = etykieta ADRESU (group.label), NIE etykieta
+        // pojedynczego dokumentu (item.label, np. "... > karta katalogowa") -
+        // "Zapisz jako PDF" (buildSaveAsPdfOutputs) grupuje po tym polu, zeby
+        // wszystkie dokumenty jednego adresu trafily do jednego pliku
+        // wyjsciowego, niezaleznie od tego, jak szczegolowa etykiete ma kazdy
+        // pojedynczy dokument.
+        built.push({ ...buildQueueItem(resolved[i].fullPath, resolved[i].label || group.label || ""), groupLabel: group.label || "" });
         i += 1;
         continue;
       }
@@ -398,12 +427,12 @@ async function buildQueueFromGroups(req, groups) {
       while (i < resolved.length && resolved[i].isPdf) i += 1;
       const run = resolved.slice(runStart, i);
       if (run.length >= 2) {
-        const safeLabel = String(group.label || "adres").replace(/[<>:"/\\|?*]/g, "_").slice(0, 80);
+        const safeLabel = sanitizeForFileName(group.label || "adres", 80);
         const outPath = path.join(MERGED_DIR, `${req.sid}_${Date.now()}_${runStart}_${safeLabel}.pdf`);
         await pdfMerge.mergePdfs(run.map(r => r.fullPath), outPath);
-        built.push(buildQueueItem(outPath, group.label || ""));
+        built.push({ ...buildQueueItem(outPath, group.label || ""), groupLabel: group.label || "" });
       } else {
-        built.push(buildQueueItem(run[0].fullPath, run[0].label || group.label || ""));
+        built.push({ ...buildQueueItem(run[0].fullPath, run[0].label || group.label || ""), groupLabel: group.label || "" });
       }
     }
   }
@@ -419,9 +448,110 @@ if (!fs.existsSync(MERGED_DIR)) fs.mkdirSync(MERGED_DIR, { recursive: true });
 const POWYKONAWCZA_DIR = path.join(DATA_DIR, "powykonawcza");
 if (!fs.existsSync(POWYKONAWCZA_DIR)) fs.mkdirSync(POWYKONAWCZA_DIR, { recursive: true });
 const DOCX_TO_PDF_SCRIPT = path.join(__dirname, "scripts", "docx-to-pdf.ps1");
+// Docelowe, TRWALE pliki wyjsciowe "Zapisz jako PDF" - w przeciwienstwie do
+// MERGED_DIR/POWYKONAWCZA_DIR NIE wchodzi do scheduleCleanup ponizej, bo to
+// nie jest katalog roboczy tylko to, co uzytkownik faktycznie chcial dostac.
+const SAVE_AS_PDF_OUTPUT_DIR = path.join(DATA_DIR, "zapisane-pdf");
+if (!fs.existsSync(SAVE_AS_PDF_OUTPUT_DIR)) fs.mkdirSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true });
+// Robocze konwersje DOCX->PDF na potrzeby "Zapisz jako PDF" - kasowane
+// synchronicznie po kazdym uzyciu (patrz finally w buildSaveAsPdfOutputs),
+// scheduleCleanup ponizej to tylko siatka bezpieczenstwa na wypadek awarii
+// w trakcie operacji.
+const SAVE_AS_PDF_TMP_DIR = path.join(DATA_DIR, "zapis-pdf-tmp");
+if (!fs.existsSync(SAVE_AS_PDF_TMP_DIR)) fs.mkdirSync(SAVE_AS_PDF_TMP_DIR, { recursive: true });
 {
   const { scheduleCleanup } = require("../../lib/hardening");
-  scheduleCleanup([MERGED_DIR, POWYKONAWCZA_DIR], 6 * 60 * 60 * 1000, 60 * 60 * 1000);
+  scheduleCleanup([MERGED_DIR, POWYKONAWCZA_DIR, SAVE_AS_PDF_TMP_DIR], 6 * 60 * 60 * 1000, 60 * 60 * 1000);
+}
+
+function uniqueOutputPath(dir, baseName) {
+  const safe = sanitizeForFileName(baseName, 120);
+  let candidate = path.join(dir, `${safe}.pdf`);
+  for (let n = 2; fs.existsSync(candidate); n++) {
+    candidate = path.join(dir, `${safe} (${n}).pdf`);
+  }
+  return candidate;
+}
+
+function newSaveAsPdfOpDir(req) {
+  const opId = `${req.sid}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
+  const dir = path.join(SAVE_AS_PDF_TMP_DIR, opId);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+// Scala CALA kolejke (session.queue, juz w prawidlowej kolejnosci i juz po
+// ewentualnym stemplowaniu "dokumentacja powykonawcza") w jeden PDF NA
+// ADRES, zapisany trwale do SAVE_AS_PDF_OUTPUT_DIR. Grupowanie to kolejne
+// pozycje o tej samej etykiecie (item.label = nazwa grupy/adresu nadana
+// przez buildQueueItem/buildQueueFromGroups) - w odroznieniu od
+// buildQueueFromGroups, ktore laczy TYLKO sasiadujace PDF-y (bo tam liczy
+// sie duplex fizycznej drukarki), tutaj DOCX-y sa najpierw konwertowane do
+// PDF, zeby caly adres wyladowal w jednym pliku niezaleznie od formatu
+// zrodlowego.
+async function buildSaveAsPdfOutputs(req, queue, onProgress) {
+  const groups = [];
+  for (const item of queue) {
+    // groupLabel (nazwa adresu, patrz buildQueueFromGroups) - NIE item.label
+    // (etykieta pojedynczego dokumentu w obrebie adresu). Fallback na
+    // item.label dotyczy tylko pozycji dodanych przez /api/queue/set (bez
+    // przejscia przez buildQueueFromGroups), gdzie kazda pozycja jest
+    // faktycznie swoja wlasna "grupa".
+    const label = item.groupLabel || item.label || "adres";
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(item);
+    else groups.push({ label, items: [item] });
+  }
+
+  const opDir = newSaveAsPdfOpDir(req);
+  try {
+    const docxJobs = [];
+    for (const group of groups) {
+      for (const item of group.items) {
+        if (path.extname(item.path).toLowerCase() !== ".pdf") {
+          const destPath = path.join(opDir, `${crypto.randomBytes(4).toString("hex")}_${sanitizeForFileName(item.originalName, 60)}.pdf`);
+          docxJobs.push({ inputPath: item.path, outputPath: destPath, item, label: item.label || group.label });
+        }
+      }
+    }
+
+    if (docxJobs.length) {
+      let results = null;
+      let conversionError = null;
+      try {
+        results = await convertDocxBatchToPdf(opDir, docxJobs.map(j => ({ inputPath: j.inputPath, outputPath: j.outputPath })));
+      } catch (err) {
+        conversionError = err;
+      }
+      if (conversionError) {
+        return { ok: false, errors: docxJobs.map(j => ({ label: j.label, message: conversionError.message || String(conversionError) })) };
+      }
+      const byInput = new Map(results.map(r => [r.input, r]));
+      const errors = [];
+      for (const job of docxJobs) {
+        const result = byInput.get(job.inputPath);
+        if (result && result.ok && fs.existsSync(job.outputPath)) {
+          job.item.path = job.outputPath;
+        } else {
+          errors.push({ label: job.label, message: (result && result.error) || "Konwersja DOCX->PDF nie powiodla sie - Word nie zwrocil wyniku dla tego pliku." });
+        }
+      }
+      if (errors.length) return { ok: false, errors };
+    }
+
+    const outputs = [];
+    for (let i = 0; i < groups.length; i++) {
+      const group = groups[i];
+      if (typeof onProgress === "function") onProgress(i, groups.length, group.label);
+      const outPath = uniqueOutputPath(SAVE_AS_PDF_OUTPUT_DIR, group.label);
+      await pdfMerge.mergePdfs(group.items.map(it => it.path), outPath);
+      outputs.push({ label: group.label, path: outPath });
+    }
+    if (typeof onProgress === "function") onProgress(groups.length, groups.length, "");
+    return { ok: true, outputs };
+  } finally {
+    try { fs.rmSync(opDir, { recursive: true, force: true }); } catch (_) {}
+  }
 }
 
 function newPowykonawczaOpDir(req) {
@@ -793,6 +923,49 @@ app.post("/api/print", async (req, res) => {
     session.queuePowykonawczaDone = true;
   }
 
+  // "Zapisz jako PDF" nigdy nie dotyka fizycznej drukarki ani withPrintLease
+  // (ten muteks arbitruje dostep do drukarki miedzy apps/drukarka* - zapis na
+  // dysk nie ma z tym nic wspolnego) - osobna, prostsza sciezka.
+  if (printerName === SAVE_AS_PDF_SENTINEL) {
+    session.printing = true;
+    const itemsToSave = [...session.queue];
+    session.status = {
+      printing: true,
+      message: "Start zapisywania do PDF...",
+      current: 0,
+      total: itemsToSave.length,
+      percent: 0,
+      done: false,
+      error: null,
+      savedFolder: null
+    };
+    res.json({ ok: true });
+    try {
+      const result = await buildSaveAsPdfOutputs(req, itemsToSave, (i, total, label) => {
+        session.status.current = i;
+        session.status.total = total;
+        session.status.percent = total ? Math.round((i / total) * 100) : 0;
+        session.status.message = label ? `Zapisuje ${i + 1}/${total}: ${label}` : `Zapisano ${i}/${total}.`;
+      });
+      if (!result.ok) {
+        const details = result.errors.map(e => `- ${e.label}: ${e.message}`).join("\n");
+        throw new Error(`Nie udalo sie zapisac PDF-ow dla wszystkich adresow.\n${details}`);
+      }
+      session.status.message = `✅ Zapisano ${result.outputs.length} plik(ow) PDF do ${SAVE_AS_PDF_OUTPUT_DIR}`;
+      session.status.percent = 100;
+      session.status.done = true;
+      session.status.savedFolder = SAVE_AS_PDF_OUTPUT_DIR;
+    } catch (err) {
+      session.status.error = String(err.message || err);
+      session.status.message = "❌ Blad zapisu PDF: " + session.status.error;
+    } finally {
+      session.queue = [];
+      session.printing = false;
+      session.status.printing = false;
+    }
+    return;
+  }
+
   try {
     await withPrintLease({ app: "drukarka-projekty", sessionId: req.sessionID || null, printerName }, async () => {
       session.printing = true;
@@ -895,4 +1068,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, "DRUKARKA_PROJEKTY");
 }
 
-module.exports = { app, buildQueueFromGroups, prepareStampedQueue, buildQueueItem, isMergedFile };
+module.exports = { app, buildQueueFromGroups, prepareStampedQueue, buildQueueItem, isMergedFile, buildSaveAsPdfOutputs, SAVE_AS_PDF_SENTINEL, SAVE_AS_PDF_OUTPUT_DIR };
