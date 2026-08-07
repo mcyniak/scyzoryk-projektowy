@@ -464,6 +464,17 @@ if (!fs.existsSync(SAVE_AS_PDF_TMP_DIR)) fs.mkdirSync(SAVE_AS_PDF_TMP_DIR, { rec
   scheduleCleanup([MERGED_DIR, POWYKONAWCZA_DIR, SAVE_AS_PDF_TMP_DIR], 6 * 60 * 60 * 1000, 60 * 60 * 1000);
 }
 
+// Kazde uzycie "Zapisz jako PDF" ma zawierac WYLACZNIE wynik BIEZACEGO
+// uruchomienia - folder jest czyszczony na starcie kazdego zapisu, zeby
+// stare/nieaktualne pliki z poprzednich uruchomien nigdy nie mieszaly sie
+// z nowymi (np. ten sam adres wygenerowany ponownie po poprawce w danych).
+function clearSaveAsPdfOutputDir() {
+  try {
+    fs.rmSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true, force: true });
+  } catch (_) {}
+  fs.mkdirSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true });
+}
+
 function uniqueOutputPath(dir, baseName) {
   const safe = sanitizeForFileName(baseName, 120);
   let candidate = path.join(dir, `${safe}.pdf`);
@@ -941,6 +952,7 @@ app.post("/api/print", async (req, res) => {
     };
     res.json({ ok: true });
     try {
+      clearSaveAsPdfOutputDir();
       const result = await buildSaveAsPdfOutputs(req, itemsToSave, (i, total, label) => {
         session.status.current = i;
         session.status.total = total;
@@ -1068,4 +1080,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, "DRUKARKA_PROJEKTY");
 }
 
-module.exports = { app, buildQueueFromGroups, prepareStampedQueue, buildQueueItem, isMergedFile, buildSaveAsPdfOutputs, SAVE_AS_PDF_SENTINEL, SAVE_AS_PDF_OUTPUT_DIR };
+module.exports = { app, buildQueueFromGroups, prepareStampedQueue, buildQueueItem, isMergedFile, buildSaveAsPdfOutputs, clearSaveAsPdfOutputDir, SAVE_AS_PDF_SENTINEL, SAVE_AS_PDF_OUTPUT_DIR };

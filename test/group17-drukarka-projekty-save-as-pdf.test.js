@@ -5,7 +5,7 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { PDFDocument } = require('../apps/drukarka-projekty/node_modules/pdf-lib');
-const { buildSaveAsPdfOutputs, buildQueueFromGroups, buildQueueItem, SAVE_AS_PDF_OUTPUT_DIR } = require('../apps/drukarka-projekty/server');
+const { buildSaveAsPdfOutputs, buildQueueFromGroups, buildQueueItem, clearSaveAsPdfOutputDir, SAVE_AS_PDF_OUTPUT_DIR } = require('../apps/drukarka-projekty/server');
 
 async function createTestPdf(filePath, pageCount = 1) {
   const doc = await PDFDocument.create();
@@ -134,6 +134,19 @@ test('buildSaveAsPdfOutputs: dokumenty jednego adresu z ROZNYMI wlasnymi etykiet
   assert.equal(result.ok, true);
   assert.equal(result.outputs.length, 1);
   assert.equal(result.outputs[0].label, '1 - ul. Testowa 1');
+});
+
+test('clearSaveAsPdfOutputDir: usuwa WSZYSTKO z poprzedniego uruchomienia (pliki i podfoldery) i zostawia pusty, istniejacy folder', async (t) => {
+  t.after(() => fsp.rm(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true, force: true }).catch(() => {}));
+
+  fs.mkdirSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true });
+  fs.writeFileSync(path.join(SAVE_AS_PDF_OUTPUT_DIR, 'stary-adres.pdf'), 'stary plik z poprzedniego uruchomienia');
+  fs.mkdirSync(path.join(SAVE_AS_PDF_OUTPUT_DIR, 'przypadkowy-podfolder'), { recursive: true });
+
+  clearSaveAsPdfOutputDir();
+
+  assert.ok(fs.existsSync(SAVE_AS_PDF_OUTPUT_DIR), 'folder wyjsciowy powinien nadal istniec (pusty)');
+  assert.deepEqual(fs.readdirSync(SAVE_AS_PDF_OUTPUT_DIR), []);
 });
 
 test('buildSaveAsPdfOutputs: niedozwolone znaki w etykiecie adresu nie tworza nieprawidlowej nazwy pliku', async (t) => {
