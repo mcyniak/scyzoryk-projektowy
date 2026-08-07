@@ -27,11 +27,14 @@ public sealed class UpdateApplier : IUpdateApplier
     private readonly ILauncherLogger _logger;
     private readonly TimeSpan _printWaitTimeout;
     private readonly TimeSpan _printPollInterval;
+    private readonly TimeSpan _stopConfirmTimeout;
+    private readonly TimeSpan _stopConfirmPollInterval;
 
     private string? _logFilePath;
 
     public UpdateApplier(IProcessManager processManager, IHealthChecker health, InstallPaths paths, ILauncherLogger logger,
-        TimeSpan? printWaitTimeout = null, TimeSpan? printPollInterval = null)
+        TimeSpan? printWaitTimeout = null, TimeSpan? printPollInterval = null,
+        TimeSpan? stopConfirmTimeout = null, TimeSpan? stopConfirmPollInterval = null)
     {
         _processManager = processManager;
         _health = health;
@@ -39,6 +42,8 @@ public sealed class UpdateApplier : IUpdateApplier
         _logger = logger;
         _printWaitTimeout = printWaitTimeout ?? TimeSpan.FromSeconds(30);
         _printPollInterval = printPollInterval ?? TimeSpan.FromSeconds(2);
+        _stopConfirmTimeout = stopConfirmTimeout ?? TimeSpan.FromSeconds(15);
+        _stopConfirmPollInterval = stopConfirmPollInterval ?? TimeSpan.FromMilliseconds(500);
     }
 
     public async Task<int> ApplyAsync(string installerPath, string expectedVersion)
@@ -84,19 +89,13 @@ public sealed class UpdateApplier : IUpdateApplier
 
         try
         {
-            WriteLog("Zatrzymuje procesy Scyzoryka...");
-            var stopped = _processManager.StopOwnedProcesses(_paths.NodeExePath);
-            WriteLog($"Zatrzymano {stopped.Count} procesow: {string.Join(",", stopped)}");
-
             // Rezydentna ikona w zasobniku (patrz ITrayIconHost) trzyma otwarty
             // WLASNY plik .exe caly czas, gdy jest aktywna - ten sam plik, ktory
             // instalator zaraz probuje nadpisac. _paths tutaj to PRAWDZIWY katalog
             // instalacji (patrz Program.cs/ArgsParser dla --apply-update), wiec to
             // NIGDY nie zamyka tej wlasnie dzialajacej kopii-aktualizatora (ta zyje
             // w oddzielnym katalogu Updates\<wersja>\, inna sciezka).
-            WriteLog("Zamykam rezydentna ikone w zasobniku (jesli aktywna)...");
-            var closedTray = _processManager.StopResidentTrayProcesses(_paths.ScyzorykExePath);
-            WriteLog($"Zamknieto {closedTray.Count} rezydentnych procesow Scyzoryk.exe: {string.Join(",", closedTray)}");
+            await StopAllOwnedProcessesUntilConfirmedAsync().ConfigureAwait(false);
 
             WriteLog($"Uruchamiam instalator cicho: {installerPath}");
             exitCode = RunInstaller(installerPath, _paths.InstallDir);
@@ -196,6 +195,60 @@ public sealed class UpdateApplier : IUpdateApplier
 
         WriteLog("Drukowanie zakonczone - kontynuuje aktualizacje.");
         return true;
+    }
+
+    /// <summary>
+    /// Audyt v1.1.7 (zlapane live na produkcji): Process.Kill() jest tylko
+    /// ZADANIEM zakonczenia, nie gwarancja natychmiastowego zniknięcia z
+    /// systemu. Zlapane realnie: stary proces server.js przetrwal
+    /// StopOwnedProcesses (byl akurat w trakcie obslugi TEGO WLASNIE
+    /// requestu /api/update/install, gdy przyszlo zabicie), instalator i tak
+    /// ruszyl dalej, a stary proces zostal SIEROTA obok swiezo
+    /// zainstalowanej wersji - dalej odpowiadal na tym samym porcie ze
+    /// STARYM kodem (m.in. bez poprawki drukowania), a panel w przegladarce
+    /// uzytkownika nigdy nie zobaczyl postepu poza "installing" (85%), bo
+    /// ten martwy-ale-zywy proces nigdy juz nie zaktualizowal wlasnego stanu
+    /// w pamieci. Ponawia StopOwnedProcesses/StopResidentTrayProcesses (obie
+    /// funkcje sa idempotentne - kolejne wywolanie na juz-martwym procesie
+    /// po prostu nic nie znajduje), az OBIE zwroca zero dopasowan w TEJ
+    /// SAMEJ probie, albo minie limit czasu (wtedy kontynuuje mimo to -
+    /// lepiej sprobowac zainstalowac niz utknac w nieskonczonosc). Krotka
+    /// dodatkowa pauza po potwierdzeniu (TYLKO jesli cokolwiek naprawde
+    /// trzeba bylo dogonic) daje systemowi czas na zwolnienie uchwytow
+    /// plikow, zanim ruszy instalator - identyczny wzorzec jak juz
+    /// sprawdzony Stop-Scyzoryk w scripts/ci/test-installed-scyzoryk.ps1.
+    /// </summary>
+    private async Task<(IReadOnlyList<int> stoppedNode, IReadOnlyList<int> stoppedTray)> StopAllOwnedProcessesUntilConfirmedAsync()
+    {
+        var deadline = DateTime.UtcNow.Add(_stopConfirmTimeout);
+        var attempt = 0;
+        IReadOnlyList<int> stoppedNode;
+        IReadOnlyList<int> stoppedTray;
+        while (true)
+        {
+            attempt++;
+            stoppedNode = _processManager.StopOwnedProcesses(_paths.NodeExePath);
+            stoppedTray = _processManager.StopResidentTrayProcesses(_paths.ScyzorykExePath);
+            WriteLog($"Proba {attempt}: zatrzymano {stoppedNode.Count} procesow node.exe ({string.Join(",", stoppedNode)}), zamknieto {stoppedTray.Count} rezydentnych Scyzoryk.exe ({string.Join(",", stoppedTray)}).");
+
+            if (stoppedNode.Count == 0 && stoppedTray.Count == 0)
+            {
+                if (attempt > 1)
+                {
+                    // Cos bylo do zabicia we wczesniejszej probie - krotki bufor na
+                    // zwolnienie uchwytow plikow przez system, zanim ruszy instalator.
+                    await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                }
+                return (stoppedNode, stoppedTray);
+            }
+
+            if (DateTime.UtcNow >= deadline)
+            {
+                WriteLog("Uwaga: procesy Scyzoryka nadal byly wykrywane po uplywie limitu czasu potwierdzenia zatrzymania - kontynuuje aktualizacje mimo to.");
+                return (stoppedNode, stoppedTray);
+            }
+            await Task.Delay(_stopConfirmPollInterval).ConfigureAwait(false);
+        }
     }
 
     private bool IsPrintingActive()

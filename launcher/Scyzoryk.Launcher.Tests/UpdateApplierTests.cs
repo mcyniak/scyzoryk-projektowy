@@ -264,6 +264,67 @@ public sealed class UpdateApplierTests
     }
 
     [Fact]
+    public async Task ProcessSurvivesFirstStopAttempt_RetriesUntilConfirmedGone_RealBugCaughtLiveOnProduction()
+    {
+        // Audyt v1.1.7: zlapane realnie na produkcji - stary proces server.js
+        // przetrwal pojedyncze StopOwnedProcesses (byl akurat w trakcie
+        // obslugi TEGO WLASNIE requestu /api/update/install), instalator i
+        // tak ruszyl dalej, a stary proces zostal sierota ze STARYM kodem
+        // (m.in. bez poprawki drukowania) obok swiezo zainstalowanej wersji.
+        // Fake symuluje: pierwsza proba znajduje 1 "uparty" proces node.exe,
+        // druga juz nic (naprawde umarl) - StopAllOwnedProcessesUntilConfirmedAsync
+        // musi ZAPYTAC PONOWNIE zamiast zaufac pierwszemu (nieprawdziwemu)
+        // "zero pozostalych".
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager
+        {
+            StopResultSequence = new Queue<IReadOnlyList<int>>(new IReadOnlyList<int>[] { new[] { 4242 }, Array.Empty<int>() })
+        };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            stopConfirmTimeout: TimeSpan.FromSeconds(5), stopConfirmPollInterval: TimeSpan.FromMilliseconds(10));
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode);
+        // Dokladnie 2 proby: pierwsza znalazla "uparty" proces, druga
+        // potwierdzila zero pozostalych - petla NIE moze zatrzymac sie po
+        // pierwszej (falszywie "udanej", bo cos jednak zostalo znalezione i
+        // dopiero co zabite) probie.
+        Assert.Equal(2, process.StopOwnedProcessesCallCount);
+
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.True(result.GetProperty("ok").GetBoolean());
+    }
+
+    [Fact]
+    public async Task ProcessNeverConfirmedGone_ContinuesAnywayAfterTimeout_NeverHangsForever()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        // Proces "wiecznie uparty" - kazda proba wciaz go znajduje.
+        var process = new FakeProcessManager { StopResultToReturn = new[] { 4242 } };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            stopConfirmTimeout: TimeSpan.FromMilliseconds(50), stopConfirmPollInterval: TimeSpan.FromMilliseconds(10));
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        // Limit czasu potwierdzenia minal, ale aktualizacja i tak KONTYNUUJE
+        // (nie wisi w nieskonczonosc) - lepiej sprobowac zainstalowac, niz
+        // nigdy nie skonczyc.
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, process.StartServerCallCount);
+    }
+
+    [Fact]
     public async Task InstallerSucceeds_HealthRespondsButNoVersion_TreatedAsFailure()
     {
         using var dir = new TempInstallDir();
