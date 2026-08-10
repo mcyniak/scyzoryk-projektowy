@@ -1,0 +1,273 @@
+// Kroki 1-4 planu brancha zaimplementowane: odczyt tabeli adresowej,
+// automatyzacja przegladarki (automation/session.js/steps.js/captcha.js),
+// skrzynka pocztowa (mailbox.js) i pelna orkiestracja (jobs.js). NIE
+// przetestowane jeszcze end-to-end na prawdziwej skrzynce (potrzebne realne
+// dane IMAP - patrz readImapConfig() nizej - i kolejne swiadome zgloszenie
+// testowe, jak przy weryfikacji krokow 2-3).
+import fs from 'fs/promises';
+import fsSync from 'fs';
+import express from 'express';
+import { rateLimit } from 'express-rate-limit';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import multer from 'multer';
+import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX } from './src/config.js';
+import { readTabelaAdresowa } from './src/excel.js';
+import { calculate } from './src/rules.js';
+import { createJob, jobs, runBatchJob, cancelJob, cancelAllJobs } from './src/jobs.js';
+import appPaths from '../../lib/appPaths.js';
+
+const { getAppDataDir } = appPaths;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const APP_DATA_ROOT = getAppDataDir('formularze-varmero');
+const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
+
+const app = express();
+const diagnosticsDir = path.join(APP_DATA_ROOT, 'logs');
+try { fsSync.mkdirSync(diagnosticsDir, { recursive: true }); } catch {}
+function appendDiagnostic(level, event, data = {}) {
+  try { fsSync.appendFileSync(path.join(diagnosticsDir, 'formularze-varmero.jsonl'), JSON.stringify({ ts: new Date().toISOString(), level, app: 'formularze-varmero', event, pid: process.pid, memory: process.memoryUsage(), ...data }) + '\n', 'utf8'); } catch {}
+}
+process.on('uncaughtException', err => { appendDiagnostic('fatal', 'uncaughtException', { message: err?.message || String(err), stack: err?.stack || '' }); setTimeout(() => process.exit(1), 50).unref(); });
+process.on('unhandledRejection', err => appendDiagnostic('error', 'unhandledRejection', { message: err?.message || String(err), stack: err?.stack || '' }));
+appendDiagnostic('info', 'process-start', { node: process.version, platform: process.platform });
+
+const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
+// Wzorzec 1:1 z apps/formularze-ecodan/server.js (i kazdej innej appki w
+// repo) - patrz CLAUDE.md "Security posture".
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+};
+app.disable('x-powered-by');
+app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  if (req.get('X-Scyzoryk-Request') === '1') return next();
+  res.status(403).json({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie.' });
+});
+app.use(express.json({ limit: '2mb' }));
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.VARMERO_API_RATE_LIMIT || 6000),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Za dużo żądań w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.' }
+});
+const heavyJobLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.VARMERO_HEAVY_RATE_LIMIT || 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, error: 'Za dużo ciężkich żądań w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.' }
+});
+app.use('/api', apiLimiter);
+
+app.use('/shared', express.static(path.join(__dirname, '..', '..', 'shared-styles')));
+app.use(express.static(path.join(__dirname, 'public')));
+
+const uploadDir = path.join(APP_DATA_ROOT, 'uploads');
+fs.mkdir(uploadDir, { recursive: true }).catch(() => {});
+const upload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const originalName = String(file.originalname || '');
+    if (/\.xlsx$/i.test(originalName)) return cb(null, true);
+    if (/\.gsheet$/i.test(originalName)) {
+      return cb(new Error('Wybrano plik .gsheet, czyli skrót do Google Sheets. Pobierz arkusz jako Microsoft Excel (.xlsx) i wybierz pobrany plik.'));
+    }
+    cb(new Error('Dozwolone są tylko prawdziwe pliki Excel .xlsx. Jeśli masz .xls, zapisz go w Excelu jako .xlsx.'));
+  }
+});
+
+async function validateXlsxFile(file) {
+  const original = String(file?.originalname || 'plik.xlsx');
+  if (!/\.xlsx$/i.test(original)) throw new Error('Dozwolone są tylko pliki .xlsx. Pliki .xls zapisz najpierw jako .xlsx.');
+  const fh = await fs.open(file.path, 'r');
+  try {
+    const buffer = Buffer.alloc(4);
+    const { bytesRead } = await fh.read(buffer, 0, 4, 0);
+    if (bytesRead < 4 || buffer.toString('latin1', 0, 4) !== 'PK\x03\x04') {
+      throw new Error('Plik nie wygląda jak poprawny XLSX. Sprawdź, czy to nie jest skrót .gsheet albo stary plik .xls.');
+    }
+  } finally {
+    await fh.close().catch(() => {});
+  }
+}
+
+function cleanText(value, max = 120) {
+  return String(value || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
+}
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, name: 'formularze-varmero', version: APP_VERSION });
+});
+
+app.get('/api/version', (req, res) => {
+  res.json({ ok: true, version: APP_VERSION, defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX } });
+});
+
+app.post('/api/calculate', (req, res) => {
+  res.json(calculate(req.body));
+});
+
+// Krok 1 planu konczy sie tutaj - podglad tabeli adresowej dziala
+// samodzielnie, bez przegladarki. /api/batch/start (rzeczywiste
+// zgloszenia) doda sie dopiero z automation/ + mailbox.js w kolejnym kroku.
+app.post('/api/batch/preview', heavyJobLimiter, (req, res, next) => {
+  upload.single('excel')(req, res, error => {
+    if (error) return res.status(400).json({ ok: false, error: String(error?.message || error) });
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
+  try {
+    await validateXlsxFile(req.file);
+    const gminaName = cleanText(req.body.gminaName, 80);
+    const postalCode = cleanText(req.body.postalCode, 10);
+    const zone = cleanText(req.body.zone, 1);
+    const wojewodztwo = cleanText(req.body.wojewodztwo, 40);
+    const parsed = readTabelaAdresowa(req.file.path, { gminaName, postalCode, zone, wojewodztwo });
+    res.json({
+      ok: true,
+      sheetName: parsed.sheetName,
+      sheetNames: parsed.sheetNames || [],
+      totalRows: parsed.totalRows,
+      zoneKnown: parsed.zoneKnown,
+      records: parsed.records.map(record => ({
+        rowNumber: record.rowNumber,
+        lp: record.lp,
+        name: record.input.name,
+        address: record.input.address,
+        ozcKw: record.input.ozcKw,
+        heatingType: record.calculated.heatingType,
+        device: record.calculated.device
+      })),
+      skipped: parsed.skipped,
+      headers: parsed.headers
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  } finally {
+    if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
+  }
+});
+
+// Dane skrzynki IMAP - na razie tylko zmienne srodowiskowe (placeholder).
+// Docelowy mechanizm (alias plusowy per instalator, konfiguracja przetrwajaca
+// aktualizacje - patrz plan, wzorowany na lib/ocrConfigMigration.js) NIE jest
+// jeszcze zbudowany, bo nie ma jeszcze prawdziwej skrzynki do skonfigurowania.
+function readImapConfig() {
+  const host = process.env.VARMERO_IMAP_HOST;
+  const user = process.env.VARMERO_IMAP_USER;
+  const pass = process.env.VARMERO_IMAP_PASSWORD;
+  if (!host || !user || !pass) return null;
+  return {
+    host,
+    port: Number(process.env.VARMERO_IMAP_PORT || 993),
+    secure: String(process.env.VARMERO_IMAP_SECURE || 'true').toLowerCase() !== 'false',
+    auth: { user, pass }
+  };
+}
+
+// 1:1 wzor z apps/formularze-ecodan/server.js#parseSelectedRows.
+function parseSelectedRows(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(item => Number(item))
+      .filter(item => Number.isInteger(item) && item > 0)
+      .filter((item, index, array) => array.indexOf(item) === index)
+      .slice(0, 10000);
+  } catch {
+    return [];
+  }
+}
+
+function publicJob(job) {
+  return {
+    ...job,
+    resultsPreview: (job.results || []).slice(-20)
+  };
+}
+
+app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
+  upload.single('excel')(req, res, error => {
+    if (error) return res.status(400).json({ ok: false, error: String(error?.message || error) });
+    next();
+  });
+}, async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
+  const imapConfig = readImapConfig();
+  if (!imapConfig) {
+    if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
+    return res.status(400).json({ ok: false, error: 'Skrzynka pocztowa nie jest jeszcze skonfigurowana (brak VARMERO_IMAP_HOST/USER/PASSWORD) - bez niej nie da się odebrać kart.' });
+  }
+  try {
+    await validateXlsxFile(req.file);
+    const gminaName = cleanText(req.body.gminaName, 80);
+    const postalCode = cleanText(req.body.postalCode, 10);
+    const zone = cleanText(req.body.zone, 1);
+    const wojewodztwo = cleanText(req.body.wojewodztwo, 40);
+    const email = cleanText(req.body.email, 160);
+    const investmentName = cleanText(req.body.investmentName, 120);
+    const selectedRows = parseSelectedRows(req.body.selectedRows);
+    if (!email) return res.status(400).json({ ok: false, error: 'Podaj adres e-mail (alias instalatora), na który mają przyjść karty.' });
+    if (!/^[1-5]$/.test(zone)) return res.status(400).json({ ok: false, error: 'Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga, a nie da się jej wyczytać z tabeli adresowej.' });
+
+    const job = createJob({
+      sourceFile: req.file.originalname,
+      options: { investmentName, gminaName, postalCode, zone, wojewodztwo, concurrency: Number(req.body.concurrency) || undefined }
+    });
+    job.outputBase = OUTPUT_DIR;
+    res.json({ ok: true, jobId: job.id });
+
+    // Fire-and-forget, jak w Ecodanie - odpowiedz HTTP nie czeka na cala
+    // paczke (kazdy wiersz to realne zgloszenie + czekanie na maila, moze
+    // trwac minuty).
+    setImmediate(() => {
+      runBatchJob(job, req.file.path, { email, imapConfig, gminaName, postalCode, zone, wojewodztwo, selectedRows })
+        .catch(error => {
+          job.status = 'fatal-error';
+          job.fatalReason = String(error?.message || error);
+          job.finishedAt = new Date().toISOString();
+        })
+        .finally(() => { fs.unlink(req.file.path).catch(() => {}); });
+    });
+  } catch (error) {
+    if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
+
+app.post('/api/batch/cancel/:jobId', async (req, res) => {
+  const result = await cancelJob(req.params.jobId);
+  if (!result) return res.status(404).json({ ok: false, error: 'Nie znaleziono zadania.' });
+  res.json({ ok: true, ...result });
+});
+
+app.get('/api/batch/status/:jobId', (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, error: 'Nie znaleziono zadania.' });
+  res.json({ ok: true, job: publicJob(job) });
+});
+
+app.get('/api/batch/jobs', (req, res) => {
+  res.json({ ok: true, jobs: [...jobs.values()].map(job => ({ id: job.id, status: job.status, sourceFile: job.sourceFile, total: job.total, done: job.done, ok: job.ok, failed: job.failed, createdAt: job.createdAt })) });
+});
+
+process.on('SIGINT', () => cancelAllJobs('SIGINT').finally(() => process.exit(0)));
+process.on('SIGTERM', () => cancelAllJobs('SIGTERM').finally(() => process.exit(0)));
+
+app.listen(PORT, HOST, () => {
+  console.log(`formularze-varmero (${APP_VERSION}) nasłuchuje na http://${HOST}:${PORT}`);
+});

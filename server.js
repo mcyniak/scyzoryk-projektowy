@@ -113,7 +113,8 @@ const apps = [
   { slug: 'karty-katalogowe', name: 'Karty katalogowe', description: 'Automatyczny dobor i kopiowanie kart katalogowych do folderow klientow na podstawie kolumny UID w Excelu.', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), port: Number(process.env.KARTY_PORT || 3006), healthPath: '/api/health' },
   { slug: 'drukarka-projekty', name: 'Drukarka projekty', description: 'Automatyczne przygotowanie i druk dokumentacji projektowej na podstawie arkusza inwestycji.', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), port: Number(process.env.DRUKARKA_PROJEKTY_PORT || 3010), healthPath: '/api/health' },
   { slug: 'ocr-audytow', name: 'OCR audytów', description: 'Rozpoznawanie tekstu (w tym pisma recznego) na zeskanowanych audytach, z podzialem zbundlowanych plikow na adresy.', dir: path.join(ROOT, 'apps', 'ocr-audytow'), port: Number(process.env.OCR_AUDYTOW_PORT || 3011), healthPath: '/api/health' },
-  { slug: 'nazywarka-skanow', name: 'Nazywarka skanów', description: 'Zmiana nazw zeskanowanych PDF-ow w miejscu, na sieciowym udziale skanera.', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), port: Number(process.env.NAZYWARKA_SKANOW_PORT || 3007), healthPath: '/api/health' }
+  { slug: 'nazywarka-skanow', name: 'Nazywarka skanów', description: 'Zmiana nazw zeskanowanych PDF-ow w miejscu, na sieciowym udziale skanera.', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), port: Number(process.env.NAZYWARKA_SKANOW_PORT || 3007), healthPath: '/api/health' },
+  { slug: 'formularze-varmero', name: 'Formularze Varmero', description: 'Automatyczne zgloszenia do kalkulatora doboru pompy ciepla Varmero na podstawie tabeli adresowej, z odbiorem kart wynikowych mailem.', dir: path.join(ROOT, 'apps', 'formularze-varmero'), port: Number(process.env.FORMULARZE_VARMERO_PORT || 3012), healthPath: '/api/health', extraEnv: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || '0' } }
 ];
 
 
@@ -126,7 +127,8 @@ const dependencyChecks = [
   { slug: 'karty-katalogowe', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'express-rate-limit'] },
   { slug: 'drukarka-projekty', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), deps: ['express', 'multer', 'express-rate-limit', 'xlsx', 'mammoth', 'pdf-parse', 'pdf-lib', 'sanitize-filename'] },
   { slug: 'ocr-audytow', dir: path.join(ROOT, 'apps', 'ocr-audytow'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib', '@pdf-lib/fontkit', 'pdf-parse', 'jimp', 'sanitize-filename', 'xlsx', '@google-cloud/documentai', 'exceljs'] },
-  { slug: 'nazywarka-skanow', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), deps: ['express', 'express-rate-limit'] }
+  { slug: 'nazywarka-skanow', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), deps: ['express', 'express-rate-limit'] },
+  { slug: 'formularze-varmero', dir: path.join(ROOT, 'apps', 'formularze-varmero'), deps: ['express', 'playwright', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx', 'imapflow', 'mailparser'], playwright: true }
 ];
 
 function appHasDependencies(app) {
