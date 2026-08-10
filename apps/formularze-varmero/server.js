@@ -218,10 +218,16 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     const postalCode = cleanText(req.body.postalCode, 10);
     const zone = cleanText(req.body.zone, 1);
     const wojewodztwo = cleanText(req.body.wojewodztwo, 40);
-    const email = cleanText(req.body.email, 160);
+    // Baza adresu plusowego jest ZAWSZE ta sama, co skonfigurowana skrzynka
+    // IMAP - to jedyna skrzynka, ktora jest realnie odpytywana o karte, wiec
+    // pozwolenie na dowolny inny adres w formularzu byloby nie tylko zbedne,
+    // ale wrecz bledne (karta nigdy by nie trafila na przeszukiwana
+    // skrzynke). Uzytkownik konfiguruje mailbox RAZ (VARMERO_IMAP_*), nie
+    // wpisuje go przy kazdej paczce - patrz tez public/inline-1.js (formularz
+    // nie ma juz pola e-mail).
+    const email = imapConfig.auth.user;
     const investmentName = cleanText(req.body.investmentName, 120);
     const selectedRows = parseSelectedRows(req.body.selectedRows);
-    if (!email) return res.status(400).json({ ok: false, error: 'Podaj adres e-mail (alias instalatora), na który mają przyjść karty.' });
     if (!/^[1-5]$/.test(zone)) return res.status(400).json({ ok: false, error: 'Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga, a nie da się jej wyczytać z tabeli adresowej.' });
 
     const job = createJob({

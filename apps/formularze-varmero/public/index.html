@@ -38,7 +38,7 @@
         <h2>Jak działa?</h2>
         <div class="pill-list">
           <div class="pill">Wczytaj Excel, sprawdź adresy.</div>
-          <div class="pill">Podaj strefę, województwo i adres e-mail.</div>
+          <div class="pill">Podaj strefę i województwo.</div>
           <div class="pill">Karty PDF trafią do folderu zadania.</div>
         </div>
       </aside>
@@ -54,25 +54,17 @@
         </div>
       </div>
       <form id="batchForm">
-        <div class="grid">
-          <label>Plik Excel tabeli adresowej
+        <label>Plik Excel tabeli adresowej
+          <div class="file-row">
             <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
-            <span class="field-help">Wybierz plik .xlsx, potem kliknij "Sprawdź adresy".</span>
-          </label>
-          <label style="align-self:end;">
             <button type="button" id="checkAddresses">Sprawdź adresy</button>
-          </label>
-        </div>
+          </div>
+          <span class="field-help">Wybierz plik .xlsx, potem kliknij "Sprawdź adresy". Karty wynikowe wrócą na skrzynkę skonfigurowaną w Scyzoryku (nie trzeba jej tu podawać) - każde zgłoszenie dostaje własny, unikalny wariant tego adresu, więc karty nigdy się nie pomylą między wierszami.</span>
+        </label>
 
-        <div class="grid two">
-          <label>Nazwa inwestycji
-            <input name="investmentName" id="investmentName" placeholder="np. Zagórów 2026" />
-          </label>
-          <label>Adres e-mail (alias), na który mają przyjść karty
-            <input name="email" id="email" type="email" required placeholder="np. oze@firma.pl" />
-            <span class="field-help">Każde zgłoszenie dostaje własny, unikalny wariant tego adresu (plusowy alias) - karty nigdy się nie pomylą między wierszami.</span>
-          </label>
-        </div>
+        <label style="margin-top: var(--space-4);">Nazwa inwestycji
+          <input name="investmentName" id="investmentName" placeholder="np. Zagórów 2026" />
+        </label>
 
         <div class="grid four">
           <label>Strefa klimatyczna

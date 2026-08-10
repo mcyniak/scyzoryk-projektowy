@@ -43,10 +43,6 @@ document.querySelector('#batchForm').addEventListener('submit', async (event) =>
     alert('Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga.');
     return;
   }
-  if (!form.email.value) {
-    alert('Podaj adres e-mail (alias), na który mają przyjść karty.');
-    return;
-  }
 
   const data = new FormData(form);
   data.set('concurrency', form.concurrency.value || '1');
@@ -356,7 +352,6 @@ function saveSettings() {
   const form = document.querySelector('#batchForm');
   const settings = {
     investmentName: form.investmentName.value || '',
-    email: form.email.value || '',
     zone: form.zone.value || '',
     wojewodztwo: form.wojewodztwo.value || '',
     gminaName: form.gminaName.value || '',
@@ -370,7 +365,6 @@ function loadSettings() {
     const settings = JSON.parse(localStorage.getItem('varmeroGeneratorSettings') || '{}');
     const form = document.querySelector('#batchForm');
     if (settings.investmentName) form.investmentName.value = settings.investmentName;
-    if (settings.email) form.email.value = settings.email;
     if (settings.zone) form.zone.value = settings.zone;
     if (settings.wojewodztwo) form.wojewodztwo.value = settings.wojewodztwo;
     if (settings.gminaName) form.gminaName.value = settings.gminaName;
