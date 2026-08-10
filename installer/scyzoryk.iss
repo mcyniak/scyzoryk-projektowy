@@ -120,6 +120,7 @@ Source: "{#StagingDir}\apps\dokumenty-seryjne\node_modules\*"; DestDir: "{app}\a
 Source: "{#StagingDir}\apps\drukarka\node_modules\*"; DestDir: "{app}\apps\drukarka\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\drukarka-projekty\node_modules\*"; DestDir: "{app}\apps\drukarka-projekty\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\formularze-ecodan\node_modules\*"; DestDir: "{app}\apps\formularze-ecodan\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\formularze-varmero\node_modules\*"; DestDir: "{app}\apps\formularze-varmero\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\karty-katalogowe\node_modules\*"; DestDir: "{app}\apps\karty-katalogowe\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\nazywarka-skanow\node_modules\*"; DestDir: "{app}\apps\nazywarka-skanow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\ocr-audytow\node_modules\*"; DestDir: "{app}\apps\ocr-audytow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
