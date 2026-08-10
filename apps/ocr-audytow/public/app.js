@@ -65,11 +65,35 @@
   const ocrUnlockStatus = document.getElementById('ocrUnlockStatus');
 
   const EXCEL_PATH_STORAGE_KEY = 'ocr-audytow-excel-path';
+  const EXCEL_PATH_HISTORY_KEY = 'ocr-audytow-excel-path-history';
+  const EXCEL_PATH_HISTORY_MAX = 8;
   const FAMILY_STORAGE_KEY = 'ocr-audytow-family';
   excelPathInput.value = localStorage.getItem(EXCEL_PATH_STORAGE_KEY) || '';
   familySelect.value = localStorage.getItem(FAMILY_STORAGE_KEY) || '';
 
-  const FAMILY_LABELS = { pc: 'Pompy ciepła', solary: 'Solary', kotly: 'Kotły' };
+  // Podpowiedzi ostatnio uzywanych sciezek Excela (2026-08-07, UX: wlasciciel
+  // sam sie gubil - "gdzie zapisac/stworzyc tabele") - DODATKOWE do
+  // EXCEL_PATH_STORAGE_KEY (ktory nadal odpowiada tylko za pre-fill OSTATNIEJ
+  // sciezki, bez zmian) - natywny <datalist>, zero nowej zaleznosci/okna.
+  const excelRecentPathsEl = document.getElementById('excelRecentPaths');
+  function loadExcelPathHistory() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(EXCEL_PATH_HISTORY_KEY) || '[]');
+      return Array.isArray(raw) ? raw.filter((p) => typeof p === 'string' && p) : [];
+    } catch (_) { return []; }
+  }
+  function renderExcelPathHistory() {
+    excelRecentPathsEl.innerHTML = loadExcelPathHistory().map((p) => `<option value="${escapeHtml(p)}"></option>`).join('');
+  }
+  function rememberExcelPath(pathValue) {
+    const history = loadExcelPathHistory().filter((p) => p !== pathValue);
+    history.unshift(pathValue);
+    localStorage.setItem(EXCEL_PATH_HISTORY_KEY, JSON.stringify(history.slice(0, EXCEL_PATH_HISTORY_MAX)));
+    renderExcelPathHistory();
+  }
+  renderExcelPathHistory();
+
+  const FAMILY_LABELS = { pc: 'Pompy ciepła', solary: 'Solary', kotly: 'Kotły', audyt: 'Audyty OZC (pompa ciepła)' };
   let selectedFamily = familySelect.value;
   let selectedFiles = [];
   // Stan sesji analizy (miedzy /api/ocr/analyze a /api/ocr/finalize) - patrz
@@ -476,8 +500,8 @@
       }
     }
     const templateNote = usedLabels.size
-      ? `Użyty wzór: ${Array.from(usedLabels).join(', ')}.`
-      : 'Nie dopasowano żadnego zapisanego wzoru - pełne rozpoznawanie.';
+      ? `Użyty wzór rozpoznawania: ${Array.from(usedLabels).join(', ')}.`
+      : 'Nie dopasowano żadnego zapisanego wzoru rozpoznawania - pełne rozpoznawanie.';
     familyChosenNote.textContent = `${familyNote} ${templateNote}`;
     reviewQueue = buildReviewQueue();
     queuePos = 0;
@@ -768,7 +792,7 @@
         body: JSON.stringify({ analysisId, fileId: file.fileId, blockIndex: block.blockIndex, label: label.trim() })
       });
       saveTemplateNote.hidden = false;
-      saveTemplateNote.textContent = `Zapisano wzór (${data.textFieldsCount} pól tekstowych, ${data.groupFieldsCount} grup checkboxów) - kolejne adresy tej gminy skorzystają z niego automatycznie.`;
+      saveTemplateNote.textContent = `Zapisano wzór rozpoznawania (${data.textFieldsCount} pól tekstowych, ${data.groupFieldsCount} grup checkboxów) - pojawi się na liście "Wzór rozpoznawania skanu" w kroku 2 dla kolejnych plików tej gminy.`;
     } catch (err) {
       saveTemplateNote.hidden = false;
       saveTemplateNote.textContent = `Nie udało się zapisać wzoru: ${err.message}.`;
@@ -786,8 +810,12 @@
     setStatus('Zapisywanie plików...', 90);
 
     const excelPath = excelPathInput.value.trim();
-    if (excelPath) localStorage.setItem(EXCEL_PATH_STORAGE_KEY, excelPath);
-    else localStorage.removeItem(EXCEL_PATH_STORAGE_KEY);
+    if (excelPath) {
+      localStorage.setItem(EXCEL_PATH_STORAGE_KEY, excelPath);
+      rememberExcelPath(excelPath);
+    } else {
+      localStorage.removeItem(EXCEL_PATH_STORAGE_KEY);
+    }
 
     const payload = {
       analysisId,

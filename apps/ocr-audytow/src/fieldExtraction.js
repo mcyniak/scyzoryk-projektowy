@@ -79,6 +79,31 @@ function cleanPercentValue(value) {
   return m[2] ? `${m[1]},${m[2]}` : m[1];
 }
 
+// Warstwa strukturalna (Faza 2 planu OZC, 2026-08-07,
+// C:\Users\Piotr.Cyniak\.claude\plans\sparkling-doodling-prism.md) - liczba
+// wyciagnieta z wartosci tekstowej pola numeric/percent, NIEZALEZNIE od
+// `value` (ktory zostaje w formacie do wyswietlenia w Excelu, z polskim
+// przecinkiem/ewentualna jednostka) - to jest wejscie, ktorego bedzie
+// potrzebowal przyszly silnik liczacy OZC (liczba typu Number, nie string do
+// parsowania). Zwraca null, jesli w wartosci nie ma zadnej liczby (needsReview
+// i tak zlapie pusty/watpliwy `value`, wiec nie trzeba tu dodatkowo ostrzegac).
+function parseNumericValue(text) {
+  const m = String(text || '').match(/-?\d+(?:[.,]\d+)?/);
+  if (!m) return null;
+  const num = Number(m[0].replace(',', '.'));
+  return Number.isFinite(num) ? num : null;
+}
+
+// Jak parseNumericValue, ale dla `numericValue` z tableMatch.js (grubosc
+// warstwy w cm) - ten string jest juz "czysty" (sam wzorzec liczby, bez
+// jednostki doklejonej), ale moze miec przecinek (odreczny zapis "8,5") albo
+// kropke na koncu (OCR-owy artefakt "8." z tableMatch.js:40) do usuniecia.
+function parseDecimal(text) {
+  const trimmed = String(text || '').trim().replace(/\.$/, '').replace(',', '.');
+  const num = Number(trimmed);
+  return Number.isFinite(num) ? num : null;
+}
+
 // found:false = etykieta/checkbox NIE wystapila w ogole w tym dokumencie -
 // pole strukturalnie nie dotyczy tego formularza, wiec NIE trafia do
 // recznego przegladu (needsReview:false, resolved:true od razu, puste w
@@ -92,7 +117,7 @@ function toFieldResult(extracted, pageIndex, valueKind) {
   let value = extracted.value || '';
   if (value && !looksPlausible(value, valueKind)) value = '';
   const needsReview = !value || extracted.confidence === null || extracted.confidence < LOW_CONFIDENCE_THRESHOLD;
-  return {
+  const result = {
     value,
     confidence: extracted.confidence,
     pageIndex,
@@ -101,6 +126,22 @@ function toFieldResult(extracted, pageIndex, valueKind) {
     needsReview,
     resolved: !needsReview
   };
+  // Warstwa strukturalna (Faza 2/3 planu OZC) - TYLKO gdy `value` przeszlo
+  // needsReview/looksPlausible (niepuste) I nie jest ostrzezeniem o
+  // "Sprzeczne odczyty..." (extractMaterialField/extractCheckboxField celowo
+  // NIE ustawiaja materialKey/optionKey w galezi ambiguous - patrz tam) -
+  // zeby niepewna/sprzeczna wartosc nigdy nie trafila jako "gotowa" liczba do
+  // przyszlego eksportu strukturalnego (Faza 4: bramka jakosci).
+  if (value) {
+    if (extracted.materialKey) result.materialKey = extracted.materialKey;
+    if (extracted.optionKey) result.optionKey = extracted.optionKey;
+    if (Number.isFinite(extracted.thicknessCm)) result.thicknessCm = extracted.thicknessCm;
+    if (valueKind === 'numeric' || valueKind === 'percent') {
+      const parsedNumber = parseNumericValue(value);
+      if (parsedNumber !== null) result.parsedNumber = parsedNumber;
+    }
+  }
+  return result;
 }
 
 // --- Ekstrakcja pojedynczego pola z JEDNEJ strony - probuje tabele, potem
@@ -228,7 +269,7 @@ function extractCheckboxField(page, def) {
         return { value: `Sprzeczne odczyty: ${checkedTable.conflictLabels.join(' / ')}`, confidence: COMPOSITE_CONFIDENCE_CAP, found: true };
       }
       if (checkedTable.option) {
-        return { value: checkedTable.option.label, confidence: null, found: true, valueBBox: checkedTable.bbox };
+        return { value: checkedTable.option.label, confidence: null, found: true, valueBBox: checkedTable.bbox, optionKey: checkedTable.option.materialKey || null };
       }
     }
   }
@@ -239,7 +280,7 @@ function extractCheckboxField(page, def) {
         return { value: `Sprzeczne odczyty: ${checkedFF.conflictLabels.join(' / ')}`, confidence: COMPOSITE_CONFIDENCE_CAP, found: true };
       }
       if (checkedFF.option) {
-        return { value: checkedFF.option.label, confidence: checkedFF.confidence, found: true, labelBBox: checkedFF.labelBBox, valueBBox: checkedFF.valueBBox };
+        return { value: checkedFF.option.label, confidence: checkedFF.confidence, found: true, labelBBox: checkedFF.labelBBox, valueBBox: checkedFF.valueBBox, optionKey: checkedFF.option.materialKey || null };
       }
       return { value: '', confidence: null, found: true };
     }
@@ -260,7 +301,8 @@ function extractMaterialField(page, def) {
     }
     if (checkedTable.option) {
       const value = checkedTable.numericValue ? `${checkedTable.option.label}, ${checkedTable.numericValue}cm` : checkedTable.option.label;
-      return { value, confidence: null, found: true, valueBBox: checkedTable.bbox };
+      const thicknessCm = checkedTable.numericValue ? parseDecimal(checkedTable.numericValue) : null;
+      return { value, confidence: null, found: true, valueBBox: checkedTable.bbox, materialKey: checkedTable.option.materialKey || null, thicknessCm };
     }
     return { value: '', confidence: null, found: true };
   }
@@ -413,11 +455,16 @@ const FIELD_DEFS = [
     { label: 'Płaski', formFieldPattern: /P[LŁ]ASKI/ },
     { label: 'Skośny', formFieldPattern: /SKO[SŚ]NY/ }
   ] },
+  // materialKey (Faza 1 planu OZC, 2026-08-07) - identyfikator materialu
+  // stabilny/ASCII, niezalezny od polskiej etykiety wyswietlanej w Excelu -
+  // przyszla baza lambda (przewodnosc cieplna) bedzie sie zaczepiac o TEN
+  // klucz, nie o `label` (ktory zostaje czysto kosmetyczny, do czytania przez
+  // czlowieka). Patrz plan C:\Users\Piotr.Cyniak\.claude\plans\sparkling-doodling-prism.md.
   { key: 'pokrycieDachu', columnLabel: 'Pokrycie dachu', kind: 'checkbox', options: [
-    { label: 'Blachodachówka', formFieldPattern: /BLACHODACH[OÓ]WKA/ },
-    { label: 'Papa', formFieldPattern: /^PAPA$/ },
-    { label: 'Dachówka ceramiczna', formFieldPattern: /DACH[OÓ]WKA.*CERAMICZNA/ },
-    { label: 'Membrana', formFieldPattern: /MEMBRANA/ }
+    { label: 'Blachodachówka', materialKey: 'blachodachowka', formFieldPattern: /BLACHODACH[OÓ]WKA/ },
+    { label: 'Papa', materialKey: 'papa', formFieldPattern: /^PAPA$/ },
+    { label: 'Dachówka ceramiczna', materialKey: 'dachowka_ceramiczna', formFieldPattern: /DACH[OÓ]WKA.*CERAMICZNA/ },
+    { label: 'Membrana', materialKey: 'membrana', formFieldPattern: /MEMBRANA/ }
   ] },
   { key: 'ksztaltBudynku', columnLabel: 'Kształt budynku', kind: 'checkbox', options: [
     { label: 'Regularny', formFieldPattern: /^REGULARNY$/ },
@@ -426,39 +473,39 @@ const FIELD_DEFS = [
 
   // Material+grubosc (tabele) - patrz extractMaterialField.
   { key: 'scianaZewnMaterial', columnLabel: 'Ściana zewnętrzna (materiał, grubość)', kind: 'material', options: [
-    { label: 'Cegła ceramiczna pełna', tablePattern: /CEG[LŁ]A.*CERAMICZNA.*PE[LŁ]NA/ },
-    { label: 'Cegła dziurawka', tablePattern: /CEG[LŁ]A.*DZIURAWKA/ },
-    { label: 'Bloczki z betonu komórkowego', tablePattern: /BLOCZKI.*BETONU.*KOM[OÓ]RKOWEGO/ },
-    { label: 'Bloczki silikatowe', tablePattern: /BLOCZKI.*SILIKATOWE/ },
-    { label: 'Pustak keramzytobetonowe', tablePattern: /PUSTAK.*KERAMZYTOBETONOWE/ },
-    { label: 'Drewno', tablePattern: /^DREWNO/ },
-    { label: 'Żużel', tablePattern: /^[ZŻ]U[ZŻ]EL/ },
-    { label: 'Inne', tablePattern: /^INNE/ }
+    { label: 'Cegła ceramiczna pełna', materialKey: 'cegla_ceramiczna_pelna', tablePattern: /CEG[LŁ]A.*CERAMICZNA.*PE[LŁ]NA/ },
+    { label: 'Cegła dziurawka', materialKey: 'cegla_dziurawka', tablePattern: /CEG[LŁ]A.*DZIURAWKA/ },
+    { label: 'Bloczki z betonu komórkowego', materialKey: 'bloczki_beton_komorkowy', tablePattern: /BLOCZKI.*BETONU.*KOM[OÓ]RKOWEGO/ },
+    { label: 'Bloczki silikatowe', materialKey: 'bloczki_silikatowe', tablePattern: /BLOCZKI.*SILIKATOWE/ },
+    { label: 'Pustak keramzytobetonowe', materialKey: 'pustak_keramzytobetonowy', tablePattern: /PUSTAK.*KERAMZYTOBETONOWE/ },
+    { label: 'Drewno', materialKey: 'drewno', tablePattern: /^DREWNO/ },
+    { label: 'Żużel', materialKey: 'zuzel', tablePattern: /^[ZŻ]U[ZŻ]EL/ },
+    { label: 'Inne', materialKey: 'inne', tablePattern: /^INNE/ }
   ] },
   { key: 'ocieplenieScianyZewn', columnLabel: 'Ocieplenie ściany zewnętrznej (materiał, grubość)', kind: 'material', options: [
-    { label: 'Styropian', tablePattern: /STYROPIAN/ },
-    { label: 'Wełna mineralna', tablePattern: /WE[LŁ]NA.*MINERALNA/ },
-    { label: 'Pustka powietrzna', tablePattern: /PUSTKA.*POWIETRZNA/ },
-    { label: 'Pianka PUR', tablePattern: /PIANKA/ },
-    { label: 'Brak', tablePattern: /^BRAK/ }
+    { label: 'Styropian', materialKey: 'styropian', tablePattern: /STYROPIAN/ },
+    { label: 'Wełna mineralna', materialKey: 'welna_mineralna', tablePattern: /WE[LŁ]NA.*MINERALNA/ },
+    { label: 'Pustka powietrzna', materialKey: 'pustka_powietrzna', tablePattern: /PUSTKA.*POWIETRZNA/ },
+    { label: 'Pianka PUR', materialKey: 'pianka_pur', tablePattern: /PIANKA/ },
+    { label: 'Brak', materialKey: 'brak', tablePattern: /^BRAK/ }
   ] },
   { key: 'scianaFundamentowaMaterial', columnLabel: 'Ściana fundamentowa (materiał, grubość)', kind: 'material', options: [
-    { label: 'Beton', tablePattern: /^BETON/ },
-    { label: 'Żużel', tablePattern: /^[ZŻ]U[ZŻ]EL/ },
-    { label: 'Cegła pełna', tablePattern: /CEG[LŁ]A.*PE[LŁ]NA/ },
-    { label: 'Pustak', tablePattern: /^PUSTAK/ },
-    { label: 'Kamień', tablePattern: /KAMIE[NŃ]/ },
-    { label: 'Bloczek betonowy', tablePattern: /BLOCZEK.*BETONOWY/ }
+    { label: 'Beton', materialKey: 'beton', tablePattern: /^BETON/ },
+    { label: 'Żużel', materialKey: 'zuzel', tablePattern: /^[ZŻ]U[ZŻ]EL/ },
+    { label: 'Cegła pełna', materialKey: 'cegla_pelna', tablePattern: /CEG[LŁ]A.*PE[LŁ]NA/ },
+    { label: 'Pustak', materialKey: 'pustak', tablePattern: /^PUSTAK/ },
+    { label: 'Kamień', materialKey: 'kamien', tablePattern: /KAMIE[NŃ]/ },
+    { label: 'Bloczek betonowy', materialKey: 'bloczek_betonowy', tablePattern: /BLOCZEK.*BETONOWY/ }
   ] },
   { key: 'stropOgrzewane', columnLabel: 'Strop nad ogrzewanymi (materiał, grubość)', kind: 'material', options: [
-    { label: 'Strop żelbetowy monolityczny', tablePattern: /STROP.*[ZŻ]ELBETOWY/ },
-    { label: 'Strop gęsto żebrowy', tablePattern: /STROP.*G[EĘ]STO.*[ZŻ]EBROWY/ },
-    { label: 'Strop drewniany', tablePattern: /STROP.*DREWNIANY/ }
+    { label: 'Strop żelbetowy monolityczny', materialKey: 'strop_zelbetowy_monolityczny', tablePattern: /STROP.*[ZŻ]ELBETOWY/ },
+    { label: 'Strop gęsto żebrowy', materialKey: 'strop_gesto_zebrowy', tablePattern: /STROP.*G[EĘ]STO.*[ZŻ]EBROWY/ },
+    { label: 'Strop drewniany', materialKey: 'strop_drewniany', tablePattern: /STROP.*DREWNIANY/ }
   ] },
   { key: 'stropNieogrzewane', columnLabel: 'Strop nad nieogrzewanymi (materiał, grubość)', kind: 'material', options: [
-    { label: 'Strop żelbetowy monolityczny', tablePattern: /STROP.*[ZŻ]ELBETOWY/ },
-    { label: 'Strop gęsto żebrowy', tablePattern: /STROP.*G[EĘ]STO.*[ZŻ]EBROWY/ },
-    { label: 'Strop drewniany', tablePattern: /STROP.*DREWNIANY/ }
+    { label: 'Strop żelbetowy monolityczny', materialKey: 'strop_zelbetowy_monolityczny', tablePattern: /STROP.*[ZŻ]ELBETOWY/ },
+    { label: 'Strop gęsto żebrowy', materialKey: 'strop_gesto_zebrowy', tablePattern: /STROP.*G[EĘ]STO.*[ZŻ]EBROWY/ },
+    { label: 'Strop drewniany', materialKey: 'strop_drewniany', tablePattern: /STROP.*DREWNIANY/ }
   ] },
   // Dodane dla kolumn "Ociepl. fund."/"Ociepl. dach/strop" tabelki adresowej PC
   // (2026-07-23) - na formularzu to proste "Izolacja: [ ] Tak, grubość: __cm
@@ -479,6 +526,65 @@ const FIELD_DEFS = [
     { label: 'Tak', tablePattern: /^TAK\b/ },
     { label: 'Nie', tablePattern: /^NIE$/ }
   ] },
+
+  // Sekcja "C./F. Podloga na gruncie (konstrukcja) - zaznaczyc wystepujace
+  // warstwy" - potwierdzone na dwoch realnych plikach (Zlesin, Kazimierz
+  // Biskupi): W ODROZNIENIU od innych pol typu 'material' w tym pliku, to
+  // NIE jest pojedynczy wybor z listy (jeden material sciany, jeden material
+  // stropu...) - to TRZY NIEZALEZNE checkboxy, kazdy z wlasna gruboscia,
+  // ktore moga byc zaznaczone w DOWOLNEJ kombinacji naraz (na realnym pliku
+  // Zlesin: Wylewka betonowa I Warstwa betonu chudego byly zaznaczone
+  // jednoczesnie, Izolacja nie). Stad TRZY OSOBNE pola typu 'material' z
+  // pojedyncza opcja kazde (nie jedno pole z 3 opcjami do wyboru), zeby
+  // kazda warstwa byla niezaleznie potwierdzana/przegladana.
+  { key: 'podlogaWylewkaBetonowa', columnLabel: 'Podłoga na gruncie - wylewka betonowa (grubość)', kind: 'material', options: [
+    { label: 'Wylewka betonowa', materialKey: 'wylewka_betonowa', tablePattern: /WYLEWKA.*BETONOWA/ }
+  ] },
+  // Audyt: "Izolacja" (bez dalszych slow) powtarza sie tez w sekcjach Sciana
+  // fundamentowa/Strop ogrzewane/Strop nieogrzewane/Dach (patrz komentarz
+  // przy izolacjaScianyFundamentowej/izolacjaDachu wyzej) - ten sam,
+  // juz zaakceptowany kompromis: needsReview zlapie niejednoznaczne
+  // dopasowanie zamiast po cichu pomylic wartosc miedzy sekcjami.
+  { key: 'podlogaIzolacja', columnLabel: 'Podłoga na gruncie - izolacja (grubość)', kind: 'material', options: [
+    { label: 'Izolacja', materialKey: 'izolacja_podlogi', tablePattern: /^IZOLACJA\b/ }
+  ] },
+  { key: 'podlogaWarstwaBetonuChudego', columnLabel: 'Podłoga na gruncie - warstwa betonu chudego (grubość)', kind: 'material', options: [
+    { label: 'Warstwa betonu chudego', materialKey: 'beton_chudy', tablePattern: /WARSTWA.*BETONU.*CHUDEGO/ }
+  ] },
+
+  // Sekcja "H. Stolarka okienna" - potwierdzone na realnym wzorze (Kazimierz
+  // Biskupi): Typ okien (Jedno/Dwu/Trzyszybowe) i Material okien
+  // (Plastik/Drewno/Aluminium) NIE byly dotad w ogole wyciagane - istniejace
+  // pole dataMontazuDrzwiZewn lapalo TYLKO date montazu drzwi zewnetrznych
+  // (jedna z 3 powtorzonych etykiet "Przyblizona data montazu" na stronie).
+  { key: 'typOkien', columnLabel: 'Typ okien', kind: 'checkbox', options: [
+    { label: 'Jednoszybowe', formFieldPattern: /JEDNOSZYBOWE/ },
+    { label: 'Dwuszybowe', formFieldPattern: /DWUSZYBOWE/ },
+    { label: 'Trzyszybowe', formFieldPattern: /TRZYSZYBOWE/ }
+  ] },
+  // Audyt: "Plastik"/"Drewno" powtarzaja sie tez w Material drzwi
+  // zewnetrznych/garazowych (osobne sekcje na tym samym formularzu) - ten
+  // sam, juz zaakceptowany kompromis co reszta pol typu checkbox z
+  // powtarzajacymi sie etykietami w tym pliku.
+  { key: 'materialOkien', columnLabel: 'Materiał okien', kind: 'checkbox', options: [
+    { label: 'Plastik', materialKey: 'plastik', formFieldPattern: /^PLASTIK$/ },
+    // materialKey 'drewno' celowo TAKI SAM jak w scianaZewnMaterial/inne pola
+    // materialowe nizej - to jest ta sama pozycja w przyszlej bazie lambda
+    // (drewno jako material ma jedna wartosc lambda niezaleznie od tego, w
+    // ktorej czesci budynku wystapi), nie kolizja do naprawy.
+    { label: 'Drewno', materialKey: 'drewno', formFieldPattern: /^DREWNO$/ },
+    { label: 'Aluminium', materialKey: 'aluminium', formFieldPattern: /ALUMINIUM/ }
+  ] },
+  // Etykieta "Przyblizona data montazu:" powtarza sie 3x na stronie
+  // (stolarka/drzwi zewn/drzwi garaz, patrz komentarz przy
+  // dataMontazuDrzwiZewn wyzej) - NIEZWERYFIKOWANE na realnym pliku (bez
+  // surowego zrzutu formFields z Document AI dla tej konkretnej sekcji):
+  // zakladamy, ze wartosc niesie wlasny prefiks naglowka sekcji "H. Stolarka
+  // okienna:" tak samo jak wersja "drzwi zewn" niesie "I. Drzwi zewnetrzne:" -
+  // jesli to zalozenie sie nie potwierdzi, pole po prostu trafi do recznego
+  // przegladu jak kazde inne niedopasowane pole (bezpieczny domysl, nie
+  // cichy zly odczyt).
+  { key: 'dataMontażuStolarki', columnLabel: 'Data montażu stolarki okiennej', kind: 'text', valueKind: 'numeric', formFieldPattern: /PRZYBLI[ZŻ]ONA.*DATA.*MONTA[ZŻ]U/, valuePattern: /STOLARKA/, stripHeaderPrefix: true },
 
   // Ksztalt budynku / elewacje (strona "OBRYS BUDYNKU") - formField, best-effort.
   { key: 'dlugoscBudynku', columnLabel: 'Długość budynku (regularny)', kind: 'text', valueKind: 'numeric', formFieldPattern: /^D[LŁ]UGO[SŚ][CĆ]$/ },
@@ -570,4 +676,4 @@ function extractSingleField(page, key) {
   return toFieldResult(extracted, page.pageIndex ?? null, def.valueKind);
 }
 
-module.exports = { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS, FIELD_DEFS, extractField, toFieldResult };
+module.exports = { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS, FIELD_DEFS, extractField, toFieldResult, parseNumericValue, parseDecimal };

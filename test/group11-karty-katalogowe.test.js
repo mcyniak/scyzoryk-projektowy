@@ -75,6 +75,34 @@ test('adresPasujeDoFolderu: przy 2 tokenach sam numer domu nie wystarcza, sama n
   assert.equal(adresPasujeDoFolderu('Kwiatowa 15', '41 - Zarnow, ul. Kwiatowa 15'), true);
 });
 
+test('adresPasujeDoFolderu: kod pocztowy w adresie z Excela nie blokuje dopasowania (real bug zlapany na produkcji z prawdziwego raportu)', () => {
+  // Audyt: kod pocztowy + gmina na koncu adresu z Excela ("26-330 Zarnow")
+  // dokladaly tokeny, ktore NIGDY nie wystepuja w nazwie folderu - to
+  // podnosilo wymagany prog dopasowania (60% z wiekszej liczby tokenow) na
+  // tyle, ze w prawdziwym raporcie uzytkownika niemal KAZDY wiersz z kodem
+  // pocztowym w adresie dostawal falszywy "mozliwy konflikt numeracji",
+  // mimo ze ulica+numer w pelni sie zgadzaly z folderem (np. "Nadole 21A" vs
+  // folder "Nadole 21a").
+  assert.equal(adresPasujeDoFolderu('Nadole 21A, 26-330 Zarnow', '10 - Nadole 21a'), true);
+  assert.equal(adresPasujeDoFolderu('Paszkowice 86, 26-330 Zarnow', '12 - Paszkowice 86'), true);
+  // Faktyczny numeracyjny konflikt (rozna ulica) nadal musi zostac wykryty -
+  // usuwanie kodu pocztowego nie moze uczynic dopasowania zbyt tolerancyjnym.
+  assert.equal(adresPasujeDoFolderu('Inna Wies 5, 26-330 Zarnow', '10 - Nadole 21a'), false);
+});
+
+test('adresPasujeDoFolderu: adnotacja "korekta adresu" ze STARYM adresem nadal pasuje do jeszcze-nieprzemianowanego folderu (real bug zlapany na produkcji)', () => {
+  // Audyt: "Przylek 72B (korekta adresu ul. Polna 12 Przylek)" - stary adres
+  // w nawiasie WCIAZ pasuje do folderu, ktory jeszcze nie zostal
+  // przemianowany po korekcie (normalny, oczekiwany stan) - ale slowa samej
+  // adnotacji ("korekta", "adresu") liczyly sie jako dodatkowe tokeny,
+  // podnoszac wymagany prog dopasowania na tyle, ze prawdziwe trafienie
+  // (ulica+numer starego adresu) przestawalo wystarczac.
+  assert.equal(
+    adresPasujeDoFolderu('Przylek 72B (korekta adresu ul. Polna 12 Przylek)', '10 - Przylek, ul. Polna 12'),
+    true
+  );
+});
+
 test('parseIdFolderu: liczba calkowita (w tym zapisana jako X.0) przechodzi, prawdziwy ulamek (X.9) jest bledem (audyt rozdz. 16, P1)', () => {
   assert.equal(parseIdFolderu(78), '78');
   assert.equal(parseIdFolderu('78'), '78');

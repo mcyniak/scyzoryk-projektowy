@@ -26,10 +26,23 @@ function normalize(text) {
     .trim();
 }
 
-const ANNOTATION_WORDS = new Set(["zmiana", "adresu", "adrsu", "adres", "stary", "nowy", "poprzedni", "obecnie", "wczesniej"]);
+// "korekta" dopisane po zlapaniu real-world przypadku ("Przylek 72B (korekta
+// adresu ul. Polna 12 Przylek)") w identycznej logice w apps/karty-katalogowe.
+const ANNOTATION_WORDS = new Set(["zmiana", "adresu", "adrsu", "adres", "korekta", "stary", "nowy", "poprzedni", "obecnie", "wczesniej"]);
+
+// Audyt: kod pocztowy w adresie z Excela (np. "26-330") NIGDY nie pojawia sie
+// w nazwie folderu na dysku (foldery maja tylko ulice/miejscowosc + numer) -
+// zlapane realnie na produkcji (identyczny bug w apps/karty-katalogowe, ktore
+// wzorowaly ta logike na tym pliku): adresy z kodem pocztowym mialy WIECEJ
+// tokenow (kod + gmina na koncu), co PODNOSILO wymagany prog dopasowania
+// (60% z wiekszej liczby tokenow, patrz filenameMatchesOwnAddress), mimo ze
+// ulica i numer w pelni sie zgadzaly z folderem - masowe falszywe "mozliwy
+// konflikt numeracji" dla kazdego wiersza z kodem pocztowym w adresie.
+// Usuwamy kod PRZED tokenizacja, zeby nie liczyl sie do progu dopasowania.
+const POSTAL_CODE_PATTERN = /\b\d{2}-\d{3}\b/g;
 
 function addressTokens(adres) {
-  return normalize(adres)
+  return normalize(String(adres || "").replace(POSTAL_CODE_PATTERN, " "))
     .split(" ")
     .filter(t => (t.length > 1 || /^\d$/.test(t)) && t !== "ul" && t !== "nr" && !ANNOTATION_WORDS.has(t));
 }

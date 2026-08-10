@@ -118,6 +118,72 @@ function getClient(config) {
   return cachedClient;
 }
 
+// Audyt: /api/ocr/setup-credentials dotad ODBLOKOWYWAL OCR (isConfigured()
+// zaczynalo zwracac true) tylko dlatego, ze wszystkie 4 pola byly niepuste,
+// nigdy faktycznie nie sprawdzajac, czy dane sie ze soba zgadzaja - zlapane
+// realnie: zly region ("UE" zamiast "eu") przeszedl caly formularz i
+// "odblokowal" OCR, a dopiero PIERWSZA prawdziwa proba rozpoznawania tekstu
+// (na realnym dokumencie uzytkownika, potencjalnie duzo pozniej) ujawniala
+// "12 UNIMPLEMENTED: HTTP 404" bez zadnej wskazowki, co jest nie tak.
+//
+// Pierwsza wersja tego testu uzywala getProcessor() (samo pobranie metadanych,
+// bez dokumentu) - WYGLADALO na najlzejsze mozliwe sprawdzenie, ale zlapane
+// realnie zaraz po wdrozeniu: getProcessor() wymaga uprawnienia
+// "documentai.processors.get", ktorego NIE MA (i celowo nie powinno miec)
+// prawidlowo, minimalnie skonfigurowane konto serwisowe z rola "Document AI
+// API User" (roles/documentai.apiUser) - ta rola daje tylko processOnline/
+// processBatch (uzywanie procesora), nie viewer-owe .get (przegladanie jego
+// metadanych). Efekt: poprawnie, bezpiecznie skonfigurowany uzytkownik
+// (dokladnie tak jak instrukcja w komunikacie bledu kazala mu zrobic)
+// dostawal falszywy PERMISSION_DENIED i nigdy nie mogl odblokowac OCR.
+// Test musi wiec uzyc DOKLADNIE tego samego uprawnienia co prawdziwe OCR
+// (ocrImage() nizej, processDocument()) - jedynym sposobem jest realne,
+// minimalne wywolanie processDocument() na maciupkim (1x1 px) obrazku.
+// Koszt to jedna strona wg cennika Document AI (ulamek centa) - akceptowalna
+// cena za realne potwierdzenie dzialania PRZED zapisaniem konfiguracji jako
+// aktywnej, zamiast dowiadywania sie dopiero przy prawdziwym audycie.
+const BLANK_TEST_IMAGE_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+async function verifyConnection({ credentials, projectId, location, processorId }) {
+  const testClient = new DocumentProcessorServiceClient({
+    credentials,
+    apiEndpoint: `${location}-documentai.googleapis.com`
+  });
+  const name = `projects/${projectId}/locations/${location}/processors/${processorId}`;
+  try {
+    await testClient.processDocument({
+      name,
+      rawDocument: { content: BLANK_TEST_IMAGE_BASE64, mimeType: 'image/png' }
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, message: explainDocumentAiError(err) };
+  } finally {
+    try { await testClient.close(); } catch (_) {}
+  }
+}
+
+function explainDocumentAiError(err) {
+  const code = err?.code;
+  const raw = String(err?.message || err || '').trim();
+  if (code === 5) {
+    return `Nie znaleziono procesora o podanym ID w tym projekcie/regionie - sprawdz projectId, location i processorId (${raw}).`;
+  }
+  if (code === 7) {
+    return `Brak uprawnien do tego procesora - sprawdz, czy konto serwisowe ma rola "Uzytkownik interfejsu API Document AI" w tym projekcie (${raw}).`;
+  }
+  if (code === 16) {
+    return `Nie udalo sie uwierzytelnic - sprawdz, czy plik klucza jest poprawny i nalezy do tego projektu (${raw}).`;
+  }
+  if (code === 12 || raw.includes('UNIMPLEMENTED') || raw.includes('404')) {
+    return `Zla lokalizacja (region) procesora - sprawdz, czy to na pewno region, w ktorym utworzono procesor w Google Cloud Console (male litery, np. "eu" albo "us") (${raw}).`;
+  }
+  if (code === 3) {
+    return `Niepoprawne dane (projectId/location/processorId) - sprawdz kazde z osobna w Google Cloud Console (${raw}).`;
+  }
+  return `Nie udalo sie polaczyc z Document AI: ${raw}`;
+}
+
 function resolveTextAnchor(textAnchor, fullText) {
   if (textAnchor?.content) return textAnchor.content;
   const segments = textAnchor?.textSegments || [];
@@ -217,6 +283,7 @@ module.exports = {
   getConfigurationStatus,
   ocrImage,
   resolveMimeType,
+  verifyConnection,
   USER_CONFIG_PATH,
   BUNDLED_CONFIG_PATH
 };

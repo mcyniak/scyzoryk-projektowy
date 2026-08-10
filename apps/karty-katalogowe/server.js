@@ -236,12 +236,34 @@ function normalizeAdresDoPorownania(text) {
     .trim();
 }
 
+// Audyt: adresy z Excela czesto maja adnotacje o korekcie ("Przylek 72B
+// (korekta adresu ul. Polna 12 Przylek)") - stary adres w nawiasie WCIAZ
+// pasuje do folderu, ktory jeszcze nie zostal przemianowany (normalny,
+// oczekiwany stan przy swiezo skorygowanym adresie), ale same slowa
+// adnotacji ("korekta", "adresu") liczyly sie jako dodatkowe tokeny do
+// dopasowania, podnoszac wymagany prog (60%) na tyle, ze prawdziwe
+// dopasowanie (ulica+numer starego adresu) przestawalo wystarczac -
+// falszywy "mozliwy konflikt numeracji" mimo poprawnego dopasowania.
+// Ten sam zestaw slow co apps/drukarka-projekty/src/folderMatch.js
+// (skad ta logika byla wzorowana) - "korekta" dopisane do OBU miejsc po
+// zlapaniu tego real-world przypadku.
 const POMIJANE_TOKENY_ADRESU = new Set(['ul', 'nr']);
+const SLOWA_ADNOTACJI_ADRESU = new Set(['zmiana', 'adresu', 'adrsu', 'adres', 'korekta', 'stary', 'nowy', 'poprzedni', 'obecnie', 'wczesniej']);
+
+// Audyt: kod pocztowy w adresie z Excela (np. "26-330") NIGDY nie pojawia sie
+// w nazwie folderu na dysku (foldery maja tylko ulice/miejscowosc + numer) -
+// zlapane realnie na produkcji: adresy z kodem pocztowym mialy WIECEJ tokenow
+// (kod + gmina na koncu), co PODNOSILO wymagany prog dopasowania (60% z
+// wiekszej liczby tokenow), mimo ze ulica i numer w pelni sie zgadzaly z
+// folderem - masowe falszywe "mozliwy konflikt numeracji" dla kazdego wiersza
+// z kodem pocztowym w adresie. Usuwamy kod PRZED tokenizacja, zeby nie liczyl
+// sie do progu dopasowania.
+const WZORZEC_KODU_POCZTOWEGO = /\b\d{2}-\d{3}\b/g;
 
 function tokenyAdresu(adres) {
-  return normalizeAdresDoPorownania(adres)
+  return normalizeAdresDoPorownania(String(adres || '').replace(WZORZEC_KODU_POCZTOWEGO, ' '))
     .split(' ')
-    .filter(t => t && (t.length > 1 || /^\d$/.test(t)) && !POMIJANE_TOKENY_ADRESU.has(t));
+    .filter(t => t && (t.length > 1 || /^\d$/.test(t)) && !POMIJANE_TOKENY_ADRESU.has(t) && !SLOWA_ADNOTACJI_ADRESU.has(t));
 }
 
 // Prog jak w folderMatch.js's filenameMatchesOwnAddress: przy 1 tokenie wymagany

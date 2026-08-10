@@ -362,6 +362,160 @@ test('eksport rodzinny zachowuje wzór i przy nadpisaniu tworzy kopię', async (
   assert.equal(writtenSheet.getRow(2).getCell(headers.indexOf('Udział ogrzew. podłog.')).value, '65');
 });
 
+// =====================================================================
+// Tryb skanowania audytow OZC (pompa powietrzna, 2026-08-07) - osobna
+// rodzina 'audyt', celowo bez fieldKey pokrywajacych sie w 100% z 'pc'
+// (patrz komentarz przy TABELA_FAMILIES.audyt w tabelaAdresowaColumns.js).
+// =====================================================================
+
+test('FIELD_DEFS: 6 nowych pol audytu OZC (podloga na gruncie x3, stolarka okienna x3) maja poprawne klucze i etykiety', () => {
+  const { COLUMN_LABELS, COLUMN_ORDER } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const expected = {
+    podlogaWylewkaBetonowa: 'Podłoga na gruncie - wylewka betonowa (grubość)',
+    podlogaIzolacja: 'Podłoga na gruncie - izolacja (grubość)',
+    podlogaWarstwaBetonuChudego: 'Podłoga na gruncie - warstwa betonu chudego (grubość)',
+    typOkien: 'Typ okien',
+    materialOkien: 'Materiał okien',
+    dataMontażuStolarki: 'Data montażu stolarki okiennej'
+  };
+  for (const [key, label] of Object.entries(expected)) {
+    assert.ok(COLUMN_ORDER.includes(key), `COLUMN_ORDER powinno zawierac "${key}"`);
+    assert.equal(COLUMN_LABELS[key], label);
+  }
+});
+
+test('TABELA_FAMILIES.audyt: wszystkie fieldKey istnieja w FIELD_DEFS, LP jest jedyna kolumna biurowa (fieldKey:null)', () => {
+  const { COLUMN_LABELS } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const { TABELA_FAMILIES, allowedKeysForFamily } = require('../apps/ocr-audytow/src/tabelaAdresowaColumns');
+  const def = TABELA_FAMILIES.audyt;
+  assert.ok(def, 'rodzina "audyt" musi istniec');
+  const nullKeyColumns = def.columns.filter((c) => c.fieldKey === null);
+  assert.deepEqual(nullKeyColumns.map((c) => c.label), ['LP']);
+  for (const col of def.columns) {
+    if (col.fieldKey) assert.ok(col.fieldKey in COLUMN_LABELS, `Nieznany fieldKey "${col.fieldKey}" w rodzinie audyt`);
+  }
+  // Zawezenie dziala automatycznie (audyt: "tez nie bedzie wtedy potwierdzac
+  // pol ktore nie sa nam potrzebne") - allowedKeysForFamily NIE zawiera np.
+  // pol wylacznie z rodziny 'pc' (np. rodzajPompy, zrodloCiepla).
+  const allowed = allowedKeysForFamily('audyt');
+  assert.equal(allowed.size, def.columns.length - 1); // wszystko oprocz LP
+  assert.ok(!allowed.has('rodzajPompy'));
+  assert.ok(!allowed.has('zrodloCiepla'));
+  assert.ok(allowed.has('adresInstalacji'));
+  assert.ok(allowed.has('podlogaWylewkaBetonowa'));
+});
+
+test('eksport rodzinny "audyt": nowy szablon istnieje, ma wlasciwy arkusz i zapisuje wartosci we wlasciwych kolumnach', async (t) => {
+  const dir = await makeTempDir();
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const { TABELA_FAMILIES, buildRowValues } = require('../apps/ocr-audytow/src/tabelaAdresowaColumns');
+  const { writeFamilyTemplateRows } = require('../apps/ocr-audytow/src/excelExport');
+  const definition = TABELA_FAMILIES.audyt;
+  assert.ok(fs.existsSync(definition.templateFile), `Brak pliku wzoru: ${definition.templateFile}`);
+  const outputPath = path.join(dir, 'wynik-audyt.xlsx');
+  await fsp.copyFile(definition.templateFile, outputPath);
+
+  const row = buildRowValues('audyt', {
+    adresInstalacji: { value: 'Akacjowa 4, 62-561 Ślesin' },
+    podlogaWylewkaBetonowa: { value: 'Wylewka betonowa, 10cm' },
+    typOkien: { value: 'Dwuszybowe' },
+    materialOkien: { value: 'Plastik' }
+  });
+  const result = await writeFamilyTemplateRows(definition.templateFile, outputPath, definition.sheetName, [row]);
+  assert.ok(result.backupPath && fs.existsSync(result.backupPath));
+
+  const written = new ExcelJS.Workbook();
+  await written.xlsx.readFile(outputPath);
+  const sheet = written.getWorksheet(definition.sheetName);
+  assert.ok(sheet, `Arkusz "${definition.sheetName}" musi istniec w zapisanym pliku`);
+  const headers = sheet.getRow(1).values;
+  assert.equal(sheet.getRow(2).getCell(headers.indexOf('Adres')).value, 'Akacjowa 4, 62-561 Ślesin');
+  assert.equal(sheet.getRow(2).getCell(headers.indexOf('Podłoga - wylewka betonowa (grubość)')).value, 'Wylewka betonowa, 10cm');
+  assert.equal(sheet.getRow(2).getCell(headers.indexOf('Typ okien')).value, 'Dwuszybowe');
+  assert.equal(sheet.getRow(2).getCell(headers.indexOf('Materiał okien')).value, 'Plastik');
+});
+
+// =====================================================================
+// Warstwa strukturalna pod przyszly silnik OZC (Faza 1/2 planu, 2026-08-07,
+// C:\Users\Piotr.Cyniak\.claude\plans\sparkling-doodling-prism.md) -
+// materialKey/optionKey/thicknessCm/parsedNumber obok istniejacego `value`
+// (ktory zostaje niezmieniony, do wyswietlenia w Excelu dla czlowieka).
+// =====================================================================
+
+test('extractField (material): zwraca materialKey + thicknessCm jako osobne, typowane wartosci obok value', () => {
+  const { extractField, FIELD_DEFS, toFieldResult } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const def = FIELD_DEFS.find((f) => f.key === 'podlogaWylewkaBetonowa');
+  const page = { tables: [{ rows: [{ text: '☑ Wylewka betonowa, grubość: 8 .cm' }] }], ocrText: '', formFields: [] };
+  const extracted = extractField(page, def);
+  assert.equal(extracted.materialKey, 'wylewka_betonowa');
+  assert.equal(extracted.thicknessCm, 8);
+  const result = toFieldResult(extracted, 0, def.valueKind);
+  assert.equal(result.value, 'Wylewka betonowa, 8cm');
+  assert.equal(result.materialKey, 'wylewka_betonowa');
+  assert.equal(result.thicknessCm, 8);
+});
+
+test('extractField (material): sprzeczne odczyty NIE ustawiaja materialKey/thicknessCm (bramka jakosci pod przyszly eksport strukturalny)', () => {
+  const { extractField, FIELD_DEFS, toFieldResult } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const def = FIELD_DEFS.find((f) => f.key === 'scianaZewnMaterial');
+  const page = { tables: [{ rows: [{ text: '☑ Cegła dziurawka' }, { text: '☑ Bloczki silikatowe' }] }], ocrText: '', formFields: [] };
+  const extracted = extractField(page, def);
+  assert.ok(extracted.value.startsWith('Sprzeczne odczyty:'));
+  assert.equal(extracted.materialKey, undefined);
+  const result = toFieldResult(extracted, 0, def.valueKind);
+  assert.equal(result.materialKey, undefined);
+  assert.equal(result.thicknessCm, undefined);
+});
+
+test('extractField (checkbox materialowy): materialOkien/pokrycieDachu zwracaja optionKey', () => {
+  const { extractField, FIELD_DEFS } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const materialOkien = FIELD_DEFS.find((f) => f.key === 'materialOkien');
+  const page = { tables: [], formFields: [{ fieldName: 'PLASTIK', fieldValue: '☑' }], ocrText: '', visualElements: [] };
+  const extracted = extractField(page, materialOkien);
+  assert.equal(extracted.value, 'Plastik');
+  assert.equal(extracted.optionKey, 'plastik');
+});
+
+test('toFieldResult: pola numeric/percent dostaja dodatkowe parsedNumber (Number), value zostaje bez zmian do wyswietlenia', () => {
+  const { toFieldResult } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const numeric = toFieldResult({ value: '120 m2', confidence: 0.9, found: true }, 0, 'numeric');
+  assert.equal(numeric.value, '120 m2');
+  assert.equal(numeric.parsedNumber, 120);
+
+  const percent = toFieldResult({ value: '70,5', confidence: 0.9, found: true }, 0, 'percent');
+  assert.equal(percent.value, '70,5');
+  assert.equal(percent.parsedNumber, 70.5);
+});
+
+test('toFieldResult: pole needsReview (puste) NIE dostaje parsedNumber/materialKey - nic niepewnego nie trafia do warstwy strukturalnej', () => {
+  const { toFieldResult } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const empty = toFieldResult({ value: '', confidence: null, found: true }, 0, 'numeric');
+  assert.equal(empty.needsReview, true);
+  assert.equal(empty.parsedNumber, undefined);
+  const notFound = toFieldResult({ value: '', confidence: null, found: false }, 0, 'numeric');
+  assert.equal(notFound.needsReview, true);
+  assert.equal(notFound.parsedNumber, undefined);
+});
+
+test('buildStructuredRow (structuredExport.js): materialy/opcje/liczby wychodza typowane, puste/needsReview pola sa pomijane', () => {
+  const { buildStructuredRow } = require('../apps/ocr-audytow/src/structuredExport');
+  const fields = {
+    scianaZewnMaterial: { value: 'Cegła dziurawka, 25cm', materialKey: 'cegla_dziurawka', thicknessCm: 25 },
+    materialOkien: { value: 'Plastik', optionKey: 'plastik' },
+    powierzchnia: { value: '120 m2', parsedNumber: 120 },
+    imieNazwisko: { value: 'Jan Kowalski' },
+    telefon: { value: '', needsReview: true } // needsReview -> field.value pusty -> pomijane
+  };
+  const row = buildStructuredRow(fields, { adres: 'Testowa 1' });
+  assert.equal(row.adres, 'Testowa 1');
+  assert.deepEqual(row.scianaZewnMaterial, { materialKey: 'cegla_dziurawka', thicknessCm: 25, label: 'Cegła dziurawka, 25cm' });
+  assert.deepEqual(row.materialOkien, { optionKey: 'plastik', label: 'Plastik' });
+  assert.equal(row.powierzchnia, 120);
+  assert.equal(typeof row.powierzchnia, 'number');
+  assert.equal(row.imieNazwisko, 'Jan Kowalski');
+  assert.ok(!('telefon' in row), 'puste/needsReview pole nie powinno trafic do eksportu strukturalnego');
+});
+
 test('klient używa wspólnej walidacji odpowiedzi przed zmianą kolejki', async () => {
   const source = await fsp.readFile(path.join(appRoot, 'public', 'app.js'), 'utf8');
   assert.match(source, /await apiJson\('\/api\/ocr\/resolve-field'/);
@@ -376,7 +530,7 @@ test('klient używa wspólnej walidacji odpowiedzi przed zmianą kolejki', async
 // per-komputer, przezywa aktualizacje - patrz lib/ocrConfigMigration.js).
 // =====================================================================
 
-test('POST /api/ocr/setup-credentials: poprawny klucz odblokowuje OCR, /api/health od razu widzi zmiane', async (t) => {
+test('POST /api/ocr/setup-credentials: niepoprawny klucz jest odrzucany PRZED zapisem, OCR zostaje zablokowany (audyt: weryfikacja polaczenia przed odblokowaniem)', async (t) => {
   const previousLocalAppData = process.env.LOCALAPPDATA;
   const previousOcrEnv = ['OCR_DOCAI_KEY_FILE', 'OCR_DOCAI_PROJECT_ID', 'OCR_DOCAI_LOCATION', 'OCR_DOCAI_PROCESSOR_ID']
     .map(key => [key, process.env[key]]);
@@ -415,6 +569,16 @@ test('POST /api/ocr/setup-credentials: poprawny klucz odblokowuje OCR, /api/heal
   const before = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
   assert.equal(before.ocrConfigured, false);
 
+  // Audyt: zlapane realnie na produkcji - dawniej WSZYSTKIE niepuste pola
+  // (nawet z gwarantowanie falszywym kluczem/regionem) "odblokowywaly" OCR,
+  // a dopiero pierwsza prawdziwa proba rozpoznawania tekstu (na realnym
+  // dokumencie, potencjalnie duzo pozniej) ujawniala niejasny blad. Teraz
+  // /api/ocr/setup-credentials faktycznie probuje polaczyc sie z Document AI
+  // (getProcessor) PRZED zapisem - niepoprawny klucz nigdy nie przejdzie
+  // dalej sam network call nie jest tu potrzebny do weryfikacji tego
+  // zachowania: google-auth-library odrzuca "FAKE-NIE-PRAWDZIWY-KLUCZ" jako
+  // niepoprawny PEM juz przy proble podpisania zadania, bez faktycznego
+  // wyjscia do sieci - test pozostaje szybki i deterministyczny w CI.
   const fakeKey = { type: 'service_account', project_id: 'test-projekt-http', client_email: 'a@b.iam.gserviceaccount.com', private_key: 'FAKE-NIE-PRAWDZIWY-KLUCZ' };
   const formData = new FormData();
   formData.append('keyFile', new Blob([JSON.stringify(fakeKey)], { type: 'application/json' }), 'service-account.json');
@@ -427,11 +591,12 @@ test('POST /api/ocr/setup-credentials: poprawny klucz odblokowuje OCR, /api/heal
     body: formData
   });
   const data = await res.json();
-  assert.equal(res.status, 200);
-  assert.deepEqual(data, { ok: true, projectId: 'test-projekt-http', location: 'eu', processorId: 'proc999' });
+  assert.equal(res.status, 400);
+  assert.equal(data.ok, false);
+  assert.match(data.message, /Polaczenie z Document AI nie powiodlo sie/);
 
   const after = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
-  assert.equal(after.ocrConfigured, true, 'juz uruchomiony proces musi widziec nowa konfiguracje bez restartu (czytana z dysku przy kazdym wywolaniu)');
+  assert.equal(after.ocrConfigured, false, 'niepoprawna konfiguracja nie moze zostac zapisana ani odblokowac OCR');
 });
 
 test('POST /api/ocr/setup-credentials: bez naglowka X-Scyzoryk-Request dostaje 403 (ta sama ochrona co reszta mutujacych tras)', async (t) => {

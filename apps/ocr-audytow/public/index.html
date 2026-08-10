@@ -121,19 +121,21 @@
       </div>
       <div id="reviewFiles"></div>
       <div class="option-field" style="margin-top:18px">
-        <span class="option-label">Rodzina protokołu - zawęża listę pól do uzupełnienia do tych, które faktycznie trafiają do tabelki adresowej tej rodziny</span>
+        <span class="option-label">Rodzina protokołu (do jakiej tabelki trafią dane) - zawęża listę pól do uzupełnienia do tych, które faktycznie trafiają do tabelki adresowej tej rodziny</span>
         <select id="familySelect">
           <option value="">— nie zawężaj (wszystkie pola) —</option>
           <option value="pc">Pompy ciepła</option>
           <option value="solary">Solary</option>
           <option value="kotly">Kotły</option>
+          <option value="audyt">Audyty OZC (pompa ciepła)</option>
         </select>
       </div>
       <div class="option-field" style="margin-top:12px">
-        <span class="option-label">Wzór gminy - domyślnie program sam rozpoznaje wzór po nagłówku protokołu; tu możesz go wymusić ręcznie (np. jeśli automatyczne rozpoznanie zawiedzie)</span>
+        <span class="option-label">Wzór rozpoznawania skanu (gmina, opcjonalnie) - domyślnie program sam rozpoznaje wzór po nagłówku protokołu; tu możesz go wymusić ręcznie (np. jeśli automatyczne rozpoznanie zawiedzie)</span>
         <select id="templateSelect">
           <option value="">— rozpoznaj automatycznie —</option>
         </select>
+        <p class="hint">To inne pojęcie niż Rodzina protokołu wyżej - ten wzór tylko pomaga OCR-owi szybciej znaleźć pola na skanie tej konkretnej gminy, nie wpływa na to, do której tabelki/kolumn trafią dane.</p>
       </div>
       <div class="hero-actions">
         <button type="button" id="confirmBtn" class="btn btn-primary">Zatwierdź podział</button>
@@ -201,13 +203,15 @@
         <p class="hint" id="familyChosenNote"></p>
         <div class="option-field" style="margin-top:18px">
           <span class="option-label">Ścieżka do tabelki Excela (.xlsx) - stworzy NOWY plik z wierszami wszystkich przetworzonych adresów (nadpisze, jeśli coś już tam jest)</span>
-          <input type="text" id="excelPathInput" placeholder="G:\Dyski współdzielone\...\tabela-audytow.xlsx">
+          <input type="text" id="excelPathInput" list="excelRecentPaths" placeholder="G:\Dyski współdzielone\...\tabela-audytow.xlsx">
+          <datalist id="excelRecentPaths"></datalist>
         </div>
-        <p class="hint">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 2) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru.</p>
+        <p class="hint">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 2) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru. Pole podpowiada ostatnio używane ścieżki (strzałka w dół albo zacznij pisać) - sprawdź, czy to na pewno właściwy plik dla TEGO projektu.</p>
         <div class="hero-actions">
           <button type="button" id="finalizeBtn" class="btn btn-primary">Zapisz i pobierz</button>
           <button type="button" id="saveTemplateBtn" class="btn btn-secondary">Zapisz układ jako wzór</button>
         </div>
+        <p class="hint">Zapisuje układ pól tego adresu jako "Wzór rozpoznawania skanu" dla tej gminy (patrz krok 2 wyżej) - przyśpieszy rozpoznawanie kolejnych skanów tej samej gminy.</p>
         <p class="hint" id="saveTemplateNote" hidden></p>
       </div>
     </section>

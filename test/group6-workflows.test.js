@@ -237,6 +237,29 @@ test('drukarka-projekty: dopasowanie folderu po LP musi sprawdzic adres (audyt P
   assert.equal(filenameMatchesOwnAddress(folderName, mismatchTokens), false);
 });
 
+test('drukarka-projekty: addressTokens usuwa kod pocztowy - realny adres z Excela ("Ulica 21A, 26-330 Zarnow") nadal pasuje do folderu bez kodu (real bug zlapany live na produkcji)', () => {
+  // Audyt: kod pocztowy + gmina na koncu adresu z Excela dokladaly tokeny,
+  // ktore NIGDY nie wystepuja w nazwie folderu (foldery maja tylko
+  // ulice/miejscowosc + numer) - to podnosilo wymagany prog dopasowania
+  // (60% z wiekszej liczby tokenow) na tyle, ze w PRAWDZIWYM raporcie z
+  // produkcji (identyczna logika w apps/karty-katalogowe) niemal KAZDY
+  // wiersz z kodem pocztowym w adresie dostawal falszywy "mozliwy konflikt
+  // numeracji", mimo ze ulica+numer w pelni sie zgadzaly z folderem.
+  const folderName = '10 - Nadole 21a';
+  const tokensWithPostalCode = addressTokens('Nadole 21A, 26-330 Zarnow');
+  assert.ok(tokensWithPostalCode.length > 0);
+  assert.equal(filenameMatchesOwnAddress(folderName, tokensWithPostalCode), true);
+  // Faktyczny numeracyjny konflikt (rozna ulica) nadal musi zostac wykryty -
+  // usuwanie kodu pocztowego nie moze uczynic dopasowania zbyt tolerancyjnym.
+  const mismatchWithPostalCode = addressTokens('Inna Wies 5, 26-330 Zarnow');
+  assert.equal(filenameMatchesOwnAddress(folderName, mismatchWithPostalCode), false);
+});
+
+test('drukarka-projekty: addressTokens usuwa slowa adnotacji "korekta adresu" - stary adres w nawiasie nadal pasuje do jeszcze-nieprzemianowanego folderu (real bug zlapany na produkcji w identycznej logice apps/karty-katalogowe)', () => {
+  const tokens = addressTokens('Przylek 72B (korekta adresu ul. Polna 12 Przylek)');
+  assert.equal(filenameMatchesOwnAddress('10 - Przylek, ul. Polna 12', tokens), true);
+});
+
 test('drukarka-projekty: matchOneAddress w server.js blokuje niezgodny adres i pamieta ostatni folder per plik (audyt P0-6a/b)', async () => {
   const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'server.js'), 'utf8');
 

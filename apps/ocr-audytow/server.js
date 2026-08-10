@@ -11,13 +11,14 @@ const { Jimp } = require('jimp');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
 const { getAppDataDir } = require('../../lib/appPaths');
 const { analyzeDocument, inspectDocument, finalizeSplit, buildFieldPreview, cropPageRegion, runWithGlobalOcrLimit } = require('./src/ocrPipeline');
-const { isConfigured: isOcrConfigured, ocrImage: docAiOcrImage } = require('./src/documentAiEngine');
+const { isConfigured: isOcrConfigured, ocrImage: docAiOcrImage, verifyConnection: verifyDocAiConnection } = require('./src/documentAiEngine');
 const { extractFields, extractSingleField, COLUMN_ORDER, COLUMN_LABELS } = require('./src/fieldExtraction');
 const { writeFreshRows, writeFamilyTemplateRows, validatePath: validateExcelPath } = require('./src/excelExport');
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
+const { buildStructuredRow } = require('./src/structuredExport');
 const { loadTemplates, matchTemplate, extractFieldsFromTemplate, buildTemplateFromReview, harvestTemplateFields } = require('./src/templateEngine');
 const { validateOcrBatchInspections } = require('./src/ocrLimits');
-const { saveUserOcrConfig } = require('../../lib/ocrConfigMigration');
+const { saveUserOcrConfig, isValidServiceAccountJson } = require('../../lib/ocrConfigMigration');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -81,14 +82,44 @@ app.get('/api/health', async (req, res) => {
 // plik klucza to kilka KB tekstu, nigdy nie musi dotknac dysku jako
 // posrednia kopia w UPLOAD_DIR.
 const credentialsUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 64 * 1024, files: 1 } });
-app.post('/api/ocr/setup-credentials', credentialsUpload.single('keyFile'), (req, res) => {
+app.post('/api/ocr/setup-credentials', credentialsUpload.single('keyFile'), async (req, res) => {
   try {
     if (!req.file) throw new Error('Wybierz plik klucza (service-account.json).');
+
+    let credentials;
+    try {
+      credentials = JSON.parse(req.file.buffer.toString('utf8'));
+    } catch (_) {
+      throw new Error('Plik klucza nie jest poprawnym JSON-em.');
+    }
+    if (!isValidServiceAccountJson(credentials)) {
+      throw new Error('Plik nie wyglada jak poprawny klucz konta serwisowego Google (brak "type": "service_account" albo private_key).');
+    }
+
+    const projectId = String(req.body?.projectId || '').trim() || String(credentials.project_id || '').trim();
+    const location = String(req.body?.location || '').trim().toLowerCase();
+    const processorId = String(req.body?.processorId || '').trim();
+    if (!projectId) throw new Error('Brak identyfikatora projektu (projectId) - ani podanego, ani odczytanego z pliku klucza.');
+    if (!location) throw new Error('Podaj lokalizacje procesora Document AI (np. "eu").');
+    if (!processorId) throw new Error('Podaj ID procesora Document AI.');
+
+    // Audyt: nie odblokowujemy OCR (zapis pliku) tylko dlatego, ze
+    // wszystkie pola sa niepuste - realny call do Document AI PRZED zapisem
+    // potwierdza, ze klucz/projekt/region/ID procesora faktycznie do siebie
+    // pasuja. Zlapane realnie: zly region przechodzil dawna walidacje
+    // (niepuste pole), a dopiero pierwsza prawdziwa proba OCR (na
+    // prawdziwym dokumencie, potencjalnie duzo pozniej) ujawniala
+    // niejasny blad "12 UNIMPLEMENTED: HTTP 404".
+    const verified = await verifyDocAiConnection({ credentials, projectId, location, processorId });
+    if (!verified.ok) {
+      return res.status(400).json({ ok: false, message: `Polaczenie z Document AI nie powiodlo sie - konfiguracja NIE zostala zapisana. ${verified.message}` });
+    }
+
     const saved = saveUserOcrConfig({
-      keyFileContent: req.file.buffer.toString('utf8'),
-      location: req.body?.location,
-      processorId: req.body?.processorId,
-      projectId: req.body?.projectId
+      keyFileContent: JSON.stringify(credentials),
+      location,
+      processorId,
+      projectId
     });
     res.json({ ok: true, ...saved });
   } catch (err) {
@@ -1016,6 +1047,13 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     // i zapisywane JEDNYM writeFreshRows PO petli, zamiast po jednym appendRow na blok - patrz
     // komentarz w excelExport.js (nigdy nie doklejac do istniejacego pliku pod ta sciezka).
     const excelRows = [];
+    // Eksport strukturalny (Faza 3 planu OZC, patrz structuredExport.js) -
+    // TYLKO dla rodziny 'audyt' (jedyna zbudowana pod przyszly silnik OZC;
+    // pc/solary/kotly nie maja takiego odbiorcy, wiec nie generujemy dla nich
+    // dodatkowego pliku, ktory nikt nie bedzie uzywal). Zbierane rownolegle z
+    // excelRows, po tym samym `b.fields` (juz zagwarantowane resolved/bez
+    // needsReview przez `unresolved` nizej).
+    const structuredRows = [];
 
     for (const requested of requestedFiles) {
       const fileEntry = analysis.files.get(requested?.fileId);
@@ -1028,6 +1066,12 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
         continue;
       }
 
+      // Faza 4 planu OZC (2026-08-07): ta bramka juz istniala przed planem, ale okazuje
+      // sie load-bearing rowniez dla eksportu strukturalnego (structuredExport.js) -
+      // skoro CALY plik jest odrzucany, jesli KTOREKOLWIEK pole ma needsReview/!resolved,
+      // to materialKey/optionKey/thicknessCm/parsedNumber ponizej (buildStructuredRow) sa
+      // gwarantowane obecne wszedzie tam, gdzie w ogole mogly wystapic - nie trzeba
+      // dodatkowej, osobnej bramki jakosci dla samego eksportu JSON.
       const unresolved = excelPath && fileEntry.resolvedBlocks.some((b) => Object.values(b.fields).some((f) => f.needsReview || !f.resolved));
       if (unresolved) {
         results.push({ ok: false, originalName: fileEntry.originalName, error: 'Ten plik ma jeszcze nieuzupełnione pola - dokończ "Uzupełnij dane" przed pobraniem.' });
@@ -1057,6 +1101,9 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
             if (family) {
               const addressRow = buildRowValues(family, b.fields);
               excelRows.push(addressRow);
+              if (family === 'audyt') {
+                structuredRows.push(buildStructuredRow(b.fields, { adres: addressLabel }));
+              }
             } else {
               const addressRow = { adres: addressLabel };
               for (const [key, field] of Object.entries(b.fields)) addressRow[key] = field.value || '';
@@ -1110,13 +1157,37 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
       }
     }
 
+    // Plik JSON (Faza 3 planu OZC) - obok, nie zamiast, Excela dla ludzi -
+    // wejscie dla przyszlego silnika liczacego OZC. Zapisywany TYLKO gdy sam
+    // zapis Excela sie powiodl (excelError === null) - jesli tabelka wzorca
+    // nie dala sie zapisac, nie ma sensu zostawiac osieroconego pliku JSON,
+    // ktorego nikt nie bedzie kojarzyl z ta paczka.
+    let structuredExportFile = null;
+    if (structuredRows.length && !excelError) {
+      structuredExportFile = safeName(`${path.basename(excelPath, '.xlsx')} - dane strukturalne OZC.json`, 'audyty-ozc-strukturalne.json');
+      await fsp.writeFile(
+        path.join(jobDir, structuredExportFile),
+        JSON.stringify({ family: 'audyt', generatedAt: new Date().toISOString(), rows: structuredRows }, null, 2),
+        'utf8'
+      );
+    }
+
     // Sesja analizy NIE jest tu usuwana (dawniej: purgeAnalysis+analyses.delete zaraz po
     // finalizacji) - wlasciciel zglosil (2026-07-23), ze chce moc kliknac "Zapisz uklad
     // jako wzor" PO pobraniu gotowych plikow, nie tylko przed - natychmiastowe kasowanie
     // odcinalo to calkowicie (endpoint /api/ocr/save-template dostawal "sesja wygasla").
     // Sesja i tak zniknie sama przez istniejacy TTL (cleanupOldAnalyses, ANALYSIS_TTL_MS
     // = 2h domyslnie) - wystarczajaco duzo czasu, zeby po fakcie zdecydowac o wzorze.
-    res.json({ ok: true, jobId, results, excelPath: excelPath || null, excelBackupPath, excelRowCount: excelRows.length, excelError });
+    res.json({
+      ok: true,
+      jobId,
+      results,
+      excelPath: excelPath || null,
+      excelBackupPath,
+      excelRowCount: excelRows.length,
+      excelError,
+      structuredExportUrl: structuredExportFile ? `/api/jobs/${jobId}/files/${encodeURIComponent(structuredExportFile)}` : null
+    });
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
   }

@@ -130,6 +130,61 @@ const TABELA_FAMILIES = {
       { label: 'Uwagi z audytów', fieldKey: null },
       { label: 'Uwagi', fieldKey: null }
     ]
+  },
+  // Audyt: tryb skanowania audytow OZC (pompa ciepla, powietrzna I gruntowa -
+  // 2026-08-07 pierwotnie zawezone tylko do powietrznej na wyrazna prosbe
+  // wlasciciela, ale skorygowane tego samego dnia: "jednak... dla pomp
+  // gruntowych tez powinno robic" - pola byly kalibrowane na realnym wzorze
+  // GRUNTOWYM formularza, wiec strukturalnie juz dzialaly dla obu wariantow,
+  // etykieta byla tylko myląco zawezona) - OSOBNA rodzina od 'pc' celowo,
+  // na wyrazna prosbe wlasciciela): "osobna opcja ktora bedzie zapisywala do
+  // kompletnie nowej tabelki, tez nie bedzie wtedy potwierdzac pol ktore nie
+  // sa nam potrzebne" - w odroznieniu od 'pc' (~30 kolumn biurowych typu
+  // LP/Model pompy/Audytor, wiekszosc nieistotna tutaj), ta rodzina zawiera
+  // WYLACZNIE pola z listy wlasciciela (patrz allowedKeysForFamily nizej -
+  // zawezenie do TYLKO tych kolumn dziala automatycznie, bez zadnej
+  // dodatkowej logiki). Wlasny, nowy plik szablonu (nie ma jeszcze realnego
+  // "wzoru" od wlasciciela, wiec assets/templates/wzor-tabela-adresowa-audyt.xlsx
+  // to prosty, czysty naglowek - do podmiany na wlasciwy wzor firmowy pozniej).
+  audyt: {
+    sheetName: 'Audyty OZC',
+    templateFile: path.join(TEMPLATES_DIR, 'wzor-tabela-adresowa-audyt.xlsx'),
+    columns: [
+      { label: 'LP', fieldKey: null },
+      { label: 'Adres', fieldKey: 'adresInstalacji' },
+      { label: 'Powierzchnia ogrzewana', fieldKey: 'powierzchnia' },
+      { label: 'Wentylacja', fieldKey: 'wentylacja' },
+      { label: 'Typ konstrukcji', fieldKey: 'typKonstrukcji' },
+      { label: 'Stopień szczelności', fieldKey: 'stopienSzczelnosci' },
+      { label: 'Ściana zewnętrzna (materiał, grubość)', fieldKey: 'scianaZewnMaterial' },
+      { label: 'Ocieplenie ściany zewnętrznej (materiał, grubość)', fieldKey: 'ocieplenieScianyZewn' },
+      { label: 'Podłoga - wylewka betonowa (grubość)', fieldKey: 'podlogaWylewkaBetonowa' },
+      { label: 'Podłoga - izolacja (grubość)', fieldKey: 'podlogaIzolacja' },
+      { label: 'Podłoga - warstwa betonu chudego (grubość)', fieldKey: 'podlogaWarstwaBetonuChudego' },
+      { label: 'Strop nad ogrzewanymi (materiał, grubość)', fieldKey: 'stropOgrzewane' },
+      { label: 'Strop nad nieogrzewanymi (materiał, grubość)', fieldKey: 'stropNieogrzewane' },
+      { label: 'Rodzaj dachu', fieldKey: 'rodzajDachu' },
+      { label: 'Pokrycie dachu', fieldKey: 'pokrycieDachu' },
+      { label: 'Izolacja dachu (grubość)', fieldKey: 'izolacjaDachu' },
+      { label: 'Typ okien', fieldKey: 'typOkien' },
+      { label: 'Materiał okien', fieldKey: 'materialOkien' },
+      { label: 'Data montażu stolarki okiennej', fieldKey: 'dataMontażuStolarki' },
+      { label: 'Data montażu drzwi zewnętrznych', fieldKey: 'dataMontażuDrzwiZewn' },
+      { label: 'Udział ogrzewania grzejnikowego (%)', fieldKey: 'udzialGrzejnikowy' },
+      { label: 'Udział ogrzewania płaszczyznowego (%)', fieldKey: 'udzialPlaszczyznowy' },
+      { label: 'Żądana temperatura w pomieszczeniach', fieldKey: 'temperaturaPomieszczenia' },
+      { label: 'Kształt budynku', fieldKey: 'ksztaltBudynku' },
+      { label: 'Długość budynku (regularny)', fieldKey: 'dlugoscBudynku' },
+      { label: 'Szerokość budynku (regularny)', fieldKey: 'szerokoscBudynku' },
+      { label: 'Długość ścian od strony północnej', fieldKey: 'dlugoscScianPolnocnej' },
+      { label: 'Długość ścian od strony południowej', fieldKey: 'dlugoscScianPoludniowej' },
+      { label: 'Długość ścian od strony wschodniej', fieldKey: 'dlugoscScianWschodniej' },
+      { label: 'Długość ścian od strony zachodniej', fieldKey: 'dlugoscScianZachodniej' },
+      { label: 'Elewacja A (Północna) - powierzchnia okien', fieldKey: 'elewacjaAPowierzchniaOkien' },
+      { label: 'Elewacja B (Wschodnia) - powierzchnia okien', fieldKey: 'elewacjaBPowierzchniaOkien' },
+      { label: 'Elewacja C (Południowa) - powierzchnia okien', fieldKey: 'elewacjaCPowierzchniaOkien' },
+      { label: 'Elewacja D (Zachodnia) - powierzchnia okien', fieldKey: 'elewacjaDPowierzchniaOkien' }
+    ]
   }
 };
 

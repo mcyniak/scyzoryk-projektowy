@@ -25,6 +25,7 @@ async function refreshStatus() {
     const data = await response.json();
     const apps = data.apps || [];
     const running = apps.filter(a => a.running).length;
+    if (data.version) setText('#panelVersionLabel', `v${data.version}`);
     setText('#metricServices', `${running}/${apps.length}`);
     setText('#metricMemory', fmtMb(data.memory?.rss || 0));
     setText('#metricStorage', fmtMb(data.storage?.bytes || 0));
