@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Formularze Varmero</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-table"/></svg>
+          <strong>Formularze Varmero</strong>
+        </div>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+        Panel główny
+      </a>
+    </header>
+
+    <section class="hero">
+      <div class="panel hero-main">
+        <div class="kicker">Automatyczny dobór pompy Varmero</div>
+        <h1>Zgłoś adresy do kalkulatora Varmero</h1>
+        <p class="lead">Wczytaj tabelę adresową, wybierz adresy z pompą powietrzną i uruchom automatyczne zgłoszenia. Karty wynikowe PDF przyjdą mailem.</p>
+      </div>
+      <aside class="panel info-card">
+        <h2>Jak działa?</h2>
+        <div class="pill-list">
+          <div class="pill">Wczytaj Excel, sprawdź adresy.</div>
+          <div class="pill">Podaj strefę, województwo i adres e-mail.</div>
+          <div class="pill">Karty PDF trafią do folderu zadania.</div>
+        </div>
+      </aside>
+    </section>
+
+    <div id="imapNotice" class="panel notice hidden" role="alert"></div>
+
+    <section class="panel" id="batchPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">1</span>Dane do zgłoszenia</h2>
+          <p class="panel-desc">Kalkulator Varmero obsługuje wyłącznie pompy powietrzne (Powietrze-woda) - inne wiersze są automatycznie pomijane.</p>
+        </div>
+      </div>
+      <form id="batchForm">
+        <div class="grid">
+          <label>Plik Excel tabeli adresowej
+            <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+            <span class="field-help">Wybierz plik .xlsx, potem kliknij "Sprawdź adresy".</span>
+          </label>
+          <label style="align-self:end;">
+            <button type="button" id="checkAddresses">Sprawdź adresy</button>
+          </label>
+        </div>
+
+        <div class="grid two">
+          <label>Nazwa inwestycji
+            <input name="investmentName" id="investmentName" placeholder="np. Zagórów 2026" />
+          </label>
+          <label>Adres e-mail (alias), na który mają przyjść karty
+            <input name="email" id="email" type="email" required placeholder="np. oze@firma.pl" />
+            <span class="field-help">Każde zgłoszenie dostaje własny, unikalny wariant tego adresu (plusowy alias) - karty nigdy się nie pomylą między wierszami.</span>
+          </label>
+        </div>
+
+        <div class="grid four">
+          <label>Strefa klimatyczna
+            <select name="zone" id="zone" required>
+              <option value="">— wybierz —</option>
+              <option value="1">Strefa I</option>
+              <option value="2">Strefa II</option>
+              <option value="3">Strefa III</option>
+              <option value="4">Strefa IV</option>
+              <option value="5">Strefa V</option>
+            </select>
+          </label>
+          <label>Województwo
+            <select name="wojewodztwo" id="wojewodztwo">
+              <option value="">— wybierz —</option>
+              <option>Dolnośląskie</option>
+              <option>Kujawsko-pomorskie</option>
+              <option>Lubelskie</option>
+              <option>Lubuskie</option>
+              <option>Łódzkie</option>
+              <option>Małopolskie</option>
+              <option>Mazowieckie</option>
+              <option>Opolskie</option>
+              <option>Podkarpackie</option>
+              <option>Podlaskie</option>
+              <option>Pomorskie</option>
+              <option>Śląskie</option>
+              <option>Świętokrzyskie</option>
+              <option>Warmińsko-mazurskie</option>
+              <option>Wielkopolskie</option>
+              <option>Zachodniopomorskie</option>
+            </select>
+          </label>
+          <label>Gmina
+            <input name="gminaName" id="gminaName" placeholder="np. Zagórów" />
+          </label>
+          <label>Kod pocztowy
+            <input name="postalCode" id="postalCode" placeholder="np. 62-410" />
+          </label>
+        </div>
+
+        <input name="concurrency" id="concurrency" type="hidden" value="1" />
+        <input type="hidden" name="selectedRows" id="selectedRowsInput" value="[]" />
+
+        <div id="recordSelector" class="record-selector hidden">
+          <div class="panel-header" style="margin-bottom:8px;">
+            <div>
+              <h3 class="panel-title" style="font-size: var(--text-md);">Wybierz adresy do zgłoszenia</h3>
+              <p class="panel-desc" id="selectorInfo">Po wczytaniu Excela zobaczysz tutaj adresy.</p>
+            </div>
+          </div>
+          <div class="selector-tools">
+            <input id="addressSearch" type="search" placeholder="Szukaj adresu, osoby albo wiersza..." />
+            <button type="button" class="ghost" id="selectAllRecords">Zaznacz wszystkie</button>
+            <button type="button" class="ghost" id="clearRecords">Odznacz wszystkie</button>
+            <button type="button" class="ghost" id="reloadPreview">Odśwież listę</button>
+          </div>
+          <p class="selector-summary" id="selectedSummary">Zaznaczono: 0</p>
+          <div class="address-table-wrap">
+            <table>
+              <thead><tr><th class="record-check"></th><th>Wiersz</th><th>Osoba</th><th>Adres</th><th>OZC / urządzenie</th></tr></thead>
+              <tbody id="addressRows"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="submit" id="startBatch">Uruchom zgłoszenia</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="statusBox" class="panel hidden">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">2</span>Postęp zgłoszeń</h2>
+          <p class="panel-desc" id="finishInfo">Zadanie jest w toku - każdy wiersz to prawdziwe zgłoszenie z oczekiwaniem na maila, może potrwać kilka minut na wiersz.</p>
+        </div>
+        <div class="actions" style="margin-top:0;">
+          <button type="button" class="danger" id="cancelBatch" disabled>Przerwij zgłaszanie</button>
+        </div>
+      </div>
+
+      <progress id="progress" max="1" value="0"></progress>
+      <div class="status-grid">
+        <div class="metric"><span>Status</span><strong id="jobStatus">-</strong></div>
+        <div class="metric"><span>Zrobione</span><strong id="jobDone">0 / 0</strong></div>
+        <div class="metric"><span>Karty gotowe</span><strong id="jobOk">0</strong></div>
+        <div class="metric"><span>Błędy</span><strong id="jobFailed">0</strong></div>
+      </div>
+
+      <p id="current" class="current">Aktualnie: -</p>
+      <p id="pdfFolder" class="folder hidden"></p>
+
+      <h3>Ostatnie wyniki</h3>
+      <table>
+        <thead><tr><th>Wiersz</th><th>Osoba</th><th>Adres</th><th>Status</th></tr></thead>
+        <tbody id="previewRows"></tbody>
+      </table>
+    </section>
+  </div>
+
+  <script src="inline-1.js"></script>
+  <script src="inline-2.js"></script>
+</body>
+</html>

@@ -106,16 +106,136 @@ public sealed class UpdateApplierTests
 
         var process = new FakeProcessManager();
         var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.0.0" };
-        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+        // installRetryDelay skrocone - ten fake installer ZAWSZE zwraca 5, wiec
+        // retry (patrz RunInstallerWithRetryAsync) i tak wyczerpie obie proby.
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            installRetryDelay: TimeSpan.FromMilliseconds(10));
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
 
         Assert.Equal(5, exitCode);
-        Assert.Equal(1, process.StartServerCallCount); // restart dzieje sie NIEZALEZNIE od wyniku
+        Assert.Equal(1, process.StartServerCallCount); // restart dzieje sie NIEZALEZNIE od wyniku, dopiero po wyczerpaniu prob
 
         var result = ReadLastResult(roots.UpdateRoot);
         Assert.False(result.GetProperty("ok").GetBoolean());
         Assert.Equal(5, result.GetProperty("exitCode").GetInt32());
+    }
+
+    // =====================================================================
+    // Audyt na zywo 2026-08-10: prawdziwa awaria produkcyjna ("aktualizacja
+    // sie wyjebala jak zawsze") - instalator zwrocil kod 5 (Inno Setup:
+    // przerwane kopiowanie, cicho "potwierdzone" jako Abort przez
+    // /SUPPRESSMSGBOXES), zostawiajac cala nowa apke (apps\formularze-varmero,
+    // wraz z node_modules) NIESKOPIOWANA, mimo ze exitCode/build-info.json
+    // sugerowaly czesciowy postep. Reczny retry TEGO SAMEGO instalatora
+    // zadzialal od razu. Testy nizej pokrywaja automatyzacje tego retry +
+    // weryfikacje integralnosci po kopiowaniu (RunInstallerWithRetryAsync/
+    // DescribeIntegrityIssue w UpdateApplier.cs).
+    // =====================================================================
+
+    [Fact]
+    public async Task TransientInstallerFailure_AutoRetrySucceeds_ReportsOkFromSecondAttempt()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+
+        // "Instalator", ktory za PIERWSZYM razem zawodzi (kod 5), a za drugim
+        // (gdy plik-znacznik juz istnieje) konczy sie sukcesem - symuluje
+        // przejsciowa blokade pliku/skan antywirusa, dokladnie to, co
+        // naprawil reczny retry na produkcji.
+        var marker = Path.Combine(roots.UpdateRoot, "flaky-marker.txt");
+        var installerPath = Path.Combine(roots.UpdateRoot, "fake-flaky-installer.cmd");
+        File.WriteAllText(installerPath,
+            "@echo off\r\n" +
+            $"if exist \"{marker}\" (\r\n" +
+            "  exit /b 0\r\n" +
+            ") else (\r\n" +
+            $"  type nul > \"{marker}\"\r\n" +
+            "  exit /b 5\r\n" +
+            ")\r\n");
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            installRetryDelay: TimeSpan.FromMilliseconds(10));
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode); // kod z DRUGIEJ (udanej) proby
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.True(result.GetProperty("ok").GetBoolean());
+        // Restart Scyzoryka i tak dzieje sie dokladnie raz, dopiero PO
+        // wyczerpaniu prob instalacji - nie po kazdej probie z osobna.
+        Assert.Equal(1, process.StartServerCallCount);
+        // Zatrzymanie procesow: raz przed pierwsza proba, raz przed retry.
+        Assert.Equal(2, process.StopOwnedProcessesCallCount);
+    }
+
+    [Fact]
+    public async Task InstallerReportsSuccess_ButExpectedAppNeverAppearsOnDisk_TreatedAsFailureAfterRetries()
+    {
+        // Wariant integralnosci: instalator sam w sobie zglasza kod 0 (nie 5),
+        // ale caly katalog nowej aplikacji z apps\* nigdy sie nie pojawia -
+        // server.js (jedyne prawdziwe zrodlo listy aplikacji) juz o niej wie.
+        using var dir = new TempInstallDir();
+        File.WriteAllText(Path.Combine(dir.Path, "server.js"),
+            "const apps = [{ slug: 'testapp', dir: path.join(ROOT, 'apps', 'testapp') }];");
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            installRetryDelay: TimeSpan.FromMilliseconds(10));
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode); // sam instalator "twierdzi" ze sukces
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.False(result.GetProperty("ok").GetBoolean());
+        Assert.Contains("testapp", result.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task IntegrityIssueOnFirstAttempt_FixedBySecondAttempt_ReportsOk()
+    {
+        // Lustrzane odbicie powyzszego: pierwsza proba zostawia "testapp" bez
+        // node_modules (integrity fail mimo exitCode 0), druga proba (ten sam
+        // instalator, ale symulujacy ze tym razem kopiowanie sie udalo)
+        // faktycznie tworzy node_modules - koncowy wynik musi byc sukcesem.
+        using var dir = new TempInstallDir();
+        File.WriteAllText(Path.Combine(dir.Path, "server.js"),
+            "const apps = [{ slug: 'testapp', dir: path.join(ROOT, 'apps', 'testapp') }];");
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+
+        var marker = Path.Combine(roots.UpdateRoot, "attempt-marker.txt");
+        var nodeModulesDir = Path.Combine(dir.Path, "apps", "testapp", "node_modules");
+        var installerPath = Path.Combine(roots.UpdateRoot, "fake-integrity-installer.cmd");
+        File.WriteAllText(installerPath,
+            "@echo off\r\n" +
+            $"if exist \"{marker}\" (\r\n" +
+            $"  mkdir \"{nodeModulesDir}\"\r\n" +
+            $"  type nul > \"{Path.Combine(nodeModulesDir, "pkg.txt")}\"\r\n" +
+            "  exit /b 0\r\n" +
+            ") else (\r\n" +
+            $"  type nul > \"{marker}\"\r\n" +
+            "  exit /b 0\r\n" +
+            ")\r\n");
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            installRetryDelay: TimeSpan.FromMilliseconds(10));
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode);
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.True(result.GetProperty("ok").GetBoolean());
+        Assert.True(Directory.Exists(nodeModulesDir));
     }
 
     [Fact]

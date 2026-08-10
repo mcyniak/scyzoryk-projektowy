@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Scyzoryk.Launcher;
 
@@ -29,12 +30,14 @@ public sealed class UpdateApplier : IUpdateApplier
     private readonly TimeSpan _printPollInterval;
     private readonly TimeSpan _stopConfirmTimeout;
     private readonly TimeSpan _stopConfirmPollInterval;
+    private readonly TimeSpan _installRetryDelay;
 
     private string? _logFilePath;
 
     public UpdateApplier(IProcessManager processManager, IHealthChecker health, InstallPaths paths, ILauncherLogger logger,
         TimeSpan? printWaitTimeout = null, TimeSpan? printPollInterval = null,
-        TimeSpan? stopConfirmTimeout = null, TimeSpan? stopConfirmPollInterval = null)
+        TimeSpan? stopConfirmTimeout = null, TimeSpan? stopConfirmPollInterval = null,
+        TimeSpan? installRetryDelay = null)
     {
         _processManager = processManager;
         _health = health;
@@ -44,6 +47,7 @@ public sealed class UpdateApplier : IUpdateApplier
         _printPollInterval = printPollInterval ?? TimeSpan.FromSeconds(2);
         _stopConfirmTimeout = stopConfirmTimeout ?? TimeSpan.FromSeconds(15);
         _stopConfirmPollInterval = stopConfirmPollInterval ?? TimeSpan.FromMilliseconds(500);
+        _installRetryDelay = installRetryDelay ?? TimeSpan.FromSeconds(2);
     }
 
     public async Task<int> ApplyAsync(string installerPath, string expectedVersion)
@@ -97,11 +101,10 @@ public sealed class UpdateApplier : IUpdateApplier
             // w oddzielnym katalogu Updates\<wersja>\, inna sciezka).
             await StopAllOwnedProcessesUntilConfirmedAsync().ConfigureAwait(false);
 
-            WriteLog($"Uruchamiam instalator cicho: {installerPath}");
-            exitCode = RunInstaller(installerPath, _paths.InstallDir);
-            WriteLog($"Instalator zakonczony kodem wyjscia: {exitCode}");
-            ok = exitCode == 0;
-            message = ok ? $"Zainstalowano wersje {expectedVersion}." : $"Instalator zakonczyl sie kodem {exitCode}.";
+            var attempt = await RunInstallerWithRetryAsync(installerPath).ConfigureAwait(false);
+            exitCode = attempt.ExitCode;
+            ok = attempt.Ok;
+            message = ok ? $"Zainstalowano wersje {expectedVersion}." : attempt.FailureReason!;
         }
         catch (Exception ex)
         {
@@ -299,7 +302,130 @@ public sealed class UpdateApplier : IUpdateApplier
         }
     }
 
-    private static int RunInstaller(string installerPath, string installDir)
+    private sealed record InstallAttemptResult(int ExitCode, bool Ok, string? FailureReason);
+
+    // Audyt na zywo 2026-08-10: prawdziwa awaria produkcyjna zlapana przez
+    // wlasciciela ("aktualizacja sie wyjebala jak zawsze") - instalator
+    // zwrocil kod 5 (Inno Setup: przerwane/nieudane kopiowanie, cicho
+    // "potwierdzone" jako Abort przez /SUPPRESSMSGBOXES zamiast pokazac
+    // uzytkownikowi realny blad), zostawiajac apps\formularze-varmero
+    // (i jego cale node_modules) NIESKOPIOWANE, mimo ze build-info.json i
+    // kilka innych plikow zdazyly sie juz podmienic - polowiczna, cicho
+    // zepsuta instalacja. Recznie powtorzone URUCHOMIENIE TEGO SAMEGO
+    // instalatora chwile pozniej zadzialalo od razu (przejsciowa blokada
+    // pliku/skan antywirusa), wiec zamiast poddawac sie po jednej probie,
+    // ponawiamy caly krok RAZ automatycznie - i, kluczowe, NIE ufamy juz
+    // samemu kodowi wyjscia 0 jako dowodowi kompletnej kopii (Restart
+    // Manager potrafi po cichu pominac zablokowany plik przy exitCode 0 -
+    // patrz komentarz przy koncowej weryfikacji ok/healthy/runningVersion
+    // nizej w tym samym duchu) - sprawdzamy realnie na dysku, ze KAZDA
+    // apka w apps\* ma niepusty node_modules, dokladnie ten sam test co
+    // scripts\build-installer.ps1 robi PRZED spakowaniem instalatora.
+    private async Task<InstallAttemptResult> RunInstallerWithRetryAsync(string installerPath)
+    {
+        const int maxAttempts = 2;
+        var logsDir = Path.Combine(_paths.UpdateRoot, "logs");
+        var exitCode = -1;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var innoLogPath = Path.Combine(logsDir, $"inno-{DateTime.Now:yyyyMMddTHHmmss}-proba{attempt}.log");
+            WriteLog($"Uruchamiam instalator cicho (proba {attempt}/{maxAttempts}): {installerPath}");
+            exitCode = RunInstaller(installerPath, _paths.InstallDir, innoLogPath);
+            WriteLog($"Instalator zakonczony kodem wyjscia: {exitCode} (proba {attempt}/{maxAttempts}, szczegolowy log Inno: {Path.GetFileName(innoLogPath)})");
+
+            var integrityIssue = DescribeIntegrityIssue();
+            if (exitCode == 0 && integrityIssue is null)
+            {
+                return new InstallAttemptResult(exitCode, true, null);
+            }
+
+            if (integrityIssue is not null)
+            {
+                WriteLog($"Weryfikacja integralnosci po instalacji NIE przeszla: {integrityIssue}");
+            }
+
+            if (attempt < maxAttempts)
+            {
+                WriteLog("Instalacja niekompletna - ponawiam po krotkiej przerwie...");
+                await StopAllOwnedProcessesUntilConfirmedAsync().ConfigureAwait(false);
+                await Task.Delay(_installRetryDelay).ConfigureAwait(false);
+            }
+            else
+            {
+                var reason = integrityIssue is not null
+                    ? (exitCode == 0
+                        ? $"Instalator zglosil sukces, ale po {maxAttempts} probach instalacja jest nadal niekompletna: {integrityIssue}."
+                        : $"Instalator zakonczyl sie kodem {exitCode} po {maxAttempts} probach, instalacja jest niekompletna: {integrityIssue}.")
+                    : $"Instalator zakonczyl sie kodem {exitCode} po {maxAttempts} probach.";
+                return new InstallAttemptResult(exitCode, false, reason);
+            }
+        }
+
+        // Nieosiagalne (petla zawsze zwraca wewnatrz), ale kompilator wymaga zwrotu.
+        return new InstallAttemptResult(exitCode, false, $"Instalator zakonczyl sie kodem {exitCode}.");
+    }
+
+    // Regex zamiast hardkodowanej listy - server.js (dopiero co skopiowany
+    // przez INSTALATOR, wiec to zawsze najswiezsza wersja rejestru) jest
+    // jedynym miejscem, ktore juz i tak zna PELNA liste aplikacji (patrz
+    // CLAUDE.md - "register it in both the apps array..."), wiec czytamy
+    // stamtad zamiast utrzymywac tu WLASNA, kolejna kopie listy nazw apek,
+    // ktora rowniez moglaby sie zestarzec.
+    private static readonly Regex AppSlugPattern = new(@"'apps',\s*'([a-z0-9][a-z0-9-]*)'", RegexOptions.Compiled);
+
+    // Ten sam duch co "Walidacja node_modules w stagingu" w
+    // scripts\build-installer.ps1 (krok 7) - tam sprawdza SWIEZO
+    // zainstalowany staging PRZED spakowaniem do .exe, tutaj sprawdzamy
+    // PRAWDZIWY katalog instalacji PO tym, jak instalator go rozpakowal na
+    // dysku uzytkownika. Celowo NIE polega WYLACZNIE na tym, co juz fizycznie
+    // istnieje pod apps\* (audyt na zywo 2026-08-10: apps\formularze-varmero
+    // nie istnialo W OGOLE po nieudanej instalacji - sprawdzanie tylko
+    // istniejacych katalogow nigdy by tego nie zlapalo) - oczekiwana lista
+    // aplikacji pochodzi z rejestru w server.js, a fizyczna obecnosc katalogu
+    // apps\* jest sprawdzana dodatkowo, na wypadek gdyby regex czegos nie
+    // zlapal. Zwraca null, gdy wszystko jest w porzadku, albo czytelny opis
+    // brakujacych/pustych aplikacji.
+    private string? DescribeIntegrityIssue()
+    {
+        var appsDir = Path.Combine(_paths.InstallDir, "apps");
+        var expectedSlugs = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        var serverJsPath = Path.Combine(_paths.InstallDir, "server.js");
+        if (File.Exists(serverJsPath))
+        {
+            string serverJsContent;
+            try { serverJsContent = File.ReadAllText(serverJsPath); }
+            catch { serverJsContent = string.Empty; }
+            foreach (Match m in AppSlugPattern.Matches(serverJsContent))
+            {
+                expectedSlugs.Add(m.Groups[1].Value);
+            }
+        }
+
+        if (Directory.Exists(appsDir))
+        {
+            foreach (var appDir in Directory.GetDirectories(appsDir))
+            {
+                expectedSlugs.Add(Path.GetFileName(appDir));
+            }
+        }
+
+        var incomplete = new List<string>();
+        foreach (var slug in expectedSlugs)
+        {
+            var nodeModules = Path.Combine(appsDir, slug, "node_modules");
+            var hasFiles = Directory.Exists(nodeModules)
+                && Directory.EnumerateFileSystemEntries(nodeModules, "*", SearchOption.TopDirectoryOnly).Any();
+            if (!hasFiles)
+            {
+                incomplete.Add(slug);
+            }
+        }
+        return incomplete.Count == 0 ? null : $"brak/pusty node_modules dla: {string.Join(", ", incomplete)}";
+    }
+
+    private static int RunInstaller(string installerPath, string installDir, string logPath)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -310,13 +436,21 @@ public sealed class UpdateApplier : IUpdateApplier
         // Identyczne flagi jak dawny run-update.ps1 - /SCYZORYKUPDATE (patrz
         // installer\scyzoryk.iss [Code]) pomija kreator, ponowna konfiguracje
         // autostartu, UAC i postinstall-autostart aplikacji - instalator tylko
-        // podmienia pliki i wychodzi, restart robimy sami.
+        // podmienia pliki i wychodzi, restart robimy sami. /LOG dodany po
+        // audycie na zywo 2026-08-10: bez tego, przy niepowodzeniu instalatora
+        // (np. kod 5) jedyna dostepna informacja jest sam kod liczbowy - zero
+        // wiedzy KTORY plik/krok faktycznie zawiodl. Inno Setup samo tworzy i
+        // zamyka ten plik, wiec zostaje na dysku do recznej analizy nawet po
+        // sukcesie (nadpisywany kolejnym uruchomieniem tej samej nazwy nie
+        // jest problemem - kazda proba dostaje wlasna, znacznikiem czasu+numerem
+        // proby nazwana sciezke, patrz RunInstallerWithRetryAsync).
         startInfo.ArgumentList.Add("/VERYSILENT");
         startInfo.ArgumentList.Add("/SUPPRESSMSGBOXES");
         startInfo.ArgumentList.Add("/NORESTART");
         startInfo.ArgumentList.Add("/SP-");
         startInfo.ArgumentList.Add("/SCYZORYKUPDATE");
         startInfo.ArgumentList.Add($"/DIR={installDir}");
+        startInfo.ArgumentList.Add($"/LOG={logPath}");
 
         using var proc = Process.Start(startInfo);
         if (proc is null) return -1;
