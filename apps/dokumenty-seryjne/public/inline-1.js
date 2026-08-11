@@ -3,6 +3,7 @@
 // Wspolny powrot do panelu glownego w tej samej karcie.
 const scyzorykMainPanelUrl = 'http://scyzoryk.localhost:3000';
 document.querySelectorAll('[data-main-link]').forEach(link => { link.href = scyzorykMainPanelUrl; link.removeAttribute('target'); });
+document.querySelectorAll('[data-help-link]').forEach(link => { link.href = `${scyzorykMainPanelUrl}/instrukcja.html#${link.dataset.helpLink}`; });
 
 const headers = { 'X-Scyzoryk-Request': '1' };
     let currentJob = null;
