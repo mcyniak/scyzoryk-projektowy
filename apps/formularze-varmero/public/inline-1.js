@@ -3,8 +3,81 @@ let pollTimer = null;
 let cancelRequested = false;
 let previewRecords = [];
 let selectedRows = new Set();
+let currentPdfDir = null;
+let currentPdfJobId = null;
+let autoOpenedForJob = null;
+
+// Zlapane realnie przez wlasciciela: Windows na tej maszynie skutecznie
+// blokuje wymuszenie okna Eksploratora na pierwszy plan z procesu w tle
+// (przetestowane NA ZYWO dwa rozne obejscia - zadne nie zadzialalo -
+// patrz scripts/open-folder.ps1) - wlasciciel klikal przycisk ~20 razy, bo
+// nie widzial zadnego potwierdzenia. Zamiast dalej walczyc z Windows,
+// GLOWNYM potwierdzeniem jest jawny komunikat na stronie (nie samo okno) -
+// dziala niezaleznie od tego, czy system odda fokus.
+async function openPdfFolder(jobId, { showConfirmation = true } = {}) {
+  if (!jobId) return;
+  try {
+    await fetch(`/api/batch/open-folder/${jobId}`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+  } catch (error) {
+    console.error(error);
+  }
+  if (showConfirmation) confirmFolderOpened();
+}
+
+function confirmFolderOpened() {
+  const notice = document.querySelector('#openPdfFolderNotice');
+  notice.textContent = '✓ Otworzono folder - jeśli nie widzisz okna, sprawdź pasek zadań (Windows czasem otwiera je w tle).';
+  notice.classList.remove('hidden');
+  clearTimeout(confirmFolderOpened._timer);
+  confirmFolderOpened._timer = setTimeout(() => notice.classList.add('hidden'), 6000);
+}
+
+document.querySelector('#openPdfFolder').addEventListener('click', async () => {
+  const btn = document.querySelector('#openPdfFolder');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Otwieram...';
+  await openPdfFolder(currentPdfJobId);
+  btn.textContent = original;
+  btn.disabled = false;
+});
 
 loadSettings();
+
+// Wojewodztwa NIE pokrywaja sie z granicami stref klimatycznych (np.
+// Podkarpackie ma zarowno nizinna strefe III jak i gorska V - patrz
+// usuniete tej samej sesji src/gminaZones.js, ktore probowalo to zrobic
+// precyzyjnie po gminie i i tak wymagalo recznej weryfikacji) - ponizsza
+// tabela jest wiec CELOWO tylko orientacyjna podpowiedz (najbardziej typowa
+// strefa dla wiekszosci obszaru danego wojewodztwa), NIGDY nie jest cichym,
+// ostatecznym rozstrzygnieciem. Pole strefy zostaje zawsze widoczne i w
+// pelni edytowalne - podpowiedz nadpisuje je TYLKO dopoki uzytkownik sam
+// go nie dotknie (patrz zoneTouchedManually nizej).
+const DEFAULT_ZONE_BY_WOJEWODZTWO = {
+  'Zachodniopomorskie': '2',
+  'Pomorskie': '2',
+  'Lubuskie': '2',
+  'Dolnośląskie': '3',
+  'Wielkopolskie': '3',
+  'Kujawsko-pomorskie': '3',
+  'Łódzkie': '3',
+  'Mazowieckie': '3',
+  'Opolskie': '3',
+  'Śląskie': '3',
+  'Świętokrzyskie': '3',
+  'Małopolskie': '4',
+  'Lubelskie': '4',
+  'Podkarpackie': '4',
+  'Warmińsko-mazurskie': '4',
+  'Podlaskie': '4'
+};
+let zoneTouchedManually = false;
+document.querySelector('#zone').addEventListener('change', () => { zoneTouchedManually = true; });
+document.querySelector('#wojewodztwo').addEventListener('change', (event) => {
+  if (zoneTouchedManually) return;
+  const suggested = DEFAULT_ZONE_BY_WOJEWODZTWO[event.currentTarget.value];
+  if (suggested) document.querySelector('#zone').value = suggested;
+});
 
 // Swiadomie BEZ auto-sprawdzania na 'change' pliku (ten sam wzorzec co
 // formularze-ecodan/karty-katalogowe) - wylacznie na klikniecie przycisku.
@@ -64,7 +137,9 @@ document.querySelector('#batchForm').addEventListener('submit', async (event) =>
   document.querySelector('#statusBox').classList.remove('hidden');
   document.querySelector('#finishInfo').textContent = 'Zadanie jest w toku - każdy wiersz to prawdziwe zgłoszenie z oczekiwaniem na maila, może potrwać kilka minut na wiersz.';
   document.querySelector('#previewRows').innerHTML = '';
-  document.querySelector('#pdfFolder').classList.add('hidden');
+  document.querySelector('#openPdfFolder').classList.add('hidden');
+  currentPdfDir = null;
+  autoOpenedForJob = null;
   document.querySelector('#statusBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   const res = await fetch('/api/batch/start', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
@@ -298,9 +373,9 @@ async function pollStatus() {
   document.querySelector('#current').textContent = job.current ? `Aktualnie: ${job.current}` : 'Aktualnie: -';
 
   if (job.pdfDir) {
-    const folderEl = document.querySelector('#pdfFolder');
-    folderEl.innerHTML = `Karty PDF zapisywane są w: <code>${escapeHtml(job.pdfDir)}</code>`;
-    folderEl.classList.remove('hidden');
+    currentPdfDir = job.pdfDir;
+    currentPdfJobId = job.id;
+    document.querySelector('#openPdfFolder').classList.remove('hidden');
   }
 
   const rows = job.resultsPreview || [];
@@ -318,6 +393,13 @@ async function pollStatus() {
     document.querySelector('#startBatch').disabled = false;
     document.querySelector('#cancelBatch').disabled = true;
     document.querySelector('#cancelBatch').textContent = 'Przerwij zgłaszanie';
+    // Otwiera folder z kartami automatycznie po zakonczeniu - dokladnie raz
+    // na zadanie (autoOpenedForJob), zeby ponowny poll (np. po kliknieciu
+    // "Przerwij") nie otwieral kolejnego okna Eksploratora.
+    if (job.pdfDir && autoOpenedForJob !== job.id) {
+      autoOpenedForJob = job.id;
+      openPdfFolder(job.id);
+    }
     if (job.status === 'cancelled') {
       document.querySelector('#finishInfo').textContent = 'Przerwano zgłaszanie. Odebrane dotąd karty zostały w folderze zadania.';
     } else if (job.status === 'fatal-error') {

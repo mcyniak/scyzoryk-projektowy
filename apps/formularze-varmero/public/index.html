@@ -76,6 +76,7 @@
               <option value="4">Strefa IV</option>
               <option value="5">Strefa V</option>
             </select>
+            <span class="field-help">Po wyborze województwa podpowiadamy typową strefę - sprawdź ją dla terenów górskich/nadmorskich.</span>
           </label>
           <label>Województwo
             <select name="wojewodztwo" id="wojewodztwo">
@@ -157,7 +158,10 @@
       </div>
 
       <p id="current" class="current">Aktualnie: -</p>
-      <p id="pdfFolder" class="folder hidden"></p>
+      <div class="result-actions">
+        <button type="button" class="secondary hidden" id="openPdfFolder">Otwórz folder z kartami</button>
+        <span id="openPdfFolderNotice" class="badge ok hidden"></span>
+      </div>
 
       <h3>Ostatnie wyniki</h3>
       <table>

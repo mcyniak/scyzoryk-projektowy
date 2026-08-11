@@ -16,8 +16,10 @@ import { readTabelaAdresowa } from './src/excel.js';
 import { calculate } from './src/rules.js';
 import { createJob, jobs, runBatchJob, cancelJob, cancelAllJobs } from './src/jobs.js';
 import appPaths from '../../lib/appPaths.js';
+import hardening from '../../lib/hardening.js';
 
 const { getAppDataDir } = appPaths;
+const { runPowerShell } = hardening;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_DATA_ROOT = getAppDataDir('formularze-varmero');
@@ -265,6 +267,31 @@ app.get('/api/batch/status/:jobId', (req, res) => {
   const job = jobs.get(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, error: 'Nie znaleziono zadania.' });
   res.json({ ok: true, job: publicJob(job) });
+});
+
+// Otwiera folder z kartami PDF danego zadania w Eksploratorze. Bezpieczne
+// mimo ze sciezka jest per-zadanie (nie stala, w odroznieniu od
+// apps/drukarka-projekty#/api/open-saved-pdf-folder): jobId musi odpowiadac
+// istniejacemu zadaniu utworzonemu przez createJob() na tym serwerze, a
+// job.pdfDir jest zawsze wyliczany po stronie serwera
+// (telemetry.js#ensureJobWorkspace, przez sanitize-filename +
+// isInsideOrEqual) - klient nigdy nie podaje surowej sciezki wprost.
+//
+// Uzywa scripts/open-folder.ps1 (nie samego spawn('explorer.exe', ...))
+// zeby dodatkowo probowac wymusic okno na pierwszym planie - zlapane realnie
+// przez wlasciciela: goly spawn otwiera okno gdzies w tle bez zadnego
+// potwierdzenia, wiec klikal przycisk kilkanascie razy myslac ze nic sie nie
+// dzieje. Best-effort (Windows moze i tak zablokowac fokus procesowi w tle),
+// dlatego blad z PowerShella NIE jest traktowany jako porazka calego
+// zadania - folder i tak zdazyl sie otworzyc, zanim skrypt probuje fokusu.
+const OPEN_FOLDER_SCRIPT = path.join(__dirname, 'scripts', 'open-folder.ps1');
+app.post('/api/batch/open-folder/:jobId', async (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, error: 'Nie znaleziono zadania.' });
+  if (!job.pdfDir) return res.status(409).json({ ok: false, error: 'Folder zadania nie jest jeszcze gotowy.' });
+  res.json({ ok: true });
+  runPowerShell(OPEN_FOLDER_SCRIPT, ['-FolderPath', job.pdfDir], { timeoutMs: 10000 })
+    .catch(error => appendDiagnostic('warn', 'open-folder-failed', { message: String(error?.message || error) }));
 });
 
 app.get('/api/batch/jobs', (req, res) => {
