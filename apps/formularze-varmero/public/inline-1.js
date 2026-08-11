@@ -6,6 +6,7 @@ let selectedRows = new Set();
 let currentPdfDir = null;
 let currentPdfJobId = null;
 let autoOpenedForJob = null;
+let currentBrowsePath = null;
 
 // Zlapane realnie przez wlasciciela: Windows na tej maszynie skutecznie
 // blokuje wymuszenie okna Eksploratora na pierwszy plan z procesu w tle
@@ -92,6 +93,26 @@ document.querySelector('#reloadPreview').addEventListener('click', () => loadAdd
 document.querySelector('#addressSearch').addEventListener('input', () => renderAddressRows());
 document.querySelector('#selectAllRecords').addEventListener('click', () => { selectedRows = new Set(previewRecords.map(row => row.rowNumber)); renderAddressRows(); });
 document.querySelector('#clearRecords').addEventListener('click', () => { selectedRows = new Set(); renderAddressRows(); });
+document.querySelector('#browseOutputFolder')?.addEventListener('click', () => {
+  openFolderBrowser(document.querySelector('#outputPath').value.trim() || null);
+});
+document.querySelector('#folderBrowseClose')?.addEventListener('click', closeFolderBrowser);
+document.querySelector('#folderBrowseModal')?.addEventListener('click', (event) => {
+  if (event.target.id === 'folderBrowseModal') closeFolderBrowser();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && document.querySelector('#folderBrowseModal')?.classList.contains('open')) closeFolderBrowser();
+});
+document.querySelector('#folderBrowseList')?.addEventListener('click', (event) => {
+  const row = event.target.closest('[data-path]');
+  if (!row) return;
+  loadFolderBrowse(row.dataset.path);
+});
+document.querySelector('#folderBrowseSelect')?.addEventListener('click', () => {
+  if (!currentBrowsePath) return;
+  document.querySelector('#outputPath').value = currentBrowsePath;
+  closeFolderBrowser();
+});
 document.querySelector('#addressRows').addEventListener('click', (event) => {
   const row = event.target.closest('[data-row-number]');
   if (!row) return;
@@ -118,13 +139,15 @@ document.querySelector('#batchForm').addEventListener('submit', async (event) =>
     alert(fileCheck.message);
     return;
   }
-  if (!form.zone.value) {
+  if (!getFormField(form, 'zone').value) {
     alert('Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga.');
     return;
   }
 
   const data = new FormData(form);
-  data.set('concurrency', form.concurrency.value || '1');
+  data.set('concurrency', getFormField(form, 'concurrency').value || '1');
+  data.set('outputPath', getFormField(form, 'outputPath').value || '');
+  data.set('skipExisting', getFormField(form, 'skipExisting').checked ? 'true' : 'false');
   const chosenRows = previewRecords.length ? Array.from(selectedRows).sort((a, b) => a - b) : [];
   if (previewRecords.length && !chosenRows.length) {
     alert('Nie zaznaczono żadnego adresu. Zaznacz minimum jeden adres do zgłoszenia.');
@@ -164,6 +187,46 @@ document.querySelector('#batchForm').addEventListener('submit', async (event) =>
   pollStatus();
   pollTimer = setInterval(pollStatus, 1500);
 });
+
+function closeFolderBrowser() {
+  document.querySelector('#folderBrowseModal')?.classList.remove('open');
+}
+
+async function openFolderBrowser(startPath) {
+  document.querySelector('#folderBrowseModal')?.classList.add('open');
+  await loadFolderBrowse(startPath);
+}
+
+async function loadFolderBrowse(targetPath) {
+  const list = document.querySelector('#folderBrowseList');
+  const current = document.querySelector('#folderBrowseCurrentPath');
+  if (!list || !current) return;
+  list.innerHTML = '<div class="folder-row">Wczytuję...</div>';
+  try {
+    const url = targetPath ? `/api/browse-folder?path=${encodeURIComponent(targetPath)}` : '/api/browse-folder';
+    const res = await fetch(url);
+    const json = await res.json().catch(() => null);
+    if (!json || !json.ok) {
+      list.innerHTML = `<div class="folder-row">${escapeHtml((json && json.error) || 'Nie udało się wczytać folderów.')}</div>`;
+      return;
+    }
+    currentBrowsePath = json.path;
+    current.textContent = json.path || 'Wybierz dysk';
+
+    const rows = [];
+    if (json.path !== null) {
+      const isDriveRoot = json.parent === null;
+      const upTarget = isDriveRoot ? '' : json.parent;
+      rows.push(`<div class="folder-row clickable up-nav" data-path="${escapeHtml(upTarget)}">${isDriveRoot ? 'Lista dysków' : '..'}</div>`);
+    }
+    for (const entry of json.entries) {
+      rows.push(`<div class="folder-row clickable" data-path="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</div>`);
+    }
+    list.innerHTML = rows.join('') || '<div class="folder-row">Brak podfolderów.</div>';
+  } catch (error) {
+    list.innerHTML = `<div class="folder-row">${escapeHtml(String(error.message || error))}</div>`;
+  }
+}
 
 function showImapNotice(message) {
   const el = document.querySelector('#imapNotice');
@@ -368,7 +431,7 @@ async function pollStatus() {
   document.querySelector('#progress').value = done;
   document.querySelector('#jobStatus').textContent = statusLabel(job.status || '-');
   document.querySelector('#jobDone').textContent = `${done} / ${total}`;
-  document.querySelector('#jobOk').textContent = job.ok || 0;
+  document.querySelector('#jobOk').textContent = `${job.ok || 0}${job.skippedExisting ? ' +' + job.skippedExisting : ''}`;
   document.querySelector('#jobFailed').textContent = job.failed || 0;
 
   if (job.cancelRequested || job.status === 'cancelling') {
@@ -387,7 +450,7 @@ async function pollStatus() {
   const rows = job.resultsPreview || [];
   document.querySelector('#previewRows').innerHTML = rows.map(row => {
     const status = row.ok
-      ? `<span class="badge ok">Karta gotowa</span>`
+      ? `<span class="badge ${row.skippedExisting ? 'skip' : 'ok'}">${row.skippedExisting ? 'Pominięto' : 'Karta gotowa'}</span>`
       : `<span class="badge bad">Błąd</span><div class="small">${escapeHtml(row.error || '')}</div>`;
     return `<tr><td>${row.rowNumber || ''}</td><td>${escapeHtml(row.name || '')}</td><td>${escapeHtml(row.address || '')}</td><td>${status}</td></tr>`;
   }).join('');
@@ -411,9 +474,11 @@ async function pollStatus() {
     } else if (job.status === 'fatal-error') {
       document.querySelector('#finishInfo').textContent = job.fatalReason || 'Nie udało się rozpocząć albo zakończyć zgłaszania.';
     } else if (job.status === 'finished-with-errors') {
-      document.querySelector('#finishInfo').textContent = `Zakończono z błędami. ${job.ok || 0} kart gotowych, ${job.failed || 0} nieudanych.`;
+      const skipped = job.skippedExisting ? `, ${job.skippedExisting} pominięto jako już gotowe` : '';
+      document.querySelector('#finishInfo').textContent = `Zakończono z błędami. ${job.ok || 0} kart gotowych${skipped}, ${job.failed || 0} nieudanych.`;
     } else {
-      document.querySelector('#finishInfo').textContent = `Zakończono. Wszystkie ${job.ok || 0} kart są gotowe do odebrania z folderu zadania.`;
+      const skipped = job.skippedExisting ? `, pominięto ${job.skippedExisting} już gotowych` : '';
+      document.querySelector('#finishInfo').textContent = `Zakończono. Wygenerowano ${job.ok || 0} kart${skipped}.`;
     }
   }
 }
@@ -436,14 +501,23 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
 }
 
+function getFormField(form, name) {
+  const field = form.elements.namedItem(name);
+  if (!field) throw new Error(`Brak pola formularza: ${name}`);
+  return field;
+}
+
 function saveSettings() {
   const form = document.querySelector('#batchForm');
   const settings = {
-    investmentName: form.investmentName.value || '',
-    zone: form.zone.value || '',
-    wojewodztwo: form.wojewodztwo.value || '',
-    gminaName: form.gminaName.value || '',
-    postalCode: form.postalCode.value || ''
+    investmentName: getFormField(form, 'investmentName').value || '',
+    outputPath: getFormField(form, 'outputPath').value || '',
+    zone: getFormField(form, 'zone').value || '',
+    wojewodztwo: getFormField(form, 'wojewodztwo').value || '',
+    gminaName: getFormField(form, 'gminaName').value || '',
+    postalCode: getFormField(form, 'postalCode').value || '',
+    concurrency: getFormField(form, 'concurrency').value || '1',
+    skipExisting: getFormField(form, 'skipExisting').checked
   };
   localStorage.setItem('varmeroGeneratorSettings', JSON.stringify(settings));
 }
@@ -452,10 +526,13 @@ function loadSettings() {
   try {
     const settings = JSON.parse(localStorage.getItem('varmeroGeneratorSettings') || '{}');
     const form = document.querySelector('#batchForm');
-    if (settings.investmentName) form.investmentName.value = settings.investmentName;
-    if (settings.zone) form.zone.value = settings.zone;
-    if (settings.wojewodztwo) form.wojewodztwo.value = settings.wojewodztwo;
-    if (settings.gminaName) form.gminaName.value = settings.gminaName;
-    if (settings.postalCode) form.postalCode.value = settings.postalCode;
+    if (settings.investmentName) getFormField(form, 'investmentName').value = settings.investmentName;
+    if (settings.outputPath) getFormField(form, 'outputPath').value = settings.outputPath;
+    if (settings.zone) getFormField(form, 'zone').value = settings.zone;
+    if (settings.wojewodztwo) getFormField(form, 'wojewodztwo').value = settings.wojewodztwo;
+    if (settings.gminaName) getFormField(form, 'gminaName').value = settings.gminaName;
+    if (settings.postalCode) getFormField(form, 'postalCode').value = settings.postalCode;
+    if (settings.concurrency) getFormField(form, 'concurrency').value = settings.concurrency;
+    if (typeof settings.skipExisting === 'boolean') getFormField(form, 'skipExisting').checked = settings.skipExisting;
   } catch {}
 }

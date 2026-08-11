@@ -23,7 +23,7 @@
         </div>
       </div>
       <div class="app-header-right">
-        <a class="btn btn-ghost btn-sm" href="#" data-help-link="varmero">
+        <a class="btn btn-ghost btn-sm" href="pomoc.html">
           <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
           Pomoc
         </a>
@@ -69,6 +69,14 @@
           <input name="investmentName" id="investmentName" placeholder="np. Zagórów 2026" />
         </label>
 
+        <label style="margin-top: var(--space-4);">Folder zapisu kart PDF
+          <div class="path-row">
+            <input name="outputPath" id="outputPath" value="" placeholder="Wybierz folder albo zostaw puste dla folderu Scyzoryka" />
+            <button type="button" class="secondary" id="browseOutputFolder">Przeglądaj...</button>
+          </div>
+          <span class="field-help">Karty PDF zapiszą się bezpośrednio w tym folderze. Opcja „Pomiń już gotowe karty” sprawdzi właśnie tę lokalizację.</span>
+        </label>
+
         <div class="grid four">
           <label>Strefa klimatyczna
             <select name="zone" id="zone" required>
@@ -112,6 +120,11 @@
 
         <input name="concurrency" id="concurrency" type="hidden" value="1" />
         <input type="hidden" name="selectedRows" id="selectedRowsInput" value="[]" />
+
+        <label class="checkbox-line">
+          <input type="checkbox" name="skipExisting" checked />
+          Pomiń już gotowe karty
+        </label>
 
         <div id="recordSelector" class="record-selector hidden">
           <div class="panel-header" style="margin-bottom:8px;">
@@ -166,12 +179,30 @@
         <span id="openPdfFolderNotice" class="badge ok hidden"></span>
       </div>
 
-      <h3>Ostatnie wyniki</h3>
-      <table>
-        <thead><tr><th>Wiersz</th><th>Osoba</th><th>Adres</th><th>Status</th></tr></thead>
-        <tbody id="previewRows"></tbody>
-      </table>
+      <h3>Wyniki</h3>
+      <div class="results-table-wrap">
+        <table>
+          <thead><tr><th>Wiersz</th><th>Osoba</th><th>Adres</th><th>Status</th></tr></thead>
+          <tbody id="previewRows"></tbody>
+        </table>
+      </div>
     </section>
+  </div>
+
+  <div class="modal-overlay" id="folderBrowseModal" role="dialog" aria-modal="true" aria-labelledby="folderBrowseTitle" aria-hidden="true">
+    <div class="modal-box">
+      <div class="modal-head">
+        <strong id="folderBrowseTitle">Wybierz folder zapisu kart PDF</strong>
+        <button id="folderBrowseClose" class="btn btn-icon btn-secondary" type="button" aria-label="Zamknij"><svg class="icon"><use href="/shared/icons.svg#i-x"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <p class="hint" id="folderBrowseCurrentPath"></p>
+        <div id="folderBrowseList" class="folder-tree"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-primary" id="folderBrowseSelect">Wybierz ten folder</button>
+      </div>
+    </div>
   </div>
 
   <script src="inline-1.js"></script>

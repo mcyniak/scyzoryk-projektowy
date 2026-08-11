@@ -265,8 +265,8 @@ process.on('SIGINT', () => { stopChildren(); process.exit(0); });
 process.on('SIGTERM', () => { stopChildren(); process.exit(0); });
 process.on('exit', stopChildren);
 
-function send(res, statusCode, body, contentType = 'text/plain; charset=utf-8') {
-  res.writeHead(statusCode, { ...SECURITY_HEADERS, 'Content-Type': contentType, 'Cache-Control': 'no-store' });
+function send(res, statusCode, body, contentType = 'text/plain; charset=utf-8', extraHeaders = {}) {
+  res.writeHead(statusCode, { ...SECURITY_HEADERS, 'Content-Type': contentType, 'Cache-Control': 'no-store', ...extraHeaders });
   res.end(body);
 }
 
@@ -321,7 +321,7 @@ function requireTrustedMutation(req, res) {
   return true;
 }
 
-function readStaticFile(filePath, res, baseDir = PUBLIC_DIR) {
+function readStaticFile(filePath, res, baseDir = PUBLIC_DIR, extraHeaders = {}) {
   const safePath = path.normalize(filePath);
   const relative = path.relative(baseDir, safePath);
   if (relative.startsWith('..') || path.isAbsolute(relative)) return send(res, 403, 'Forbidden');
@@ -329,7 +329,7 @@ function readStaticFile(filePath, res, baseDir = PUBLIC_DIR) {
     if (err) return send(res, 404, 'Not found');
     const ext = path.extname(safePath).toLowerCase();
     const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.svg': 'image/svg+xml; charset=utf-8', '.png': 'image/png' };
-    send(res, 200, data, types[ext] || 'application/octet-stream');
+    send(res, 200, data, types[ext] || 'application/octet-stream', extraHeaders);
   });
 }
 
@@ -460,6 +460,12 @@ const server = http.createServer(async (req, res) => {
 
   if (decodedPath === '/' || decodedPath === '/index.html') return readStaticFile(path.join(PUBLIC_DIR, 'index.html'), res);
   if (decodedPath.startsWith('/shared/')) return readStaticFile(path.join(SHARED_DIR, decodedPath.slice('/shared/'.length)), res, SHARED_DIR);
+  // Zrzuty ekranow narzedzi sa tez osadzane cross-origin we wlasnej stronie
+  // pomoc.html kazdej apki (inny port) - domyslny Cross-Origin-Resource-Policy:
+  // same-origin z SECURITY_HEADERS blokowalby to ladowanie w przegladarce.
+  if (decodedPath.startsWith('/instrukcja-images/')) {
+    return readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res, PUBLIC_DIR, { 'Cross-Origin-Resource-Policy': 'cross-origin' });
+  }
   readStaticFile(path.join(PUBLIC_DIR, decodedPath.replace(/^\/+/, '')), res);
 });
 

@@ -19,11 +19,6 @@ function cleanPathInput(value) {
   return String(value || '').trim().replace(/^['"]|['"]$/g, '');
 }
 
-function isInsideOrEqual(base, target) {
-  const relative = path.relative(base, target);
-  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
 function safeOutputBase(defaultOutputRoot) {
   const configured = cleanPathInput(process.env.SCYZORYK_OUTPUT_BASE || '');
   return path.resolve(configured || defaultOutputRoot);
@@ -38,10 +33,6 @@ function safeFolderName(value, fallback = 'inwestycja') {
   return (safe || fallback).slice(0, 120);
 }
 
-function makeTimestampForFolder(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-}
-
 export function getInvestmentFolderName(job) {
   const requested = String(job?.options?.investmentName || '').trim();
   if (requested) return safeFolderName(requested, `zadanie-${job.id}`);
@@ -53,22 +44,22 @@ export function getInvestmentFolderName(job) {
 }
 
 export function resolveJobWorkspaceRoot(job, outputRoot) {
-  const rawOutputPath = cleanPathInput(job?.options?.outputPath || '');
   const investmentFolder = getInvestmentFolderName(job);
-
   const allowedBase = safeOutputBase(outputRoot);
-  if (rawOutputPath) {
-    const requestedBase = path.resolve(rawOutputPath);
-    if (isInsideOrEqual(allowedBase, requestedBase)) return path.join(requestedBase, investmentFolder);
-    job.outputPathWarning = `Podany folder wyjściowy jest poza dozwolonym miejscem. Używam bezpiecznego folderu: ${allowedBase}`;
-  }
-  const fallbackName = `${investmentFolder}-${makeTimestampForFolder()}-${String(job.id).slice(-6)}`;
-  return path.join(allowedBase, 'jobs', safeFolderName(fallbackName, `zadanie-${job.id}`));
+
+  // Stabilny folder dla tej samej inwestycji/pliku Excela jest potrzebny,
+  // zeby "Pomin juz gotowe raporty" moglo zobaczyc PDF-y z poprzedniego startu.
+  return path.join(allowedBase, 'jobs', investmentFolder);
+}
+export function resolvePdfDir(job, jobRoot) {
+  const rawOutputPath = cleanPathInput(job?.options?.outputPath || '');
+  if (rawOutputPath) return path.resolve(rawOutputPath);
+  return path.join(jobRoot, 'pdf');
 }
 
 export async function ensureJobWorkspace(job, outputRoot) {
   const jobRoot = resolveJobWorkspaceRoot(job, outputRoot);
-  const pdfDir = path.join(jobRoot, 'pdf');
+  const pdfDir = resolvePdfDir(job, jobRoot);
   const tmpDir = path.join(jobRoot, 'tmp');
   const debugDir = path.join(jobRoot, 'debug');
   const logsDir = path.join(jobRoot, 'logs');
@@ -91,11 +82,12 @@ export async function ensureJobWorkspace(job, outputRoot) {
   return { jobRoot, pdfDir, tmpDir, debugDir, logsDir };
 }
 
-// Ten log techniczny (events.jsonl) zyje obok wygenerowanych PDF-ow, ale to
-// NIE jest raport dla operatora (tym jest wyniki.csv/podsumowanie.json,
-// gdzie imie/adres sa potrzebne, bo o to caly raport chodzi) - to surowy
-// strumien zdarzen do diagnostyki technicznej. Zgodnie z decyzja "brak
-// trwalych logow uzytkownikow" nie duplikujemy w nim danych klienta - numer
+// Ten log techniczny (events.jsonl) zostaje w folderze roboczym aplikacji,
+// nawet gdy PDF-y sa zapisywane bezposrednio do folderu wybranego przez
+// uzytkownika. To NIE jest raport dla operatora (tym jest wyniki.csv/
+// podsumowanie.json, gdzie imie/adres sa potrzebne, bo o to caly raport
+// chodzi) - to surowy strumien zdarzen do diagnostyki technicznej. Zgodnie z
+// decyzja "brak trwalych logow uzytkownikow" nie duplikujemy w nim danych klienta - numer
 // wiersza wystarczy zeby w razie potrzeby zestawic zdarzenie z wyniki.csv.
 function stripCustomerFields(payload) {
   if (!payload || typeof payload !== 'object') return payload;

@@ -295,13 +295,47 @@ async function runEcodanFlow(page, input, result, tmpDir) {
   return await downloadReport(page, result, input, tmpDir);
 }
 
+async function findExistingReportPath(pdfDir, fileName, options = {}) {
+  const desiredPath = path.join(pdfDir, fileName);
+  if (await pathExists(desiredPath)) return desiredPath;
+  if (options.includeLegacy === false) return null;
+
+  const jobRoot = path.dirname(pdfDir);
+  const jobsRoot = path.dirname(jobRoot);
+  const investmentFolder = path.basename(jobRoot);
+  let entries = [];
+  try {
+    entries = await fs.readdir(jobsRoot, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  const legacyRoots = entries
+    .filter(entry => entry.isDirectory() && entry.name.startsWith(`${investmentFolder}-`))
+    .map(entry => path.join(jobsRoot, entry.name))
+    .sort((a, b) => path.basename(b).localeCompare(path.basename(a)));
+
+  for (const legacyRoot of legacyRoots) {
+    const legacyPdf = path.join(legacyRoot, 'pdf', fileName);
+    if (await pathExists(legacyPdf)) return legacyPdf;
+  }
+  return null;
+}
+
+async function copySkippedReportIntoCurrentJob(existingPath, desiredPath) {
+  if (!existingPath || existingPath === desiredPath) return existingPath;
+  await fs.mkdir(path.dirname(desiredPath), { recursive: true });
+  await fs.copyFile(existingPath, desiredPath);
+  return desiredPath;
+}
+
 export async function runAutomationInSession(input, session, pdfDir, options = {}) {
   const startedAt = Date.now();
   const result = calculate(input);
   const page = session.page;
   const desiredFileName = options.fileName || makePdfName(input, options.rowNumber || '');
   const desiredPath = path.join(pdfDir, desiredFileName);
-  const outputRoot = path.dirname(pdfDir);
+  const outputRoot = options.workspaceRoot || path.dirname(pdfDir);
 
   // Obrona w glab: nawet gdyby cos ominelo filtrowanie na poziomie Excela
   // (readExcelRecords) albo wywolalo ta funkcje wprost, dobor NIGDY nie
@@ -311,14 +345,18 @@ export async function runAutomationInSession(input, session, pdfDir, options = {
     return { ok: false, blocked: true, result, error: result.calculated.errors.join(' '), durationMs: Date.now() - startedAt };
   }
 
-  if (options.skipExisting && await pathExists(desiredPath)) {
+  const existingReportPath = options.skipExisting
+    ? await findExistingReportPath(pdfDir, desiredFileName, { includeLegacy: !options.outputPath })
+    : null;
+  if (existingReportPath) {
     // "Pomiń istniejące" ma oznaczać dosłownie brak jakichkolwiek zmian w
     // istniejącym pliku - poprzednio ta gałąź otwierała i PRZYCINAŁA
     // istniejący PDF do pierwszych 3 stron, co mogło nadpisać ręcznie
     // umieszczony/starszy raport. Przycinanie ma sens tylko dla PLIKU
     // WŁAŚNIE POBRANEGO z Ecodana (patrz niżej po pobraniu), nie dla pliku,
     // który miał zostać w ogóle nietknięty.
-    return { ok: true, skippedExisting: true, result, pdf: desiredPath, durationMs: Date.now() - startedAt };
+    const pdf = await copySkippedReportIntoCurrentJob(existingReportPath, desiredPath);
+    return { ok: true, skippedExisting: true, result, pdf, existingPdf: existingReportPath, durationMs: Date.now() - startedAt };
   }
 
   try {
@@ -407,6 +445,8 @@ async function processRecordWithWorker(record, recordIndex, worker, job, pdfDir,
     rowNumber: record.rowNumber,
     fileName,
     skipExisting: options.skipExisting !== false,
+    outputPath: options.outputPath || '',
+    workspaceRoot: outputRoot,
     workerId: worker.id,
     shouldCancel: () => !!job.cancelRequested
   };

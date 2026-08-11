@@ -78,6 +78,7 @@ export function createJob({ sourceFile, options }) {
     ok: 0,
     failed: 0,
     cancelled: 0,
+    skippedExisting: 0,
     skipped: {},
     results: [],
     errors: [],
@@ -94,9 +95,13 @@ export function createJob({ sourceFile, options }) {
   return job;
 }
 
-function makePdfName(record) {
+export function makePdfName(record) {
   const label = `${record.input.name || 'brak-nazwiska'} - ${record.input.address || 'brak-adresu'}`;
   return sanitize(`${String(record.rowNumber).padStart(3, '0')} - ${label}.pdf`) || `${record.rowNumber}.pdf`;
+}
+
+async function pathExists(filePath) {
+  try { await fs.access(filePath); return true; } catch { return false; }
 }
 
 // Kazdy wiersz dostaje WLASNY, unikalny adres plusowy (baseEmail
@@ -112,9 +117,15 @@ export function deriveSubmissionEmail(baseEmail) {
   return `${baseEmail.slice(0, at)}+varmero-${token}${baseEmail.slice(at)}`;
 }
 
-async function processRecord(record, { job, session, imapConfig, baseEmail, createImapClient }) {
+async function processRecord(record, { job, session, imapConfig, baseEmail, skipExisting, createImapClient }) {
   const startedAt = Date.now();
   const base = { rowNumber: record.rowNumber, name: record.input.name, address: record.input.address };
+  const pdfPath = path.join(job.pdfDir, makePdfName(record));
+  if (skipExisting && await pathExists(pdfPath)) {
+    await appendJobEvent(job, 'record-skipped-existing', { rowNumber: record.rowNumber });
+    return { ...base, ok: true, skippedExisting: true, pdf: pdfPath, durationMs: Date.now() - startedAt };
+  }
+
   const recipientEmail = deriveSubmissionEmail(baseEmail);
   await appendJobEvent(job, 'record-start', { rowNumber: record.rowNumber });
 
@@ -156,7 +167,6 @@ async function processRecord(record, { job, session, imapConfig, baseEmail, crea
       throw err;
     }
 
-    const pdfPath = path.join(job.pdfDir, makePdfName(record));
     await fs.writeFile(pdfPath, card.buffer);
     await appendJobEvent(job, 'record-ok', { rowNumber: record.rowNumber });
     return { ...base, ok: true, pdf: pdfPath, durationMs: Date.now() - startedAt };
@@ -174,7 +184,7 @@ async function processRecord(record, { job, session, imapConfig, baseEmail, crea
 // wierszy Excela do faktycznego przetworzenia; bez tego kazde uruchomienie
 // zglaszaloby CALA tabele adresowa (dziesiatki/setki prawdziwych zgloszen
 // naraz) - w praktyce zawsze chce sie wybrac konkretne, gotowe adresy.
-export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapConfig, gminaName, postalCode, zone, wojewodztwo, selectedRows, createImapClient } = {}) {
+export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapConfig, gminaName, postalCode, zone, wojewodztwo, skipExisting = true, selectedRows, createImapClient } = {}) {
   job.status = 'reading-excel';
   job.startedAt = new Date().toISOString();
 
@@ -213,22 +223,44 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
   const takeNext = () => (job.cancelRequested || nextIndex >= records.length ? null : records[nextIndex++]);
 
   async function runWorker(workerId) {
-    let session = await createAutomationSession(job.outputRoot);
-    registerSession(job.id, session);
+    let session = null;
     try {
       let record;
       while ((record = takeNext())) {
         job.current = `worker ${workerId}: wiersz ${record.rowNumber} (${record.input.address})`;
-        const result = await processRecord(record, { job, session, imapConfig, baseEmail, createImapClient });
+        const startedAt = Date.now();
+        const pdfPath = path.join(job.pdfDir, makePdfName(record));
+        let result;
+        if (skipExisting && await pathExists(pdfPath)) {
+          await appendJobEvent(job, 'record-skipped-existing', { rowNumber: record.rowNumber });
+          result = {
+            rowNumber: record.rowNumber,
+            name: record.input.name,
+            address: record.input.address,
+            ok: true,
+            skippedExisting: true,
+            pdf: pdfPath,
+            durationMs: Date.now() - startedAt
+          };
+        } else {
+          if (!session) {
+            session = await createAutomationSession(job.outputRoot);
+            registerSession(job.id, session);
+          }
+          result = await processRecord(record, { job, session, imapConfig, baseEmail, skipExisting, createImapClient });
+        }
         job.results.push(result);
         job.done += 1;
-        if (result.ok) job.ok += 1;
+        if (result.ok) {
+          if (result.skippedExisting) job.skippedExisting += 1;
+          else job.ok += 1;
+        }
         else { job.failed += 1; job.errors.push(result); }
 
         // Sesja jest odtwarzana po kazdym wierszu, w ktorym cos nie
         // zadzialalo (formularz/CAPTCHA/submit) - prostsze niz Ecodanowy licznik
         // "closed session streak", wystarczajace przy tej skali paczek.
-        if (!result.ok) {
+        if (!result.ok && session) {
           unregisterSession(job.id, session);
           await closeAutomationSession(session).catch(() => {});
           if (job.cancelRequested) break;
@@ -238,8 +270,10 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
         }
       }
     } finally {
-      unregisterSession(job.id, session);
-      await closeAutomationSession(session).catch(() => {});
+      if (session) {
+        unregisterSession(job.id, session);
+        await closeAutomationSession(session).catch(() => {});
+      }
     }
   }
 

@@ -197,6 +197,44 @@ test('jobs.js deriveSubmissionEmail: kazde wywolanie daje inny, unikalny adres p
   assert.throws(() => deriveSubmissionEmail('bez-malpy'), /@/);
 });
 
+test('jobs.js runBatchJob: wskazany folder zapisu jest sprawdzany przy pomijaniu gotowych kart', async () => {
+  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const dir = await makeTempDir();
+  const outputDir = path.join(dir, 'gotowe-karty');
+  const fixturePath = path.join(dir, 'fixture-existing.xlsx');
+  const rows = [
+    ['LP', 'Imie i Nazwisko', 'Adres', 'Rodzaj pompy', 'OZC'],
+    [1, 'Jan Testowy', 'Testowa 1', 'Powietrze-woda', '9.5']
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Pompy ciepla');
+  XLSX.writeFile(wb, fixturePath);
+
+  const { readTabelaAdresowa } = await importSrc('excel.js');
+  const { createJob, makePdfName, runBatchJob } = await importSrc('jobs.js');
+  const parsed = readTabelaAdresowa(fixturePath, { zone: '3' });
+  await fsp.mkdir(outputDir, { recursive: true });
+  await fsp.writeFile(path.join(outputDir, makePdfName(parsed.records[0])), 'ISTNIEJACY PDF');
+
+  const job = createJob({
+    sourceFile: 'fixture-existing.xlsx',
+    options: { investmentName: 'Inwestycja testowa', outputPath: outputDir, skipExisting: true, concurrency: 1 }
+  });
+  job.outputBase = path.join(dir, 'workspace');
+
+  await runBatchJob(job, fixturePath, { zone: '3', skipExisting: true });
+
+  assert.equal(job.status, 'finished');
+  assert.equal(job.pdfDir, outputDir);
+  assert.equal(job.done, 1);
+  assert.equal(job.ok, 0);
+  assert.equal(job.skippedExisting, 1);
+  assert.equal(job.results[0].skippedExisting, true);
+  assert.equal(job.results[0].ok, true);
+
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
 // --- mailbox.js -------------------------------------------------------------
 
 test('mailbox.js pickCardAttachment: wybiera "Varmero-podsumowanie-*.pdf" z 4 zalacznikow (dokladnie jak w realnym mailu z tej sesji)', async () => {

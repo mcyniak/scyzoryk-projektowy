@@ -13,6 +13,7 @@
     if (failed) throw new Error(`HTTP ${failed.status}`);
     const parts = await Promise.all(responses.map(response => response.text()));
     target.innerHTML = parts.join('\n');
+    document.querySelectorAll('[data-app-link]').forEach(el => { el.href = `http://scyzoryk.localhost:${el.dataset.appLink}/pomoc.html`; });
     if (location.hash) requestAnimationFrame(() => document.querySelector(location.hash)?.scrollIntoView());
   }
   loadGuide().catch(error => {

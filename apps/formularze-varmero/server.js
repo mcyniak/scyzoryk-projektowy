@@ -17,9 +17,11 @@ import { calculate } from './src/rules.js';
 import { createJob, jobs, runBatchJob, cancelJob, cancelAllJobs } from './src/jobs.js';
 import appPaths from '../../lib/appPaths.js';
 import hardening from '../../lib/hardening.js';
+import folderBrowse from '../../lib/folderBrowse.js';
 
 const { getAppDataDir } = appPaths;
 const { runPowerShell } = hardening;
+const { browseFolder } = folderBrowse;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_DATA_ROOT = getAppDataDir('formularze-varmero');
@@ -44,7 +46,7 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
   'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 };
 app.disable('x-powered-by');
 app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
@@ -114,6 +116,15 @@ app.get('/api/health', (req, res) => {
 
 app.get('/api/version', (req, res) => {
   res.json({ ok: true, version: APP_VERSION, defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX } });
+});
+
+app.get('/api/browse-folder', (req, res) => {
+  try {
+    const result = browseFolder(req.query.path);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
 });
 
 app.post('/api/calculate', (req, res) => {
@@ -198,7 +209,7 @@ function parseSelectedRows(value) {
 function publicJob(job) {
   return {
     ...job,
-    resultsPreview: (job.results || []).slice(-20)
+    resultsPreview: job.results || []
   };
 }
 
@@ -229,12 +240,14 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     // nie ma juz pola e-mail).
     const email = imapConfig.auth.user;
     const investmentName = cleanText(req.body.investmentName, 120);
+    const outputPath = String(req.body.outputPath || '').trim().replace(/^['"]|['"]$/g, '').slice(0, 1000);
+    const skipExisting = String(req.body.skipExisting || 'true').toLowerCase() !== 'false';
     const selectedRows = parseSelectedRows(req.body.selectedRows);
     if (!/^[1-5]$/.test(zone)) return res.status(400).json({ ok: false, error: 'Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga, a nie da się jej wyczytać z tabeli adresowej.' });
 
     const job = createJob({
       sourceFile: req.file.originalname,
-      options: { investmentName, gminaName, postalCode, zone, wojewodztwo, concurrency: Number(req.body.concurrency) || undefined }
+      options: { investmentName, outputPath, skipExisting, gminaName, postalCode, zone, wojewodztwo, concurrency: Number(req.body.concurrency) || undefined }
     });
     job.outputBase = OUTPUT_DIR;
     res.json({ ok: true, jobId: job.id });
@@ -243,7 +256,7 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     // paczke (kazdy wiersz to realne zgloszenie + czekanie na maila, moze
     // trwac minuty).
     setImmediate(() => {
-      runBatchJob(job, req.file.path, { email, imapConfig, gminaName, postalCode, zone, wojewodztwo, selectedRows })
+      runBatchJob(job, req.file.path, { email, imapConfig, gminaName, postalCode, zone, wojewodztwo, outputPath, skipExisting, selectedRows })
         .catch(error => {
           job.status = 'fatal-error';
           job.fatalReason = String(error?.message || error);

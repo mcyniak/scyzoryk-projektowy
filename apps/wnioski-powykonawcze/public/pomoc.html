@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc - Wnioski powykonawcze PDF</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wroc do narzedzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-refresh"/></svg>
+          <strong>Pomoc - Wnioski powykonawcze PDF</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wroc do narzedzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel glowny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Przerabia firmowe wnioski materialowe Word na dokumentacje powykonawcza i zapisuje gotowe PDF-y.</p>
+      <div class="help-chips"><span class="help-chip">DOCX</span><span class="help-chip">PDF</span><span class="help-chip help-chip-req">wymaga Worda</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/06-wnioski.png" alt="Aktualny ekran Wnioskow powykonawczych" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran - tryb plikow, tryb folderu WM, data i wyniki konwersji.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Dodaj pliki DOCX recznie albo wskaz folder z wnioskami materialowymi w trybie folderu WM.</li>
+        <li>Ustaw date dokumentacji. Mozesz podac pelna date albo tylko miesiac i rok, jesli dokument tego wymaga.</li>
+        <li>Wybierz kategorie lub pliki, ktore maja zostac przerobione.</li>
+        <li>Kliknij <strong>Generuj PDF</strong> i poczekaj na zakonczenie pracy Worda.</li>
+        <li>Pobierz pojedyncze PDF-y albo paczke ZIP z wynikami.</li>
+      </ol>
+
+      <div class="help-callout warn">
+        <span class="help-callout-label">Word COM</span>
+        <p>Podczas generowania nie zamykaj recznie Microsoft Worda. Program uruchamia go w tle i sam konczy prace po przetworzeniu dokumentow.</p>
+      </div>
+
+      <h3>Mozliwe bledy i co zrobic</h3>
+      <dl class="help-errors">
+        <div><dt>"Dodaj przynajmniej jeden plik DOCX."</dt><dd>Wybierz pliki Word albo najpierw przeskanuj folder WM i zaznacz pozycje do przetworzenia.</dd></div>
+        <div><dt>"Plik ... nie jest DOCX" / "nie wyglada jak poprawny DOCX"</dt><dd>Program przyjmuje tylko prawdziwe pliki .docx. Otworz dokument w Wordzie i zapisz go ponownie jako DOCX.</dd></div>
+        <div><dt>"Nie znaleziono folderu: ..."</dt><dd>Sprawdz sciezke do folderu WM. Jesli to dysk sieciowy albo Google Drive, otworz go najpierw w Eksploratorze Windows.</dd></div>
+        <div><dt>"Wybierz przynajmniej jedna kategorie do przerobienia."</dt><dd>Po skanowaniu folderu zaznacz minimum jedna kategorie lub pozycje.</dd></div>
+        <div><dt>"Sesja skanowania folderu wygasla..."</dt><dd>Przeskanuj folder ponownie. Lista plikow jest przechowywana tylko dla aktualnej sesji pracy.</dd></div>
+        <div><dt>Blad Worda, WINWORD albo PowerShell</dt><dd>Upewnij sie, ze Word jest zainstalowany i aktywowany. Zamknij recznie wiszace okna Worda, a potem uruchom generowanie ponownie.</dd></div>
+      </dl>
+    </div>
+  </main>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

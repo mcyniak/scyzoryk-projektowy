@@ -1,0 +1,52 @@
+/* Wspolne style dla stron pomocy jednego narzedzia (apps/<nazwa>/public/pomoc.html)
+   oraz ogólnego indeksu na panelu (public/instrukcja.html). Ladowany PO
+   components.css. Osobny plik (nie components.css), bo dotyczy tylko tresci
+   pomocy/instrukcji, nie reszty UI - i wszystko scoped pod .help-doc /
+   klasami z przedrostkiem "help-", zeby nie nadpisac globalnie h1/h2/p/ol/ul
+   ani nie kolidowac z ewentualnym .chip/.callout w app.css danego modulu. */
+:root{
+  --help-ink:var(--text-primary);--help-ink-soft:var(--text-secondary);--help-ink-faint:var(--text-tertiary);
+  --help-line:var(--border-strong);--help-line-soft:var(--border-default);
+  --help-accent:var(--brand-500);--help-accent-tint:var(--brand-50);
+  --help-bg-raised:var(--bg-surface);
+  --help-mono-bg:var(--gray-100);
+  --help-info:var(--info-600);--help-info-tint:var(--info-50);
+  --help-warn:var(--warning-600);--help-warn-tint:var(--warning-50);
+  --help-good:var(--success-600);--help-good-tint:var(--success-50);
+  --help-shadow:var(--shadow-sm);--help-radius:var(--radius-md);
+  --help-font-mono:Consolas,"SF Mono","Cascadia Mono",ui-monospace,monospace;
+}
+.help-doc{max-width:760px}
+.help-doc code{font-family:var(--help-font-mono);font-size:.88em;background:var(--help-mono-bg);padding:.1em .42em;border-radius:5px;color:var(--help-ink)}
+.help-doc h1{font-family:var(--font-display);font-size:2.1rem;font-weight:700;letter-spacing:-.01em;text-wrap:balance;margin:0 0 10px}
+.help-doc .help-dek{font-size:1.08rem;color:var(--help-ink-soft);margin:0 0 26px;max-width:60ch}
+.help-doc h2{font-family:var(--font-display);font-size:1.4rem;font-weight:700;letter-spacing:-.005em;margin:0 0 4px;text-wrap:balance}
+.help-doc h3{font-family:var(--font-display);font-size:.95rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--help-accent);margin:26px 0 10px}
+.help-doc p{margin:0 0 14px;max-width:66ch}
+.help-doc ol,.help-doc ul{padding-left:1.35em;margin:0 0 14px}
+.help-doc li{margin-bottom:7px}
+.help-doc li:last-child{margin-bottom:0}
+.help-doc strong{color:var(--help-ink)}
+.help-tagline{color:var(--help-ink-soft);font-size:1.03rem;margin:6px 0 14px;max-width:62ch}
+.help-chips{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0 6px}
+.help-chip{font-family:var(--help-font-mono);font-size:.78rem;padding:3px 10px;border-radius:999px;border:1px solid var(--help-line);color:var(--help-ink-soft);background:var(--help-bg-raised);white-space:nowrap;display:inline-block}
+.help-chip.help-chip-req{background:var(--help-accent-tint);color:var(--help-accent);border-color:transparent;font-family:var(--font-sans);font-style:italic}
+.help-callout{border-radius:var(--help-radius);padding:13px 16px;margin:14px 0;border:1px solid transparent;font-size:.96rem}
+.help-callout p:last-child{margin-bottom:0}
+.help-callout .help-callout-label{font-family:var(--font-display);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;display:block;margin-bottom:4px}
+.help-callout.warn{background:var(--help-warn-tint);color:var(--help-ink)}
+.help-callout.warn .help-callout-label{color:var(--help-warn)}
+.help-callout.info{background:var(--help-info-tint);color:var(--help-ink)}
+.help-callout.info .help-callout-label{color:var(--help-info)}
+.help-callout.good{background:var(--help-good-tint);color:var(--help-ink)}
+.help-callout.good .help-callout-label{color:var(--help-good)}
+.help-errors{margin:6px 0 14px}
+.help-errors>div{padding:11px 0;border-bottom:1px dashed var(--help-line-soft);display:grid;grid-template-columns:minmax(160px,290px) 1fr;gap:16px}
+.help-errors>div:last-child{border-bottom:none}
+.help-errors dt{font-family:var(--font-sans);font-style:italic;color:var(--help-ink);font-size:.94rem}
+.help-errors dd{margin:0;color:var(--help-ink-soft);font-size:.94rem}
+.help-shot-wrap{margin:18px 0 24px}
+.help-shot{width:100%;display:block;border-radius:10px;border:1px solid var(--help-line);box-shadow:var(--help-shadow)}
+.help-shot-cap{margin:8px 2px 0;font-size:.82rem;color:var(--help-ink-faint);font-family:var(--font-display)}
+@media (max-width:880px){.help-errors>div{grid-template-columns:1fr;gap:3px}}
+@media print{.help-shot-wrap{break-inside:avoid;page-break-inside:avoid}.help-shot{max-height:112mm;object-fit:contain}.help-doc h2,.help-doc h3{break-after:avoid;page-break-after:avoid}.help-callout{break-inside:avoid;page-break-inside:avoid}}

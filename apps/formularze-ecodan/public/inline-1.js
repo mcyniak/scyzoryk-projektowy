@@ -4,6 +4,7 @@ let activeJob = null;
     let lastPdfDir = '';
     let previewRecords = [];
     let selectedRows = new Set();
+    let currentBrowsePath = null;
 
     loadSettings();
 
@@ -23,6 +24,26 @@ let activeJob = null;
       const visible = filteredPreviewRecords();
       visible.forEach(row => selectedRows.add(row.rowNumber));
       renderAddressRows();
+    });
+    document.querySelector('#browseOutputFolder')?.addEventListener('click', () => {
+      openFolderBrowser(document.querySelector('#outputPath').value.trim() || null);
+    });
+    document.querySelector('#folderBrowseClose')?.addEventListener('click', closeFolderBrowser);
+    document.querySelector('#folderBrowseModal')?.addEventListener('click', (event) => {
+      if (event.target.id === 'folderBrowseModal') closeFolderBrowser();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && document.querySelector('#folderBrowseModal')?.classList.contains('open')) closeFolderBrowser();
+    });
+    document.querySelector('#folderBrowseList')?.addEventListener('click', (event) => {
+      const row = event.target.closest('[data-path]');
+      if (!row) return;
+      loadFolderBrowse(row.dataset.path);
+    });
+    document.querySelector('#folderBrowseSelect')?.addEventListener('click', () => {
+      if (!currentBrowsePath) return;
+      document.querySelector('#outputPath').value = currentBrowsePath;
+      closeFolderBrowser();
     });
     document.querySelector('#addressRows').addEventListener('click', (event) => {
       const row = event.target.closest('[data-row-number]');
@@ -56,8 +77,8 @@ let activeJob = null;
       }
 
       const data = new FormData(form);
-      data.set('skipExisting', form.skipExisting.checked ? 'true' : 'false');
-      data.set('concurrency', form.concurrency.value || '1');
+      data.set('skipExisting', getFormField(form, 'skipExisting').checked ? 'true' : 'false');
+      data.set('concurrency', getFormField(form, 'concurrency').value || '1');
       const chosenRows = previewRecords.length ? Array.from(selectedRows).sort((a, b) => a - b) : [];
       if (previewRecords.length && !chosenRows.length) {
         alert('Nie zaznaczono żadnego adresu. Zaznacz minimum jeden adres do wygenerowania.');
@@ -95,6 +116,45 @@ let activeJob = null;
       pollTimer = setInterval(pollStatus, 1500);
     });
 
+    function closeFolderBrowser() {
+      document.querySelector('#folderBrowseModal')?.classList.remove('open');
+    }
+
+    async function openFolderBrowser(startPath) {
+      document.querySelector('#folderBrowseModal')?.classList.add('open');
+      await loadFolderBrowse(startPath);
+    }
+
+    async function loadFolderBrowse(targetPath) {
+      const list = document.querySelector('#folderBrowseList');
+      const current = document.querySelector('#folderBrowseCurrentPath');
+      if (!list || !current) return;
+      list.innerHTML = '<div class="folder-row">Wczytuję...</div>';
+      try {
+        const url = targetPath ? `/api/browse-folder?path=${encodeURIComponent(targetPath)}` : '/api/browse-folder';
+        const res = await fetch(url);
+        const json = await res.json().catch(() => null);
+        if (!json || !json.ok) {
+          list.innerHTML = `<div class="folder-row">${escapeHtml((json && json.error) || 'Nie udało się wczytać folderów.')}</div>`;
+          return;
+        }
+        currentBrowsePath = json.path;
+        current.textContent = json.path || 'Wybierz dysk';
+
+        const rows = [];
+        if (json.path !== null) {
+          const isDriveRoot = json.parent === null;
+          const upTarget = isDriveRoot ? '' : json.parent;
+          rows.push(`<div class="folder-row clickable up-nav" data-path="${escapeHtml(upTarget)}">${isDriveRoot ? 'Lista dysków' : '..'}</div>`);
+        }
+        for (const entry of json.entries) {
+          rows.push(`<div class="folder-row clickable" data-path="${escapeHtml(entry.path)}">${escapeHtml(entry.name)}</div>`);
+        }
+        list.innerHTML = rows.join('') || '<div class="folder-row">Brak podfolderów.</div>';
+      } catch (error) {
+        list.innerHTML = `<div class="folder-row">${escapeHtml(String(error.message || error))}</div>`;
+      }
+    }
 
     function isRealExcelFile(file) {
       const name = String(file?.name || '').toLowerCase();
@@ -357,19 +417,25 @@ let activeJob = null;
       return String(value).replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
     }
 
+    function getFormField(form, name) {
+      const field = form.elements.namedItem(name);
+      if (!field) throw new Error(`Brak pola formularza: ${name}`);
+      return field;
+    }
+
     function saveSettings() {
       const form = document.querySelector('#batchForm');
       const settings = {
-        investmentName: form.investmentName.value || '',
-        outputPath: form.outputPath.value || '',
+        investmentName: getFormField(form, 'investmentName').value || '',
+        outputPath: getFormField(form, 'outputPath').value || '',
         // Audyt rozdz. 14, P0/P1: lokalizacja NIE jest zapamietywana miedzy
         // sesjami. To pole jest fallbackiem wylacznie dla wierszy bez wlasnej
         // kolumny lokalizacji (patrz src/excel.js#rowToInput) - zapamietanie
         // jej w localStorage znaczyloby, ze przy NASTEPNEJ, zupelnie innej
         // inwestycji formularz cicho podstawia lokalizacje z POPRZEDNIEJ,
         // dla kazdego wiersza, ktoremu przypadkiem zabraknie wlasnej danej.
-        concurrency: form.concurrency.value || '1',
-        skipExisting: form.skipExisting.checked
+        concurrency: getFormField(form, 'concurrency').value || '1',
+        skipExisting: getFormField(form, 'skipExisting').checked
       };
       localStorage.setItem('ecodanGeneratorSettings', JSON.stringify(settings));
     }
@@ -378,9 +444,9 @@ let activeJob = null;
       try {
         const settings = JSON.parse(localStorage.getItem('ecodanGeneratorSettings') || '{}');
         const form = document.querySelector('#batchForm');
-        if (settings.investmentName) form.investmentName.value = settings.investmentName;
-        if (settings.outputPath) form.outputPath.value = settings.outputPath;
-        if (settings.concurrency) form.concurrency.value = settings.concurrency;
-        if (typeof settings.skipExisting === 'boolean') form.skipExisting.checked = settings.skipExisting;
+        if (settings.investmentName) getFormField(form, 'investmentName').value = settings.investmentName;
+        if (settings.outputPath) getFormField(form, 'outputPath').value = settings.outputPath;
+        if (settings.concurrency) getFormField(form, 'concurrency').value = settings.concurrency;
+        if (typeof settings.skipExisting === 'boolean') getFormField(form, 'skipExisting').checked = settings.skipExisting;
       } catch {}
     }

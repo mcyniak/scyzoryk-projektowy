@@ -16,11 +16,6 @@ function cleanPathInput(value) {
   return String(value || '').trim().replace(/^['"]|['"]$/g, '');
 }
 
-function isInsideOrEqual(base, target) {
-  const relative = path.relative(base, target);
-  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
 function safeOutputBase(defaultOutputRoot) {
   const configured = cleanPathInput(process.env.SCYZORYK_OUTPUT_BASE || '');
   return path.resolve(configured || defaultOutputRoot);
@@ -32,10 +27,6 @@ function safeFolderName(value, fallback = 'inwestycja') {
   return (safe || fallback).slice(0, 120);
 }
 
-function makeTimestampForFolder(date = new Date()) {
-  return date.toISOString().replace(/[:.]/g, '-').slice(0, 19);
-}
-
 export function getInvestmentFolderName(job) {
   const requested = String(job?.options?.investmentName || '').trim();
   if (requested) return safeFolderName(requested, `zadanie-${job.id}`);
@@ -45,21 +36,19 @@ export function getInvestmentFolderName(job) {
 }
 
 export function resolveJobWorkspaceRoot(job, outputRoot) {
-  const rawOutputPath = cleanPathInput(job?.options?.outputPath || '');
   const investmentFolder = getInvestmentFolderName(job);
   const allowedBase = safeOutputBase(outputRoot);
-  if (rawOutputPath) {
-    const requestedBase = path.resolve(rawOutputPath);
-    if (isInsideOrEqual(allowedBase, requestedBase)) return path.join(requestedBase, investmentFolder);
-    job.outputPathWarning = `Podany folder wyjściowy jest poza dozwolonym miejscem. Używam bezpiecznego folderu: ${allowedBase}`;
-  }
-  const fallbackName = `${investmentFolder}-${makeTimestampForFolder()}-${String(job.id).slice(-6)}`;
-  return path.join(allowedBase, 'jobs', safeFolderName(fallbackName, `zadanie-${job.id}`));
+  return path.join(allowedBase, 'jobs', investmentFolder);
 }
 
+export function resolvePdfDir(job, jobRoot) {
+  const rawOutputPath = cleanPathInput(job?.options?.outputPath || '');
+  if (rawOutputPath) return path.resolve(rawOutputPath);
+  return path.join(jobRoot, 'pdf');
+}
 export async function ensureJobWorkspace(job, outputRoot) {
   const jobRoot = resolveJobWorkspaceRoot(job, outputRoot);
-  const pdfDir = path.join(jobRoot, 'pdf');
+  const pdfDir = resolvePdfDir(job, jobRoot);
   const debugDir = path.join(jobRoot, 'debug');
   const logsDir = path.join(jobRoot, 'logs');
   await Promise.all([
@@ -96,11 +85,11 @@ export async function appendJobEvent(job, type, payload = {}) {
 
 export async function writeResultsCsv(job) {
   if (!job?.resultsCsv) return;
-  const header = ['status', 'rowNumber', 'name', 'address', 'pdf', 'error', 'durationMs'];
+  const header = ['status', 'rowNumber', 'name', 'address', 'pdf', 'error', 'skippedExisting', 'durationMs'];
   const lines = [header.join(';')];
   for (const row of job.results || []) {
-    const status = row.cancelled ? 'cancelled' : row.ok ? 'ok' : 'error';
-    lines.push([status, row.rowNumber || '', row.name || '', row.address || '', row.pdf || '', row.error || '', row.durationMs || '']
+    const status = row.cancelled ? 'cancelled' : row.ok ? (row.skippedExisting ? 'skipped-existing' : 'ok') : 'error';
+    lines.push([status, row.rowNumber || '', row.name || '', row.address || '', row.pdf || '', row.error || '', row.skippedExisting ? 'true' : 'false', row.durationMs || '']
       .map(csvEscape).join(';'));
   }
   await fs.writeFile(job.resultsCsv, lines.join('\n'), 'utf8').catch(() => {});
@@ -122,6 +111,7 @@ export async function writeSummary(job) {
     ok: job.ok,
     failed: job.failed,
     cancelled: job.cancelled,
+    skippedExisting: job.skippedExisting,
     concurrency: job.concurrency,
     restartedSessions: job.restartedSessions || 0,
     unknownCaptchaIcons: job.unknownCaptchaIcons || 0,

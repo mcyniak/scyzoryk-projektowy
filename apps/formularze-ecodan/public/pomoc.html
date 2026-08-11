@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc — Formularze Ecodan</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-table"/></svg>
+          <strong>Pomoc — Formularze Ecodan</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Na podstawie Excela przygotowuje raporty PDF z konfiguratora Ecodan (my-ecodan.me) dla wybranych adresów.</p>
+      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">PDF</span><span class="help-chip help-chip-req">internet</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/04-formularze.png" alt="Aktualny ekran Formularzy Ecodan" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran — dane inwestycji, wybór adresów, postęp oraz pobieranie wyników.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Kliknij pole pliku i wybierz Excel inwestycji (.xlsx), potem kliknij <strong>Sprawdź adresy</strong>, żeby wczytać listę wierszy z arkusza.</li>
+        <li>Uzupełnij nazwę inwestycji oraz lokalizację/kod pocztowy — to pole jest używane tylko dla wierszy, które nie mają własnej kolumny lokalizacji.</li>
+        <li>Po wczytaniu listy zaznacz w tabeli adresy, dla których chcesz wygenerować raporty. Możesz szukać po adresie, osobie albo numerze wiersza, oraz zaznaczyć lub odznaczyć wszystkie naraz.</li>
+        <li>Zostaw zaznaczone <strong>Pomiń już gotowe raporty</strong>, jeśli nie chcesz ponownie generować plików, które już istnieją w folderze wyników.</li>
+        <li>Kliknij <strong>Start generowania PDF</strong> i obserwuj postęp: liczbę zrobionych wierszy, gotowych PDF-ów oraz błędów.</li>
+        <li>Pojedynczy adres może zakończyć się błędem — reszta zadania jest kontynuowana. Sprawdź listę „Ostatnie wyniki”, popraw dane w Excelu i w razie potrzeby wygeneruj ponownie tylko brakujące adresy.</li>
+        <li>Po zakończeniu kliknij <strong>Pobierz ZIP z wynikami</strong> — paczka zawiera PDF-y, wyniki.csv i bledy.txt.</li>
+      </ol>
+
+      <div class="help-callout good">
+        <span class="help-callout-label">Stała zasada Ecodan</span>
+        <p>Każdy wynik zawiera wyłącznie <strong>pierwsze trzy strony</strong> raportu, ponieważ tylko one są potrzebne. Dotyczy to również istniejących raportów wykrytych przy pomijaniu gotowych plików.</p>
+      </div>
+
+      <h3>Możliwe błędy i co zrobić</h3>
+      <dl class="help-errors">
+        <div><dt>„Dozwolone są tylko pliki .xlsx. Pliki .xls zapisz najpierw jako .xlsx”</dt><dd>Program sprawdza rozszerzenie pliku inwestycji. Otwórz stary .xls w Excelu i zapisz go jako .xlsx, potem wgraj ponownie.</dd></div>
+        <div><dt>„Plik nie wygląda jak poprawny XLSX. Sprawdź, czy to nie jest skrót .gsheet albo stary plik .xls”</dt><dd>Program sprawdza realną zawartość pliku, nie tylko rozszerzenie. Zwykle chodzi o eksport z Google Sheets zapisany jako skrót albo plik z podmienionym rozszerzeniem — otwórz go w Excelu i zapisz ponownie jako .xlsx.</dd></div>
+        <div><dt>„Nie przesłano pliku Excel”</dt><dd>Kliknięto „Sprawdź adresy” albo „Start generowania PDF” bez wybrania pliku w polu Excel — wybierz plik inwestycji i spróbuj ponownie.</dd></div>
+        <div><dt>„Limit czasu rekordu przekroczony (… s). Sesja została zamknięta i zostanie uruchomiona ponownie”</dt><dd>Strona my-ecodan.me nie odpowiedziała w oczekiwanym czasie dla danego adresu. Program sam zamyka sesję przeglądarki i ponawia próbę — nie trzeba nic robić, chyba że błąd powtarza się dla wielu adresów pod rząd (wtedy sprawdź połączenie z internetem).</dd></div>
+        <div><dt>„Strona Ecodan nie pokazała »Pobierz raport«, bo uznaje jeden z wcześniejszych kroków za nieukończony”</dt><dd>Zwykle winny jest krok Strefa klimatyczna, który nie zapisał się przez skrót nawigacji. Spróbuj wygenerować ten sam adres jeszcze raz — druga próba zwykle przechodzi cały formularz od nowa i kończy się poprawnie.</dd></div>
+        <div><dt>„Nie udało się skrócić PDF do pierwszych 3 stron”</dt><dd>Pobrany z my-ecodan.me plik PDF nie dał się przyciąć do wymaganych trzech stron (np. był uszkodzony w trakcie pobierania). Wygeneruj ten adres ponownie.</dd></div>
+        <div><dt>Komunikat o błędnym PDF przeniesionym do folderu debug/invalid-pdf</dt><dd>Program wykrył, że pobrany plik nie jest poprawnym PDF-em, i odłożył go do podglądu zamiast dopisać do wyników. Wygeneruj adres ponownie — jeśli błąd się powtarza, sprawdź w folderze debug, co faktycznie zostało pobrane.</dd></div>
+        <div><dt>„Nie znaleziono zadania” / „Folder zadania jeszcze nie istnieje”</dt><dd>Dotyczy pobierania PDF-u pojedynczego wiersza albo folderu zadania po odświeżeniu strony przy starym albo nieistniejącym identyfikatorze zadania. Uruchom generowanie ponownie z ekranu głównego.</dd></div>
+      </dl>
+    </div>
+  </main>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

@@ -13,6 +13,15 @@ input, select { width: 100%; margin-top: 8px; min-height: var(--hit-min); paddin
 input[type="checkbox"] { width: 20px; margin: 0 9px 0 0; }
 .checkbox-line { display: flex; align-items: center; color: var(--text-secondary); font-weight: 600; margin-top: var(--space-4); }
 .actions { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-4); align-items: center; }
+.path-row { display: flex; gap: var(--space-3); align-items: center; margin-top: 8px; }
+.path-row input { flex: 1; min-width: 0; margin-top: 0; }
+.path-row button { flex: none; white-space: nowrap; }
+.folder-tree { margin-top: var(--space-4); max-height: 420px; overflow: auto; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.folder-row { display: flex; align-items: center; gap: 10px; padding: 7px 14px; border-bottom: 1px solid var(--border-default); font-size: var(--text-sm); font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace; }
+.folder-row:last-child { border-bottom: 0; }
+.folder-row.clickable { cursor: pointer; }
+.folder-row.clickable:hover { background: var(--bg-surface-muted); }
+.folder-row.up-nav { color: var(--text-secondary); font-weight: 700; font-family: inherit; }
 
 .button, button:not(.btn), a.button-link { border: 0; border-radius: var(--radius-md); min-height: var(--hit-min); padding: 0 18px; font: inherit; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--brand-500); color: #fff; transition: background var(--duration-fast); text-decoration: none; }
 .button:hover, button:not(.btn):hover, a.button-link:hover { background: var(--brand-600); text-decoration: none; }
@@ -39,6 +48,8 @@ progress::-moz-progress-bar { background: var(--brand-500); border-radius: 999px
 .result-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: var(--space-4); }
 
 table { width: 100%; border-collapse: separate; border-spacing: 0; margin-top: var(--space-4); overflow: hidden; border: 1px solid var(--border-default); border-radius: var(--radius-lg); font-size: var(--text-sm); background: var(--bg-surface); }
+.results-table-wrap { max-height: 520px; overflow: auto; border-radius: var(--radius-lg); margin-top: var(--space-4); }
+.results-table-wrap table { margin-top: 0; }
 th, td { padding: 11px 12px; text-align: left; border-bottom: 1px solid var(--border-default); vertical-align: top; }
 th { background: var(--bg-surface-muted); color: var(--text-secondary); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
 tr:last-child td { border-bottom: 0; }
@@ -63,4 +74,6 @@ tr:last-child td { border-bottom: 0; }
 
 @media (max-width: 980px) {
   .grid, .grid.two, .grid.four, .status-grid { grid-template-columns: 1fr; }
+  .path-row { align-items: stretch; flex-direction: column; }
+  .path-row button { width: 100%; }
 }

@@ -34,11 +34,42 @@ test('pominiecie istniejacego raportu Ecodan nie modyfikuje/przycina pliku (audy
   // być ręcznie umieszczony/starszy raport). Ten test pilnuje, żeby ta gałąź
   // nigdy więcej nie wołała keepFirstPdfPages ani nie zwracała trimmedExisting.
   const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'formularze-ecodan', 'src', 'jobs.js'), 'utf8');
-  const skipBranch = source.match(/if \(options\.skipExisting && await pathExists\(desiredPath\)\) \{[\s\S]*?\n  \}/);
+  const skipBranch = source.match(/if \(existingReportPath\) \{[\s\S]*?\n  \}/);
   assert.ok(skipBranch, 'nie znaleziono gałęzi options.skipExisting w jobs.js');
+  assert.match(source, /const existingReportPath = options\.skipExisting\s+\?\s+await findExistingReportPath\(pdfDir, desiredFileName,/);
   assert.doesNotMatch(skipBranch[0], /keepFirstPdfPages/);
   assert.match(skipBranch[0], /skippedExisting: true/);
   assert.doesNotMatch(source, /skippedExisting: true,\s*trimmedExisting: pdfTrim\.trimmed/);
+});
+
+test('domyslny folder Ecodan jest staly dla tej samej inwestycji, zeby pominiecie widzialo gotowe PDF-y', async () => {
+  const previousOutputBase = process.env.SCYZORYK_OUTPUT_BASE;
+  delete process.env.SCYZORYK_OUTPUT_BASE;
+  try {
+    const { resolveJobWorkspaceRoot, resolvePdfDir } = await import('../apps/formularze-ecodan/src/telemetry.js');
+    const outputRoot = path.join(os.tmpdir(), 'scyzoryk-ecodan-output');
+    const firstJob = { id: '111111-a', sourceFile: 'adresy.xlsx', options: { investmentName: 'Inwestycja Testowa', outputPath: '' } };
+    const secondJob = { id: '222222-b', sourceFile: 'adresy.xlsx', options: { investmentName: 'Inwestycja Testowa', outputPath: '' } };
+    const expected = path.join(outputRoot, 'jobs', 'Inwestycja Testowa');
+
+    assert.equal(resolveJobWorkspaceRoot(firstJob, outputRoot), expected);
+    assert.equal(resolveJobWorkspaceRoot(secondJob, outputRoot), expected);
+    assert.equal(resolvePdfDir(firstJob, expected), path.join(expected, 'pdf'));
+  } finally {
+    if (previousOutputBase === undefined) delete process.env.SCYZORYK_OUTPUT_BASE;
+    else process.env.SCYZORYK_OUTPUT_BASE = previousOutputBase;
+  }
+});
+
+test('wybrany folder zapisu Ecodan jest bezposrednim folderem PDF-ow', async () => {
+  const { resolveJobWorkspaceRoot, resolvePdfDir } = await import('../apps/formularze-ecodan/src/telemetry.js');
+  const outputRoot = path.join(os.tmpdir(), 'scyzoryk-ecodan-output');
+  const selectedOutput = path.join(os.tmpdir(), 'ecodan-wybrany-folder');
+  const job = { id: '333333-c', sourceFile: 'adresy.xlsx', options: { investmentName: 'Inwestycja Testowa', outputPath: selectedOutput } };
+  const jobRoot = resolveJobWorkspaceRoot(job, outputRoot);
+
+  assert.equal(jobRoot, path.join(outputRoot, 'jobs', 'Inwestycja Testowa'));
+  assert.equal(resolvePdfDir(job, jobRoot), selectedOutput);
 });
 
 // =====================================================================
@@ -56,6 +87,52 @@ const validInput = {
   ozc: '7,8', municipalityPower: '9 kW', chosenPower: '',
   radiatorsShare: '60', floorShare: '40', cwuTank: '200 l', boilerRoomHeight: '2.2'
 };
+
+test('skipExisting znajduje raport w starszym folderze z data i kopiuje go do stabilnego folderu', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-legacy-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const { runAutomationInSession } = await import('../apps/formularze-ecodan/src/jobs.js');
+  const { makePdfName } = await import('../apps/formularze-ecodan/src/excel.js');
+  const fileName = makePdfName(validInput, 7);
+  const legacyPdf = path.join(dir, 'jobs', 'Inwestycja Testowa-2026-08-11T10-00-00-abcdef', 'pdf', fileName);
+  const stablePdfDir = path.join(dir, 'jobs', 'Inwestycja Testowa', 'pdf');
+  const stablePdf = path.join(stablePdfDir, fileName);
+  await fsp.mkdir(path.dirname(legacyPdf), { recursive: true });
+  await createPdf(legacyPdf, 2);
+
+  const result = await runAutomationInSession(validInput, { page: {} }, stablePdfDir, {
+    fileName,
+    rowNumber: 7,
+    skipExisting: true
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skippedExisting, true);
+  assert.equal(result.existingPdf, legacyPdf);
+  assert.equal(result.pdf, stablePdf);
+  await fsp.access(stablePdf);
+});
+
+test('skipExisting sprawdza bezposrednio wybrany folder zapisu PDF', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-selected-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const { runAutomationInSession } = await import('../apps/formularze-ecodan/src/jobs.js');
+  const { makePdfName } = await import('../apps/formularze-ecodan/src/excel.js');
+  const fileName = makePdfName(validInput, 8);
+  const pdf = path.join(dir, fileName);
+  await createPdf(pdf, 2);
+
+  const result = await runAutomationInSession(validInput, { page: {} }, dir, {
+    fileName,
+    rowNumber: 8,
+    skipExisting: true,
+    outputPath: dir
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.skippedExisting, true);
+  assert.equal(result.pdf, pdf);
+});
 
 test('calculate(): kompletne dane sa poprawne, bez bledow blokujacych', async () => {
   const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');

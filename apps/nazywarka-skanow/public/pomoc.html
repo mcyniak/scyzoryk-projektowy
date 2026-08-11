@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pomoc — Nazywarka skanów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-file"/></svg>
+          <strong>Pomoc — Nazywarka skanów</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Otwiera folder skanera na sieciowym udziale i pozwala nadać każdemu plikowi PDF właściwą nazwę na podstawie podglądu.</p>
+      <div class="help-chips"><span class="help-chip">PDF</span><span class="help-chip">sieć</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/12-nazywarka-skanow.png" alt="Aktualny ekran Nazywarki skanów" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran — lista plików, podgląd PDF i pole nowej nazwy.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Wpisz ścieżkę UNC folderu skanera (np. <code>\\192.168.99.251\skan\twoj_login</code>) i kliknij <strong>Otwórz folder</strong>. Ścieżkę trzeba wpisywać przy każdym uruchomieniu od nowa — nie jest zapamiętywana.</li>
+        <li>Sprawdź podgląd PDF pierwszego pliku z listy po lewej.</li>
+        <li>Wpisz nazwę w polu <strong>Nowa nazwa pliku</strong> i kliknij <strong>Zatwierdź nazwę i dalej</strong> — rozszerzenie <code>.pdf</code> dokleja się automatycznie.</li>
+        <li>Program przechodzi do kolejnego pliku. Możesz się cofnąć przyciskiem <strong>← Poprzedni</strong> albo wybrać dowolny plik wprost z listy.</li>
+      </ol>
+
+      <div class="help-callout good">
+        <span class="help-callout-label">Zmiana w miejscu</span>
+        <p>Nazwa zmienia się od razu na tym samym udziale sieciowym — plik nie jest kopiowany ani przenoszony. Po nadaniu nazw wszystkim plikom możesz wrócić do dowolnego z listy i ją poprawić.</p>
+      </div>
+
+      <h3>Możliwe błędy i co zrobić</h3>
+      <dl class="help-errors">
+        <div><dt>„Nie można otworzyć folderu: …”</dt><dd>Sprawdź pisownię ścieżki UNC oraz dostęp do udziału sieciowego (uprawnienia, ewentualnie VPN). Komunikat pokazuje dokładny powód systemowy.</dd></div>
+        <div><dt>„Podana ścieżka nie jest folderem”</dt><dd>Ścieżka wskazuje na plik albo nie istnieje — popraw ją i spróbuj ponownie.</dd></div>
+        <div><dt>„Nie udało się odczytać zawartości folderu: …”</dt><dd>Zwykle chwilowa awaria dysku sieciowego. Sprawdź połączenie i otwórz folder jeszcze raz.</dd></div>
+        <div><dt>„W tym folderze nie znaleziono żadnych plików PDF”</dt><dd>Sprawdź, czy skaner faktycznie zapisał tam pliki — nazywarka widzi tylko pliki <code>.pdf</code>.</dd></div>
+        <div><dt>„Plik źródłowy już nie istnieje na dysku — otwórz folder ponownie”</dt><dd>Ktoś inny (albo Ty w innej karcie) usunął lub przeniósł plik w trakcie pracy. Otwórz folder od nowa, żeby odświeżyć listę.</dd></div>
+        <div><dt>„Plik „X” już istnieje w tym folderze — sprawdź nazwę jeszcze raz”</dt><dd>W folderze jest już plik o takiej nazwie. Wybierz inną nazwę — nazywarka nigdy nie nadpisuje istniejącego pliku po cichu.</dd></div>
+        <div><dt>„Nie udało się zmienić nazwy: …”</dt><dd>Plik może być otwarty w innym programie (np. w przeglądarce PDF) albo brakuje uprawnień do zapisu na udziale — zamknij plik gdzie indziej i spróbuj ponownie.</dd></div>
+      </dl>
+    </div>
+  </main>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc — Dokumenty seryjne PDF</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-file-check"/></svg>
+          <strong>Pomoc — Dokumenty seryjne PDF</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Z folderu wzorów Word i tabeli Excel tworzy osobny, gotowy PDF dla każdego wybranego adresu.</p>
+      <div class="help-chips"><span class="help-chip">DOCX</span><span class="help-chip">XLSX</span><span class="help-chip help-chip-req">wymaga Worda</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/05-dokumenty-seryjne.png" alt="Aktualny ekran Dokumentów seryjnych PDF" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran — wybór folderu wzorów, dokumentów, Excela, arkusza i adresów.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>W polu <strong>Szablony Word</strong> kliknij i wybierz cały folder z szablonami DOCX (nie pojedynczy plik) — po wczytaniu pojawią się wykryte typy dokumentów do zaznaczenia.</li>
+        <li>Dodaj plik Excel z tabelą adresową i kliknij <strong>Sprawdź dane</strong>.</li>
+        <li>Wybierz właściwy arkusz (moc) oraz — gdy jest potrzebna — kolumnę wariantu, np. pojemność zasobnika.</li>
+        <li>Zaznacz adresy do wygenerowania, opcjonalnie ustaw przedrostek nazwy pliku i kliknij <strong>Utwórz PDF-y</strong>.</li>
+        <li>Obserwuj postęp. Po zakończeniu pobierz pojedyncze PDF-y albo całą paczkę ZIP.</li>
+      </ol>
+
+      <div class="help-callout warn">
+        <span class="help-callout-label">Ważne</span>
+        <p>Nie zmieniaj wzorów ani Excela podczas trwania zadania. Word działa w osobnej, niewidocznej instancji — prywatne dokumenty Worda otwarte poza Scyzorykiem nie powinny zostać przez program zamknięte, ale mimo to nie korzystaj w tym czasie z Worda do innych zadań.</p>
+      </div>
+
+      <h3>Możliwe błędy i co zrobić</h3>
+      <dl class="help-errors">
+        <div><dt>„Dodaj tabelę Excel XLSX.”</dt><dd>Przy sprawdzaniu danych nie wybrano pliku Excel. Dodaj plik .xlsx w polu Tabela Excel i spróbuj ponownie.</dd></div>
+        <div><dt>„Dodaj co najmniej jeden szablon Word DOCX.”</dt><dd>Wybrany folder nie zawiera żadnego pliku .docx. Wskaż folder z prawdziwymi szablonami korespondencji seryjnej.</dd></div>
+        <div><dt>„Nieprawidłowy plik: …” / „Plik … nie wygląda jak poprawny .xlsx/.docx”</dt><dd>Program sprawdza prawdziwą zawartość pliku, nie tylko rozszerzenie. Plik jest uszkodzony, nie jest prawdziwym XLSX/DOCX, albo ma podmienione rozszerzenie — otwórz go w źródłowym programie i zapisz ponownie.</dd></div>
+        <div><dt>„Tabela Excel nie ma kolumn wymaganych dla korespondencji seryjnej: …”</dt><dd>Arkusz musi mieć taką samą strukturę kolumn jak wzorcowa tabela (ID, Adres, Beneficjent...). Sprawdź nagłówki wybranego arkusza albo wybierz inny arkusz z listy.</dd></div>
+        <div><dt>„Żaden z wgranych plików .docx nie jest prawdziwym dokumentem korespondencji seryjnej”</dt><dd>Żaden szablon nie ma powiązania z arkuszem Excela przez „Wybierz odbiorców” w Wordzie. Otwórz szablon w Wordzie, podepnij źródło danych i zapisz ponownie — Scyzoryk generuje dokumenty tylko z prawdziwych szablonów korespondencji seryjnej.</dd></div>
+        <div><dt>„Generowanie przez Word działa tylko na Windows z zainstalowanym Microsoft Office.”</dt><dd>To ograniczenie środowiska, nie da się go obejść z poziomu aplikacji — uruchamiaj generowanie na komputerze z zainstalowanym i aktywowanym Wordem.</dd></div>
+        <div><dt>„To zadanie już trwa albo czeka w kolejce Word.”</dt><dd>Word obsługuje jedno zadanie generowania na raz. Poczekaj na zakończenie bieżącego zadania, zanim uruchomisz kolejne.</dd></div>
+        <div><dt>„Nie znaleziono żadnych szablonów korespondencji seryjnej dla arkusza „…” wśród wybranych typów dokumentów.”</dt><dd>Zaznaczone typy dokumentów nie mają szablonu pasującego do wybranego arkusza/wariantu. Wybierz inny arkusz albo dodaj brakujący szablon dla tej mocy/wariantu.</dd></div>
+      </dl>
+    </div>
+  </main>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

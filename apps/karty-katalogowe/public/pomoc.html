@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc - Karty katalogowe</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wroc do narzedzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-book"/></svg>
+          <strong>Pomoc - Karty katalogowe</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wroc do narzedzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel glowny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Dobiera karty katalogowe na podstawie danych i UID w Excelu, a potem kopiuje dokumenty do folderow klientow.</p>
+      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">foldery</span><span class="help-chip">UID</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/07-karty.png" alt="Aktualny ekran Kart katalogowych" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran - Excel, folder Kolektory, podglad dopasowan i kopiowanie kart.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Wybierz plik Excel z arkuszami inwestycji i kolumnami UID.</li>
+        <li>Podaj sciezke do glownego folderu z projektami, np. folderu <code>Kolektory</code>.</li>
+        <li>Najpierw uruchom podglad, zeby sprawdzic znalezione adresy, urzadzenia i brakujace pliki.</li>
+        <li>Jesli podglad jest poprawny, uruchom kopiowanie kart katalogowych.</li>
+        <li>Sprawdz raport koncowy i foldery klientow.</li>
+      </ol>
+
+      <div class="help-callout info">
+        <span class="help-callout-label">Najpierw podglad</span>
+        <p>Podglad jest bezpieczny - niczego nie kopiuje. Uzywaj go przed kazda wieksza paczka, zeby zobaczyc braki w UID albo w folderze z kartami.</p>
+      </div>
+
+      <h3>Mozliwe bledy i co zrobic</h3>
+      <dl class="help-errors">
+        <div><dt>"Dodaj plik Excel (.xlsx)."</dt><dd>Wybierz prawdziwy plik .xlsx. Skrot .gsheet trzeba najpierw pobrac jako Microsoft Excel.</dd></div>
+        <div><dt>"Podaj sciezke do glownego folderu..."</dt><dd>Wklej pelna sciezke do folderu, w ktorym sa projekty i podfoldery klientow.</dd></div>
+        <div><dt>"Podana sciezka nie istnieje: ..."</dt><dd>Sprawdz litere dysku, polskie znaki i dostep do dysku sieciowego. Otworz folder w Eksploratorze i sprobuj ponownie.</dd></div>
+        <div><dt>W podgladzie brakuje kart dla czesci adresow</dt><dd>Sprawdz UID w Excelu oraz nazwy plikow kart katalogowych w folderze z dokumentacja. Program nie zgaduje brakujacych kart.</dd></div>
+        <div><dt>Kopiowanie nie trafilo do oczekiwanego folderu</dt><dd>Sprawdz, czy folder klienta ma nazwe zgodna z adresem z Excela. Przy duzych rozbieznosciach popraw folder lub dane w tabeli.</dd></div>
+      </dl>
+    </div>
+  </main>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

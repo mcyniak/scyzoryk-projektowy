@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc — Tworzenie folderów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-table"/></svg>
+          <strong>Pomoc — Tworzenie folderów</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Na podstawie tabeli adresowej uzupełnia podfoldery inwestycji (WM, pompy, kolektory, kotły) w już istniejącym folderze.</p>
+      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">foldery</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/13-tworzenie-folderow.png" alt="Aktualny ekran Tworzenia folderów" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran — ścieżka folderu inwestycji, tabela adresowa i podgląd planowanej struktury.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Wskaż ścieżkę <strong>już istniejącego</strong> folderu inwestycji — przyciskiem <strong>Przeglądaj...</strong> albo wklejając ścieżkę ręcznie. Program go nie zakłada, tylko wypełnia podfoldery w środku.</li>
+        <li>Dodaj tabelę adresową <code>.xlsx</code>. Skrót <code>.gsheet</code> z Dysku Google trzeba najpierw samodzielnie wyeksportować (Plik → Pobierz → Microsoft Excel).</li>
+        <li>Sprawdź podgląd planowanej struktury podfolderów.</li>
+        <li>Kliknij <strong>Utwórz foldery</strong>.</li>
+        <li>Sprawdź wynik. Foldery, które już istniały, nie są nadpisywane ani czyszczone.</li>
+      </ol>
+
+      <div class="help-callout warn">
+        <span class="help-callout-label">Zakres</span>
+        <p>Program tworzy wyłącznie podfoldery WM, pompy, kolektory i kotły. Wszystko poza tą strukturą nadal trzeba tworzyć ręcznie.</p>
+      </div>
+
+      <h3>Możliwe błędy i co zrobić</h3>
+      <dl class="help-errors">
+        <div><dt>„Folder inwestycji nie istnieje: …”</dt><dd>Ta appka wypełnia JUŻ ISTNIEJĄCY folder inwestycji, nie tworzy go od zera — wskaż poprawną, już istniejącą ścieżkę.</dd></div>
+        <div><dt>„Dozwolone są tylko pliki .xlsx”</dt><dd>Zapisz plik jako .xlsx (Plik → Zapisz jako) — stare .xls nie są obsługiwane.</dd></div>
+        <div><dt>„Plik nie wygląda jak poprawny XLSX. Sprawdź, czy to nie jest skrót .gsheet…”</dt><dd>Skrót .gsheet z Dysku Google trzeba najpierw ręcznie wyeksportować do prawdziwego pliku Excel (Plik → Pobierz → Microsoft Excel), zanim go tu wgrasz.</dd></div>
+        <div><dt>„Kolumna LP jest pusta w niektórych wierszach (…)”</dt><dd>Program celowo nie zgaduje numeru porządkowego — uzupełnij LP dla każdego adresu w Excelu i wgraj plik ponownie.</dd></div>
+        <div><dt>„Nie przesłano pliku Excel”</dt><dd>Sprawdź, czy plik faktycznie się wybrał (pole pliku pod „Tabela adresowa”) przed kliknięciem dalej.</dd></div>
+        <div><dt>Przeglądarka folderów nie widzi dysku sieciowego</dt><dd>Wpisz ścieżkę ręcznie w polu tekstowym zamiast korzystać z przycisku Przeglądaj.</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

@@ -17,8 +17,10 @@ import { calculate } from './src/rules.js';
 import { cancelAllJobs, cancelJob, createJob, jobs, persistJobsIndex, runAutomation, runBatchJob } from './src/jobs.js';
 import { readExcelRecords } from './src/excel.js';
 import appPaths from '../../lib/appPaths.js';
+import folderBrowse from '../../lib/folderBrowse.js';
 
 const { getAppDataDir } = appPaths;
+const { browseFolder } = folderBrowse;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_DATA_ROOT = getAppDataDir('formularze-ecodan');
@@ -41,7 +43,7 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
   'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 };
 app.disable('x-powered-by');
 app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
@@ -138,7 +140,7 @@ async function validateXlsxFile(file) {
 }
 
 function publicJob(job) {
-  const resultsPreview = (job.results || []).slice(-20).map(row => ({
+  const resultsPreview = (job.results || []).map(row => ({
     ...row,
     pdfDisplay: row.pdf ? displayPath(row.pdf) : null,
     pdfUrl: row.pdf && row.rowNumber ? `/api/batch/pdf/${encodeURIComponent(job.id)}/${encodeURIComponent(String(row.rowNumber))}` : row.pdfUrl || null
@@ -169,6 +171,15 @@ app.get('/api/health', (req, res) => {
 
 app.get('/api/version', (req, res) => {
   res.json({ ok: true, version: APP_VERSION, defaults: { concurrency: BATCH_CONCURRENCY_DEFAULT, maxConcurrency: BATCH_CONCURRENCY_MAX }, safeOutputBase: process.env.SCYZORYK_OUTPUT_BASE || OUTPUT_DIR });
+});
+
+app.get('/api/browse-folder', (req, res) => {
+  try {
+    const result = browseFolder(req.query.path);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
 });
 
 app.post('/api/calculate', (req, res) => {

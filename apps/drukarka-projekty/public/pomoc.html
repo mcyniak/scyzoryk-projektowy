@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc — Drukarka projektów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-folder"/></svg>
+          <strong>Pomoc — Drukarka projektów</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Znajduje dokumentację dla adresów z Excela albo skanuje folder WM, układa pliki w kolejności i przygotowuje serię do druku.</p>
+      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">PDF/DOCX</span><span class="help-chip help-chip-req">Word dla DOCX</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/08-drukarka-projekty.png" alt="Aktualny ekran Drukarki projektów" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran — wybór trybu: projekty z Excela albo wnioski materiałowe WM.</p>
+      </div>
+
+      <h3>Tryb „Drukuj projekty”</h3>
+      <ol>
+        <li>Na ekranie startowym wybierz kartę <strong>Drukuj projekty</strong>.</li>
+        <li>W kroku 1 wgraj Excel inwestycji i wybierz właściwą zakładkę z listy rozwijanej.</li>
+        <li>W kroku 2 zaznacz adresy bez odbioru i bez rezygnacji, posortowane po numerze LP gminy — możesz zaznaczyć jeden albo kilka naraz.</li>
+        <li>W kroku 3 wklej ścieżkę folderu bazowego z podfolderami adresów (albo użyj <strong>Przeglądaj...</strong>) i kliknij <strong>Znajdź projekty</strong>.</li>
+        <li>W kroku 4 sprawdź proponowaną kolejność: strona tytułowa, opis techniczny, rysunki i załączniki. Pozycje oznaczone jako wariant, konflikt, niedopasowane albo dopasowane tylko po kolejności wymagają ręcznego sprawdzenia — program nie zaznacza ich automatycznie.</li>
+        <li>Przeciągnij plik w obrębie adresu, żeby poprawić kolejność. Ikona oka pokazuje podgląd PDF.</li>
+        <li>Kliknij <strong>Zatwierdź i dodaj wszystko do kolejki</strong>, wybierz drukarkę, liczbę kopii i tryb strony, a potem <strong>Drukuj</strong>.</li>
+      </ol>
+
+      <h3>Tryb „Wnioski materiałowe (WM)”</h3>
+      <ol>
+        <li>Na ekranie startowym wybierz kartę <strong>Drukuj wnioski materiałowe (WM)</strong>.</li>
+        <li>Wskaż folder WM jednego adresu — wklej ścieżkę albo użyj <strong>Przeglądaj...</strong>.</li>
+        <li>Opcjonalnie zaznacz <strong>Wersja powykonawcza (dok.pod)</strong>, jeśli potrzebujesz tego wariantu.</li>
+        <li>Kliknij <strong>Skanuj folder WM</strong> i sprawdź znalezione pliki oraz proponowaną kolejność.</li>
+        <li>Wybierz drukarkę, ewentualnie zaznacz <strong>Drukuj jako dokumentację powykonawczą</strong> (stempel na każdej stronie), i kliknij <strong>Drukuj</strong>.</li>
+      </ol>
+
+      <div class="help-callout info">
+        <span class="help-callout-label">Skanowanie folderów</span>
+        <p>Program skanuje podfoldery do określonej głębokości, ignoruje pliki tymczasowe i nie przechodzi przez dowiązania, junctiony ani reparse points. PDF zastępuje DOCX tylko wtedy, gdy oba pliki znajdują się w tym samym folderze względnym.</p>
+      </div>
+
+      <h3>Możliwe błędy i co zrobić</h3>
+      <dl class="help-errors">
+        <div><dt>„Nie znaleziono zakładki »X« w arkuszu”</dt><dd>Wybrana z listy zakładka nie istnieje w aktualnie wgranym pliku Excel — odśwież wybór zakładki albo wgraj arkusz ponownie.</dd></div>
+        <div><dt>„Nie udało się znaleźć w tej zakładce kolumn »LP gmina« i »Adres«. Sprawdź czy to właściwa zakładka”</dt><dd>Program dopasowuje adresy po nagłówkach kolumn — jeśli zakładka nie ma kolumny „LP gmina” ani „Adres”, wybierz inną zakładkę albo popraw nagłówki w Excelu.</dd></div>
+        <div><dt>„Folder bazowy nie istnieje: …”</dt><dd>Ścieżka wklejona w kroku 3 jest błędna albo dysk sieciowy jest niedostępny — sprawdź ścieżkę w Eksploratorze albo użyj przycisku „Przeglądaj...”.</dd></div>
+        <div><dt>„Brak numeru LP gmina albo folderu bazowego”</dt><dd>Kliknięto „Znajdź projekty” bez zaznaczonego adresu w kroku 2 albo bez podanego folderu bazowego w kroku 3 — uzupełnij oba i spróbuj ponownie.</dd></div>
+        <div><dt>„Podaj ścieżkę folderu z wnioskami materiałowymi (WM)” / „Nie znaleziono folderu: …”</dt><dd>W trybie WM pole ścieżki jest puste albo wskazuje folder, który nie istnieje — wklej poprawną ścieżkę do folderu WM jednego adresu.</dd></div>
+        <div><dt>„Nie udało się przeskanować folderu WM”</dt><dd>Folder WM istnieje, ale jego zawartości nie dało się odczytać (np. brak uprawnień albo problem z dyskiem sieciowym) — sprawdź dostęp do folderu i spróbuj ponownie.</dd></div>
+        <div><dt>„Trwa drukowanie” / „Drukowanie już trwa” (kod PRINT_LOCK_BUSY)</dt><dd>Blokada druku jest wspólna w całym Scyzoryku — inny moduł (np. Drukarka dokumentów) albo inna karta przeglądarki właśnie drukuje. Poczekaj, aż tamta seria się skończy.</dd></div>
+        <div><dt>„Za dużo pozycji w kolejce (X). Limit: Y. Podziel na mniejsze paczki”</dt><dd>Wybrano naraz więcej dokumentów niż dopuszczalny limit kolejki — zmniejsz liczbę zaznaczonych adresów albo wydrukuj kolejką w kilku mniejszych partiach.</dd></div>
+        <div><dt>„Niektóre pliki nie istnieją na dysku”</dt><dd>Plik źródłowy został usunięty albo przeniesiony po dopasowaniu folderu, zanim trafił do kolejki druku — odśwież dopasowanie (krok 3/4) i spróbuj ponownie.</dd></div>
+        <div><dt>„Nie udało się połączyć PDF-ów: …”</dt><dd>Konwersja albo łączenie dokumentów w jedną kolejkę nie powiodło się (np. uszkodzony DOCX albo Word nie odpowiada) — sprawdź wskazany plik źródłowy i spróbuj ponownie.</dd></div>
+        <div><dt>„Nie udało się zapisać PDF-ów dla wszystkich adresów”</dt><dd>Dotyczy stemplowania jako dokumentacja powykonawcza — część plików w kolejce nie dała się ostemplować. Sprawdź szczegóły błędu przy poszczególnych pozycjach i spróbuj ponownie tylko dla nich.</dd></div>
+      </dl>
+    </div>
+  </main>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

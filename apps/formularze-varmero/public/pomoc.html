@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc — Formularze Varmero</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-table"/></svg>
+          <strong>Pomoc — Formularze Varmero</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Na podstawie tabeli adresowej zgłasza adresy z pompą powietrzną do kalkulatora doboru Varmero i pobiera karty wynikowe PDF mailem.</p>
+      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">PDF</span><span class="help-chip help-chip-req">wymaga internetu</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/11-varmero.png" alt="Aktualny ekran Formularzy Varmero" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran — dane inwestycji, wybór adresów z pompą powietrzną i postęp zgłoszeń.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Dodaj plik Excel tabeli adresowej — adresy sprawdzają się automatycznie po wybraniu pliku.</li>
+        <li>Uzupełnij nazwę inwestycji, strefę klimatyczną i województwo. Po wyborze województwa strefa podpowiada się sama — sprawdź ją ręcznie dla terenów górskich lub nadmorskich.</li>
+        <li>W tabeli zaznacz adresy do zgłoszenia. Kalkulator obsługuje wyłącznie pompy powietrzne (Powietrze-woda) — pozostałe wiersze są pomijane automatycznie.</li>
+        <li>Kliknij <strong>Uruchom zgłoszenia</strong> i obserwuj postęp. Każdy wiersz to prawdziwe zgłoszenie z oczekiwaniem na maila zwrotnego, więc może potrwać kilka minut na adres.</li>
+        <li>Po zakończeniu pobierz gotowe karty PDF z folderu zadania.</li>
+      </ol>
+
+      <div class="help-callout good">
+        <span class="help-callout-label">Skrzynka pocztowa</span>
+        <p>Karty wynikowe wracają na skrzynkę skonfigurowaną centralnie w Scyzoryku — nie trzeba jej tu podawać. Każde zgłoszenie dostaje własny, unikalny wariant adresu, więc karty nigdy się nie pomylą między wierszami.</p>
+      </div>
+
+      <div class="help-callout warn">
+        <span class="help-callout-label">Prawdziwe zgłoszenia</span>
+        <p>To są rzeczywiste zgłoszenia do zewnętrznego kalkulatora producenta. Nie uruchamiaj tej samej paczki wielokrotnie bez potrzeby.</p>
+      </div>
+
+      <h3>Możliwe błędy i co zrobić</h3>
+      <dl class="help-errors">
+        <div><dt>„Dozwolone są tylko pliki .xlsx. Pliki .xls zapisz najpierw jako .xlsx.”</dt><dd>Otwórz plik w Excelu i zapisz go jako .xlsx (Plik → Zapisz jako → Skoroszyt programu Excel), a dopiero potem wgraj go ponownie.</dd></div>
+        <div><dt>„Plik nie wygląda jak poprawny XLSX. Sprawdź, czy to nie jest skrót .gsheet albo stary plik .xls.”</dt><dd>Program sprawdza rzeczywistą zawartość pliku. Jeśli to skrót z Dysku Google (.gsheet), wyeksportuj go najpierw jako .xlsx (Plik → Pobierz → Microsoft Excel).</dd></div>
+        <div><dt>„Nie przesłano pliku Excel.”</dt><dd>Wybierz plik w polu „Plik Excel tabeli adresowej”, zanim uruchomisz sprawdzanie albo zgłoszenia.</dd></div>
+        <div><dt>„Skrzynka pocztowa nie jest jeszcze skonfigurowana (brak VARMERO_IMAP_HOST/USER/PASSWORD) - bez niej nie da się odebrać kart.”</dt><dd>Bez skonfigurowanej skrzynki program nie odbierze kart wynikowych z maila. To ustawienie konfiguruje się na poziomie instalacji Scyzoryka — zgłoś to administratorowi środowiska, nie próbuj obejść tego samodzielnie.</dd></div>
+        <div><dt>„Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga, a nie da się jej wyczytać z tabeli adresowej.”</dt><dd>Wybierz strefę ręcznie z listy przed uruchomieniem zgłoszeń — program nie zgaduje jej z Excela.</dd></div>
+        <div><dt>„Nieznana strefa klimatyczna: …” (błąd w trakcie zgłoszenia)</dt><dd>Kalkulator Varmero nie rozpoznał wybranej wartości strefy. Sprawdź, czy w polu Strefa klimatyczna wybrano jedną z wartości I–V, i spróbuj ponownie.</dd></div>
+        <div><dt>„CAPTCHA jeszcze się nie załadowała (widget pusty) po odczekaniu.” / „Nie udało się trafić znanej ikony CAPTCHY po kilku próbach…”</dt><dd>Kalkulator producenta chwilowo nie odpowiedział albo captcha zmieniła układ ikon. Zgłoszenie tego wiersza kończy się błędem, ale reszta paczki jest kontynuowana — popraw dane, jeśli to konieczne, i ponów tylko brakujące adresy.</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

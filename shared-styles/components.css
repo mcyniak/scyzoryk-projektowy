@@ -86,6 +86,34 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible,
 .app-current-tool strong { font-size: var(--text-md); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .app-header-right { display: flex; align-items: center; gap: var(--space-2); }
 
+@media (max-width: 560px) {
+  .app-header {
+    height: auto;
+    min-height: 60px;
+    padding: 10px 0 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .app-header-left,
+  .app-header-right {
+    width: 100%;
+  }
+  .app-header-right {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+  .app-brand,
+  .app-current-tool {
+    min-width: 0;
+  }
+  .app-current-tool strong {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+}
+
 .module-status { display: inline-flex; align-items: center; gap: 6px; font-size: var(--text-xs); font-weight: 700; color: var(--text-tertiary); }
 .module-status .dot { width: 7px; height: 7px; border-radius: 999px; background: var(--gray-400); flex: none; }
 .module-status.is-ok .dot { background: var(--success-500); }

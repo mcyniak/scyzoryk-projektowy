@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc - Pieczatki PDF</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wroc do narzedzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-stamp"/></svg>
+          <strong>Pomoc - Pieczatki PDF</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wroc do narzedzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel glowny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Dodaje jedna lub wiele pieczatek do PDF-ow z podgladem polozenia, zakresu stron, rozmiaru i przezroczystosci.</p>
+      <div class="help-chips"><span class="help-chip">PDF</span><span class="help-chip">presety</span><span class="help-chip">podglad</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/03-pieczatki.png" alt="Aktualny ekran Pieczatek PDF" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran - dodawanie PDF-ow, konfiguracja pieczatek i podglad strony.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Dodaj jeden lub kilka plikow PDF.</li>
+        <li>Wpisz tekst pieczatki albo wybierz zapisany preset.</li>
+        <li>Ustaw rozmiar, obrot, przezroczystosc i polozenie na podgladzie.</li>
+        <li>Wybierz, czy pieczatka ma trafic na wszystkie strony, pojedyncze strony albo zakres, np. <code>1,3,5-7</code>.</li>
+        <li>Kliknij <strong>Ostempluj PDF</strong> i pobierz gotowy plik wynikowy.</li>
+      </ol>
+
+      <div class="help-callout good">
+        <span class="help-callout-label">Presety</span>
+        <p>Presety zapisuja tekst i ustawienia pieczatki, wiec najczesciej uzywane warianty mozna odtworzyc jednym kliknieciem.</p>
+      </div>
+
+      <h3>Mozliwe bledy i co zrobic</h3>
+      <dl class="help-errors">
+        <div><dt>"Dodaj przynajmniej jeden plik PDF."</dt><dd>Wybierz plik PDF w pierwszym kroku. Program nie rozpocznie pracy bez pliku zrodlowego.</dd></div>
+        <div><dt>"Plik ... nie wyglada jak poprawny PDF."</dt><dd>Plik ma zle rozszerzenie albo jest uszkodzony. Otworz go w programie zrodlowym i zapisz ponownie jako PDF.</dd></div>
+        <div><dt>"Niepoprawna lista pieczatek."</dt><dd>Odśwież strone i dodaj pieczatke ponownie. Ten blad zwykle oznacza przerwany albo niepelny formularz.</dd></div>
+        <div><dt>"PDF ... ma za duzo stron"</dt><dd>Podziel bardzo duzy PDF na mniejsze czesci i ostempluj je osobno. Limit chroni przegladarke i pamiec komputera.</dd></div>
+        <div><dt>"Tryb wybrane strony nie zawiera zadnej poprawnej strony"</dt><dd>Popraw zakres stron, np. <code>1</code>, <code>1,3</code> albo <code>5-7</code>. Numery musza istniec w danym PDF-ie.</dd></div>
+        <div><dt>"Zadna strona pliku ... nie zostala ostemplowana"</dt><dd>Sprawdz, czy zakres stron i wykluczenia nie usuwaja wszystkich stron z przetwarzania.</dd></div>
+      </dl>
+    </div>
+  </main>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>
