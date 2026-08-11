@@ -255,7 +255,7 @@ async function loadAddressPreview() {
     const skippedTotal = Object.values(skipped).reduce((a, b) => a + Number(b || 0), 0);
     const skipLabels = {
       empty: 'puste wiersze', missingAddress: 'brak adresu', notAirSourcePump: 'nie pompa powietrzna (Powietrze-woda)',
-      missingOzc: 'brak OZC', invalidOzc: 'niepoprawne OZC', duplicateLp: 'zduplikowany numer LP'
+      missingOzc: 'brak OZC', invalidOzc: 'niepoprawne OZC', missingLp: 'puste LP (kolumna jest, komórka nie)', duplicateLp: 'zduplikowany numer LP'
     };
     const skipBreakdown = Object.entries(skipped)
       .filter(([, count]) => Number(count) > 0)

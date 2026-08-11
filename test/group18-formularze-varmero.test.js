@@ -94,6 +94,51 @@ test('excel.js readTabelaAdresowa: czyta OZC/procenty ogrzewania, pomija wiersze
   await fsp.rm(dir, { recursive: true, force: true });
 });
 
+test('excel.js readTabelaAdresowa: kolumna LP obecna ale pusta w konkretnym wierszu jest pomijana (skipped.missingLp), nie podstawia cicho numeru wiersza (ten sam blad co naprawiony w tworzenie-folderow/drukarka-projekty)', async () => {
+  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const dir = await makeTempDir();
+  const fixturePath = path.join(dir, 'fixture.xlsx');
+  const rows = [
+    ['LP', 'Imię i Nazwisko', 'Adres', 'Rodzaj pompy', 'Ogrzewanie grzejnikowe', 'Ogrzewanie podłogowe', 'OZC'],
+    [1, 'Jan Testowy', 'Testowa 1', 'Powietrze-woda', 70, 30, '11.27'],
+    ['', 'Puste LP', 'Testowa 2', 'Powietrze-woda', 70, 30, '9.5']
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Pompy ciepła');
+  XLSX.writeFile(wb, fixturePath);
+
+  const { readTabelaAdresowa } = await importSrc('excel.js');
+  const result = readTabelaAdresowa(fixturePath, { zone: '3' });
+
+  assert.equal(result.records.length, 1);
+  assert.equal(result.records[0].input.name, 'Jan Testowy');
+  assert.equal(result.skipped.missingLp, 1);
+
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
+test('excel.js readTabelaAdresowa: arkusz BEZ kolumny LP w ogole nadal dziala - fallback na numer wiersza pozostaje bezpieczny', async () => {
+  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const dir = await makeTempDir();
+  const fixturePath = path.join(dir, 'fixture.xlsx');
+  const rows = [
+    ['Imię i Nazwisko', 'Adres', 'Rodzaj pompy', 'Ogrzewanie grzejnikowe', 'Ogrzewanie podłogowe', 'OZC'],
+    ['Jan Testowy', 'Testowa 1', 'Powietrze-woda', 70, 30, '11.27']
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Pompy ciepła');
+  XLSX.writeFile(wb, fixturePath);
+
+  const { readTabelaAdresowa } = await importSrc('excel.js');
+  const result = readTabelaAdresowa(fixturePath, { zone: '3' });
+
+  assert.equal(result.records.length, 1);
+  assert.equal(result.skipped.missingLp, 0);
+  assert.equal(result.records[0].lp, '2');
+
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
 test('excel.js readTabelaAdresowa: kalkulator Varmero jest tylko dla pomp powietrznych - "Gruntowa" i brak/nieznana wartosc sa pomijane, NIGDY nie przechodza (realny blad zlapany w tej sesji - wszystkie 3 testowe zgloszenia na zywo mialy zly typ pompy)', async () => {
   const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
   const dir = await makeTempDir();

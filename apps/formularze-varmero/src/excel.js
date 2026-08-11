@@ -126,6 +126,7 @@ export function readTabelaAdresowa(filePath, { gminaName, postalCode, zone, woje
     notAirSourcePump: 0,
     missingOzc: 0,
     invalidOzc: 0,
+    missingLp: 0,
     duplicateLp: 0
   };
 
@@ -144,8 +145,15 @@ export function readTabelaAdresowa(filePath, { gminaName, postalCode, zone, woje
     const pumpTypeRaw = getCell(row, headerIndex, 'pumpType');
     if (!isAirSourcePump(pumpTypeRaw)) { skipped.notAirSourcePump += 1; continue; }
 
+    // getCell zwraca undefined gdy arkusz W OGOLE nie ma kolumny LP (bezpieczny
+    // fallback na numer wiersza), ale '' gdy kolumna JEST, tylko ta konkretna
+    // komorka jest pusta - w tym drugim przypadku wczesniej cicho podstawialismy
+    // numer wiersza zamiast prawdziwego LP, co pokazywalo uzytkownikowi w
+    // podgladzie (inline-1.js) numer niezgodny z tym, co naprawde jest w Excelu.
+    // Ten sam wzorzec co juz naprawiony w formularze-ecodan/src/excel.js.
     const lpRaw = getCell(row, headerIndex, 'lp');
-    const lp = lpRaw !== undefined && lpRaw !== '' ? String(lpRaw).trim() : String(rowNumber);
+    if (lpRaw !== undefined && String(lpRaw).trim() === '') { skipped.missingLp += 1; continue; }
+    const lp = lpRaw !== undefined ? String(lpRaw).trim() : String(rowNumber);
     if (seenLp.has(lp)) { skipped.duplicateLp += 1; continue; }
     seenLp.add(lp);
 
