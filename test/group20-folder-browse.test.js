@@ -38,6 +38,17 @@ test('browseFolder: listuje TYLKO podfoldery (nie pliki), posortowane', async (t
   assert.deepEqual(result.entries.map(e => e.name), ['Alfa', 'Zeta']);
 });
 
+test('browseFolder: sortowanie naturalne/numeryczne (2 przed 10, jak w prawdziwych folderach adresow)', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fb-test-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  for (const name of ['10.Zabno', '2.Kijowiec-Szyszynek 2', '1.Adamow', '11.Zorawina']) {
+    fs.mkdirSync(path.join(dir, name));
+  }
+
+  const result = browseFolder(dir);
+  assert.deepEqual(result.entries.map(e => e.name), ['1.Adamow', '2.Kijowiec-Szyszynek 2', '10.Zabno', '11.Zorawina']);
+});
+
 test('browseFolder: parent jest null w korzeniu dysku, ustawiony w innym miejscu', async (t) => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fb-test-'));
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));
