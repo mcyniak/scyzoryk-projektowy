@@ -170,13 +170,24 @@ function listCandidates(token, sheetName) {
   }
 
   const candidates = [];
+  // Wiersz z wypelnionym adresem, ale bez numeru LP gmina (albo odwrotnie) jest
+  // odrzucany - bez numeru nie da sie go dopasowac do folderu klienta. Wczesniej
+  // taki wiersz po prostu znikal z listy kandydatow bez sladu (ten sam blad co
+  // pusta kolumna LP w tworzenie-folderow) - teraz liczymy te przypadki i
+  // zwracamy w skippedRows, zeby uzytkownik zobaczyl ostrzezenie zamiast
+  // domyslac sie, czemu brakuje adresu na liscie.
+  let missingLpGmina = 0;
+  let missingAdres = 0;
   for (let r = 1; r < rows.length; r += 1) {
     const row = rows[r];
     if (!row) continue;
     const adres = colAdres >= 0 ? row[colAdres] : null;
     const lpGmina = colLpGmina >= 0 ? row[colLpGmina] : null;
-    if (adres === null || adres === undefined || String(adres).trim() === "") continue;
-    if (lpGmina === null || lpGmina === undefined || String(lpGmina).trim() === "") continue;
+    const hasAdres = !(adres === null || adres === undefined || String(adres).trim() === "");
+    const hasLpGmina = !(lpGmina === null || lpGmina === undefined || String(lpGmina).trim() === "");
+    if (!hasAdres && !hasLpGmina) continue;
+    if (hasAdres && !hasLpGmina) { missingLpGmina += 1; continue; }
+    if (!hasAdres && hasLpGmina) { missingAdres += 1; continue; }
 
     const odbior = colOdbior >= 0 ? row[colOdbior] : null;
     const rezygnacja = colRezygnacja >= 0 ? row[colRezygnacja] : null;
@@ -204,7 +215,7 @@ function listCandidates(token, sheetName) {
     if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb;
     return String(a.lpGmina).localeCompare(String(b.lpGmina), "pl", { numeric: true });
   });
-  return { candidates, columnsFound };
+  return { candidates, columnsFound, skippedRows: { missingLpGmina, missingAdres } };
 }
 
 module.exports = { loadWorkbookFromBuffer, listCandidates, isTruthyMark };

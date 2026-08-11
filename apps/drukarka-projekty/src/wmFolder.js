@@ -28,7 +28,14 @@ function findCategoryFolders(rootPath, depth = 0, relParts = []) {
   let entries;
   try {
     entries = fs.readdirSync(rootPath, { withFileTypes: true });
-  } catch (_) {
+  } catch (err) {
+    // Ten sam problem co w folderMatch.js#scanFilesRecursive: folder WM sam w
+    // sobie nieczytelny (dysk sieciowy) nie moze wygladac jak "0 kategorii
+    // znaleziono" - to sugerowaloby uzytkownikowi ze folder jest po prostu
+    // pusty. Zagniezdzone podfoldery (depth>0) zostaja tolerowane.
+    if (depth === 0) {
+      throw new Error(`Nie udało się odczytać folderu WM "${rootPath}": ${err.message || err}`);
+    }
     return [];
   }
 

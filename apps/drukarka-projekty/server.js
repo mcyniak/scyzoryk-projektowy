@@ -154,14 +154,14 @@ app.post("/api/excel/upload", excelUpload.single("file"), (req, res) => {
 
 app.get("/api/excel/:token/sheets/:sheetName/candidates", (req, res) => {
   try {
-    const { candidates, columnsFound } = excelInvestment.listCandidates(req.params.token, req.params.sheetName);
+    const { candidates, columnsFound, skippedRows } = excelInvestment.listCandidates(req.params.token, req.params.sheetName);
     const lastFolders = readLastFolders();
     const fileKey = String(req.query.fileKey || "").trim();
     // Fallback na sama nazwe zakladki (klucz sprzed tej poprawki) - jesli nic
     // nie ma pod kombinowanym kluczem, sprobuj starego, zeby wpisy zapisane
     // przed ta zmiana nie znikaly bez powodu.
     const lastFolder = lastFolders[lastFolderKey(fileKey, req.params.sheetName)] || lastFolders[req.params.sheetName] || "";
-    res.json({ ok: true, candidates, columnsFound, lastFolder });
+    res.json({ ok: true, candidates, columnsFound, skippedRows, lastFolder });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac zakladki.", columnsFound: err.columnsFound });
   }

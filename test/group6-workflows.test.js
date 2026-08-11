@@ -14,7 +14,9 @@ const {
   addressTokens,
   filenameMatchesOwnAddress
 } = require('../apps/drukarka-projekty/src/folderMatch');
-const { isTruthyMark } = require('../apps/drukarka-projekty/src/excelInvestment');
+const { isTruthyMark, loadWorkbookFromBuffer, listCandidates } = require('../apps/drukarka-projekty/src/excelInvestment');
+const XLSX = require('../apps/drukarka-projekty/node_modules/xlsx');
+const { findCategoryFolders } = require('../apps/drukarka-projekty/src/wmFolder');
 const { buildQueueFromGroups } = require('../apps/drukarka-projekty/server');
 const { isAffirmativeFlag } = require('../lib/businessFlags');
 const { normalizeDate } = require('../apps/wnioski-powykonawcze/src/dateValidation');
@@ -40,6 +42,16 @@ test('skanowanie folderu działa rekurencyjnie i respektuje limit głębokości'
     if (depth <= 8) expected.push(path.join(...Array.from({ length: depth }, (_, i) => `sub${i + 1}`), `${depth}.pdf`));
   }
   assert.deepEqual(scanFilesRecursive(root).sort(), expected.sort());
+});
+
+test('skanowanie: nieczytelny folder adresu rzuca czytelny blad, nie znika po cichu jako "brak plikow" (np. chwilowa awaria dysku sieciowego)', () => {
+  const nieistniejacyFolder = path.join(os.tmpdir(), 'scyzoryk-nieistniejacy-' + Date.now());
+  assert.throws(() => scanFilesRecursive(nieistniejacyFolder), /Nie udało się odczytać folderu/);
+});
+
+test('WM: nieczytelny folder WM rzuca czytelny blad zamiast "0 kategorii znaleziono" (ten sam wzorzec co scanFilesRecursive)', () => {
+  const nieistniejacyFolder = path.join(os.tmpdir(), 'scyzoryk-wm-nieistniejacy-' + Date.now());
+  assert.throws(() => findCategoryFolders(nieistniejacyFolder), /Nie udało się odczytać folderu WM/);
 });
 
 test('duplikaty są rozstrzygane tylko w tym samym podfolderze', async (t) => {
@@ -210,6 +222,27 @@ test('drukarka-projekty: isTruthyMark (audyt P1-4) uzywa bialej listy zamiast wy
   for (const value of ['brak', 'n/d', 'costam']) {
     assert.equal(isTruthyMark(value), false, `nierozpoznana wartosc nie powinna wykluczac wiersza: ${value}`);
   }
+});
+
+test('drukarka-projekty: listCandidates zglasza w skippedRows wiersze z adresem bez LP gminy (albo odwrotnie), zamiast cicho je gubic', () => {
+  const rows = [
+    ['LP gmina', 'Adres', 'Odbiór', 'Rezygnacja'],
+    [1, 'Testowa 1', '', ''],
+    ['', 'Testowa 2 (bez LP)', '', ''],
+    [3, '', '', ''],
+    [4, 'Testowa 4', '', '']
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Solary');
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+  const { token } = loadWorkbookFromBuffer(buffer);
+  const { candidates, skippedRows } = listCandidates(token, 'Solary');
+
+  assert.deepEqual(candidates.map(c => c.adres), ['Testowa 1', 'Testowa 4']);
+  assert.equal(skippedRows.missingLpGmina, 1, 'wiersz z adresem ale bez LP gminy');
+  assert.equal(skippedRows.missingAdres, 1, 'wiersz z LP gminy ale bez adresu');
 });
 
 test('drukarka-projekty: dopasowanie folderu po LP musi sprawdzic adres (audyt P0-6b)', async (t) => {

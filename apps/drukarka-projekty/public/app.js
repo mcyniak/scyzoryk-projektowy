@@ -234,6 +234,7 @@
       state.batchSummary = null;
       updateQueueStatus("Kolejka jest pusta.");
       renderCandidates();
+      renderSkippedRowsWarning(data.skippedRows);
       if (data.lastFolder) $("baseFolderInput").value = data.lastFolder;
       enablePanel("panelCandidates");
       setStep(2);
@@ -269,6 +270,21 @@
   function updateQueueStatus(message) {
     const el = $("queueStatusText");
     if (el) el.textContent = message || "Kolejka jest pusta.";
+  }
+
+  // Wiersz z adresem, ale bez numeru LP gmina (albo odwrotnie) jest odrzucany
+  // po stronie serwera, bo nie da sie go dopasowac do folderu klienta -
+  // wczesniej znikal z listy bez sladu (patrz excelInvestment.js#listCandidates).
+  function renderSkippedRowsWarning(skippedRows) {
+    const el = $("candidatesSkippedWarning");
+    const missingLpGmina = skippedRows?.missingLpGmina || 0;
+    const missingAdres = skippedRows?.missingAdres || 0;
+    if (!missingLpGmina && !missingAdres) { el.hidden = true; el.textContent = ""; return; }
+    const parts = [];
+    if (missingLpGmina) parts.push(`${missingLpGmina} ${missingLpGmina === 1 ? "wiersz z adresem ma" : "wierszy z adresem ma"} puste LP gminy`);
+    if (missingAdres) parts.push(`${missingAdres} ${missingAdres === 1 ? "wiersz z LP gminy ma" : "wierszy z LP gminy ma"} pusty adres`);
+    el.textContent = `⚠️ Pominięto na liście: ${parts.join(", ")} - uzupełnij w Excelu i wgraj plik ponownie, jeśli te adresy też mają zostać wydrukowane.`;
+    el.hidden = false;
   }
 
   function renderCandidates() {

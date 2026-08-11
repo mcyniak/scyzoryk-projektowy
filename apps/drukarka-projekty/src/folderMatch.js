@@ -100,7 +100,21 @@ function scanFilesRecursive(folderPath) {
   function walk(currentPath, relativePath, depth) {
     if (depth > MAX_SCAN_DEPTH) return;
     let entries;
-    try { entries = fs.readdirSync(currentPath, { withFileTypes: true }); } catch (_) { return; }
+    try {
+      entries = fs.readdirSync(currentPath, { withFileTypes: true });
+    } catch (err) {
+      // Folder adresu sam w sobie nieczytelny (np. chwilowy problem sieciowego
+      // dysku Google Drive, blokada uprawnien) - odrozniamy to od "folder
+      // pusty". Bez tego rozroznienia caly komplet dokumentow wygladal jak
+      // "BRAK PLIKU" dla kazdej pozycji, sugerujac ze pliki naprawde nie
+      // istnieja, zamiast ze po prostu nie udalo sie ich odczytac. Zagniezdzone
+      // podfoldery (depth>0) zostaja tolerowane jak dawniej - pojedynczy dziwny
+      // podfolder nie powinien blokowac calego dopasowania adresu.
+      if (depth === 0) {
+        throw new Error(`Nie udało się odczytać folderu "${currentPath}": ${err.message || err}`);
+      }
+      return;
+    }
     for (const entry of entries) {
       const entryFull = path.join(currentPath, entry.name);
       const entryRel = relativePath ? path.join(relativePath, entry.name) : entry.name;
