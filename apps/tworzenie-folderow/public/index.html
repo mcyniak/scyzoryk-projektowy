@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tworzenie folderów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-table"/></svg>
+          <strong>Tworzenie folderów</strong>
+        </div>
+      </div>
+      <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+        Panel główny
+      </a>
+    </header>
+
+    <section class="hero">
+      <div class="panel hero-main">
+        <div class="kicker">Struktura folderów inwestycji</div>
+        <h1>Uzupełnij foldery w inwestycji na podstawie tabeli adresowej</h1>
+        <p class="lead">Wskaż istniejący folder inwestycji i tabelę adresową (.xlsx) - reszta podfolderów (WM, pompy, kolektory, kotły) powstanie automatycznie, zgodnie z tym, co jest w Excelu.</p>
+      </div>
+      <aside class="panel info-card">
+        <h2>Jak działa?</h2>
+        <div class="pill-list">
+          <div class="pill">Wskaż istniejący folder inwestycji.</div>
+          <div class="pill">Wybierz tabelę adresową (.xlsx).</div>
+          <div class="pill">Sprawdź podgląd i utwórz foldery.</div>
+        </div>
+      </aside>
+    </section>
+
+    <div id="topNotice" class="panel notice hidden" role="alert"></div>
+
+    <section class="panel" id="formPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">1</span>Dane inwestycji</h2>
+          <p class="panel-desc">Folder inwestycji musi już istnieć - ta appka go NIE zakłada, tylko wypełnia podfoldery w środku. Wszystko poza wymienioną strukturą (WM/pompy/kolektory/kotły) trzeba nadal tworzyć ręcznie.</p>
+        </div>
+      </div>
+      <form id="planForm">
+        <label>Ścieżka folderu inwestycji
+          <input type="text" name="investmentFolder" id="investmentFolder" placeholder="np. G:\Dyski współdzielone\Dział Projektowy Sanitarny\...\17. Kamieńsk" required />
+          <span class="field-help">Folder, w którym leży już skrót .gsheet do tabeli adresowej tej inwestycji.</span>
+        </label>
+
+        <label style="margin-top: var(--space-4);">Tabela adresowa (.xlsx)
+          <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+          <span class="field-help">Podgląd wczytuje się automatycznie po wybraniu pliku. Skrót .gsheet w folderze inwestycji trzeba samodzielnie wyeksportować do .xlsx (Plik → Pobierz → Microsoft Excel).</span>
+        </label>
+
+        <div id="sheetSummary" class="sheet-summary hidden"></div>
+
+        <div id="planBox" class="hidden">
+          <p class="small" id="planInfo"></p>
+          <div id="folderTree" class="folder-tree"></div>
+        </div>
+
+        <div class="actions">
+          <button type="submit" id="createBtn" disabled>Utwórz foldery</button>
+        </div>
+      </form>
+    </section>
+
+    <section id="resultBox" class="panel hidden">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">2</span>Wynik</h2>
+          <p class="panel-desc" id="resultInfo"></p>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="inline-1.js"></script>
+  <script src="inline-2.js"></script>
+</body>
+</html>

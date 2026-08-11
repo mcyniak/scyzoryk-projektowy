@@ -1,0 +1,21 @@
+{
+  "name": "tworzenie-folderow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automatyczne tworzenie struktury folderow (WM/pompy/kolektory/kotly) w istniejacym folderze inwestycji, na podstawie tabeli adresowej.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check src/excel.js && node --check src/folderPlan.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "multer": "^2.0.2",
+    "sanitize-filename": "^1.6.3",
+    "express-rate-limit": "^7.5.0",
+    "xlsx": "^0.18.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
