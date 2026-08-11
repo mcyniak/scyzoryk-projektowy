@@ -77,6 +77,16 @@ test('readTabelaAdresowa: odczytuje wiele arkuszy naraz, klasyfikuje kazdy osobn
   assert.equal(kolektory.records[0].lpOrId, '10');
 });
 
+test('readTabelaAdresowa: kolumna LP obecna ale pusta w wierszach z adresem -> czytelny blad zamiast cichego "0 rekordow" (realny plik, Slupca)', async (t) => {
+  const HEADER_POMPY = ['LP', 'Adres', 'Rodzaj pompy'];
+  const { dir, file } = await napiszArkusze([
+    ['Pompy ciepła', [HEADER_POMPY, ['', 'Testowa 1', 'Powietrze-woda'], ['', 'Testowa 2', 'Powietrze-woda'], ['3', 'Testowa 3', 'Gruntowa']]]
+  ]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  assert.throws(() => readTabelaAdresowa(file), /LP jest pusta.*Pompy ciepła.*2 wierszy/s);
+});
+
 test('readTabelaAdresowa: kolumna ID (nie LP) tez jest rozpoznawana jako numer wiersza', async (t) => {
   const { dir, file } = await napiszArkusze([
     ['Kotły', [['ID', 'Adres'], ['5', 'Testowa 5']]]

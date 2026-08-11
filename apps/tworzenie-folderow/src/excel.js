@@ -128,6 +128,7 @@ function readSheet(workbook, sheetName, type) {
   const gminaColumnPresent = hasColumn(headerIndex, 'gmina');
 
   const records = [];
+  let missingLpCount = 0;
   for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
     const row = rows[i];
     const hasAnyValue = row.some(cell => String(cell ?? '').trim());
@@ -138,7 +139,13 @@ function readSheet(workbook, sheetName, type) {
 
     const lpOrIdRaw = getCell(row, headerIndex, 'lpOrId');
     const lpOrId = String(lpOrIdRaw ?? '').trim();
-    if (!lpOrId) continue;
+    // Kolumna LP/ID bywa OBECNA w naglowku, ale pusta w realnych wierszach
+    // (zdarzylo sie naprawde - arkusz "Pompy ciepla" z 47 adresami, LP puste
+    // w kazdym). Bez numeru nie da sie zbudowac nazwy folderu adresu
+    // ("2.Kijowiec-Szyszynek 2") - taki wiersz jest CELOWO odrzucany zamiast
+    // zgadywac numer, ale liczymy go, zeby zglosic czytelny blad zamiast po
+    // cichu pokazac "0 pomp" (patrz readTabelaAdresowa).
+    if (!lpOrId) { missingLpCount += 1; continue; }
 
     const gmina = gminaColumnPresent ? String(getCell(row, headerIndex, 'gmina') ?? '').trim() : '';
 
@@ -155,7 +162,7 @@ function readSheet(workbook, sheetName, type) {
     records.push({ lpOrId, address, gmina, pumpType });
   }
 
-  return { type, sheetName, gminaColumnPresent, records };
+  return { type, sheetName, gminaColumnPresent, records, missingLpCount };
 }
 
 // Zwraca { sheetNames, sheets: [{ type, sheetName, gminaColumnPresent, records }] }
@@ -171,6 +178,15 @@ function readTabelaAdresowa(filePath) {
     if (!type) continue;
     sheets.push(readSheet(workbook, sheetName, type));
   }
+
+  const sheetsWithMissingLp = sheets.filter(s => s.missingLpCount > 0);
+  if (sheetsWithMissingLp.length > 0) {
+    const details = sheetsWithMissingLp
+      .map(s => `arkusz "${s.sheetName}": ${s.missingLpCount} ${s.missingLpCount === 1 ? 'wiersz' : 'wierszy'} z adresem bez LP`)
+      .join(', ');
+    throw new Error(`Kolumna LP jest pusta w niektórych wierszach (${details}). Uzupełnij numer LP dla każdego adresu w Excelu i wgraj plik ponownie - bez niego nie da się nazwać folderu adresu.`);
+  }
+
   return { sheetNames: workbook.SheetNames, sheets };
 }
 
