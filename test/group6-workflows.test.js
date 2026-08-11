@@ -21,6 +21,7 @@ const { buildQueueFromGroups } = require('../apps/drukarka-projekty/server');
 const { isAffirmativeFlag } = require('../lib/businessFlags');
 const { normalizeDate } = require('../apps/wnioski-powykonawcze/src/dateValidation');
 const { app: wmApp, isPathInsideFolder: wmIsPathInsideFolder } = require('../apps/wnioski-powykonawcze/server');
+const { findCategoryFolders: wmPowykonawczeFindCategoryFolders } = require('../apps/wnioski-powykonawcze/src/wmFolderScan');
 const { PDFDocument } = require('../apps/drukarka-projekty/node_modules/pdf-lib');
 
 async function createTestPdf(filePath) {
@@ -52,6 +53,11 @@ test('skanowanie: nieczytelny folder adresu rzuca czytelny blad, nie znika po ci
 test('WM: nieczytelny folder WM rzuca czytelny blad zamiast "0 kategorii znaleziono" (ten sam wzorzec co scanFilesRecursive)', () => {
   const nieistniejacyFolder = path.join(os.tmpdir(), 'scyzoryk-wm-nieistniejacy-' + Date.now());
   assert.throws(() => findCategoryFolders(nieistniejacyFolder), /Nie udało się odczytać folderu WM/);
+});
+
+test('wnioski-powykonawcze WM: nieczytelny folder WM rzuca czytelny blad zamiast "0 kategorii znaleziono" (kopia tego samego wzorca co drukarka-projekty)', async () => {
+  const nieistniejacyFolder = path.join(os.tmpdir(), 'scyzoryk-wm-powyk-nieistniejacy-' + Date.now());
+  await assert.rejects(() => wmPowykonawczeFindCategoryFolders(nieistniejacyFolder), /Nie udało się odczytać folderu WM/);
 });
 
 test('duplikaty są rozstrzygane tylko w tym samym podfolderze', async (t) => {

@@ -32,7 +32,14 @@ async function findCategoryFolders(rootPath, depth = 0, relParts = []) {
   let entries;
   try {
     entries = await fsp.readdir(rootPath, { withFileTypes: true });
-  } catch (_) {
+  } catch (err) {
+    // Ten sam problem co w apps/drukarka-projekty/src/wmFolder.js: folder WM
+    // sam w sobie nieczytelny (np. chwilowa awaria dysku sieciowego) nie moze
+    // wygladac jak "0 kategorii znaleziono" - to sugerowaloby ze folder jest
+    // po prostu pusty. Zagniezdzone podfoldery (depth>0) zostaja tolerowane.
+    if (depth === 0) {
+      throw new Error(`Nie udało się odczytać folderu WM "${rootPath}": ${err.message || err}`);
+    }
     return [];
   }
 
