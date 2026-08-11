@@ -7,13 +7,16 @@
     '/instrukcja-sections/05-karty-ocr-pomoc.html'
   ];
   const target = document.getElementById('guideContent');
+  const panelHost = location.hostname === 'scyzoryk.localhost' ? 'scyzoryk.localhost' : '127.0.0.1';
+  const mainPanelUrl = `http://${panelHost}:3000`;
   async function loadGuide() {
     const responses = await Promise.all(files.map(file => fetch(file, { cache: 'no-store' })));
     const failed = responses.find(response => !response.ok);
     if (failed) throw new Error(`HTTP ${failed.status}`);
     const parts = await Promise.all(responses.map(response => response.text()));
     target.innerHTML = parts.join('\n');
-    document.querySelectorAll('[data-app-link]').forEach(el => { el.href = `http://scyzoryk.localhost:${el.dataset.appLink}/pomoc.html`; });
+    document.querySelectorAll('[data-main-panel-link], a.plain[href="/"]').forEach(el => { el.href = mainPanelUrl; });
+    document.querySelectorAll('[data-app-link]').forEach(el => { el.href = `http://${panelHost}:${el.dataset.appLink}/pomoc.html`; });
     if (location.hash) requestAnimationFrame(() => document.querySelector(location.hash)?.scrollIntoView());
   }
   loadGuide().catch(error => {
