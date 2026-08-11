@@ -1192,6 +1192,7 @@ form.addEventListener('submit', async event => {
       try { msg = (await response.json()).error || msg; } catch {}
       throw new Error(msg);
     }
+    const fontFallback = response.headers.get('x-stamp-font-fallback') === '1';
     const blob = await response.blob();
     const disposition = response.headers.get('content-disposition') || '';
     const match = disposition.match(/filename="?([^";]+)"?/i);
@@ -1205,7 +1206,11 @@ form.addEventListener('submit', async event => {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    setStatus('Gotowe. Plik powinien się pobrać.');
+    // Serwer nie znalazl czcionki Windows Arial (bardzo nietypowe) - tekst
+    // pieczatki stracil polskie znaki w wynikowym pliku, patrz server.js#loadTextFont.
+    setStatus(fontFallback
+      ? 'Gotowe, ale brakowało czcionki z polskimi znakami na serwerze - sprawdź, czy tekst pieczatki w pobranym pliku wygląda poprawnie.'
+      : 'Gotowe. Plik powinien się pobrać.', fontFallback);
   } catch (err) {
     console.error(err);
     setStatus(err.message, true);

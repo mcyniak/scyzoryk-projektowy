@@ -314,6 +314,12 @@ async function prepareStamp(doc, opts) {
     color: hexToRgb(opts.textColor),
     border: opts.textBorder,
     fontSize: opts.fontSize,
+    // Brak pliku Windows Arial (C:\Windows\Fonts\arialbd.ttf/Arial.ttf) jest
+    // bardzo nietypowy, ale gdy sie zdarzy, tekst pieczatki cicho traci polskie
+    // znaki (patrz stripUnsupportedText) - stemplowany PDF wyglada inaczej niz
+    // uzytkownik wpisal, bez zadnego ostrzezenia. Flaga leci do /api/stamp,
+    // ktore ustawia naglowek odpowiedzi odczytywany przez frontend.
+    fontFallback: !isCustom,
   };
 }
 
@@ -497,7 +503,8 @@ async function stampPdf(inputFile, stamps, jobDir) {
   const outputBytes = await doc.save({ useObjectStreams: true });
   const outPath = uniqueOutputPath(jobDir, safeOutputName(decodeOriginalName(inputFile.originalname)));
   await fsp.writeFile(outPath, outputBytes);
-  return outPath;
+  const fontFallback = prepared.some(item => item.preparedStamp.fontFallback);
+  return { path: outPath, fontFallback };
 }
 
 async function zipFiles(files, zipPath) {
@@ -553,13 +560,19 @@ app.post('/api/stamp', heavyJobLimiter, upload.array('pdfs', MAX_FILES), async (
     for (const pdf of uploadedPdfs) {
       outputs.push(await stampPdf(pdf, stamps, jobDir));
     }
+    const outputPaths = outputs.map(o => o.path);
+    // Brak pliku Windows Arial jest bardzo nietypowy (patrz prepareStamp), ale
+    // gdy sie zdarzy uzytkownik dostaje niewidoczne w podglądzie strony ("PDF
+    // sie pobral") uszkodzenie polskich znakow w tekscie pieczatki - naglowek
+    // pozwala frontendowi to zauwazyc mimo ze odpowiedz to surowy plik, nie JSON.
+    if (outputs.some(o => o.fontFallback)) res.setHeader('X-Stamp-Font-Fallback', '1');
 
-    if (outputs.length === 1) {
-      res.download(outputs[0], path.basename(outputs[0]), async () => {
+    if (outputPaths.length === 1) {
+      res.download(outputPaths[0], path.basename(outputPaths[0]), async () => {
         await removeFiles([...cleanup, jobDir]);
       });
     } else {
-      await zipFiles(outputs, zipPath);
+      await zipFiles(outputPaths, zipPath);
       res.download(zipPath, 'ostemplowane-pdf.zip', async () => {
         await removeFiles([...cleanup, jobDir, zipPath]);
       });

@@ -53,8 +53,8 @@ test('stampPdf: dwa pliki o tej samej oryginalnej nazwie w jednej paczce nie nad
   const stamps = [textStamp()];
   // Oba pliki maja RÓZNA tresc, ale IDENTYCZNA oryginalna nazwe zgloszona przez
   // przegladarke - to dokladnie scenariusz z audytu (dwa foldery, ta sama nazwa).
-  const outA = await stampPdf({ path: pdfA, originalname: 'raport.pdf' }, stamps, jobDir);
-  const outB = await stampPdf({ path: pdfB, originalname: 'raport.pdf' }, stamps, jobDir);
+  const outA = (await stampPdf({ path: pdfA, originalname: 'raport.pdf' }, stamps, jobDir)).path;
+  const outB = (await stampPdf({ path: pdfB, originalname: 'raport.pdf' }, stamps, jobDir)).path;
 
   assert.notEqual(outA, outB);
   const docA = await PDFDocument.load(await fsp.readFile(outA));
@@ -96,9 +96,24 @@ test('stampPdf: poprawny zakres nadal dziala normalnie (brak regresji)', async (
   await createTestPdf(pdfPath, 5);
 
   const stamps = [textStamp({ pageMode: 'custom', customPages: '1,3-4' })];
-  const outPath = await stampPdf({ path: pdfPath, originalname: 'test.pdf' }, stamps, dir);
+  const { path: outPath } = await stampPdf({ path: pdfPath, originalname: 'test.pdf' }, stamps, dir);
   const outDoc = await PDFDocument.load(await fsp.readFile(outPath));
   assert.equal(outDoc.getPageCount(), 5);
+});
+
+test('stampPdf: zglasza fontFallback gdy nie udalo sie zaladowac czcionki z polskimi znakami (inaczej polskie znaki cicho znikaja z pieczatki bez ostrzezenia)', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-pieczatki-fallback-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const pdfPath = path.join(dir, 'wejscie.pdf');
+  await createTestPdf(pdfPath, 1);
+
+  // Na tej (Windows) maszynie plik czcionki naprawde istnieje, wiec
+  // fontFallback powinno byc false w normalnym dzialaniu - sprawdzamy ze
+  // flaga faktycznie odzwierciedla stan (nie jest zawsze true, co zaspamowa
+  // by kazdego uzytkownika ostrzezeniem bez powodu).
+  const stamps = [textStamp()];
+  const result = await stampPdf({ path: pdfPath, originalname: 'test.pdf' }, stamps, dir);
+  assert.equal(result.fontFallback, false);
 });
 
 test('drawPreparedStampOnPage: kotwica KAZDEJ linii tekstu stempla zostaje w granicach strony, nawet gdy strona jest obrocona o 90/270 st.', async (t) => {
