@@ -55,11 +55,8 @@
       </div>
       <form id="batchForm">
         <label>Plik Excel tabeli adresowej
-          <div class="file-row">
-            <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
-            <button type="button" id="checkAddresses">Sprawdź adresy</button>
-          </div>
-          <span class="field-help">Wybierz plik .xlsx, potem kliknij "Sprawdź adresy". Karty wynikowe wrócą na skrzynkę skonfigurowaną w Scyzoryku (nie trzeba jej tu podawać) - każde zgłoszenie dostaje własny, unikalny wariant tego adresu, więc karty nigdy się nie pomylą między wierszami.</span>
+          <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+          <span class="field-help">Adresy sprawdzają się automatycznie po wybraniu pliku. Karty wynikowe wrócą na skrzynkę skonfigurowaną w Scyzoryku (nie trzeba jej tu podawać) - każde zgłoszenie dostaje własny, unikalny wariant tego adresu, więc karty nigdy się nie pomylą między wierszami.</span>
         </label>
 
         <label style="margin-top: var(--space-4);">Nazwa inwestycji

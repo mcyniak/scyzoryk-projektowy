@@ -79,9 +79,15 @@ document.querySelector('#wojewodztwo').addEventListener('change', (event) => {
   if (suggested) document.querySelector('#zone').value = suggested;
 });
 
-// Swiadomie BEZ auto-sprawdzania na 'change' pliku (ten sam wzorzec co
-// formularze-ecodan/karty-katalogowe) - wylacznie na klikniecie przycisku.
-document.querySelector('#checkAddresses').addEventListener('click', () => loadAddressPreview());
+// Sprawdzanie adresow odpala sie automatycznie po wybraniu pliku (bez
+// osobnego przycisku "Sprawdz adresy") - decyzja wlasciciela dla tej appki,
+// swiadomie inna niz formularze-ecodan/karty-katalogowe: tam auto-check na
+// 'change' pliku byl celowo pominiety, ale te apki wymagaja wypelnienia
+// pol (np. lokalizacji) PRZED sprawdzeniem, zeby wynik mial sens - w
+// varmero wszystkie pola strefy/wojewodztwa/gminy sa opcjonalne dla samego
+// podgladu (tylko ostrzegaja, nigdy nie blokuja), wiec auto-check od razu
+// po wyborze pliku nie traci danych.
+document.querySelector('#excelFile').addEventListener('change', () => loadAddressPreview());
 document.querySelector('#reloadPreview').addEventListener('click', () => loadAddressPreview());
 document.querySelector('#addressSearch').addEventListener('input', () => renderAddressRows());
 document.querySelector('#selectAllRecords').addEventListener('click', () => { selectedRows = new Set(previewRecords.map(row => row.rowNumber)); renderAddressRows(); });

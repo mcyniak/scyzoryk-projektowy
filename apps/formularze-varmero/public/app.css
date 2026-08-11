@@ -1,16 +1,12 @@
 /* Formularze Varmero - style specyficzne dla tego modulu (reszta: /shared/*.css) */
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); align-items: end; }
-.grid.two { grid-template-columns: 1fr 1.4fr; margin-top: var(--space-3); }
 /* align-items:start (nie odziedziczone "end") - "Strefa klimatyczna" ma pod
    polem dodatkowa podpowiedz (patrz index.html), wiec przy wyrownaniu do
    dolu caly wiersz sie rozjezdzal: pozostale 3 pola (bez podpowiedzi) byly
    wypychane nizej, zeby zrownac sie z dolem tej najwyzszej kolumny -
    zlapane realnie przez wlasciciela ("pole strefa jest jakos za wysoko"). */
 .grid.four { grid-template-columns: repeat(4, 1fr); margin-top: var(--space-3); align-items: start; }
-.file-row { display: flex; gap: var(--space-3); align-items: center; margin-top: 8px; }
-.file-row input[type="file"] { margin-top: 0; flex: 1; min-width: 0; }
-.file-row button { white-space: nowrap; flex: none; }
 label { display: block; font-weight: 700; color: var(--text-secondary); font-size: var(--text-sm); }
 .hint, .field-help { display: block; color: var(--text-tertiary); font-size: 12px; font-weight: 600; margin-top: 7px; line-height: 1.35; }
 input, select { width: 100%; margin-top: 8px; min-height: var(--hit-min); padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text-primary); font: inherit; }
