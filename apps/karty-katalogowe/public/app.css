@@ -25,3 +25,16 @@
 #kkResultsPanel { display: none; }
 #runBtn[hidden] { display: none !important; }
 .kk-run-controls { margin-top: var(--space-5); }
+
+/* Przegladarka folderow w stronie (przycisk "Przegladaj..." + modal) - patrz
+   lib/folderBrowse.js dla uzasadnienia (natywne okno Windows nie dziala
+   niezawodnie na tej maszynie). */
+.path-row { display: flex; gap: var(--space-3); align-items: center; }
+.path-row input { flex: 1; min-width: 0; }
+.path-row button { white-space: nowrap; flex: none; }
+.folder-tree { margin-top: var(--space-4); max-height: 420px; overflow: auto; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.folder-row { display: flex; align-items: center; gap: 10px; padding: 7px 14px; border-bottom: 1px solid var(--border-default); font-size: var(--text-sm); font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace; }
+.folder-row:last-child { border-bottom: 0; }
+.folder-row.clickable { cursor: pointer; }
+.folder-row.clickable:hover { background: var(--bg-surface-muted); }
+.folder-row.up-nav { color: var(--text-secondary); font-weight: 700; font-family: inherit; }

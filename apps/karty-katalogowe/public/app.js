@@ -82,3 +82,77 @@ async function runJob(dryRun) {
 
 checkBtn.addEventListener('click', () => runJob(true));
 runBtn.addEventListener('click', () => runJob(false));
+
+// Przegladarka folderow w stronie zamiast recznego wpisywania sciezki -
+// natywne okno Windows nie dziala niezawodnie na tej maszynie, patrz
+// lib/folderBrowse.js.
+let browseTargetInput = null;
+let currentBrowsePath = null;
+
+const folderBrowseModal = document.getElementById('folderBrowseModal');
+const folderBrowseList = document.getElementById('folderBrowseList');
+const folderBrowseCurrentPath = document.getElementById('folderBrowseCurrentPath');
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function closeFolderBrowser() {
+  folderBrowseModal.classList.remove('open');
+}
+
+async function openFolderBrowser(startPath) {
+  folderBrowseModal.classList.add('open');
+  await loadFolderBrowse(startPath);
+}
+
+async function loadFolderBrowse(targetPath) {
+  folderBrowseList.innerHTML = '<div class="folder-row">Wczytuję...</div>';
+  try {
+    const url = targetPath ? `/api/browse-folder?path=${encodeURIComponent(targetPath)}` : '/api/browse-folder';
+    const res = await fetch(url);
+    const json = await res.json().catch(() => null);
+    if (!json || !json.ok) {
+      folderBrowseList.innerHTML = `<div class="folder-row">${escapeHtml((json && json.error) || 'Nie udało się wczytać folderów.')}</div>`;
+      return;
+    }
+    currentBrowsePath = json.path;
+    folderBrowseCurrentPath.textContent = json.path || 'Wybierz dysk';
+
+    const rows = [];
+    if (json.path !== null) {
+      const isDriveRoot = json.parent === null;
+      const upTarget = isDriveRoot ? '' : json.parent;
+      rows.push(`<div class="folder-row clickable up-nav" data-path="${escapeHtml(upTarget)}">${isDriveRoot ? '⬆ Lista dysków' : '⬆ ..'}</div>`);
+    }
+    for (const entry of json.entries) {
+      rows.push(`<div class="folder-row clickable" data-path="${escapeHtml(entry.path)}">📁 ${escapeHtml(entry.name)}</div>`);
+    }
+    folderBrowseList.innerHTML = rows.join('') || '<div class="folder-row">Brak podfolderów.</div>';
+  } catch (error) {
+    folderBrowseList.innerHTML = `<div class="folder-row">${escapeHtml(String(error.message || error))}</div>`;
+  }
+}
+
+document.getElementById('browseFolderBtn').addEventListener('click', () => {
+  browseTargetInput = document.getElementById('rootPath');
+  const startPath = browseTargetInput.value.trim();
+  openFolderBrowser(startPath || null);
+});
+document.getElementById('folderBrowseClose').addEventListener('click', closeFolderBrowser);
+folderBrowseModal.addEventListener('click', (event) => {
+  if (event.target.id === 'folderBrowseModal') closeFolderBrowser();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && folderBrowseModal.classList.contains('open')) closeFolderBrowser();
+});
+folderBrowseList.addEventListener('click', (event) => {
+  const row = event.target.closest('[data-path]');
+  if (!row) return;
+  loadFolderBrowse(row.dataset.path);
+});
+document.getElementById('folderBrowseSelect').addEventListener('click', () => {
+  if (!currentBrowsePath || !browseTargetInput) return;
+  browseTargetInput.value = currentBrowsePath;
+  closeFolderBrowser();
+});

@@ -1,5 +1,79 @@
 let lastPlan = null;
 
+// Przegladarka folderow w stronie zamiast recznego wpisywania sciezki -
+// dwie proby prawdziwego natywnego okna Windows (explorer.exe w tle,
+// System.Windows.Forms.FolderBrowserDialog) zostaly przetestowane NA ZYWO
+// i obie zawiodly (okno sie nie pojawialo) - patrz lib/folderBrowse.js.
+let browseTargetInput = null;
+let currentBrowsePath = null;
+
+document.querySelector('#browseFolderBtn').addEventListener('click', () => {
+  browseTargetInput = document.querySelector('#investmentFolder');
+  const startPath = browseTargetInput.value.trim();
+  openFolderBrowser(startPath || null);
+});
+document.querySelector('#folderBrowseClose').addEventListener('click', closeFolderBrowser);
+document.querySelector('#folderBrowseModal').addEventListener('click', (event) => {
+  if (event.target.id === 'folderBrowseModal') closeFolderBrowser();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && document.querySelector('#folderBrowseModal').classList.contains('open')) closeFolderBrowser();
+});
+
+function closeFolderBrowser() {
+  document.querySelector('#folderBrowseModal').classList.remove('open');
+}
+
+async function openFolderBrowser(startPath) {
+  document.querySelector('#folderBrowseModal').classList.add('open');
+  await loadFolderBrowse(startPath);
+}
+
+async function loadFolderBrowse(targetPath) {
+  const listEl = document.querySelector('#folderBrowseList');
+  const currentEl = document.querySelector('#folderBrowseCurrentPath');
+  listEl.innerHTML = '<div class="folder-row">Wczytuję...</div>';
+  try {
+    const url = targetPath ? `/api/browse-folder?path=${encodeURIComponent(targetPath)}` : '/api/browse-folder';
+    const res = await fetch(url);
+    const json = await res.json().catch(() => null);
+    if (!json || !json.ok) {
+      listEl.innerHTML = `<div class="folder-row">${escapeHtml(json?.error || 'Nie udało się wczytać folderów.')}</div>`;
+      return;
+    }
+    currentBrowsePath = json.path;
+    currentEl.textContent = json.path || 'Wybierz dysk';
+
+    const rows = [];
+    if (json.path !== null) {
+      const isDriveRoot = json.parent === null;
+      const upTarget = isDriveRoot ? '' : json.parent;
+      rows.push(`<div class="folder-row clickable up-nav" data-path="${escapeHtml(upTarget)}">${isDriveRoot ? '⬆ Lista dysków' : '⬆ ..'}</div>`);
+    }
+    for (const entry of json.entries) {
+      rows.push(`<div class="folder-row clickable" data-path="${escapeHtml(entry.path)}">📁 ${escapeHtml(entry.name)}</div>`);
+    }
+    listEl.innerHTML = rows.join('') || '<div class="folder-row">Brak podfolderów.</div>';
+  } catch (error) {
+    listEl.innerHTML = `<div class="folder-row">${escapeHtml(String(error.message || error))}</div>`;
+  }
+}
+
+document.querySelector('#folderBrowseList').addEventListener('click', (event) => {
+  const row = event.target.closest('[data-path]');
+  if (!row) return;
+  loadFolderBrowse(row.dataset.path);
+});
+
+document.querySelector('#folderBrowseSelect').addEventListener('click', () => {
+  if (!currentBrowsePath || !browseTargetInput) return;
+  browseTargetInput.value = currentBrowsePath;
+  closeFolderBrowser();
+  // Odpala ten sam listener co reczne wpisanie sciezki (ponizej) - jesli
+  // plik Excela jest juz wybrany, podglad odswiezy sie automatycznie.
+  browseTargetInput.dispatchEvent(new Event('change'));
+});
+
 document.querySelector('#excelFile').addEventListener('change', () => maybeLoadPreview());
 document.querySelector('#investmentFolder').addEventListener('change', () => maybeLoadPreview());
 document.querySelector('#investmentFolder').addEventListener('blur', () => maybeLoadPreview());

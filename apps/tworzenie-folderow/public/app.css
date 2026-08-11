@@ -37,6 +37,16 @@ code { background: var(--gray-100); border: 1px solid var(--border-default); pad
 .folder-row:last-child { border-bottom: 0; }
 .folder-row.exists { color: var(--text-tertiary); }
 
+/* Przeglądarka folderów (przycisk "Przeglądaj..." + modal) - patrz
+   lib/folderBrowse.js dla uzasadnienia (natywne okno Windows nie działa
+   niezawodnie na tej maszynie, więc przeglądanie dzieje się w stronie). */
+.path-row { display: flex; gap: var(--space-3); align-items: center; margin-top: 8px; }
+.path-row input { margin-top: 0; flex: 1; min-width: 0; }
+.path-row button { white-space: nowrap; flex: none; }
+.folder-row.clickable { cursor: pointer; }
+.folder-row.clickable:hover { background: var(--bg-surface-muted); }
+.folder-row.up-nav { color: var(--text-secondary); font-weight: 700; font-family: inherit; }
+
 @media (max-width: 980px) {
   .grid, .status-grid { grid-template-columns: 1fr; }
 }

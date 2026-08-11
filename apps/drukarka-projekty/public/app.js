@@ -43,6 +43,76 @@
     return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  // Przegladarka folderow w stronie zamiast recznego wpisywania sciezki -
+  // natywne okno Windows nie dziala niezawodnie na tej maszynie, patrz
+  // lib/folderBrowse.js. Uzywa zwyklego fetch (nie api()), bo /api/browse-folder
+  // zwraca blad jako {error}, a api() oczekuje {message}.
+  let browseTargetInput = null;
+  let currentBrowsePath = null;
+
+  function closeFolderBrowser() {
+    $("folderBrowseModal").classList.remove("open");
+  }
+
+  async function openFolderBrowser(startPath) {
+    $("folderBrowseModal").classList.add("open");
+    await loadFolderBrowse(startPath);
+  }
+
+  async function loadFolderBrowse(targetPath) {
+    const listEl = $("folderBrowseList");
+    const currentEl = $("folderBrowseCurrentPath");
+    listEl.innerHTML = '<div class="folder-row">Wczytuję...</div>';
+    try {
+      const url = targetPath ? `/api/browse-folder?path=${encodeURIComponent(targetPath)}` : "/api/browse-folder";
+      const res = await fetch(url);
+      const json = await res.json().catch(() => null);
+      if (!json || !json.ok) {
+        listEl.innerHTML = `<div class="folder-row">${escapeHtml((json && json.error) || "Nie udało się wczytać folderów.")}</div>`;
+        return;
+      }
+      currentBrowsePath = json.path;
+      currentEl.textContent = json.path || "Wybierz dysk";
+
+      const rows = [];
+      if (json.path !== null) {
+        const isDriveRoot = json.parent === null;
+        const upTarget = isDriveRoot ? "" : json.parent;
+        rows.push(`<div class="folder-row clickable up-nav" data-path="${escapeHtml(upTarget)}">${isDriveRoot ? "⬆ Lista dysków" : "⬆ .."}</div>`);
+      }
+      for (const entry of json.entries) {
+        rows.push(`<div class="folder-row clickable" data-path="${escapeHtml(entry.path)}">📁 ${escapeHtml(entry.name)}</div>`);
+      }
+      listEl.innerHTML = rows.join("") || '<div class="folder-row">Brak podfolderów.</div>';
+    } catch (error) {
+      listEl.innerHTML = `<div class="folder-row">${escapeHtml(String(error.message || error))}</div>`;
+    }
+  }
+
+  $("browseFolderBtn").addEventListener("click", () => {
+    browseTargetInput = $("baseFolderInput");
+    const startPath = browseTargetInput.value.trim();
+    openFolderBrowser(startPath || null);
+  });
+  $("folderBrowseClose").addEventListener("click", closeFolderBrowser);
+  $("folderBrowseModal").addEventListener("click", (event) => {
+    if (event.target.id === "folderBrowseModal") closeFolderBrowser();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && $("folderBrowseModal").classList.contains("open")) closeFolderBrowser();
+  });
+  $("folderBrowseList").addEventListener("click", (event) => {
+    const row = event.target.closest("[data-path]");
+    if (!row) return;
+    loadFolderBrowse(row.dataset.path);
+  });
+  $("folderBrowseSelect").addEventListener("click", () => {
+    if (!currentBrowsePath || !browseTargetInput) return;
+    browseTargetInput.value = currentBrowsePath;
+    closeFolderBrowser();
+    browseTargetInput.dispatchEvent(new Event("change"));
+  });
+
   function enablePanel(id) { $(id).classList.remove("disabled"); }
   function disablePanel(id) { $(id).classList.add("disabled"); }
 

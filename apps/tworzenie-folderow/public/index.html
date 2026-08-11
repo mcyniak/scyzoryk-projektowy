@@ -55,7 +55,10 @@
       </div>
       <form id="planForm">
         <label>Ścieżka folderu inwestycji
-          <input type="text" name="investmentFolder" id="investmentFolder" placeholder="np. G:\Dyski współdzielone\Dział Projektowy Sanitarny\...\17. Kamieńsk" required />
+          <div class="path-row">
+            <input type="text" name="investmentFolder" id="investmentFolder" placeholder="np. G:\Dyski współdzielone\Dział Projektowy Sanitarny\...\17. Kamieńsk" required />
+            <button type="button" class="secondary" id="browseFolderBtn">Przeglądaj...</button>
+          </div>
           <span class="field-help">Folder, w którym leży już skrót .gsheet do tabeli adresowej tej inwestycji.</span>
         </label>
 
@@ -85,6 +88,22 @@
         </div>
       </div>
     </section>
+  </div>
+
+  <div class="modal-overlay" id="folderBrowseModal" role="dialog" aria-modal="true" aria-labelledby="folderBrowseTitle" aria-hidden="true">
+    <div class="modal-box" role="document">
+      <div class="modal-head">
+        <strong id="folderBrowseTitle">Wybierz folder</strong>
+        <button type="button" class="btn btn-ghost btn-sm" id="folderBrowseClose" aria-label="Zamknij">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="small" id="folderBrowseCurrentPath"></p>
+        <div id="folderBrowseList" class="folder-tree"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" id="folderBrowseSelect">Wybierz ten folder</button>
+      </div>
+    </div>
   </div>
 
   <script src="inline-1.js"></script>

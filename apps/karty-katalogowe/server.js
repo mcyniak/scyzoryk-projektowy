@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup, createSemaphore } = require('../../lib/hardening');
 const { getAppDataDir } = require('../../lib/appPaths');
 const { isAffirmativeFlag } = require('../../lib/businessFlags');
+const { browseFolder } = require('../../lib/folderBrowse');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -503,6 +504,18 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
 // --- Endpointy ---
 
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'karty-katalogowe' }));
+
+// Przegladarka folderow w stronie (przycisk "Przegladaj..." przy polu
+// sciezki glownej) - patrz lib/folderBrowse.js dla pelnego uzasadnienia
+// (dwie proby prawdziwego natywnego okna Windows zawiodly na zywo).
+app.get('/api/browse-folder', (req, res) => {
+  try {
+    const result = browseFolder(req.query.path);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
 
 app.post('/api/run', upload.single('excel'), async (req, res) => {
   const jobId = crypto.randomUUID();

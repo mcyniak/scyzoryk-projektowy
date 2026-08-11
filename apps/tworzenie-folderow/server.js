@@ -12,9 +12,9 @@ const multer = require('multer');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
-const crypto = require('crypto');
 const { setupProcessDiagnostics, scheduleCleanup } = require('../../lib/hardening');
 const { getAppDataDir } = require('../../lib/appPaths');
+const { browseFolder } = require('../../lib/folderBrowse');
 const { readTabelaAdresowa } = require('./src/excel.js');
 const { buildFolderPlan } = require('./src/folderPlan.js');
 
@@ -148,6 +148,20 @@ app.get('/api/health', (req, res) => {
 
 app.get('/api/version', (req, res) => {
   res.json({ ok: true, version: APP_VERSION });
+});
+
+// Przegladarka folderow w stronie (przycisk "Przegladaj..." przy polu
+// sciezki inwestycji) - patrz lib/folderBrowse.js dla pelnego uzasadnienia
+// (dwie proby prawdziwego natywnego okna Windows zawiodly na zywo).
+// Odczyt (GET), wiec nie wymaga naglowka X-Scyzoryk-Request - dokladnie
+// tak samo jak /api/health.
+app.get('/api/browse-folder', (req, res) => {
+  try {
+    const result = browseFolder(req.query.path);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
 });
 
 app.post('/api/preview', (req, res, next) => {

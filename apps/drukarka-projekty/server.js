@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
+const { browseFolder } = require("../../lib/folderBrowse");
 const { sessionMiddleware } = require("./lib/sessionStore");
 const excelInvestment = require("./src/excelInvestment");
 const folderMatch = require("./src/folderMatch");
@@ -865,6 +866,18 @@ app.get("/api/file/:id/preview", (req, res) => {
 
 app.get("/api/health", (req, res) => res.json({ ok: true, name: "drukarka-projekty", version: require("./package.json").version }));
 app.get("/api/status", (req, res) => res.json(req.session.status));
+
+// Przegladarka folderow w stronie (przycisk "Przegladaj..." przy polu
+// sciezki bazowej) - patrz lib/folderBrowse.js dla pelnego uzasadnienia
+// (dwie proby prawdziwego natywnego okna Windows zawiodly na zywo).
+app.get("/api/browse-folder", (req, res) => {
+  try {
+    const result = browseFolder(req.query.path);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
 
 app.post("/api/print", async (req, res) => {
   const session = req.session;
