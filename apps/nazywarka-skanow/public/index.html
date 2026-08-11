@@ -13,7 +13,7 @@
   <main class="shell">
     <header class="app-header">
       <div class="app-header-left">
-        <a class="app-brand" href="http://scyzoryk.localhost:3000/">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu">
           <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
         </a>
         <span class="app-divider"></span>
@@ -22,10 +22,16 @@
           <strong>Nazywarka skanów</strong>
         </div>
       </div>
-      <a class="btn btn-ghost btn-sm" href="http://scyzoryk.localhost:3000">
-        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
-        Panel główny
-      </a>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="#" data-help-link="nazywarka-skanow">
+          <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
+          Pomoc
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
     </header>
 
     <section class="panel intro-panel">
