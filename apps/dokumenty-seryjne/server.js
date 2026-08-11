@@ -574,7 +574,14 @@ function buildGenerationTasks(job, selectedGroupNames, sheetName, selectedSheet,
 
   for (const groupName of selectedGroupNames) {
     const group = (job.templateGroups || []).find(g => g.name === groupName);
-    if (!group) continue;
+    if (!group) {
+      // Nazwa grupy z zaznaczenia UI nie pasuje do zadnej znanej grupy szablonow
+      // (np. dane joba zmienily sie miedzy wyborem a generowaniem) - zamiast
+      // cicho pominac cala pozycje bez sladu, zglaszamy tak samo jak brak
+      // wariantu dla arkusza nizej.
+      skippedGroups.push({ groupName, reason: `Nie znaleziono grupy szablonow "${groupName}".` });
+      continue;
+    }
     const variantKeys = Object.keys(group.variants || {});
     const exactKey = variantKeys.find(k => k === sheetName);
     const looseKey = exactKey || variantKeys.find(k => k.trim().toLowerCase() === wantedSheet);
