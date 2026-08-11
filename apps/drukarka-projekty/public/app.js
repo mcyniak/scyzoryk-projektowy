@@ -15,6 +15,15 @@
 
   const $ = (id) => document.getElementById(id);
 
+  // Ta apka (w odroznieniu od reszty) miala dotad zahardkodowany
+  // "http://scyzoryk.localhost:3000" wprost w atrybutach href - dzialalo, ale
+  // niespojnie z reszta modulow, ktore nadpisuja href w runtime (patrz
+  // inline-1.js kazdej innej apki). Ten sam mechanizm tutaj, zeby link do
+  // Pomocy (nowy) i Panelu glownego trzymaly sie jednego wzorca.
+  const mainPanelUrl = "http://scyzoryk.localhost:3000";
+  document.querySelectorAll("[data-main-link]").forEach((link) => { link.href = mainPanelUrl; link.removeAttribute("target"); });
+  document.querySelectorAll("[data-help-link]").forEach((link) => { link.href = `${mainPanelUrl}/instrukcja.html#${link.dataset.helpLink}`; });
+
   function api(path, options = {}) {
     const opts = { ...options, headers: { ...(options.headers || {}), "X-Scyzoryk-Request": "1" } };
     return fetch(path, opts).then(async (res) => {
@@ -91,6 +100,15 @@
 
   $("browseFolderBtn").addEventListener("click", () => {
     browseTargetInput = $("baseFolderInput");
+    const startPath = browseTargetInput.value.trim();
+    openFolderBrowser(startPath || null);
+  });
+  // Tryb WM ma wlasne, osobne pole sciezki (wmFolderInput) - ten sam modal i
+  // logika przegladania, tylko inny input docelowy. Wczesniej ten przycisk
+  // istnial TYLKO dla trybu Projekty (baseFolderInput) - pole WM zostalo
+  // pominiete przy pierwszym wdrozeniu przegladarki folderow.
+  $("browseWmFolderBtn").addEventListener("click", () => {
+    browseTargetInput = $("wmFolderInput");
     const startPath = browseTargetInput.value.trim();
     openFolderBrowser(startPath || null);
   });

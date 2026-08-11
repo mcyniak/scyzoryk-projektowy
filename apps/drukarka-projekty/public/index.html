@@ -13,7 +13,7 @@
   <main class="shell">
     <header class="app-header">
       <div class="app-header-left">
-        <a class="app-brand" href="http://scyzoryk.localhost:3000/">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu">
           <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
         </a>
         <span class="app-divider"></span>
@@ -22,10 +22,16 @@
           <strong>Drukarka projektów</strong>
         </div>
       </div>
-      <a class="btn btn-ghost btn-sm" href="http://scyzoryk.localhost:3000">
-        <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
-        Panel główny
-      </a>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="#" data-help-link="drukarka-projekty">
+          <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
+          Pomoc
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
     </header>
 
     <!-- Wybór trybu: projekty (arkusz Excel) albo wnioski materiałowe (WM) -->
@@ -115,7 +121,7 @@
         <div class="panel-header">
           <div>
             <h2 class="panel-title"><span class="step-num">3</span>Folder z projektami</h2>
-            <p class="panel-desc">Wklej ścieżkę do folderu, w którym są podfoldery adresów (np. ...\Kolektory\Projekty\Żarnów). Ten sam folder zostanie użyty dla wszystkich zaznaczonych adresów. Zapamiętam ją dla tej zakładki.</p>
+            <p class="panel-desc">Wybierz folder, w którym są podfoldery adresów (np. ...\Kolektory\Projekty\Żarnów) - przyciskiem „Przeglądaj...” albo wklejając ścieżkę. Ten sam folder zostanie użyty dla wszystkich zaznaczonych adresów. Zapamiętam ją dla tej zakładki.</p>
           </div>
         </div>
         <div class="field-row">
@@ -171,7 +177,10 @@
         <div class="field-row">
           <label class="option-field" style="grid-column: 1 / -1;">
             <span class="option-label">Ścieżka folderu WM</span>
-            <input id="wmFolderInput" type="text" placeholder="G:\Dyski współdzielone\...\Projekty\<adres>\WM" />
+            <div class="path-row">
+              <input id="wmFolderInput" type="text" placeholder="G:\Dyski współdzielone\...\Projekty\<adres>\WM" />
+              <button type="button" class="btn btn-secondary" id="browseWmFolderBtn">Przeglądaj...</button>
+            </div>
           </label>
         </div>
         <label style="display:flex; align-items:center; gap:8px; font-weight:700; color: var(--text-secondary); cursor:pointer; margin-bottom: var(--space-4);">
