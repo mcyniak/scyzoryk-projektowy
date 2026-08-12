@@ -344,6 +344,10 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
   const sideMode = req.body.sideMode === "two-sided" ? "two-sided" : "one-sided";
   const copyMode = req.body.copyMode === "set" ? "set" : "file";
   const printerName = String(req.body.printerName || "").trim();
+  // Domyslnie wlaczone (zachowuje dotychczasowe zachowanie) - uzytkownik moze
+  // wylaczyc laczenie sasiadujacych PDF-ow w panelu (np. gdy kazdy plik ma isc
+  // na drukarke jako osobne, wyraznie oddzielone zadanie).
+  const mergeFiles = req.body.mergeFiles !== false;
   const order = Array.isArray(req.body.order) ? req.body.order : [];
 
   if (order.length) {
@@ -397,7 +401,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
         // znaczenia), albo uzytkownik i tak wybral "najpierw komplet" (copyMode
         // "set"), gdzie laczenie daje dokladnie to samo zachowanie co bez laczenia.
         const mergeChangesCopySemantics = copies > 1 && copyMode === "file";
-        if (!mergeChangesCopySemantics && originalItems.filter(it => it.ext === ".pdf").length >= 2) {
+        if (mergeFiles && !mergeChangesCopySemantics && originalItems.filter(it => it.ext === ".pdf").length >= 2) {
           status.message = "Łączę sąsiadujące PDF-y w jeden plik, żeby drukować szybciej...";
           try {
             itemsToPrint = await buildMergedPrintItems(originalItems, { padOddPagesForDuplex: sideMode === "two-sided" });

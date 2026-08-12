@@ -23,6 +23,8 @@
 .move-btn:disabled { opacity: .35; cursor: not-allowed; }
 
 .job-summary { margin: 2px 0 var(--space-4); }
+.option-field-checkbox { justify-content: center; }
+.option-checkbox-row { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text-primary); cursor: pointer; }
 .controls { margin-top: var(--space-2); }
 .print { margin-left: auto; }
 

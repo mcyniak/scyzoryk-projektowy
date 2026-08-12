@@ -7,6 +7,7 @@ const copiesInput = document.getElementById("copiesInput");
 const sideModeInput = document.getElementById("sideModeInput");
 const printerSelectInput = document.getElementById("printerSelectInput");
 const copyModeInput = document.getElementById("copyModeInput");
+const mergeFilesInput = document.getElementById("mergeFilesInput");
 const jobSummary = document.getElementById("jobSummary");
 const fileList = document.getElementById("fileList");
 const dropZone = document.getElementById("dropZone");
@@ -93,19 +94,21 @@ function getPrintOptions() {
   const sideMode = sideModeInput.value === "one-sided" ? "one-sided" : "two-sided";
   const copyMode = copyModeInput.value === "set" ? "set" : "file";
   const printerName = printerSelectInput ? printerSelectInput.value : "";
+  const mergeFiles = mergeFilesInput ? mergeFilesInput.checked : true;
 
   copiesInput.value = copies;
   delayInput.value = delaySeconds;
 
-  return { copies, delaySeconds, sideMode, copyMode, printerName };
+  return { copies, delaySeconds, sideMode, copyMode, printerName, mergeFiles };
 }
 
 // Odzwierciedla dokladnie ta sama regule co server.js#buildMergedPrintItems:
 // sasiadujace w kolejce pliki PDF licza sie jako JEDNO zadanie druku, ale
-// tylko gdy to nie zmienia znaczenia "kopia przy kazdym pliku" (patrz
-// mergeChangesCopySemantics w server.js) - inaczej liczba pokazana tutaj
-// myliloby, ile realnie zadan pojdzie do drukarki.
-function countPrintUnits(copies, copyMode) {
+// tylko gdy uzytkownik nie wylaczyl laczenia i to nie zmienia znaczenia
+// "kopia przy kazdym pliku" (patrz mergeChangesCopySemantics w server.js) -
+// inaczej liczba pokazana tutaj myliloby, ile realnie zadan pojdzie do drukarki.
+function countPrintUnits(copies, copyMode, mergeFiles) {
+  if (!mergeFiles) return queue.length;
   if (copies > 1 && copyMode === "file") return queue.length;
   let units = 0;
   let i = 0;
@@ -129,7 +132,7 @@ function updateJobSummary() {
   const modeText = options.copyMode === "set"
     ? "najpierw komplet, potem kolejna kopia kompletu"
     : "kopia przy każdym pliku";
-  const jobCount = countPrintUnits(options.copies, options.copyMode) * options.copies;
+  const jobCount = countPrintUnits(options.copies, options.copyMode, options.mergeFiles) * options.copies;
 
   jobSummary.textContent = `${copiesText} · ${sides} · ${modeText} · wydruków do wysłania: ${jobCount}`;
 }
@@ -488,7 +491,8 @@ printBtn.addEventListener("click", async () => {
       copies: options.copies,
       sideMode: options.sideMode,
       copyMode: options.copyMode,
-      printerName: options.printerName
+      printerName: options.printerName,
+      mergeFiles: options.mergeFiles
     })
   });
 
@@ -541,7 +545,7 @@ dropZone.addEventListener("drop", async e => {
   await uploadFiles(e.dataTransfer.files);
 });
 
-[copiesInput, delayInput, sideModeInput, copyModeInput].forEach(input => {
+[copiesInput, delayInput, sideModeInput, copyModeInput, mergeFilesInput].forEach(input => {
   input.addEventListener("input", updateJobSummary);
   input.addEventListener("change", updateJobSummary);
 });
