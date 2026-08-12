@@ -2,8 +2,6 @@
   [Parameter(Mandatory = $true)][string]$InstallerPath,
   [Parameter(Mandatory = $true)][string]$InstallDir,
   [Parameter(Mandatory = $true)][string]$LogsDir,
-  [switch]$ExpectBundledOcr,
-  [switch]$TestLiveOcr,
   # Audyt 2026-08-06 - opcjonalny maly instalator aktualizacyjny (bez
   # node-runtime/node_modules, patrz scripts\build-installer.ps1). Gdy podany,
   # dodatkowy test naklada go na juz zainstalowana (przez $InstallerPath,
@@ -117,37 +115,14 @@ Run-Test 'Kompletnosc zainstalowanej aplikacji' {
   $missing = @($required | Where-Object { -not (Test-Path (Join-Path $InstallDir $_)) })
   Assert-True ($missing.Count -eq 0) "Brakuje elementow instalacji: $($missing -join ', ')"
 
+  # OCR audytow (Google Gemini od 2026-08-12, patrz apps/ocr-audytow/src/geminiFieldEngine.js)
+  # nie ma juz zadnej konfiguracji bakowanej w instalator - klucz API uzytkownik
+  # wpisuje recznie w samej aplikacji. Zaden wariant instalatora nie powinien
+  # nigdy zawierac tych plikow.
   $configPath = Join-Path $InstallDir 'apps\ocr-audytow\config\document-ai.json'
   $keyPath = Join-Path $InstallDir 'apps\ocr-audytow\config\service-account.json'
-
-  if ($ExpectBundledOcr) {
-    Assert-True (Test-Path $configPath) 'Gotowy instalator nie zawiera konfiguracji OCR.'
-    Assert-True (Test-Path $keyPath) 'Gotowy instalator nie zawiera klucza OCR.'
-
-    $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$cfg.projectId)) 'Brak projectId OCR.'
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$cfg.location)) 'Brak location OCR.'
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$cfg.processorId)) 'Brak processorId OCR.'
-    Assert-True ($cfg.keyFile -eq 'service-account.json') 'Nieprawidlowa sciezka keyFile OCR.'
-
-    if (-not [string]::IsNullOrWhiteSpace($env:OCR_DOCAI_PROJECT_ID)) {
-      Assert-True ($cfg.projectId -eq $env:OCR_DOCAI_PROJECT_ID) 'Instalator zawiera nieprawidlowy projekt OCR.'
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:OCR_DOCAI_LOCATION)) {
-      Assert-True ($cfg.location -eq $env:OCR_DOCAI_LOCATION) 'Instalator zawiera nieprawidlowa lokalizacje OCR.'
-    }
-    if (-not [string]::IsNullOrWhiteSpace($env:OCR_DOCAI_PROCESSOR_ID)) {
-      Assert-True ($cfg.processorId -eq $env:OCR_DOCAI_PROCESSOR_ID) 'Instalator zawiera nieprawidlowy processor ID OCR.'
-    }
-
-    $credentials = Get-Content $keyPath -Raw | ConvertFrom-Json
-    Assert-True ($credentials.type -eq 'service_account') 'Plik OCR nie jest kontem serwisowym.'
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$credentials.client_email)) 'Brak client_email w kluczu OCR.'
-    Assert-True (-not [string]::IsNullOrWhiteSpace([string]$credentials.private_key)) 'Brak private_key w kluczu OCR.'
-  } else {
-    Assert-True (-not (Test-Path $configPath)) 'Zwykly instalator nie powinien zawierac konfiguracji OCR.'
-    Assert-True (-not (Test-Path $keyPath)) 'Zwykly instalator nie powinien zawierac klucza OCR.'
-  }
+  Assert-True (-not (Test-Path $configPath)) 'Instalator nie powinien zawierac wbudowanej konfiguracji OCR.'
+  Assert-True (-not (Test-Path $keyPath)) 'Instalator nie powinien zawierac wbudowanego klucza OCR.'
 }
 
 Run-Test 'Aktualny panel i instrukcja w instalatorze' {
@@ -289,7 +264,7 @@ Run-Test 'Health-check wszystkich narzedzi i stan OCR' {
 
   $ocr = Invoke-RestMethod 'http://127.0.0.1:3011/api/health' -TimeoutSec 10
   $ocr | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $LogsDir 'reports\ocr-health.json') -Encoding utf8
-  Assert-True ([bool]$ocr.ocrConfigured -eq [bool]$ExpectBundledOcr) "Nieprawidlowy stan ocrConfigured. Oczekiwano: $([bool]$ExpectBundledOcr)."
+  Assert-True ($ocr.ocrConfigured -eq $false) 'Swiezo zainstalowana kopia nie powinna miec skonfigurowanego klucza API Gemini (zaden instalator go nie bakuje).'
 }
 
 Run-Test 'Przyjazny adres http://scyzoryk.localhost:3000 dziala w Chromium bez konfiguracji' {
@@ -329,46 +304,6 @@ Run-Test 'Endpoint /api/update/status odpowiada z poprawnym kontraktem' {
   $status = Invoke-RestMethod 'http://127.0.0.1:3000/api/update/status' -TimeoutSec 10
   foreach ($field in @('enabled', 'state', 'available', 'currentVersion')) {
     Assert-True ($status.PSObject.Properties.Name -contains $field) "Odpowiedz /api/update/status nie ma pola `"$field`"."
-  }
-}
-
-if ($TestLiveOcr) {
-  Run-Test 'Prawdziwe polaczenie z Google Document AI bez konfiguracji po instalacji' {
-    Assert-True ([bool]$ExpectBundledOcr) 'Test prawdziwego OCR wymaga -ExpectBundledOcr.'
-    Add-Type -AssemblyName System.Drawing
-    $jpg = Join-Path $LogsDir 'input\ocr-test.jpg'
-    $bitmap = New-Object Drawing.Bitmap 1000,300
-    $graphics = [Drawing.Graphics]::FromImage($bitmap)
-    $font = New-Object Drawing.Font('Arial',32)
-    try {
-      $graphics.Clear([Drawing.Color]::White)
-      $graphics.DrawString('TEST OCR SCYZORYK 123', $font, [Drawing.Brushes]::Black, 40, 100)
-      $bitmap.Save($jpg, [Drawing.Imaging.ImageFormat]::Jpeg)
-    } finally {
-      $font.Dispose()
-      $graphics.Dispose()
-      $bitmap.Dispose()
-    }
-
-    $testJs = Join-Path $LogsDir 'ocr-api-test.js'
-    $jsLines = @(
-      "const { ocrImage, getConfigurationStatus } = require(process.argv[2]);",
-      "console.log('Konfiguracja OCR:', getConfigurationStatus());",
-      "ocrImage(process.argv[3]).then((result) => {",
-      "  const text = String(result && result.text || '').trim();",
-      "  console.log('Document AI odpowiedzial. Tekst:', text);",
-      "  if (!text) process.exit(2);",
-      "}).catch((error) => {",
-      "  console.error(error && error.stack || error);",
-      "  process.exit(1);",
-      "});"
-    )
-    [IO.File]::WriteAllLines($testJs, $jsLines, [Text.UTF8Encoding]::new($false))
-
-    $node = Join-Path $InstallDir 'node-runtime\node.exe'
-    $engine = Join-Path $InstallDir 'apps\ocr-audytow\src\documentAiEngine.js'
-    & $node $testJs $engine $jpg
-    Assert-True ($LASTEXITCODE -eq 0) 'Prawdziwe wywolanie Google Document AI nie powiodlo sie.'
   }
 }
 
@@ -461,13 +396,8 @@ Run-Test 'Ponowna instalacja' {
 
   $configPath = Join-Path $InstallDir 'apps\ocr-audytow\config\document-ai.json'
   $keyPath = Join-Path $InstallDir 'apps\ocr-audytow\config\service-account.json'
-  if ($ExpectBundledOcr) {
-    Assert-True (Test-Path $configPath) 'Po reinstalacji brakuje konfiguracji OCR.'
-    Assert-True (Test-Path $keyPath) 'Po reinstalacji brakuje klucza OCR.'
-  } else {
-    Assert-True (-not (Test-Path $configPath)) 'Reinstalacja dodala konfiguracje OCR.'
-    Assert-True (-not (Test-Path $keyPath)) 'Reinstalacja dodala klucz OCR.'
-  }
+  Assert-True (-not (Test-Path $configPath)) 'Reinstalacja dodala konfiguracje OCR.'
+  Assert-True (-not (Test-Path $keyPath)) 'Reinstalacja dodala klucz OCR.'
 }
 
 if ($UpdateInstallerPath) {

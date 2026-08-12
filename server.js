@@ -10,7 +10,6 @@ const { getDataRoot, getAppDataDir } = require('./lib/appPaths');
 const { migrateLegacyDataIfNeeded } = require('./lib/appDataMigration');
 const { hasDependencies } = require('./lib/dependencyCheck');
 const { getInstalledVersion } = require('./lib/updateBuildInfo');
-const { migrateOcrConfigIfNeeded } = require('./lib/ocrConfigMigration');
 const { createUpdateService } = require('./lib/updateService');
 
 const ROOT = __dirname;
@@ -30,19 +29,6 @@ if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
   migrateLegacyDataIfNeeded([{ slug: 'panel', dir: ROOT }]);
 }
 const diagnostics = setupProcessDiagnostics('panel-glowny', PANEL_DATA_ROOT);
-// Migracja wbudowanej konfiguracji OCR (tylko wewnetrzne buildy z sekretem)
-// do trwalego profilu uzytkownika - patrz lib/ocrConfigMigration.js. Musi
-// zajsc PRZED tym, jak publiczne (bez sekretow) aktualizacje zaczna
-// nadpisywac folder programu. Idempotentna i bezpieczna do wywolania przy
-// kazdym starcie; awaria migracji nie moze zatrzymac calego panelu.
-if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
-  try {
-    const ocrMigration = migrateOcrConfigIfNeeded(ROOT, { log: diagnostics.log });
-    if (ocrMigration.migrated) console.log('Konfiguracja OCR przeniesiona do profilu uzytkownika.');
-  } catch (err) {
-    diagnostics.log('warn', 'ocr-config-migration-failed', { message: err?.message || String(err) });
-  }
-}
 const CHILDREN_LOG_FILE = path.join(PANEL_DATA_ROOT, 'logs', 'children.jsonl');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const SHARED_DIR = path.join(ROOT, 'shared-styles');
@@ -127,7 +113,7 @@ const dependencyChecks = [
   { slug: 'wnioski-powykonawcze', dir: path.join(ROOT, 'apps', 'wnioski-powykonawcze'), deps: ['express', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
   { slug: 'karty-katalogowe', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'express-rate-limit'] },
   { slug: 'drukarka-projekty', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), deps: ['express', 'multer', 'express-rate-limit', 'xlsx', 'mammoth', 'pdf-parse', 'pdf-lib', 'sanitize-filename'] },
-  { slug: 'ocr-audytow', dir: path.join(ROOT, 'apps', 'ocr-audytow'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib', '@pdf-lib/fontkit', 'pdf-parse', 'jimp', 'sanitize-filename', 'xlsx', '@google-cloud/documentai', 'exceljs'] },
+  { slug: 'ocr-audytow', dir: path.join(ROOT, 'apps', 'ocr-audytow'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib', 'pdf-parse', 'jimp', 'sanitize-filename', 'xlsx', 'exceljs'] },
   { slug: 'nazywarka-skanow', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), deps: ['express', 'express-rate-limit'] },
   { slug: 'formularze-varmero', dir: path.join(ROOT, 'apps', 'formularze-varmero'), deps: ['express', 'playwright', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx', 'imapflow', 'mailparser'], playwright: true },
   { slug: 'tworzenie-folderow', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), deps: ['express', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx'] }

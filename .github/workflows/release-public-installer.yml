@@ -10,8 +10,10 @@ name: Opublikuj publiczny instalator (GitHub Release)
 # aplikacje). Recznie (workflow_dispatch) rowniez mozliwe - walidacja wersji
 # jest IDENTYCZNA w obu przypadkach, nie da sie jej obejsc.
 #
-# Ten workflow NIGDY nie dostaje sekretu OCR_DOCAI_CREDENTIALS_B64 - publiczny
-# instalator jest budowany tak jak w build-internal-installer.yml (bez OCR).
+# Instalator nie zawiera zadnych wbudowanych sekretow (od 2026-08-12 OCR
+# audytow korzysta z Google Gemini, ktorego klucz API uzytkownik wpisuje
+# recznie w aplikacji - zaden instalator, publiczny ani wewnetrzny, nigdy go
+# nie bakuje) - budowany tak samo jak w build-internal-installer.yml.
 
 on:
   push:

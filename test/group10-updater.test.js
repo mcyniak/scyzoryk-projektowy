@@ -18,7 +18,6 @@ const {
 const { assetFileName, findExactAsset, fetchLatestRelease } = require('../lib/updateGithub');
 const { downloadText, downloadToPartialFile, parseSha256File } = require('../lib/updateDownload');
 const { createUpdateService, cleanupUpdatesDir, buildUpdaterInvocation } = require('../lib/updateService');
-const { migrateOcrConfigIfNeeded, isCompleteConfig, userConfigPath, saveUserOcrConfig } = require('../lib/ocrConfigMigration');
 
 function withEnvironment(values, body) {
   const previous = {};
@@ -1077,207 +1076,34 @@ test('trasy /api/update/* - bezpieczenstwo i kontrakt', async t => {
 });
 
 // =====================================================================
-// Migracja konfiguracji OCR (lib/ocrConfigMigration.js)
+// Migracja/konfiguracja klucza OCR - do 2026-08-12 zyla tu jako
+// lib/ocrConfigMigration.js (wbudowana w instalator konfiguracja Document AI
+// migrowana do profilu uzytkownika). Ten mechanizm zostal usuniety razem z
+// migracja OCR audytow na Google Gemini - zaden instalator juz nigdy nie
+// bakuje zadnego sekretu, wiec nie ma juz niczego do migrowania. Rownowazne
+// testy konfiguracji klucza API Gemini (src/geminiFieldEngine.js#isConfigured/
+// saveUserApiKey) zyja teraz w test/group3-ocr.test.js.
 // =====================================================================
-
-function writeJson(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-}
-
-test('OCR: migruje kompletna wbudowana konfiguracje do profilu uzytkownika', () => {
-  // Uzywamy sciezki z polskimi znakami i spacja w LOCALAPPDATA, zeby
-  // potwierdzic ze migracja dziala z takimi sciezkami (wymaganie testowe).
-  const localAppData = tempDir('sciezka z polskimi znakami zażółć gęślą jaźń ');
-  const appRoot = tempDir('scz-ocr-app-');
-  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
-    const configDir = path.join(appRoot, 'apps', 'ocr-audytow', 'config');
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(path.join(configDir, 'service-account.json'), JSON.stringify({ type: 'service_account', client_email: 'a@b.iam', private_key: 'TAJNY-KLUCZ-NIE-LOGOWAC' }), 'utf8');
-    writeJson(path.join(configDir, 'document-ai.json'), { projectId: 'proj', location: 'eu', processorId: 'proc123', keyFile: 'service-account.json' });
-
-    const logs = [];
-    const result = migrateOcrConfigIfNeeded(appRoot, { log: (level, event, data) => logs.push({ level, event, data }) });
-    assert.equal(result.migrated, true);
-
-    const userPath = userConfigPath();
-    assert.equal(fs.existsSync(userPath), true);
-    const userConfig = JSON.parse(fs.readFileSync(userPath, 'utf8'));
-    assert.equal(userConfig.projectId, 'proj');
-    assert.equal(userConfig.processorId, 'proc123');
-    assert.equal(userConfig.keyFile, 'service-account.json');
-    assert.equal(isCompleteConfig(userConfig, path.dirname(userPath)), true);
-
-    // Wbudowana kopia zostala usunieta PO potwierdzeniu skopiowania.
-    assert.equal(fs.existsSync(configDir), false);
-
-    // Nigdy nie logujemy TRESCI klucza.
-    const serialized = JSON.stringify(logs);
-    assert.equal(serialized.includes('TAJNY-KLUCZ-NIE-LOGOWAC'), false);
-  });
-  fs.rmSync(localAppData, { recursive: true, force: true });
-  fs.rmSync(appRoot, { recursive: true, force: true });
-});
-
-test('OCR: nie nadpisuje juz istniejacej, kompletnej konfiguracji uzytkownika', () => {
-  const localAppData = tempDir('scz-ocr-user-');
-  const appRoot = tempDir('scz-ocr-app2-');
-  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
-    const userDir = path.join(localAppData, 'Scyzoryk');
-    fs.mkdirSync(userDir, { recursive: true });
-    fs.writeFileSync(path.join(userDir, 'service-account.json'), JSON.stringify({ type: 'service_account', client_email: 'x@y.iam', private_key: 'RECZNIE-SKONFIGUROWANY' }), 'utf8');
-    writeJson(path.join(userDir, 'ocr-document-ai.json'), { projectId: 'reczny-projekt', location: 'eu', processorId: 'recznyproc', keyFile: 'service-account.json' });
-
-    const configDir = path.join(appRoot, 'apps', 'ocr-audytow', 'config');
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(path.join(configDir, 'service-account.json'), JSON.stringify({ type: 'service_account', client_email: 'a@b.iam', private_key: 'WBUDOWANY' }), 'utf8');
-    writeJson(path.join(configDir, 'document-ai.json'), { projectId: 'wbudowany-projekt', location: 'eu', processorId: 'wbudowanyproc', keyFile: 'service-account.json' });
-
-    const result = migrateOcrConfigIfNeeded(appRoot, {});
-    assert.equal(result.migrated, false);
-    assert.equal(result.reason, 'user-config-already-complete');
-
-    const userConfig = JSON.parse(fs.readFileSync(path.join(userDir, 'ocr-document-ai.json'), 'utf8'));
-    assert.equal(userConfig.projectId, 'reczny-projekt'); // NIE nadpisane
-  });
-  fs.rmSync(localAppData, { recursive: true, force: true });
-  fs.rmSync(appRoot, { recursive: true, force: true });
-});
-
-test('OCR: migracja jest idempotentna (drugie wywolanie nie robi nic i nie rzuca)', () => {
-  const localAppData = tempDir('scz-ocr-idem-');
-  const appRoot = tempDir('scz-ocr-app3-');
-  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
-    const configDir = path.join(appRoot, 'apps', 'ocr-audytow', 'config');
-    fs.mkdirSync(configDir, { recursive: true });
-    fs.writeFileSync(path.join(configDir, 'service-account.json'), JSON.stringify({ type: 'service_account', client_email: 'a@b.iam', private_key: 'K' }), 'utf8');
-    writeJson(path.join(configDir, 'document-ai.json'), { projectId: 'p', location: 'eu', processorId: 'pr', keyFile: 'service-account.json' });
-
-    const first = migrateOcrConfigIfNeeded(appRoot, {});
-    assert.equal(first.migrated, true);
-    const second = migrateOcrConfigIfNeeded(appRoot, {});
-    assert.equal(second.migrated, false);
-    assert.equal(second.reason, 'user-config-already-complete');
-  });
-  fs.rmSync(localAppData, { recursive: true, force: true });
-  fs.rmSync(appRoot, { recursive: true, force: true });
-});
-
-test('OCR: niekompletna wbudowana konfiguracja nie jest migrowana', () => {
-  const localAppData = tempDir('scz-ocr-incomplete-');
-  const appRoot = tempDir('scz-ocr-app4-');
-  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
-    const configDir = path.join(appRoot, 'apps', 'ocr-audytow', 'config');
-    fs.mkdirSync(configDir, { recursive: true });
-    // Brak service-account.json - keyFile wskazuje na nieistniejacy plik.
-    writeJson(path.join(configDir, 'document-ai.json'), { projectId: 'p', location: 'eu', processorId: 'pr', keyFile: 'service-account.json' });
-
-    const result = migrateOcrConfigIfNeeded(appRoot, {});
-    assert.equal(result.migrated, false);
-    assert.equal(result.reason, 'bundled-config-incomplete');
-    assert.equal(fs.existsSync(userConfigPath()), false);
-  });
-  fs.rmSync(localAppData, { recursive: true, force: true });
-  fs.rmSync(appRoot, { recursive: true, force: true });
-});
-
-test('OCR: brak wbudowanej konfiguracji w ogole (zwykla instalacja) - brak migracji, brak bledu', () => {
-  const localAppData = tempDir('scz-ocr-none-');
-  const appRoot = tempDir('scz-ocr-app5-');
-  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
-    const result = migrateOcrConfigIfNeeded(appRoot, {});
-    assert.equal(result.migrated, false);
-    assert.equal(result.reason, 'no-bundled-config');
-  });
-  fs.rmSync(localAppData, { recursive: true, force: true });
-  fs.rmSync(appRoot, { recursive: true, force: true });
-});
-
-// =====================================================================
-// Reczne wgranie klucza OCR przez uzytkownika (lib/ocrConfigMigration.js#saveUserOcrConfig)
-// - alternatywa dla wbudowanego w instalator sekretu, ktora nie wymaga
-// prywatnego repo. Patrz apps/ocr-audytow POST /api/ocr/setup-credentials.
-// =====================================================================
-
-const VALID_SERVICE_ACCOUNT = { type: 'service_account', project_id: 'z-klucza-projekt', client_email: 'a@b.iam.gserviceaccount.com', private_key: 'TAJNY-KLUCZ-NIE-LOGOWAC' };
-
-test('saveUserOcrConfig: poprawny klucz + wszystkie pola zapisuje oba pliki i zwraca rozstrzygniete wartosci', () => {
-  const localAppData = tempDir('scz-ocr-manual-ok-');
-  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
-    const result = saveUserOcrConfig({
-      keyFileContent: JSON.stringify(VALID_SERVICE_ACCOUNT),
-      location: 'eu',
-      processorId: 'proc123',
-      projectId: 'recznie-podany-projekt'
-    });
-    assert.deepEqual(result, { projectId: 'recznie-podany-projekt', location: 'eu', processorId: 'proc123' });
-
-    const userPath = userConfigPath();
-    const userConfig = JSON.parse(fs.readFileSync(userPath, 'utf8'));
-    assert.equal(userConfig.projectId, 'recznie-podany-projekt', 'recznie podany projectId ma pierwszenstwo przed tym z pliku klucza');
-    assert.equal(userConfig.keyFile, 'service-account.json');
-    assert.equal(isCompleteConfig(userConfig, path.dirname(userPath)), true);
-
-    const savedKey = JSON.parse(fs.readFileSync(path.join(path.dirname(userPath), 'service-account.json'), 'utf8'));
-    assert.equal(savedKey.private_key, 'TAJNY-KLUCZ-NIE-LOGOWAC');
-  });
-  fs.rmSync(localAppData, { recursive: true, force: true });
-});
-
-test('saveUserOcrConfig: brak recznego projectId - uzywa project_id z pliku klucza', () => {
-  const localAppData = tempDir('scz-ocr-manual-autopid-');
-  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
-    const result = saveUserOcrConfig({
-      keyFileContent: JSON.stringify(VALID_SERVICE_ACCOUNT),
-      location: 'eu',
-      processorId: 'proc123'
-    });
-    assert.equal(result.projectId, 'z-klucza-projekt');
-  });
-  fs.rmSync(localAppData, { recursive: true, force: true });
-});
-
-test('saveUserOcrConfig: odrzuca niepoprawny JSON, brak type/private_key, brak location/processorId - nic nie zapisuje', () => {
-  const localAppData = tempDir('scz-ocr-manual-bad-');
-  withEnvironment({ LOCALAPPDATA: localAppData }, () => {
-    assert.throws(() => saveUserOcrConfig({ keyFileContent: '{niepoprawny', location: 'eu', processorId: 'p' }), /nie jest poprawnym JSON/);
-    assert.throws(() => saveUserOcrConfig({ keyFileContent: JSON.stringify({ foo: 'bar' }), location: 'eu', processorId: 'p' }), /konta serwisowego/);
-    assert.throws(() => saveUserOcrConfig({ keyFileContent: JSON.stringify(VALID_SERVICE_ACCOUNT), processorId: 'p' }), /lokalizacje/);
-    assert.throws(() => saveUserOcrConfig({ keyFileContent: JSON.stringify(VALID_SERVICE_ACCOUNT), location: 'eu' }), /ID procesora/);
-    assert.equal(fs.existsSync(userConfigPath()), false, 'zaden z odrzuconych wywolan nie mogl nic zapisac na dysk');
-  });
-  fs.rmSync(localAppData, { recursive: true, force: true });
-});
 
 // =====================================================================
 // Statyczne sprawdzenie bezpieczenstwa workflow (zero sekretu OCR w
 // publicznym workflow, blokada widocznosci repo w wewnetrznym workflow)
 // =====================================================================
 
-test('workflow publicznego wydania nigdy nie uzywa sekretu OCR', async () => {
+test('workflow publicznego wydania nigdy nie uzywa sekretu OCR (od 2026-08-12 zaden workflow go juz nie ma)', async () => {
   const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release-public-installer.yml'), 'utf8');
-  // Sprawdzamy faktyczne UZYCIE sekretu (odwolanie do GitHub Actions Secret
-  // albo przekazanie go jako env: kroku), nie samo wystapienie nazwy w
-  // komentarzu wyjasniajacym - stad wzorce ponizej, a nie goly string.
-  assert.doesNotMatch(workflow, /secrets\.OCR_DOCAI_CREDENTIALS_B64/);
-  assert.doesNotMatch(workflow, /OCR_DOCAI_CREDENTIALS_B64:\s*\$\{\{/);
-  // service-account.json/document-ai.json moga byc wspominane WYLACZNIE w
-  // kontekscie sprawdzania ich NIEOBECNOSCI (krok weryfikujacy), nie
-  // tworzenia/kopiowania.
+  assert.doesNotMatch(workflow, /OCR_DOCAI/);
   assert.doesNotMatch(workflow, /Add-OcrConfigurationToStaging/);
   assert.match(workflow, /forbidden/i);
   assert.match(workflow, /tag Git.*nie zgadza sie z package\.json/i);
   assert.match(workflow, /permissions:\s*\n\s*contents: write/);
 });
 
-test('wewnetrzny workflow z OCR blokuje sie na publicznym repozytorium PRZED uzyciem sekretu', async () => {
+test('gotowy instalator nie ma juz bramki prywatnosci repo (nie ma zadnego sekretu do ochrony)', async () => {
   const workflow = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'build-ready-installer.yml'), 'utf8');
-  const guardIndex = workflow.indexOf('Sprawdz, ze repozytorium jest prywatne');
-  const secretIndex = workflow.indexOf('Sprawdz sekret OCR');
-  assert.ok(guardIndex >= 0, 'Brak kroku sprawdzajacego widocznosc repozytorium.');
-  assert.ok(guardIndex < secretIndex, 'Sprawdzenie widocznosci repo musi isc PRZED jakimkolwiek uzyciem sekretu.');
-  assert.match(workflow, /\.private/);
-  assert.match(workflow, /throw ".*nie jest prywatne/i);
+  assert.doesNotMatch(workflow, /Sprawdz, ze repozytorium jest prywatne/);
+  assert.doesNotMatch(workflow, /Sprawdz sekret OCR/);
+  assert.doesNotMatch(workflow, /OCR_DOCAI/);
 });
 
 test('update-ui.js: pasek nie reloaduje strony, jesli po restarcie dziala inna wersja niz oczekiwana (audyt v1.0.4, P0-8)', async () => {

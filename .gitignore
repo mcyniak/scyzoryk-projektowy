@@ -8,8 +8,6 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
-apps/ocr-audytow/config/document-ai.json
-apps/ocr-audytow/config/service-account.json
 
 # Lokalne ustawienia Claude i Serena
 .claude/settings.local.json

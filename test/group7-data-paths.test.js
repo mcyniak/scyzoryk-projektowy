@@ -93,34 +93,34 @@ test('wspolny check zaleznosci nie odczytuje package.json przez exports', () => 
   }
 });
 
-test('wariant deweloperski nie zawiera OCR, a gotowy instalator pakuje go tylko z sekretu Actions', () => {
+test('zaden wariant instalatora nigdy nie bakuje klucza API Gemini (od 2026-08-12 nie ma juz osobnego "instalatora z OCR")', () => {
   const root = path.resolve(__dirname, '..');
   const buildScript = fs.readFileSync(path.join(root, 'scripts', 'build-installer.ps1'), 'utf8');
   const developerWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build-internal-installer.yml'), 'utf8');
   const readyWorkflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build-ready-installer.yml'), 'utf8');
   const installedTest = fs.readFileSync(path.join(root, 'scripts', 'ci', 'test-installed-scyzoryk.ps1'), 'utf8');
-  const engine = fs.readFileSync(path.join(root, 'apps', 'ocr-audytow', 'src', 'documentAiEngine.js'), 'utf8');
+  const engine = fs.readFileSync(path.join(root, 'apps', 'ocr-audytow', 'src', 'geminiFieldEngine.js'), 'utf8');
   const gitignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
 
-  assert.match(buildScript, /function Add-OcrConfigurationToStaging/);
-  assert.match(buildScript, /OCR_DOCAI_CREDENTIALS_B64/);
-  assert.match(buildScript, /Get-ChildItem -Path \$stagingDir -Recurse -File -Filter 'service-account\.json'/);
-  assert.match(buildScript, /Eksport repo zawiera zabroniony plik service-account\.json/);
+  assert.doesNotMatch(buildScript, /Add-OcrConfigurationToStaging/);
+  assert.doesNotMatch(buildScript, /OCR_DOCAI_CREDENTIALS_B64/);
+  assert.doesNotMatch(buildScript, /service-account\.json/);
 
-  assert.match(developerWorkflow, /name: Zbuduj instalator deweloperski bez OCR/);
   assert.doesNotMatch(developerWorkflow, /secrets\.OCR_DOCAI_CREDENTIALS_B64/);
+  assert.doesNotMatch(readyWorkflow, /OCR_DOCAI_CREDENTIALS_B64/);
+  assert.doesNotMatch(readyWorkflow, /-ExpectBundledOcr/);
+  assert.doesNotMatch(readyWorkflow, /-TestLiveOcr/);
+  assert.equal(fs.existsSync(path.join(root, '.github', 'workflows', 'build-internal-installer-ocr.yml')), false, 'osobny workflow "instalatora z OCR" nie powinien juz istniec');
 
-  assert.match(readyWorkflow, /name: Zbuduj gotowy instalator Windows z OCR/);
-  assert.match(readyWorkflow, /OCR_DOCAI_CREDENTIALS_B64: \$\{\{ secrets\.OCR_DOCAI_CREDENTIALS_B64 \}\}/);
-  assert.match(readyWorkflow, /-ExpectBundledOcr/);
-  assert.match(readyWorkflow, /-TestLiveOcr/);
+  assert.doesNotMatch(installedTest, /ExpectBundledOcr/);
+  assert.doesNotMatch(installedTest, /TestLiveOcr/);
+  assert.match(installedTest, /Instalator nie powinien zawierac wbudowanej konfiguracji OCR/);
 
-  assert.match(installedTest, /\[switch\]\$ExpectBundledOcr/);
-  assert.match(installedTest, /Prawdziwe polaczenie z Google Document AI bez konfiguracji po instalacji/);
-  assert.match(engine, /const BUNDLED_CONFIG_PATH/);
-  assert.match(engine, /if \(isComplete\(bundledConfig\)\) return bundledConfig/);
+  assert.match(engine, /GEMINI_API_KEY/);
+  assert.match(engine, /gemini-api-key\.json/);
+  assert.doesNotMatch(engine, /BUNDLED_CONFIG_PATH/);
 
-  assert.match(gitignore, /apps\/ocr-audytow\/config\/service-account\.json/);
-  assert.match(gitignore, /apps\/ocr-audytow\/config\/document-ai\.json/);
-  assert.equal(fs.existsSync(path.join(root, 'docs', 'ocr-document-ai.example.json')), true);
+  assert.doesNotMatch(gitignore, /apps\/ocr-audytow\/config/);
+  assert.equal(fs.existsSync(path.join(root, 'docs', 'gemini-api-key.example.json')), true);
+  assert.equal(fs.existsSync(path.join(root, 'docs', 'ocr-document-ai.example.json')), false);
 });

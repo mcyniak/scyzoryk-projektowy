@@ -9,26 +9,22 @@ async function read(relativePath) {
   return fs.readFile(path.join(root, relativePath), 'utf8');
 }
 
-test('OCR odczytuje konfigurację w kolejności env, użytkownik, instalator', async () => {
-  const source = await read('apps/ocr-audytow/src/documentAiEngine.js');
-  assert.match(source, /const BUNDLED_CONFIG_PATH = path\.join\(__dirname, '\.\.', 'config', 'document-ai\.json'\)/);
-
-  const envIndex = source.indexOf('const envConfig = getEnvironmentConfig()');
-  const userIndex = source.indexOf('const userConfig = normalizeFileConfig');
-  const bundledIndex = source.indexOf('const bundledConfig = normalizeFileConfig');
-  assert.ok(envIndex >= 0 && userIndex > envIndex && bundledIndex > userIndex, 'Nieprawidłowa kolejność źródeł konfiguracji OCR.');
-  assert.match(source, /if \(isComplete\(bundledConfig\)\) return bundledConfig/);
-  assert.match(source, /BUNDLED_CONFIG_PATH/);
+test('geminiFieldEngine odczytuje klucz API w kolejności env, użytkownik (bez wariantu wbudowanego w instalator)', async () => {
+  const source = await read('apps/ocr-audytow/src/geminiFieldEngine.js');
+  assert.doesNotMatch(source, /BUNDLED_CONFIG_PATH/);
+  const envIndex = source.indexOf("process.env.GEMINI_API_KEY");
+  const userIndex = source.indexOf('readJsonFile(USER_CONFIG_PATH)');
+  assert.ok(envIndex >= 0 && userIndex > envIndex, 'Zmienna srodowiskowa musi miec pierwszenstwo przed plikiem uzytkownika.');
 });
 
-test('odinstalowanie usuwa klucz OCR z osobnego katalogu %LOCALAPPDATA%\\Scyzoryk (audyt rozdz. 22/23, P1)', async () => {
-  // Klucz konta serwisowego OCR migruje do %LOCALAPPDATA%\Scyzoryk (patrz
-  // lib/ocrConfigMigration.js#userConfigPath) - OSOBNEGO katalogu niz zwykle
+test('odinstalowanie usuwa katalog %LOCALAPPDATA%\\Scyzoryk (klucz API Gemini, audyt rozdz. 22/23, P1)', async () => {
+  // Klucz API Gemini trafia do %LOCALAPPDATA%\Scyzoryk (patrz
+  // src/geminiFieldEngine.js#USER_CONFIG_PATH) - OSOBNEGO katalogu niz zwykle
   // dane robocze aplikacji (%LOCALAPPDATA%\ScyzorykProjektowy). Bez wpisu w
   // [UninstallDelete] prywatny klucz zostawal na dysku uzytkownika po
   // odinstalowaniu, niewidoczny i nieusuwany.
   const source = await read('installer/scyzoryk.iss');
-  const migrationSource = await read('lib/ocrConfigMigration.js');
+  const engineSource = await read('apps/ocr-audytow/src/geminiFieldEngine.js');
 
   // Wycinamy tresc sekcji recznie (nie jednym zachlannym regexem z $) -
   // "^...$" z flaga /m dopasowuje $ na KAZDYM koncu linii, wiec lazy
@@ -46,26 +42,21 @@ test('odinstalowanie usuwa klucz OCR z osobnego katalogu %LOCALAPPDATA%\\Scyzory
   // {localappdata}\ScyzorykProjektowy to INNY, zwykly katalog danych - nie
   // wolno pomylic tych dwoch sciezek w tescie ani w skrypcie.
   assert.doesNotMatch(section, /"\{localappdata\}\\ScyzorykProjektowy"/);
-  assert.match(migrationSource, /path\.join\(base, 'Scyzoryk', 'ocr-document-ai\.json'\)/, 'sciezka w tescie musi nadal zgadzac sie z lib/ocrConfigMigration.js');
+  assert.match(engineSource, /path\.join\(\s*[\s\S]*?'Scyzoryk',\s*'gemini-api-key\.json'/, 'sciezka w tescie musi nadal zgadzac sie z src/geminiFieldEngine.js');
 });
 
-test('build instalatora bierze sekret OCR tylko ze środowiska i dodaje go do stagingu', async () => {
+test('build instalatora nie ma juz zadnej logiki dolaczania sekretu OCR', async () => {
   const source = await read('scripts/build-installer.ps1');
   const gitignore = await read('.gitignore');
-  assert.match(source, /OCR_DOCAI_CREDENTIALS_B64/);
-  assert.match(source, /Add-OcrConfigurationToStaging/);
-  assert.match(source, /FromBase64String/);
-  assert.match(source, /service_account/);
-  assert.match(source, /Get-ChildItem -Path \$stagingDir -Recurse -File -Filter 'service-account\.json'/);
-  assert.match(source, /Eksport repo zawiera zabroniony plik service-account\.json/);
-  assert.match(source, /Dolaczono gotowa konfiguracje Google Document AI do instalatora/);
-  assert.match(gitignore, /apps\/ocr-audytow\/config\/document-ai\.json/);
-  assert.match(gitignore, /apps\/ocr-audytow\/config\/service-account\.json/);
+  assert.doesNotMatch(source, /OCR_DOCAI/);
+  assert.doesNotMatch(source, /Add-OcrConfigurationToStaging/);
+  assert.doesNotMatch(source, /service-account\.json/);
+  assert.doesNotMatch(gitignore, /apps\/ocr-audytow\/config/);
 });
 
-test('workflow wykonuje jeden kontrolowany przebieg z dwoma jobami i publikuje dopiero zweryfikowany EXE', async () => {
+test('workflow wykonuje jeden kontrolowany przebieg z dwoma jobami i publikuje dopiero zweryfikowany EXE (bez sekretu OCR)', async () => {
   const workflow = await read('.github/workflows/build-ready-installer.yml');
-  assert.match(workflow, /name: Zbuduj gotowy instalator Windows z OCR/);
+  assert.match(workflow, /name: Zbuduj gotowy instalator Windows/);
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /\.github\/run-ready-installer/);
   assert.doesNotMatch(workflow, /branches: \[ui-redesign-v1\][\s\S]*- 'public\/\*\*'/);
@@ -79,26 +70,26 @@ test('workflow wykonuje jeden kontrolowany przebieg z dwoma jobami i publikuje d
   assert.equal((workflow.match(/uses: actions\/checkout@v4/g) || []).length, 2, 'Kod powinien być pobierany raz na każdy z dwóch jobów.');
   assert.equal((workflow.match(/uses: actions\/download-artifact@v4/g) || []).length, 1, 'Tylko finalny instalator powinien być pobierany między jobami.');
 
-  const previewBuild = workflow.indexOf('name: Zbuduj instalator probny z OCR');
+  const previewBuild = workflow.indexOf('name: Zbuduj instalator probny');
   const previewTest = workflow.indexOf('name: Zainstaluj, przetestuj i wykonaj aktualne zrzuty');
   const copyScreenshots = workflow.indexOf('name: Wstaw aktualne zrzuty do instrukcji');
-  const finalBuild = workflow.indexOf('name: Zbuduj finalny instalator z OCR i aktualnymi zrzutami');
+  const finalBuild = workflow.indexOf('name: Zbuduj finalny instalator z aktualnymi zrzutami');
   assert.ok(previewBuild >= 0 && previewBuild < previewTest && previewTest < copyScreenshots && copyScreenshots < finalBuild,
     'Pierwszy job powinien kolejno zbudować wersję próbną, przetestować ją, wstawić zrzuty i zbudować finalny EXE.');
 
-  assert.match(workflow, /OCR_DOCAI_CREDENTIALS_B64: \$\{\{ secrets\.OCR_DOCAI_CREDENTIALS_B64 \}\}/);
+  assert.doesNotMatch(workflow, /OCR_DOCAI/);
+  assert.doesNotMatch(workflow, /-ExpectBundledOcr/);
+  assert.doesNotMatch(workflow, /-TestLiveOcr/);
   assert.match(workflow, /public\\instrukcja-images/);
-  assert.match(workflow, /-ExpectBundledOcr/);
-  assert.match(workflow, /-TestLiveOcr/);
-  assert.match(workflow, /if: success\(\)[\s\S]*name: Scyzoryk-Projektowy-gotowy-Windows-z-OCR/);
+  assert.match(workflow, /if: success\(\)[\s\S]*name: Scyzoryk-Projektowy-gotowy-Windows/);
 });
 
-test('test świeżej instalacji rozróżnia zwykły i gotowy instalator OCR', async () => {
+test('test świeżej instalacji juz nie rozroznia wariantu z OCR (zaden nie istnieje)', async () => {
   const source = await read('scripts/ci/test-installed-scyzoryk.ps1');
-  assert.match(source, /\[switch\]\$ExpectBundledOcr/);
-  assert.match(source, /\[switch\]\$TestLiveOcr/);
-  assert.match(source, /Prawdziwe polaczenie z Google Document AI bez konfiguracji po instalacji/);
-  assert.match(source, /\[bool\]\$ocr\.ocrConfigured -eq \[bool\]\$ExpectBundledOcr/);
+  assert.doesNotMatch(source, /ExpectBundledOcr/);
+  assert.doesNotMatch(source, /TestLiveOcr/);
+  assert.match(source, /Instalator nie powinien zawierac wbudowanej konfiguracji OCR/);
+  assert.match(source, /\$ocr\.ocrConfigured -eq \$false/);
 });
 
 test('Pomoc prowadzi do rozbudowanej lokalnej instrukcji z aktualnymi zrzutami', async () => {

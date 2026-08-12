@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { PDFDocument, StandardFonts } = require('../apps/ocr-audytow/node_modules/pdf-lib');
+const { PDFDocument } = require('../apps/ocr-audytow/node_modules/pdf-lib');
 const ExcelJS = require('../apps/ocr-audytow/node_modules/exceljs');
 
 const appRoot = path.join(__dirname, '..', 'apps', 'ocr-audytow');
@@ -21,188 +21,48 @@ async function createPdf(filePath, pageCount = 3) {
   await fsp.writeFile(filePath, await document.save());
 }
 
-test('warstwa tekstowa jest wykrywana osobno dla każdej strony', async (t) => {
-  const dir = await makeTempDir();
-  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
-  const pdfPath = path.join(dir, 'mixed-text.pdf');
-  const document = await PDFDocument.create();
-  const font = await document.embedFont(StandardFonts.Helvetica);
-  const textPage = document.addPage([600, 800]);
-  textPage.drawText(Array(80).fill('tekst').join(' '), { x: 20, y: 700, size: 8, font, maxWidth: 550 });
-  document.addPage([600, 800]);
-  await fsp.writeFile(pdfPath, await document.save());
+// =====================================================================
+// ocrPipeline.js - od 2026-08-12 (migracja Document AI -> Gemini, patrz
+// pamiec projektu) juz NIE robi wlasnego OCR-u per strona - tylko liczy
+// strony, generuje miniatury i pyta geminiFieldEngine.js o propozycje
+// podzialu na bloki. finalizeSplit to teraz zwykle kopiowanie zakresu
+// stron oryginalu (pdf-lib copyPages), bez posredniego "ocrDoc".
+// =====================================================================
 
-  const { checkTextLayerByPage } = require('../apps/ocr-audytow/src/textLayerCheck');
-  const pages = await checkTextLayerByPage(pdfPath);
-  assert.deepEqual(pages.map((page) => page.hasTextLayer), [true, false]);
-});
-
-test('mieszany PDF wywołuje OCR raz i składa wszystkie trzy strony we właściwej kolejności', async (t) => {
+test('finalizeSplit kopiuje poprawny zakres stron oryginalu do kazdego pliku wyjsciowego', async (t) => {
   const dir = await makeTempDir();
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));
   const sourcePdfPath = path.join(dir, 'source.pdf');
-  const imagePath = path.join(dir, 'page-002.png');
-  const workDir = path.join(dir, 'work');
-  const outputPath = path.join(dir, 'final.pdf');
-  await createPdf(sourcePdfPath, 3);
-  await fsp.writeFile(imagePath, Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-    'base64'
-  ));
+  const outputA = path.join(dir, 'blok-a.pdf');
+  const outputB = path.join(dir, 'blok-b.pdf');
+  await createPdf(sourcePdfPath, 5);
 
-  const textCheckPath = require.resolve('../apps/ocr-audytow/src/textLayerCheck');
-  const extractorPath = require.resolve('../apps/ocr-audytow/src/pdfImageExtractor');
-  const enginePath = require.resolve('../apps/ocr-audytow/src/documentAiEngine');
-  const pipelinePath = require.resolve('../apps/ocr-audytow/src/ocrPipeline');
-  const originalCache = new Map([textCheckPath, extractorPath, enginePath, pipelinePath].map((key) => [key, require.cache[key]]));
-  let ocrCalls = 0;
-  require.cache[textCheckPath] = {
-    id: textCheckPath,
-    filename: textCheckPath,
-    loaded: true,
-    exports: {
-      checkTextLayerByPage: async () => [
-        { pageIndex: 0, hasTextLayer: true, textLength: 500 },
-        { pageIndex: 1, hasTextLayer: false, textLength: 0 },
-        { pageIndex: 2, hasTextLayer: true, textLength: 500 }
-      ]
-    }
-  };
-  require.cache[extractorPath] = {
-    id: extractorPath,
-    filename: extractorPath,
-    loaded: true,
-    exports: {
-      extractPageImages: async () => ({
-        pageCount: 3,
-        pages: [
-          { pageIndex: 0, imagePath: null, width: 400, height: 600, dpi: 72 },
-          { pageIndex: 1, imagePath, width: 1, height: 1, dpi: 72 },
-          { pageIndex: 2, imagePath: null, width: 420, height: 620, dpi: 72 }
-        ]
-      })
-    }
-  };
-  require.cache[enginePath] = {
-    id: enginePath,
-    filename: enginePath,
-    loaded: true,
-    exports: {
-      isConfigured: () => true,
-      ocrImage: async () => {
-        ocrCalls += 1;
-        return { text: '', words: [], formFields: [], tables: [], visualElements: [] };
-      }
-    }
-  };
-  delete require.cache[pipelinePath];
-  t.after(() => {
-    for (const [key, value] of originalCache) {
-      if (value) require.cache[key] = value;
-      else delete require.cache[key];
-    }
-  });
-
-  const { analyzeDocument, finalizeSplit } = require(pipelinePath);
-  const result = await analyzeDocument({ sourcePdfPath, workDir });
-  assert.equal(ocrCalls, 1);
-  assert.deepEqual(result.pages.map((page) => page.ocrOutputIndex), [null, 0, null]);
+  const { finalizeSplit } = require('../apps/ocr-audytow/src/ocrPipeline');
   await finalizeSplit({
     sourcePdfPath,
-    ocrPdfPath: result.ocrPdfPath,
-    pages: result.pages,
-    blocks: [{ startPage: 0, endPage: 2 }],
-    outPaths: [outputPath]
+    blocks: [{ startPage: 0, endPage: 2 }, { startPage: 3, endPage: 4 }],
+    outPaths: [outputA, outputB]
   });
-  const finalDocument = await PDFDocument.load(await fsp.readFile(outputPath));
-  assert.equal(finalDocument.getPageCount(), 3);
+
+  const docA = await PDFDocument.load(await fsp.readFile(outputA));
+  const docB = await PDFDocument.load(await fsp.readFile(outputB));
+  assert.equal(docA.getPageCount(), 3);
+  assert.equal(docB.getPageCount(), 2);
+  // Strona 0 zrodla jest 400x600, strona 3 jest 430x630 (patrz createPdf) -
+  // sprawdza, ze pocieto WLASCIWY zakres, nie np. od poczatku za kazdym razem.
+  assert.equal(docA.getPages()[0].getWidth(), 400);
+  assert.equal(docB.getPages()[0].getWidth(), 430);
 });
 
-test('uszkodzony obraz strony OCR: finalny dokument dostaje oryginalna strone, nie biala (audyt v1.0.4, P0-7)', async (t) => {
+test('inspectDocument zwraca poprawna liczbe stron', async (t) => {
   const dir = await makeTempDir();
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));
   const sourcePdfPath = path.join(dir, 'source.pdf');
-  const goodImagePath = path.join(dir, 'good.png');
-  const corruptImagePath = path.join(dir, 'corrupt.png');
-  const workDir = path.join(dir, 'work');
-  const outputPath = path.join(dir, 'final.pdf');
-  // Strona 0: 400x600, strona 1: 410x610 (patrz createPdf) - realne, rozne od
-  // rozmiaru "mockowanego" obrazu OCR ponizej, zeby dalo sie jednoznacznie
-  // sprawdzic, ktora strona trafila do finalnego pliku.
-  await createPdf(sourcePdfPath, 2);
-  await fsp.writeFile(goodImagePath, Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-    'base64'
-  ));
-  // Naglowek PNG jest tu celowo uszkodzony (losowe bajty) - pdf-lib's
-  // embedPng() musi sie na tym wywalic, symulujac realny przypadek z
-  // 2026-07-22 (fizycznie uszkodzone dane obrazu na jednej stronie pliku).
-  await fsp.writeFile(corruptImagePath, Buffer.from([0x00, 0x01, 0x02, 0x03, 0x04, 0x05]));
+  await createPdf(sourcePdfPath, 4);
 
-  const textCheckPath = require.resolve('../apps/ocr-audytow/src/textLayerCheck');
-  const extractorPath = require.resolve('../apps/ocr-audytow/src/pdfImageExtractor');
-  const enginePath = require.resolve('../apps/ocr-audytow/src/documentAiEngine');
-  const pipelinePath = require.resolve('../apps/ocr-audytow/src/ocrPipeline');
-  const originalCache = new Map([textCheckPath, extractorPath, enginePath, pipelinePath].map((key) => [key, require.cache[key]]));
-  require.cache[textCheckPath] = {
-    id: textCheckPath, filename: textCheckPath, loaded: true,
-    exports: { checkTextLayerByPage: async () => [
-      { pageIndex: 0, hasTextLayer: false, textLength: 0 },
-      { pageIndex: 1, hasTextLayer: false, textLength: 0 }
-    ] }
-  };
-  require.cache[extractorPath] = {
-    id: extractorPath, filename: extractorPath, loaded: true,
-    exports: { extractPageImages: async () => ({
-      pageCount: 2,
-      pages: [
-        { pageIndex: 0, imagePath: goodImagePath, width: 999, height: 999, dpi: 72 },
-        { pageIndex: 1, imagePath: corruptImagePath, width: 999, height: 999, dpi: 72 }
-      ]
-    }) }
-  };
-  require.cache[enginePath] = {
-    id: enginePath, filename: enginePath, loaded: true,
-    exports: {
-      isConfigured: () => true,
-      ocrImage: async () => ({ text: '', words: [], formFields: [], tables: [], visualElements: [] })
-    }
-  };
-  delete require.cache[pipelinePath];
-  t.after(() => {
-    for (const [key, value] of originalCache) {
-      if (value) require.cache[key] = value;
-      else delete require.cache[key];
-    }
-  });
-
-  const { analyzeDocument, finalizeSplit } = require(pipelinePath);
-  const result = await analyzeDocument({ sourcePdfPath, workDir });
-
-  // Strona 0 (obraz OK) zachowuje przypisany ocrOutputIndex; strona 1 (obraz
-  // uszkodzony) MUSI zostac cofnieta na null, zeby finalizeSplit nie wciagnal
-  // bialej strony z ocrDoc.
-  assert.equal(result.pages[0].ocrOutputIndex, 0);
-  assert.equal(result.pages[1].ocrOutputIndex, null);
-  assert.ok(result.warnings.some((w) => /nie udalo sie osadzic obrazu/.test(w)));
-
-  await finalizeSplit({
-    sourcePdfPath,
-    ocrPdfPath: result.ocrPdfPath,
-    pages: result.pages,
-    blocks: [{ startPage: 0, endPage: 1 }],
-    outPaths: [outputPath]
-  });
-
-  const finalDocument = await PDFDocument.load(await fsp.readFile(outputPath));
-  assert.equal(finalDocument.getPageCount(), 2);
-  // Strona 1 w finalnym dokumencie musi miec wymiary ORYGINALNEJ strony
-  // zrodlowej (410x610, patrz createPdf), NIE wymiary "mockowanego" obrazu
-  // OCR (999x999) - to potwierdza, ze zostal skopiowany oryginal, a nie
-  // biala strona z ocrDoc.
-  const secondPage = finalDocument.getPages()[1];
-  assert.equal(secondPage.getWidth(), 410);
-  assert.equal(secondPage.getHeight(), 610);
+  const { inspectDocument } = require('../apps/ocr-audytow/src/ocrPipeline');
+  const result = await inspectDocument(sourcePdfPath);
+  assert.equal(result.pageCount, 4);
 });
 
 test('dedupeOutPaths: identyczna etykieta dwoch blokow nie nadpisuje pliku (audyt v1.0.4, OCR ustalenie 7)', async (t) => {
@@ -211,15 +71,15 @@ test('dedupeOutPaths: identyczna etykieta dwoch blokow nie nadpisuje pliku (audy
   const { dedupeOutPaths } = require('../apps/ocr-audytow/server');
 
   const paths = [
-    path.join(dir, 'audyt - Kowalski (OCR).pdf'),
-    path.join(dir, 'audyt - Kowalski (OCR).pdf'),
-    path.join(dir, 'audyt - Kowalski (OCR).pdf')
+    path.join(dir, 'audyt - Kowalski.pdf'),
+    path.join(dir, 'audyt - Kowalski.pdf'),
+    path.join(dir, 'audyt - Kowalski.pdf')
   ];
   const deduped = dedupeOutPaths(paths);
   assert.equal(new Set(deduped).size, 3, 'wszystkie sciezki musza byc unikalne');
   assert.equal(deduped[0], paths[0]);
-  assert.equal(deduped[1], path.join(dir, 'audyt - Kowalski (OCR) (2).pdf'));
-  assert.equal(deduped[2], path.join(dir, 'audyt - Kowalski (OCR) (3).pdf'));
+  assert.equal(deduped[1], path.join(dir, 'audyt - Kowalski (2).pdf'));
+  assert.equal(deduped[2], path.join(dir, 'audyt - Kowalski (3).pdf'));
 
   // Rozne etykiety nie powinny dostawac zadnego sufiksu.
   const distinct = dedupeOutPaths([path.join(dir, 'a.pdf'), path.join(dir, 'b.pdf')]);
@@ -275,60 +135,113 @@ test('validateBlocks: podzial nie zaczynajacy sie od strony 1 albo nie konczacy 
   );
 });
 
-test('globalny semafor OCR nie przekracza pięciu równoległych zadań', async () => {
-  const { runWithGlobalOcrLimit } = require('../apps/ocr-audytow/src/ocrPipeline');
-  let active = 0;
-  let maximum = 0;
-  await Promise.all(Array.from({ length: 20 }, () => runWithGlobalOcrLimit(async () => {
-    active += 1;
-    maximum = Math.max(maximum, active);
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    active -= 1;
-  })));
-  assert.ok(maximum <= 5, `maksymalna równoległość: ${maximum}`);
-});
-
-test('limit paczki jest sprawdzany przed rozpoczęciem płatnego OCR', () => {
+test('limit paczki jest sprawdzany przed rozpoczeciem platnego rozpoznawania', () => {
   const { validateOcrBatchInspections } = require('../apps/ocr-audytow/src/ocrLimits');
-  let paidOcrCalls = 0;
+  let calls = 0;
   assert.throws(() => {
     validateOcrBatchInspections([
-      {
-        originalName: 'za-duzy.pdf',
-        inspection: {
-          pageCount: 61,
-          pages: Array.from({ length: 61 }, (_, pageIndex) => ({ pageIndex, hasTextLayer: false }))
-        }
-      }
+      { originalName: 'za-duzy.pdf', inspection: { pageCount: 61 } }
     ], { maxPagesPerFile: 60, maxTotalPages: 300 });
-    paidOcrCalls += 1;
+    calls += 1;
   }, /Limit jednego pliku/);
-  assert.equal(paidOcrCalls, 0);
+  assert.equal(calls, 0);
 });
 
-test('puste pole pozostaje nierozstrzygnięte, a MIME wynika z formatu obrazu', () => {
+// =====================================================================
+// src/fieldExtraction.js - od 2026-08-12 to juz TYLKO schemat pol
+// (FIELD_DEFS/COLUMN_*) + budowa wyniku z needsReview na podstawie
+// deterministycznej walidacji (bez wlasnego, geometrycznego dopasowania -
+// to robi teraz Gemini, patrz src/geminiFieldEngine.js).
+// =====================================================================
+
+test('toFieldResult: pusta/null wartosc zawsze trafia do recznego przegladu', () => {
   const { toFieldResult } = require('../apps/ocr-audytow/src/fieldExtraction');
-  const { resolveMimeType } = require('../apps/ocr-audytow/src/documentAiEngine');
+  const def = { key: 'imieNazwisko', columnLabel: 'Imię i nazwisko', kind: 'text' };
   assert.deepEqual(
-    { needsReview: toFieldResult(null, 0, 'text').needsReview, resolved: toFieldResult(null, 0, 'text').resolved },
-    { needsReview: true, resolved: false }
+    { value: toFieldResult(null, def).value, needsReview: toFieldResult(null, def).needsReview, resolved: toFieldResult(null, def).resolved },
+    { value: '', needsReview: true, resolved: false }
   );
-  assert.equal(resolveMimeType('scan.jpg'), 'image/jpeg');
-  assert.equal(resolveMimeType('scan.png'), 'image/png');
-  assert.equal(resolveMimeType('scan.tiff'), 'image/tiff');
-  assert.throws(() => resolveMimeType('scan.jp2'), /nie obsluguje/);
 });
 
-test('niejednoznaczne dopasowanie wzoru nie wybiera pierwszego pliku', () => {
-  const { matchTemplate } = require('../apps/ocr-audytow/src/templateEngine');
-  const pages = [{ ocrText: 'GMINA TESTOWA PROTOKOL' }];
-  const block = { startPage: 0, endPage: 0 };
-  const templates = [
-    { id: 'a', headerPattern: 'GMINA TESTOWA' },
-    { id: 'b', headerPattern: 'GMINA TESTOWA' }
-  ];
-  assert.equal(matchTemplate(pages, block, templates), null);
+test('toFieldResult: checkbox z wartoscia spoza dozwolonej listy trafia do przegladu (lapie halucynacje modelu)', () => {
+  const { toFieldResult } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const def = { key: 'typKonstrukcji', columnLabel: 'Typ konstrukcji', kind: 'checkbox', options: [{ label: 'Lekka' }, { label: 'Średnia' }, { label: 'Ciężka' }] };
+  assert.equal(toFieldResult('Ciężka', def).needsReview, false);
+  assert.equal(toFieldResult('Bardzo ciężka', def).needsReview, true);
 });
+
+test('toFieldResult: pole numeryczne bez zadnej cyfry trafia do przegladu', () => {
+  const { toFieldResult } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const def = { key: 'rokBudowy', columnLabel: 'Rok budowy budynku', kind: 'text', valueKind: 'numeric' };
+  assert.equal(toFieldResult('1950', def).needsReview, false);
+  assert.equal(toFieldResult('brak danych', def).needsReview, true);
+});
+
+test('buildFieldsFromExtraction: pole typu manual (demontaz) zawsze trafia do recznego przegladu, nigdy nie jest wysylane do Gemini', () => {
+  const { buildFieldsFromExtraction, filterExtractableFields } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const extractable = filterExtractableFields();
+  assert.ok(!extractable.some((f) => f.key === 'demontaz'), 'demontaz nie moze trafic do schematu wysylanego do Gemini');
+
+  const result = buildFieldsFromExtraction({ imieNazwisko: 'Jan Kowalski' });
+  assert.equal(result.demontaz.needsReview, true);
+  assert.equal(result.demontaz.resolved, false);
+  assert.equal(result.imieNazwisko.value, 'Jan Kowalski');
+  assert.equal(result.imieNazwisko.needsReview, false);
+});
+
+test('buildFieldsFromExtraction: allowedKeys zawęża wynik do podanych kluczy (rodzina protokolu)', () => {
+  const { buildFieldsFromExtraction } = require('../apps/ocr-audytow/src/fieldExtraction');
+  const allowed = new Set(['imieNazwisko', 'rokBudowy']);
+  const result = buildFieldsFromExtraction({ imieNazwisko: 'Jan Kowalski', rokBudowy: '1950', adresInstalacji: 'nie powinno sie pojawic' }, allowed);
+  assert.deepEqual(Object.keys(result).sort(), ['imieNazwisko', 'rokBudowy']);
+});
+
+// =====================================================================
+// src/geminiFieldEngine.js - konfiguracja (klucz API) i budowa
+// schematu/promptu wysylanego do Gemini.
+// =====================================================================
+
+test('geminiFieldEngine: isConfigured czyta klucz z pliku uzytkownika (%LOCALAPPDATA%/Scyzoryk/gemini-api-key.json)', async (t) => {
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousEnvKey = process.env.GEMINI_API_KEY;
+  const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-gemini-cfg-'));
+  process.env.LOCALAPPDATA = localAppData;
+  delete process.env.GEMINI_API_KEY;
+  const enginePath = require.resolve('../apps/ocr-audytow/src/geminiFieldEngine');
+  delete require.cache[enginePath];
+  t.after(() => {
+    process.env.LOCALAPPDATA = previousLocalAppData;
+    if (previousEnvKey !== undefined) process.env.GEMINI_API_KEY = previousEnvKey; else delete process.env.GEMINI_API_KEY;
+    delete require.cache[enginePath];
+    return fsp.rm(localAppData, { recursive: true, force: true });
+  });
+
+  const { isConfigured, saveUserApiKey } = require(enginePath);
+  assert.equal(isConfigured(), false);
+  saveUserApiKey('test-klucz-abc123');
+  assert.equal(isConfigured(), true);
+});
+
+test('geminiFieldEngine: saveUserApiKey odrzuca pusty klucz', async (t) => {
+  const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-gemini-cfg-'));
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  process.env.LOCALAPPDATA = localAppData;
+  const enginePath = require.resolve('../apps/ocr-audytow/src/geminiFieldEngine');
+  delete require.cache[enginePath];
+  t.after(() => {
+    process.env.LOCALAPPDATA = previousLocalAppData;
+    delete require.cache[enginePath];
+    return fsp.rm(localAppData, { recursive: true, force: true });
+  });
+  const { saveUserApiKey } = require(enginePath);
+  assert.throws(() => saveUserApiKey(''), /Podaj klucz/);
+  assert.throws(() => saveUserApiKey('   '), /Podaj klucz/);
+});
+
+// =====================================================================
+// eksport rodzinny (src/tabelaAdresowaColumns.js, src/excelExport.js) -
+// niezalezne od silnika ekstrakcji, bez zmian.
+// =====================================================================
 
 test('eksport rodzinny zachowuje wzór i przy nadpisaniu tworzy kopię', async (t) => {
   const dir = await makeTempDir();
@@ -362,44 +275,41 @@ test('eksport rodzinny zachowuje wzór i przy nadpisaniu tworzy kopię', async (
   assert.equal(writtenSheet.getRow(2).getCell(headers.indexOf('Udział ogrzew. podłog.')).value, '65');
 });
 
-test('klient używa wspólnej walidacji odpowiedzi przed zmianą kolejki', async () => {
+// =====================================================================
+// Frontend (public/app.js) - sprawdza uzycie wspolnego apiJson() (z
+// obsluga bledow/kodow) zamiast surowego fetch() dla mutujacych zadan,
+// oraz ze zapis pola faktycznie idzie przez /api/ocr/resolve-field.
+// =====================================================================
+
+test('klient zapisuje reczne poprawki pol przez wspolna walidacje odpowiedzi (apiJson), nie surowy fetch', async () => {
   const source = await fsp.readFile(path.join(appRoot, 'public', 'app.js'), 'utf8');
   assert.match(source, /await apiJson\('\/api\/ocr\/resolve-field'/);
-  assert.match(source, /item\.field\.resolved = true;\s+queuePos \+= 1;/);
+  assert.match(source, /field\.needsReview = false;/);
   assert.doesNotMatch(source, /await fetch\('\/api\/ocr\/resolve-field'/);
   assert.match(source, /EXCEL_ALREADY_EXISTS/);
 });
 
 // =====================================================================
-// Ekran "OCR zablokowany" - reczne wgranie klucza zamiast wbudowanego w
-// instalator sekretu (audyt rozdz. 22: nie wymaga prywatnego repo, dziala
-// per-komputer, przezywa aktualizacje - patrz lib/ocrConfigMigration.js).
+// Ekran "OCR zablokowany" - reczne wpisanie klucza API Gemini (zamiast
+// pliku service-account.json + 3 zmiennych Document AI).
 // =====================================================================
 
-test('POST /api/ocr/setup-credentials: poprawny klucz odblokowuje OCR, /api/health od razu widzi zmiane', async (t) => {
+test('POST /api/ocr/setup-api-key: poprawny klucz odblokowuje OCR, /api/health od razu widzi zmiane', async (t) => {
   const previousLocalAppData = process.env.LOCALAPPDATA;
-  const previousOcrEnv = ['OCR_DOCAI_KEY_FILE', 'OCR_DOCAI_PROJECT_ID', 'OCR_DOCAI_LOCATION', 'OCR_DOCAI_PROCESSOR_ID']
-    .map(key => [key, process.env[key]]);
+  const previousEnvKey = process.env.GEMINI_API_KEY;
   const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ocr-http-'));
   process.env.LOCALAPPDATA = localAppData;
-  // Srodowisko ma pierwszenstwo przed plikiem uzytkownika (patrz kolejnosc w
-  // documentAiEngine.js#getConfiguration) - musimy je wyczyscic, zeby ten
-  // test faktycznie sprawdzal sciezke z pliku, ktora testujemy, a nie
-  // przypadkowo zaliczal dzieki (byc moze niepelnym) zmiennym z otoczenia.
-  for (const [key] of previousOcrEnv) delete process.env[key];
-  // documentAiEngine.js oblicza USER_CONFIG_PATH RAZ, jako stala modulu, przy
-  // pierwszym require() - nie na nowo przy kazdym wywolaniu. Ten modul mogl
-  // juz zostac zaladowany wczesniej w tym samym procesie testow (np. przez
-  // test "resolveMimeType" wyzej) z PRAWDZIWYM LOCALAPPDATA sprzed override -
-  // trzeba wyczyscic cache obu modulow, zeby swiezy require() faktycznie
-  // przeliczyl sciezke z NOWYM process.env.LOCALAPPDATA ustawionym powyzej.
+  delete process.env.GEMINI_API_KEY;
+  // geminiFieldEngine.js oblicza USER_CONFIG_PATH RAZ, jako stala modulu, przy
+  // pierwszym require() - trzeba wyczyscic cache, zeby swiezy require()
+  // faktycznie przeliczyl sciezke z NOWYM process.env.LOCALAPPDATA.
   delete require.cache[require.resolve('../apps/ocr-audytow/server')];
-  delete require.cache[require.resolve('../apps/ocr-audytow/src/documentAiEngine')];
+  delete require.cache[require.resolve('../apps/ocr-audytow/src/geminiFieldEngine')];
   t.after(() => {
     process.env.LOCALAPPDATA = previousLocalAppData;
-    for (const [key, value] of previousOcrEnv) { if (value !== undefined) process.env[key] = value; }
+    if (previousEnvKey !== undefined) process.env.GEMINI_API_KEY = previousEnvKey; else delete process.env.GEMINI_API_KEY;
     delete require.cache[require.resolve('../apps/ocr-audytow/server')];
-    delete require.cache[require.resolve('../apps/ocr-audytow/src/documentAiEngine')];
+    delete require.cache[require.resolve('../apps/ocr-audytow/src/geminiFieldEngine')];
     return fsp.rm(localAppData, { recursive: true, force: true });
   });
 
@@ -415,26 +325,20 @@ test('POST /api/ocr/setup-credentials: poprawny klucz odblokowuje OCR, /api/heal
   const before = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
   assert.equal(before.ocrConfigured, false);
 
-  const fakeKey = { type: 'service_account', project_id: 'test-projekt-http', client_email: 'a@b.iam.gserviceaccount.com', private_key: 'FAKE-NIE-PRAWDZIWY-KLUCZ' };
-  const formData = new FormData();
-  formData.append('keyFile', new Blob([JSON.stringify(fakeKey)], { type: 'application/json' }), 'service-account.json');
-  formData.append('location', 'eu');
-  formData.append('processorId', 'proc999');
-
-  const res = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-credentials`, {
+  const res = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-api-key`, {
     method: 'POST',
-    headers: { 'X-Scyzoryk-Request': '1' },
-    body: formData
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ apiKey: 'test-klucz-abc123' })
   });
   const data = await res.json();
   assert.equal(res.status, 200);
-  assert.deepEqual(data, { ok: true, projectId: 'test-projekt-http', location: 'eu', processorId: 'proc999' });
+  assert.equal(data.ok, true);
 
   const after = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
   assert.equal(after.ocrConfigured, true, 'juz uruchomiony proces musi widziec nowa konfiguracje bez restartu (czytana z dysku przy kazdym wywolaniu)');
 });
 
-test('POST /api/ocr/setup-credentials: bez naglowka X-Scyzoryk-Request dostaje 403 (ta sama ochrona co reszta mutujacych tras)', async (t) => {
+test('POST /api/ocr/setup-api-key: bez naglowka X-Scyzoryk-Request dostaje 403 (ta sama ochrona co reszta mutujacych tras)', async (t) => {
   const { app: ocrApp } = require('../apps/ocr-audytow/server');
   const server = ocrApp.listen(0, '127.0.0.1');
   const port = await new Promise((resolve, reject) => {
@@ -443,6 +347,6 @@ test('POST /api/ocr/setup-credentials: bez naglowka X-Scyzoryk-Request dostaje 4
   });
   t.after(() => new Promise(resolve => server.close(resolve)));
 
-  const res = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-credentials`, { method: 'POST' });
+  const res = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-api-key`, { method: 'POST' });
   assert.equal(res.status, 403);
 });

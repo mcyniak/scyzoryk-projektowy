@@ -1,8 +1,11 @@
-name: Zbuduj instalator deweloperski bez OCR
+name: Zbuduj instalator deweloperski
 
-# Ten workflow buduje instalator bez sekretow. Sluzy do testow technicznych,
-# a nie do przekazywania pracownikom. Gotowy instalator dla uzytkownika koncowego
-# buduje osobny workflow build-ready-installer.yml.
+# Ten workflow buduje instalator bez zadnych sekretow (zaden wariant
+# instalatora nigdy ich nie bakuje - OCR audytow od 2026-08-12 korzysta z
+# Google Gemini, ktorego klucz API uzytkownik wpisuje recznie w aplikacji).
+# Sluzy do testow technicznych, a nie do przekazywania pracownikom. Gotowy
+# instalator dla uzytkownika koncowego buduje osobny workflow
+# build-ready-installer.yml.
 
 on:
   workflow_dispatch: {}
@@ -24,7 +27,7 @@ permissions:
 
 jobs:
   build:
-    name: Zbuduj instalator bez OCR
+    name: Zbuduj instalator
     runs-on: windows-latest
     timeout-minutes: 30
     steps:

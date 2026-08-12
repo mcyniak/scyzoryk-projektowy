@@ -20,19 +20,13 @@
 #   - buduja i dolaczaja natywny launcher Scyzoryk.exe (C#/.NET 8, launcher\Scyzoryk.Launcher,
 #     przez scripts\build-launcher.ps1) - jedyny sposob normalnego startu aplikacji,
 #     bez CMD/PowerShell/VBS,
-#   - opcjonalnie dolaczaja gotowa konfiguracje Google Document AI przekazana
-#     wyłącznie przez zmienne srodowiskowe procesu budowania,
 #   - instaluja sie per-uzytkownik, bez wymogu stalego konta administratora.
 #
-# Opcjonalna konfiguracja OCR podczas budowania:
-#   OCR_DOCAI_CREDENTIALS_B64 - JSON konta serwisowego zakodowany Base64
-#   OCR_DOCAI_PROJECT_ID
-#   OCR_DOCAI_LOCATION
-#   OCR_DOCAI_PROCESSOR_ID
-#
-# Wszystkie cztery wartosci musza byc podane razem. Nie sa zapisywane w repo,
-# ale gotowy instalator bedzie zawieral dane logowania i dlatego wolno go
-# udostepniac wyłącznie wewnetrznie.
+# OCR audytow (apps/ocr-audytow) od 2026-08-12 nie ma juz wbudowanej w instalator
+# konfiguracji - korzysta z Google Gemini, ktorego klucz API uzytkownik wpisuje
+# recznie w samej aplikacji przy pierwszym uruchomieniu (patrz
+# apps/ocr-audytow/src/geminiFieldEngine.js). Nie ma juz osobnego "instalatora
+# wewnetrznego z OCR" ani sekretu doklejanego podczas budowania.
 #
 # Uzycie:
 #   powershell -File scripts\build-installer.ps1
@@ -61,67 +55,6 @@ function Find-ISCC {
     if ($c -and (Test-Path $c)) { return $c }
   }
   return $null
-}
-
-function Add-OcrConfigurationToStaging {
-  param([Parameter(Mandatory = $true)][string]$StagingDir)
-
-  $values = [ordered]@{
-    OCR_DOCAI_CREDENTIALS_B64 = [string]$env:OCR_DOCAI_CREDENTIALS_B64
-    OCR_DOCAI_PROJECT_ID      = [string]$env:OCR_DOCAI_PROJECT_ID
-    OCR_DOCAI_LOCATION        = [string]$env:OCR_DOCAI_LOCATION
-    OCR_DOCAI_PROCESSOR_ID    = [string]$env:OCR_DOCAI_PROCESSOR_ID
-  }
-
-  $provided = @($values.GetEnumerator() | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) })
-  if ($provided.Count -eq 0) {
-    Write-Host 'Buduje instalator bez wbudowanej konfiguracji OCR.'
-    return $false
-  }
-
-  if ($provided.Count -ne $values.Count) {
-    $missing = @($values.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object { $_.Key })
-    throw "Niepelna konfiguracja OCR dla instalatora. Brakuje: $($missing -join ', ')."
-  }
-
-  $configDir = Join-Path $StagingDir 'apps\ocr-audytow\config'
-  New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-
-  $credentialsPath = Join-Path $configDir 'service-account.json'
-  try {
-    $credentialBytes = [Convert]::FromBase64String($values.OCR_DOCAI_CREDENTIALS_B64)
-  } catch {
-    throw 'OCR_DOCAI_CREDENTIALS_B64 nie jest poprawnym tekstem Base64.'
-  }
-
-  [IO.File]::WriteAllBytes($credentialsPath, $credentialBytes)
-  try {
-    $credentialJson = Get-Content -Raw -Path $credentialsPath -Encoding UTF8 | ConvertFrom-Json
-  } catch {
-    Remove-Item -Force -ErrorAction SilentlyContinue $credentialsPath
-    throw 'Dane OCR po zdekodowaniu nie sa poprawnym plikiem JSON.'
-  }
-
-  if ($credentialJson.type -ne 'service_account' -or
-      [string]::IsNullOrWhiteSpace([string]$credentialJson.client_email) -or
-      [string]::IsNullOrWhiteSpace([string]$credentialJson.private_key)) {
-    Remove-Item -Force -ErrorAction SilentlyContinue $credentialsPath
-    throw 'Sekret OCR nie jest kompletnym plikiem konta serwisowego Google Cloud.'
-  }
-
-  $config = [ordered]@{
-    projectId   = $values.OCR_DOCAI_PROJECT_ID.Trim()
-    location    = $values.OCR_DOCAI_LOCATION.Trim()
-    processorId = $values.OCR_DOCAI_PROCESSOR_ID.Trim()
-    keyFile     = 'service-account.json'
-  }
-  $configJson = $config | ConvertTo-Json
-  $configPath = Join-Path $configDir 'document-ai.json'
-  [IO.File]::WriteAllText($configPath, $configJson, [Text.UTF8Encoding]::new($false))
-
-  Write-Host 'Dolaczono gotowa konfiguracje Google Document AI do instalatora.'
-  Write-Warning 'Gotowy instalator zawiera dane konta serwisowego. Traktuj plik EXE jak poufny i nie publikuj go publicznie.'
-  return $true
 }
 
 $iscc = Find-ISCC
@@ -172,13 +105,6 @@ try {
 }
 Write-Host "Rozpakowano eksport repo do: $stagingDir"
 
-# Sekret nie moze pochodzic z repo. Jedynym dozwolonym zrodlem jest zmienna
-# srodowiskowa procesu budowania, np. GitHub Actions Secret.
-$secretFiles = @(Get-ChildItem -Path $stagingDir -Recurse -File -Filter 'service-account.json')
-if ($secretFiles.Count -gt 0) {
-  throw "Eksport repo zawiera zabroniony plik service-account.json: $($secretFiles.FullName -join ', ')"
-}
-
 # --- 1.5) build-info.json - wersja/commit zainstalowanej kopii (patrz lib/updateBuildInfo.js) ---
 $buildInfo = [ordered]@{
   version = $Version
@@ -188,10 +114,7 @@ $buildInfo = [ordered]@{
 [IO.File]::WriteAllText((Join-Path $stagingDir 'build-info.json'), ($buildInfo | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 Write-Host 'Zapisano build-info.json.'
 
-# --- 2) Opcjonalna konfiguracja Google Document AI ---
-$ocrIncluded = Add-OcrConfigurationToStaging -StagingDir $stagingDir
-
-# --- 3) Bundlowany, portable Node.js (Windows x64) ---
+# --- 2) Bundlowany, portable Node.js (Windows x64) ---
 $nodeCacheDir = Join-Path $env:TEMP 'scyzoryk-node-cache'
 New-Item -ItemType Directory -Force -Path $nodeCacheDir | Out-Null
 $nodeZipName = "node-v$NodeVersion-win-x64.zip"
@@ -216,7 +139,7 @@ Copy-Item -Path $nodeSourceDir -Destination $nodeRuntimeDir -Recurse -Force
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $nodeExtractDir
 Write-Host "Bundlowany Node.js gotowy: $nodeRuntimeDir"
 
-# --- 4) Natywny launcher (Scyzoryk.exe) ---
+# --- 3) Natywny launcher (Scyzoryk.exe) ---
 # Scyzoryk.exe jest wynikiem budowania (launcher\Scyzoryk.Launcher, C#/.NET 8),
 # NIE jest sciagany przez git archive jak reszta stagingu - build-launcher.ps1
 # uruchamia jego wlasne testy jednostkowe i publikuje self-contained/single-file
@@ -227,7 +150,7 @@ if ($LASTEXITCODE -ne 0 -or -not $launcherExePath -or -not (Test-Path $launcherE
 }
 Copy-Item -Path $launcherExePath -Destination (Join-Path $stagingDir 'Scyzoryk.exe') -Force
 
-# --- 5) Zaleznosci kazdej aplikacji (npm install + Chromium dla Playwrighta) ---
+# --- 4) Zaleznosci kazdej aplikacji (npm install + Chromium dla Playwrighta) ---
 # Audyt 2026-08-06 (Podejrzenie B): to kiedys robil ukryty CMD na komputerze
 # UZYTKOWNIKA (installer\instaluj-zaleznosci.cmd, usuniety z [Run] w
 # scyzoryk.iss). Ten sam efekt koncowy (node_modules kazdej apki gotowe),
@@ -246,7 +169,7 @@ if ($LASTEXITCODE -ne 0) { throw "Instalacja zaleznosci do stagingu nie powiodla
 if ($LASTEXITCODE -ne 0) { throw "Sprawdzenie projektu w stagingu nie powiodlo sie (kod $LASTEXITCODE)." }
 Write-Host "Zaleznosci gotowe w stagingu."
 
-# --- 6) Fingerprint runtime (Node + wszystkie package-lock.json) ---
+# --- 5) Fingerprint runtime (Node + wszystkie package-lock.json) ---
 # Uzywany przez lib/updateService.js do wyboru miedzy pelnym a aktualizacyjnym
 # instalatorem - patrz scripts\generate-runtime-fingerprint.js. Liczony z
 # WLASNEJ kopii skryptu w stagingu (ten sam powod co krok 5), ale wynik jest
@@ -265,7 +188,7 @@ Write-Host "Runtime fingerprint: $runtimeFingerprint"
 # ktoregokolwiek z duzych plikow .exe.
 Copy-Item -Path $fingerprintPath -Destination (Join-Path $OutputDir 'runtime-fingerprint.txt') -Force
 
-# --- 7) Walidacja stagingu PRZED wywolaniem ISCC ---
+# --- 6) Walidacja stagingu PRZED wywolaniem ISCC ---
 # Zlapane realnie w CI: gdy ktoregokolwiek apps\*\node_modules zabraknie albo
 # jest pusty, ISCC zglasza nieczytelne "the system cannot find the path
 # specified" przy zupelnie innym, NASTEPNYM Source w [Files] (bo kompiluje
@@ -283,7 +206,7 @@ if ($appsWithMissingModules.Count -gt 0) {
 }
 Write-Host "Walidacja node_modules w stagingu OK."
 
-# --- 8) Kompilacja obu wariantow instalatora z tego samego stagingu ---
+# --- 7) Kompilacja obu wariantow instalatora z tego samego stagingu ---
 $issPath = Join-Path $Root 'installer\scyzoryk.iss'
 $results = @()
 foreach ($variant in @('full', 'update')) {
@@ -300,8 +223,7 @@ foreach ($variant in @('full', 'update')) {
 
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stagingDir
 
-$ocrLabel = if ($ocrIncluded) { 'z gotowym OCR' } else { 'bez wbudowanego OCR' }
-Write-Host "`nGotowe ($ocrLabel):"
+Write-Host "`nGotowe:"
 foreach ($outputExe in $results) {
   if (Test-Path $outputExe) {
     $sizeMb = [math]::Round((Get-Item $outputExe).Length / 1MB, 1)

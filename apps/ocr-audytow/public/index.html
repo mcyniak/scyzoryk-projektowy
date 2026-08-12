@@ -25,7 +25,7 @@
       <div class="app-header-right">
         <button type="button" id="ocrChangeKeyBtn" class="btn btn-ghost btn-sm" hidden>
           <svg class="icon"><use href="/shared/icons.svg#i-scan"/></svg>
-          Zmień klucz OCR
+          Zmień klucz API
         </button>
         <a class="btn btn-ghost btn-sm" href="#" data-help-link="ocr-audytow">
           <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
@@ -41,22 +41,14 @@
     <section class="panel" id="ocrLockedPanel" hidden>
       <div class="panel-header">
         <div>
-          <h2 class="panel-title" id="ocrLockedTitle">🔒 OCR nie jest jeszcze skonfigurowany na tym komputerze</h2>
-          <p class="panel-desc">Wgraj plik klucza konta serwisowego Google Document AI (<code>service-account.json</code>), żeby odblokować rozpoznawanie tekstu. Robisz to raz na tym komputerze - ustawienie zostaje zapisane osobno od samej aplikacji i przetrwa kolejne aktualizacje Scyzoryka. Chcesz przełączyć się na inne konto Google (np. inny płatnik)? Wgraj tu po prostu nowy klucz - nadpisze poprzedni.</p>
+          <h2 class="panel-title" id="ocrLockedTitle">🔒 Rozpoznawanie tekstu nie jest jeszcze skonfigurowane</h2>
+          <p class="panel-desc">Wpisz klucz API Google Gemini, żeby odblokować rozpoznawanie tekstu i pisma odręcznego. Robisz to raz na tym komputerze - ustawienie zostaje zapisane osobno od samej aplikacji i przetrwa kolejne aktualizacje Scyzoryka. Chcesz zmienić klucz (np. inne konto)? Wpisz tu po prostu nowy - nadpisze poprzedni.</p>
         </div>
       </div>
       <form id="ocrUnlockForm">
         <div class="option-field">
-          <span class="option-label">Plik klucza (service-account.json)</span>
-          <input type="file" id="ocrKeyFileInput" accept=".json,application/json" required>
-        </div>
-        <div class="option-field" style="margin-top:12px">
-          <span class="option-label">Lokalizacja procesora Document AI</span>
-          <input type="text" id="ocrLocationInput" placeholder="np. eu">
-        </div>
-        <div class="option-field" style="margin-top:12px">
-          <span class="option-label">ID procesora Document AI</span>
-          <input type="text" id="ocrProcessorIdInput" placeholder="np. c8cea9ff6f6430c3">
+          <span class="option-label">Klucz API Gemini</span>
+          <input type="password" id="ocrApiKeyInput" placeholder="AIza..." autocomplete="off" required>
         </div>
         <div class="hero-actions">
           <button type="submit" id="ocrUnlockBtn" class="btn btn-primary">Zapisz i odblokuj</button>
@@ -70,15 +62,15 @@
       <div class="panel hero-main">
         <div class="kicker">Rozpoznawanie tekstu</div>
         <h1>OCR skanów audytów</h1>
-        <p class="lead">Wgraj zeskanowane PDF-y audytów. Program rozpozna tekst i odda ten sam dokument z niewidoczną warstwą tekstu - da się w niej zaznaczać, kopiować i wyszukiwać. Wygląd oryginału (w tym odręczne notatki) zostaje bez zmian.</p>
+        <p class="lead">Wgraj zeskanowane PDF-y audytów. Program rozpozna tekst i pismo odręczne (Google Gemini) i sam uzupełni tabelkę danych - Ty sprawdzasz tylko pola oznaczone jako niepewne, resztę odbierasz gotową.</p>
       </div>
       <aside class="panel info-card">
         <h2>Jak to działa?</h2>
         <div class="pill-list">
-          <div class="pill">Dokumenty, które już mają tekst (np. eksporty z aplikacji), zostają bez zmian - OCR jest pomijany.</div>
-          <div class="pill">Reszta strony przechodzi przez rozpoznawanie tekstu, zachowując oryginalny obraz.</div>
-          <div class="pill">Przy niskiej pewności rozpoznania (częste przy odręcznym piśmie) dostaniesz ostrzeżenie.</div>
-          <div class="pill">Jeśli w jednym pliku jest kilka adresów, przed pobraniem zobaczysz miniatury stron i sam potwierdzisz podział.</div>
+          <div class="pill">Program czyta cały dokument na raz, wraz z pismem odręcznym i zaznaczonymi checkboxami.</div>
+          <div class="pill">Pola, których program nie jest pewien, dostają wyraźne oznaczenie do ręcznego sprawdzenia.</div>
+          <div class="pill">Jeśli w jednym pliku jest kilka adresów, przed dalszą pracą zobaczysz miniatury stron i sam potwierdzisz podział.</div>
+          <div class="pill">Oryginalny wygląd skanu (w tym odręczne notatki) nigdy się nie zmienia.</div>
         </div>
       </aside>
     </section>
@@ -120,7 +112,7 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">2</span>Sprawdź podział na adresy</h2>
-          <p class="panel-desc">Tekst jest już rozpoznany. Program zaproponował podział na podstawie powtarzającego się nagłówka protokołu - sprawdź miniatury stron, w razie potrzeby popraw podział (przyciski między stronami) i nazwy adresów.</p>
+          <p class="panel-desc">Program zaproponował podział na podstawie powtarzającego się nagłówka protokołu - sprawdź miniatury stron, w razie potrzeby popraw podział (przyciski między stronami) i nazwy adresów.</p>
         </div>
       </div>
       <div id="reviewFiles"></div>
@@ -133,12 +125,6 @@
           <option value="kotly">Kotły</option>
         </select>
       </div>
-      <div class="option-field" style="margin-top:12px">
-        <span class="option-label">Wzór gminy - domyślnie program sam rozpoznaje wzór po nagłówku protokołu; tu możesz go wymusić ręcznie (np. jeśli automatyczne rozpoznanie zawiedzie)</span>
-        <select id="templateSelect">
-          <option value="">— rozpoznaj automatycznie —</option>
-        </select>
-      </div>
       <div class="hero-actions">
         <button type="button" id="confirmBtn" class="btn btn-primary">Zatwierdź podział</button>
         <button type="button" id="cancelReviewBtn" class="btn btn-secondary">Anuluj</button>
@@ -149,57 +135,11 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">3</span>Uzupełnij dane</h2>
-          <p class="panel-desc" id="fieldsIntro">Program nie wszystko odczytał pewnie - dla każdego brakującego pola zobaczysz podgląd miejsca na skanie. Wpisz wartość i naciśnij Enter, żeby przejść dalej. Jeśli pole faktycznie jest puste w oryginale, kliknij "Brak w oryginale".</p>
+          <p class="panel-desc" id="fieldsIntro">Program rozpoznał większość pól automatycznie. Pola oznaczone na bursztynowo wymagają Twojej uwagi - sprawdź je na oryginalnej stronie (miniatury nad tabelką) i wpisz poprawną wartość. Zmiany zapisują się automatycznie.</p>
         </div>
       </div>
 
-      <div id="fieldsQueue">
-        <div class="field-progress" id="fieldProgress"></div>
-        <div class="field-review-card">
-          <div class="field-preview-box">
-            <img id="fieldPreviewImg" alt="Podgląd miejsca na skanie">
-            <button type="button" id="fieldRemarkBtn" class="btn btn-secondary" hidden>Popraw zaznaczenie</button>
-            <div id="fieldPreviewMissingBox" hidden>
-              <p id="fieldPreviewMissing" class="hint">Nie udało się zlokalizować tego pola na skanie. Jeśli pole faktycznie jest puste w oryginale, od razu kliknij "Brak w oryginale" niżej - nie trzeba nic zaznaczać. Jeśli wartość tam jest, sprawdź w oryginalnym dokumencie i wpisz ją, albo zaznacz miejsce ręcznie poniżej.</p>
-              <button type="button" id="fieldMarkBtn" class="btn btn-secondary">Zaznacz ręcznie na skanie</button>
-            </div>
-          </div>
-          <div id="fieldMarkBox" hidden>
-            <div class="mark-wrap" id="markWrap">
-              <img id="markPageImg" alt="Cała strona - zaznacz obszar pola przeciągając myszą">
-              <div id="markOverlay"></div>
-            </div>
-            <p class="hint">Przeciągnij prostokąt wokół pola na skanie. Jeśli to nie ta strona, przełącz się przyciskami niżej.</p>
-            <p class="hint" id="markError" hidden></p>
-            <div class="hero-actions">
-              <button type="button" id="markPrevPageBtn" class="btn btn-secondary">
-                <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
-                Poprzednia strona
-              </button>
-              <button type="button" id="markNextPageBtn" class="btn btn-secondary">
-                Następna strona
-                <svg class="icon"><use href="/shared/icons.svg#i-chevron-right"/></svg>
-              </button>
-              <button type="button" id="markCancelBtn" class="btn btn-secondary">Anuluj</button>
-            </div>
-          </div>
-          <div class="field-input-box">
-            <div class="field-doc-name" id="fieldDocName"></div>
-            <label class="field-label" id="fieldLabel" for="fieldValueInput"></label>
-            <form id="fieldForm">
-              <input type="text" id="fieldValueInput" autocomplete="off" placeholder="Wpisz odczytaną wartość...">
-              <div class="hero-actions">
-                <button type="button" id="fieldBackBtn" class="btn btn-secondary">
-                  <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
-                  Poprzednie pole
-                </button>
-                <button type="submit" class="btn btn-primary">Zapisz i dalej (Enter)</button>
-                <button type="button" id="fieldSkipBtn" class="btn btn-secondary">Brak w oryginale</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </div>
+      <div id="fieldsBlocks"></div>
 
       <div id="excelStep" hidden>
         <p class="hint" id="familyChosenNote"></p>
@@ -210,9 +150,7 @@
         <p class="hint">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 2) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru.</p>
         <div class="hero-actions">
           <button type="button" id="finalizeBtn" class="btn btn-primary">Zapisz i pobierz</button>
-          <button type="button" id="saveTemplateBtn" class="btn btn-secondary">Zapisz układ jako wzór</button>
         </div>
-        <p class="hint" id="saveTemplateNote" hidden></p>
       </div>
     </section>
 
@@ -220,7 +158,7 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">4</span>Gotowe pliki</h2>
-          <p class="panel-desc">Pobierz rozpoznane PDF-y - oryginalny plik źródłowy nie został zmieniony.</p>
+          <p class="panel-desc">Pobierz podzielone PDF-y - oryginalny plik źródłowy nie został zmieniony.</p>
         </div>
       </div>
       <p class="hint" id="excelResultNote" hidden></p>
