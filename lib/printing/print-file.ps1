@@ -305,6 +305,8 @@ function Invoke-PrintWithSumatra([string]$path, [string]$targetPrinter, $jobIdsB
   }
 }
 
+$script:AcrobatProcessId = $null
+
 function Invoke-PrintWithAcrobat([string]$path, [string]$targetPrinter) {
   if (-not (Test-Path $AcrobatPath)) { return $false }
   $quotedPath = Quote-CmdArg $path
@@ -317,13 +319,26 @@ function Invoke-PrintWithAcrobat([string]$path, [string]$targetPrinter) {
     # pokazac chwile po starcie, niezaleznie od tego flagu. Reuzywamy juz
     # zdefiniowany ScyzorykFocusGuard (ten sam mechanizm co Restore-Foreground)
     # zeby aktywnie chowac kazde widoczne okno tego konkretnego PID przez
-    # pierwsze ~3s po starcie - "/t" i tak drukuje w tle bez interakcji, wiec
-    # okno nie jest nigdy potrzebne uzytkownikowi.
+    # pierwsze kilka sekund po starcie - "/t" i tak drukuje w tle bez
+    # interakcji, wiec okno nie jest nigdy potrzebne uzytkownikowi.
+    #
+    # Audyt 2026-08-12, druga runda (zlapane live na produkcji, dluzsza seria
+    # wydrukow): 3s bylo za malo przy druku wielu plikow pod rzad - okno
+    # zdazylo pokazac sie PO uplywie tego okna, a do tego Acrobat NIGDY nie byl
+    # zamykany po druku ("/t" nie zamyka wlasnej instancji), wiec przy kazdym
+    # kolejnym pliku dochodzila nastepna, osobna instancja - kazda mogla
+    # bysnac na ekranie przy WLASNYM starcie. Wydluzone do 8s (realistyczny
+    # czas startu+wczytania dla typowych plikow tej apki) I - kluczowe -
+    # PID zapisywany do $script:AcrobatProcessId, zeby koncowa czesc skryptu
+    # (po potwierdzeniu zadania w kolejce) mogla jawnie zamknac ten proces,
+    # zamiast zostawiac go dzialajacego w nieskonczonosc.
+    $script:AcrobatProcessId = $null
     if ($null -ne $proc) {
+      $script:AcrobatProcessId = $proc.Id
       try {
         $pidSet = New-Object 'System.Collections.Generic.HashSet[uint32]'
         [void]$pidSet.Add([uint32]$proc.Id)
-        $hideDeadline = (Get-Date).AddSeconds(3)
+        $hideDeadline = (Get-Date).AddSeconds(8)
         while ((Get-Date) -lt $hideDeadline) {
           $windows = [ScyzorykFocusGuard]::FindVisibleWindowsForProcesses($pidSet)
           foreach ($hwnd in $windows) { [void][ScyzorykFocusGuard]::ShowWindowAsync($hwnd, 0) } # 0 = SW_HIDE
@@ -335,6 +350,21 @@ function Invoke-PrintWithAcrobat([string]$path, [string]$targetPrinter) {
   } catch {
     return $false
   }
+}
+
+# Audyt 2026-08-12: "/t" (druk cichy) nigdy nie zamyka wlasnej instancji
+# Acrobata - zostawiony sam sobie, kazdy plik w serii dodawal KOLEJNA,
+# nigdy niezamykana instancje w tle. Poza marnowaniem pamieci, kazda nowa
+# instancja moze na chwile pokazac wlasne okno przy WLASNYM starcie (patrz
+# komentarz w Invoke-PrintWithAcrobat) - im dluzej dzialaja stare instancje,
+# tym wiecej okazji do bysniecia w trakcie dlugiej serii wydrukow. Wywolane
+# PO potwierdzeniu (albo uplywie czasu oczekiwania na potwierdzenie) zadania
+# w kolejce drukarki - do tego momentu Acrobat na pewno juz przekazal
+# dokument do spoolera, wiec zamkniecie go jest bezpieczne.
+function Close-AcrobatIfUsed {
+  if ($null -eq $script:AcrobatProcessId) { return }
+  try { Stop-Process -Id $script:AcrobatProcessId -Force -ErrorAction SilentlyContinue } catch {}
+  $script:AcrobatProcessId = $null
 }
 
 # WAZNE: Sumatra i Acrobat "/t" umieja drukowac TYLKO pliki PDF. Dla Worda
@@ -391,6 +421,7 @@ while ($waited -lt $maxWaitMs) {
 }
 
 Restore-Foreground $originalForeground
+Close-AcrobatIfUsed
 
 # Audyt v1.0.4, P0-1: skrypt wczesniej ZAWSZE konczyl sie "OK", nawet gdy
 # sledzenie kolejki BYLO dostepne (mamy nazwe drukarki i dziala Get-PrintJob),
