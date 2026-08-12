@@ -208,55 +208,99 @@ function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
 
 function Quote-CmdArg([string]$value) { return '"' + $value.Replace('"', '\"') + '"' }
 
-function Invoke-PrintWithSumatra([string]$path, [string]$targetPrinter) {
+function Invoke-PrintWithSumatra([string]$path, [string]$targetPrinter, $jobIdsBeforeSumatra) {
   if (-not (Test-Path $SumatraPath)) { return $false }
   try {
     $sumatraArgs = @("-print-to", $targetPrinter, "-silent", "-exit-when-done", $path)
     $proc = Start-Process -FilePath $SumatraPath -ArgumentList $sumatraArgs -PassThru -WindowStyle Hidden
-    $finished = $proc.WaitForExit(15000)
-    if (-not $finished) {
-      # Audyt 2026-08-12 (zlapane live na produkcji): "-exit-when-done" na
-      # niektorych drukarkach WSD (Lexmark, "Flexi-archiwum2") nie dziala
-      # niezawodnie - Sumatra POTRAFI juz zaczac wysylac dokument do spoolera
-      # i mimo to nigdy nie zakonczyc wlasnego procesu. WCZESNIEJSZA proba
-      # naprawy sprawdzala tylko "czy jakiekolwiek zadanie jest w kolejce" i
-      # jesli tak, pomijala Acrobata - ale Stop-Process -Force w POLOWIE
-      # wysylania danych do portu WSD moze zostawic w kolejce NIEKOMPLETNY
-      # wydruk (potwierdzone live: brakowalo jednego z polaczonych plikow),
-      # a ten "prosty" check tego nie odroznia od prawdziwego sukcesu. Zamiast
-      # zgadywac kompletnosc po fakcie, drukarki WSD (patrz $isWsdPrinter przy
-      # dyspozycji nizej) w ogole NIE probuja przez Sumatre - unikamy problemu
-      # u zrodla. Ta funkcja dla pozostalych (nie-WSD) drukarek wraca do
-      # prostego "zawsze probuj Acrobata po zawieszeniu" - podwojny wydruk nie
-      # byl tam nigdy zglaszany, a ryzyko niekompletnego zadania jest tam
-      # dużo mniejsze (sterowniki lokalne/USB nie wieszaja Sumatry w praktyce).
-      Write-PrintLog "Sumatra ZAWIESILA SIE (>15s), zabijam, przechodze na Acrobata"
-      try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-      return $false
+
+    # Szybka sciezka - normalny przypadek (wszystkie nie-WSD drukarki, i
+    # wiekszosc czasu). Bez zmian wzgledem zachowania sprzed audytu 2026-08-12.
+    if ($proc.WaitForExit(15000)) {
+      Write-PrintLog "Sumatra zakonczyla sie, kod wyjscia: $($proc.ExitCode)"
+      return ($proc.ExitCode -eq 0)
     }
-    Write-PrintLog "Sumatra zakonczyla sie, kod wyjscia: $($proc.ExitCode)"
-    return ($proc.ExitCode -eq 0)
+
+    # Audyt 2026-08-12 (zlapane live na produkcji, drukarki WSD - Lexmark
+    # "Flexi-archiwum2"): "-exit-when-done" na niektorych portach WSD nie
+    # dziala niezawodnie - Sumatra potrafi juz wysylac dane do spoolera i mimo
+    # to NIGDY nie zakonczyc wlasnego procesu. Dwie wczesniejsze proby naprawy
+    # obie mialy realne wady:
+    #   1. "zawsze probuj Acrobata po zabiciu" -> podwajalo kazdy wydruk, gdy
+    #      Sumatra faktycznie juz wyslala dokument przed zawieszeniem.
+    #   2. "zabij i sprawdz czy JAKIEKOLWIEK zadanie jest w kolejce" -> Stop-
+    #      Process -Force w POLOWIE wysylania danych do portu WSD potrafil
+    #      zostawic w kolejce NIEKOMPLETNY wydruk (potwierdzone live: brakowalo
+    #      jednego z polaczonych plikow), a sam fakt istnienia zadania w
+    #      kolejce tego nie odroznial od prawdziwego sukcesu.
+    # Zamiast zgadywac po fakcie, SLEDZIMY realny postep zadania w kolejce
+    # (Get-PrintJob's PagesPrinted) zamiast polegac na zakonczeniu procesu:
+    #   - zadanie robi postep (PagesPrinted rosnie) -> NIE zabijamy, czekamy dalej
+    #   - zadanie znika z kolejki PO potwierdzonym postepie -> drukarka je
+    #     skonsumowala, prawdziwy sukces, Sumatre po prostu dobijamy (juz nic
+    #     nie robi) i NIE probujemy Acrobata (unika podwojnego wydruku)
+    #   - zadanie utknelo BEZ zadnego postepu przez dluzszy czas, albo nigdy
+    #     sie nie pojawilo w kolejce -> prawdziwe zawieszenie, zabijamy i
+    #     przechodzimy na Acrobata (nic realnie nie zdazylo dojsc do drukarki)
+    Write-PrintLog "Sumatra nie zakonczyla sie w 15s - sledze postep w kolejce drukarki zamiast od razu zabijac."
+    if ($targetPrinter -and $null -ne $jobIdsBeforeSumatra) {
+      $trackedJobId = $null
+      $lastPagesPrinted = -1
+      $lastProgressAt = Get-Date
+      $stallTimeout = [TimeSpan]::FromSeconds(20)
+      $hardDeadline = (Get-Date).AddSeconds(90)
+
+      while ((Get-Date) -lt $hardDeadline) {
+        if ($proc.HasExited) {
+          Write-PrintLog "Sumatra zakonczyla sie po dluzszym oczekiwaniu, kod wyjscia: $($proc.ExitCode)"
+          return ($proc.ExitCode -eq 0)
+        }
+
+        $jobs = $null
+        try { $jobs = @(Get-PrintJob -PrinterName $targetPrinter -ErrorAction SilentlyContinue) } catch { $jobs = @() }
+
+        if ($null -eq $trackedJobId) {
+          foreach ($j in $jobs) {
+            if ($null -ne $j -and -not $jobIdsBeforeSumatra.Contains([int]$j.Id)) {
+              $trackedJobId = [int]$j.Id
+              $lastPagesPrinted = [int]$j.PagesPrinted
+              $lastProgressAt = Get-Date
+              Write-PrintLog "Znaleziono nowe zadanie w kolejce (Id=$trackedJobId) - sledze jego postep."
+              break
+            }
+          }
+        } else {
+          $trackedJob = $jobs | Where-Object { $null -ne $_ -and [int]$_.Id -eq $trackedJobId } | Select-Object -First 1
+          if ($null -eq $trackedJob) {
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+            if ($lastPagesPrinted -gt 0) {
+              Write-PrintLog "Zadanie Id=$trackedJobId zniknelo z kolejki po realnym postepie (PagesPrinted=$lastPagesPrinted) - traktuje jako sukces, NIE probuje Acrobata."
+              return $true
+            }
+            Write-PrintLog "Zadanie Id=$trackedJobId zniknelo z kolejki bez zadnego potwierdzonego postepu - przechodze na Acrobata."
+            return $false
+          }
+          $currentPages = [int]$trackedJob.PagesPrinted
+          if ($currentPages -gt $lastPagesPrinted) {
+            $lastPagesPrinted = $currentPages
+            $lastProgressAt = Get-Date
+          } elseif (((Get-Date) - $lastProgressAt) -gt $stallTimeout) {
+            Write-PrintLog "Zadanie Id=$trackedJobId utknelo bez postepu przez $([int]$stallTimeout.TotalSeconds)s - zabijam Sumatre, przechodze na Acrobata."
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+            return $false
+          }
+        }
+
+        Start-Sleep -Milliseconds 500
+      }
+      Write-PrintLog "Zadne zadanie nie pojawilo sie/nie zakonczylo w kolejce w rozsadnym czasie - zabijam Sumatre, przechodze na Acrobata."
+    } else {
+      Write-PrintLog "Sledzenie kolejki niedostepne dla tej drukarki - nie da sie bezpiecznie odroznic zawieszenia od wyslanego zadania."
+    }
+    try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+    return $false
   } catch {
     Write-PrintLog "Sumatra wyjatek: $($_.Exception.Message)"
-    return $false
-  }
-}
-
-# Audyt 2026-08-12 (zlapane live na produkcji): drukarki podpiete przez WSD
-# (Web Services for Devices - port zaczyna sie od "WSD-") maja udokumentowany
-# problem z Sumatra: proces potrafi zawiesic sie w trakcie wysylania danych,
-# a wymuszone zabicie go w takim momencie zostawia NIEKOMPLETNY wydruk w
-# kolejce (jeden z polaczonych plikow potrafil sie zgubic). Zamiast probowac
-# wykryc to po fakcie, dla drukarek WSD w ogole pomijamy Sumatre i drukujemy
-# od razu przez Acrobata (jeden, pewny przebieg - bez ryzyka zawieszenia w
-# polowie wysylania i bez ryzyka podwojnego wydruku).
-function Test-IsWsdPrinter([string]$printerName) {
-  if (-not $printerName) { return $false }
-  try {
-    $printer = Get-CimInstance Win32_Printer -Filter "Name='$($printerName.Replace("'", "''"))'" -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -eq $printer -or -not $printer.PortName) { return $false }
-    return $printer.PortName -match '^WSD-'
-  } catch {
     return $false
   }
 }
@@ -300,18 +344,11 @@ function Invoke-PrintWithAcrobat([string]$path, [string]$targetPrinter) {
 $isPdf = $FilePath.ToLower().EndsWith(".pdf")
 
 if ($hasTargetedPrinter -and $isPdf) {
-  $isWsdPrinter = Test-IsWsdPrinter $printerName
-  if ($isWsdPrinter) {
-    Write-PrintLog "Drukarka '$printerName' jest podpieta przez WSD - pomijam Sumatre (znane ryzyko niekompletnego wydruku), drukuje od razu przez Acrobata."
+  $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName -jobIdsBeforeSumatra $jobIdsBefore
+  if (-not $sent) {
+    Write-PrintLog "Sumatra nie wyslala - probuje Acrobata"
     $sent = Invoke-PrintWithAcrobat -path $FilePath -targetPrinter $printerName
     Write-PrintLog "Acrobat wynik: $sent"
-  } else {
-    $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName
-    if (-not $sent) {
-      Write-PrintLog "Sumatra nie wyslala - probuje Acrobata"
-      $sent = Invoke-PrintWithAcrobat -path $FilePath -targetPrinter $printerName
-      Write-PrintLog "Acrobat wynik: $sent"
-    }
   }
   if (-not $sent) {
     # Audyt v1.0.4, P0-1: wczesniej tu byl fallback na Invoke-PrintWithShell,
