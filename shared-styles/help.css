@@ -30,6 +30,7 @@
 .help-tagline{color:var(--help-ink-soft);font-size:1.03rem;margin:6px 0 14px;max-width:62ch}
 .help-chips{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0 6px}
 .help-chip{font-family:var(--help-font-mono);font-size:.78rem;padding:3px 10px;border-radius:999px;border:1px solid var(--help-line);color:var(--help-ink-soft);background:var(--help-bg-raised);white-space:nowrap;display:inline-block}
+.help-chip.help-chip-link{color:var(--help-accent);border-color:var(--help-accent);text-decoration:none}
 .help-chip.help-chip-req{background:var(--help-accent-tint);color:var(--help-accent);border-color:transparent;font-family:var(--font-sans);font-style:italic}
 .help-callout{border-radius:var(--help-radius);padding:13px 16px;margin:14px 0;border:1px solid transparent;font-size:.96rem}
 .help-callout p:last-child{margin-bottom:0}
@@ -48,5 +49,7 @@
 .help-shot-wrap{margin:18px 0 24px}
 .help-shot{width:100%;display:block;border-radius:10px;border:1px solid var(--help-line);box-shadow:var(--help-shadow)}
 .help-shot-cap{margin:8px 2px 0;font-size:.82rem;color:var(--help-ink-faint);font-family:var(--font-display)}
+.help-doc hr{border:none;border-top:1px solid var(--help-line-soft);margin:36px 0}
+footer.help-page-foot{max-width:64ch;margin-top:40px;padding-top:22px;border-top:1px solid var(--help-line);color:var(--help-ink-faint);font-size:.85rem}
 @media (max-width:880px){.help-errors>div{grid-template-columns:1fr;gap:3px}}
 @media print{.help-shot-wrap{break-inside:avoid;page-break-inside:avoid}.help-shot{max-height:112mm;object-fit:contain}.help-doc h2,.help-doc h3{break-after:avoid;page-break-after:avoid}.help-callout{break-inside:avoid;page-break-inside:avoid}}

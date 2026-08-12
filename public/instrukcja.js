@@ -15,8 +15,8 @@
     if (failed) throw new Error(`HTTP ${failed.status}`);
     const parts = await Promise.all(responses.map(response => response.text()));
     target.innerHTML = parts.join('\n');
-    document.querySelectorAll('[data-main-panel-link], a.plain[href="/"]').forEach(el => { el.href = mainPanelUrl; });
     document.querySelectorAll('[data-app-link]').forEach(el => { el.href = `http://${panelHost}:${el.dataset.appLink}/pomoc.html`; });
+    document.querySelectorAll('[data-app-root-link]').forEach(el => { el.href = `http://${panelHost}:${el.dataset.appRootLink}/`; });
     if (location.hash) requestAnimationFrame(() => document.querySelector(location.hash)?.scrollIntoView());
   }
   loadGuide().catch(error => {

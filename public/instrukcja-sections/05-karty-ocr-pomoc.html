@@ -1,31 +1,51 @@
-<section class="tool" id="karty-katalogowe">
-<div class="tool-head"><div><span class="tool-eyebrow">07 / DOKUMENTACJA URZĄDZEŃ</span><h2>Karty katalogowe</h2><p class="tool-tagline">Dobiera karty katalogowe na podstawie danych i UID w Excelu, a następnie kopiuje je do folderów klientów.</p></div><div class="chips"><a class="chip chip-link" data-app-link="3006" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="chip">XLSX</span><span class="chip">foldery</span></div></div>
-<div class="shot-wrap"><img class="shot" src="/instrukcja-images/07-karty.png" alt="Aktualny ekran Kart katalogowych" loading="lazy"><p class="shot-cap">Aktualny ekran narzedzia Karty katalogowe.</p></div>
+<section id="karty-katalogowe">
+<h2>Karty katalogowe</h2>
+<p class="help-tagline">Dobiera karty katalogowe na podstawie danych i UID w Excelu, a następnie kopiuje je do folderów klientów.</p>
+<div class="help-chips"><a class="help-chip help-chip-link" data-app-link="3006" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="help-chip">XLSX</span><span class="help-chip">foldery</span></div>
+<div class="help-shot-wrap"><img class="help-shot" src="/instrukcja-images/07-karty.png" alt="Aktualny ekran Kart katalogowych" loading="lazy"><p class="help-shot-cap">Aktualny ekran narzedzia Karty katalogowe.</p></div>
 </section>
-<section class="tool" id="ocr-audytow">
-<div class="tool-head"><div><span class="tool-eyebrow">08 / GOOGLE DOCUMENT AI</span><h2>OCR audytów</h2><p class="tool-tagline">Rozpoznaje tekst w zeskanowanych audytach, dzieli pliki na adresy, pozwala sprawdzić pola i tworzy PDF-y z warstwą tekstową oraz opcjonalny Excel.</p></div><div class="chips"><a class="chip chip-link" href="http://scyzoryk.localhost:3011">scyzoryk.localhost:3011</a><span class="chip">PDF</span><span class="chip">XLSX</span><span class="chip chip-req">internet</span></div></div>
-<div class="shot-wrap"><img class="shot" src="/instrukcja-images/09-ocr.png" alt="Aktualny ekran OCR audytów" loading="lazy"><p class="shot-cap">Aktualny ekran — dodawanie skanów, podział na adresy, kontrola pól i zapis wyników.</p></div>
-<div class="callout good"><span class="callout-label">Gotowe po instalacji</span><p>W przetestowanym instalatorze <strong>nie trzeba ustawiać klucza</strong>, zmiennych środowiskowych ani kopiować konfiguracji. OCR korzysta z konfiguracji dołączonej podczas bezpiecznego builda wewnętrznego.</p></div>
-<h3>Krok po kroku</h3><ol><li>Dodaj jeden lub kilka zeskanowanych PDF-ów i kliknij <strong>Rozpoznaj tekst</strong>.</li><li>Sprawdź proponowany podział na adresy. Popraw granice i nazwy, jeżeli dokument został źle rozdzielony.</li><li>Wybierz rodzinę: Pompy ciepła, Solary albo Kotły. Wzór gminy może zostać dobrany automatycznie lub wskazany ręcznie.</li><li>Dla każdego niepewnego pola wpisz wartość i naciśnij Enter. Gdy pole naprawdę jest puste, kliknij <strong>Brak w oryginale</strong>.</li><li>Opcjonalnie podaj ścieżkę nowego Excela. Istniejący plik wymaga jawnego potwierdzenia nadpisania; zapis jest wykonywany atomowo z kopią bezpieczeństwa.</li><li>Kliknij <strong>Zapisz i pobierz</strong>. Oryginalny PDF pozostaje bez zmian.</li></ol>
-<div class="callout warn"><span class="callout-label">Dane wysyłane do Google</span><p>Strony wymagające rozpoznania są wysyłane do Google Document AI. Nie uruchamiaj tej samej dużej paczki wielokrotnie bez potrzeby, ponieważ zużywa to limit i generuje koszt.</p></div>
-<h3>Najczęstsze problemy</h3><dl class="errors"><div><dt>Niska pewność rozpoznania</dt><dd>Sprawdź fragment skanu i popraw wartość ręcznie.</dd></div><div><dt>Nie da się wyeksportować Excela</dt><dd>Najpierw rozstrzygnij wszystkie pola wymagające kontroli. Sam PDF może pozostać dostępny.</dd></div><div><dt>OCR nie odpowiada</dt><dd>Sprawdź internet. W gotowym instalatorze nie wykonuj ręcznej konfiguracji klucza — zgłoś problem wraz z komunikatem.</dd></div></dl>
+<hr>
+<section id="ocr-audytow">
+<h2>OCR audytów</h2>
+<p class="help-tagline">Rozpoznaje tekst w zeskanowanych audytach, dzieli pliki na adresy, pozwala sprawdzić pola i tworzy PDF-y z warstwą tekstową oraz opcjonalny Excel.</p>
+<div class="help-chips"><a class="help-chip help-chip-link" data-app-root-link="3011" href="#">Otwórz narzędzie →</a><span class="help-chip">PDF</span><span class="help-chip">XLSX</span><span class="help-chip help-chip-req">internet</span></div>
+<div class="help-shot-wrap"><img class="help-shot" src="/instrukcja-images/09-ocr.png" alt="Aktualny ekran OCR audytów" loading="lazy"><p class="help-shot-cap">Aktualny ekran — dodawanie skanów, podział na adresy, kontrola pól i zapis wyników.</p></div>
+<div class="help-callout good"><span class="help-callout-label">Gotowe po instalacji</span><p>W przetestowanym instalatorze <strong>nie trzeba ustawiać klucza</strong>, zmiennych środowiskowych ani kopiować konfiguracji. OCR korzysta z konfiguracji dołączonej podczas bezpiecznego builda wewnętrznego.</p></div>
+<h3>Krok po kroku</h3>
+<ol><li>Dodaj jeden lub kilka zeskanowanych PDF-ów i kliknij <strong>Rozpoznaj tekst</strong>.</li><li>Sprawdź proponowany podział na adresy. Popraw granice i nazwy, jeżeli dokument został źle rozdzielony.</li><li>Wybierz rodzinę: Pompy ciepła, Solary albo Kotły. Wzór gminy może zostać dobrany automatycznie lub wskazany ręcznie.</li><li>Dla każdego niepewnego pola wpisz wartość i naciśnij Enter. Gdy pole naprawdę jest puste, kliknij <strong>Brak w oryginale</strong>.</li><li>Opcjonalnie podaj ścieżkę nowego Excela. Istniejący plik wymaga jawnego potwierdzenia nadpisania; zapis jest wykonywany atomowo z kopią bezpieczeństwa.</li><li>Kliknij <strong>Zapisz i pobierz</strong>. Oryginalny PDF pozostaje bez zmian.</li></ol>
+<div class="help-callout warn"><span class="help-callout-label">Dane wysyłane do Google</span><p>Strony wymagające rozpoznania są wysyłane do Google Document AI. Nie uruchamiaj tej samej dużej paczki wielokrotnie bez potrzeby, ponieważ zużywa to limit i generuje koszt.</p></div>
+<h3>Najczęstsze problemy</h3>
+<dl class="help-errors"><div><dt>Niska pewność rozpoznania</dt><dd>Sprawdź fragment skanu i popraw wartość ręcznie.</dd></div><div><dt>Nie da się wyeksportować Excela</dt><dd>Najpierw rozstrzygnij wszystkie pola wymagające kontroli. Sam PDF może pozostać dostępny.</dd></div><div><dt>OCR nie odpowiada</dt><dd>Sprawdź internet. W gotowym instalatorze nie wykonuj ręcznej konfiguracji klucza — zgłoś problem wraz z komunikatem.</dd></div></dl>
 </section>
-<section class="tool" id="varmero">
-<div class="tool-head"><div><span class="tool-eyebrow">09 / KALKULATOR VARMERO</span><h2>Formularze Varmero</h2><p class="tool-tagline">Na podstawie tabeli adresowej zgłasza adresy z pompą powietrzną do kalkulatora doboru Varmero i pobiera karty wynikowe PDF mailem.</p></div><div class="chips"><a class="chip chip-link" data-app-link="3012" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="chip">XLSX</span><span class="chip">PDF</span><span class="chip chip-req">internet</span></div></div>
-<div class="shot-wrap"><img class="shot" src="/instrukcja-images/11-varmero.png" alt="Aktualny ekran Formularzy Varmero" loading="lazy"><p class="shot-cap">Aktualny ekran narzedzia Formularze Varmero.</p></div>
+<hr>
+<section id="varmero">
+<h2>Formularze Varmero</h2>
+<p class="help-tagline">Na podstawie tabeli adresowej zgłasza adresy z pompą powietrzną do kalkulatora doboru Varmero i pobiera karty wynikowe PDF mailem.</p>
+<div class="help-chips"><a class="help-chip help-chip-link" data-app-link="3012" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="help-chip">XLSX</span><span class="help-chip">PDF</span><span class="help-chip help-chip-req">internet</span></div>
+<div class="help-shot-wrap"><img class="help-shot" src="/instrukcja-images/11-varmero.png" alt="Aktualny ekran Formularzy Varmero" loading="lazy"><p class="help-shot-cap">Aktualny ekran narzedzia Formularze Varmero.</p></div>
 </section>
-<section class="tool" id="nazywarka-skanow">
-<div class="tool-head"><div><span class="tool-eyebrow">10 / SKANY PDF</span><h2>Nazywarka skanów</h2><p class="tool-tagline">Otwiera folder skanera na sieciowym udziale i pozwala nadać każdemu plikowi PDF właściwą nazwę na podstawie podglądu.</p></div><div class="chips"><a class="chip chip-link" data-app-link="3007" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="chip">PDF</span><span class="chip">sieć</span></div></div>
-<div class="shot-wrap"><img class="shot" src="/instrukcja-images/12-nazywarka-skanow.png" alt="Aktualny ekran Nazywarki skanow" loading="lazy"><p class="shot-cap">Aktualny ekran narzedzia Nazywarka skanow.</p></div>
+<hr>
+<section id="nazywarka-skanow">
+<h2>Nazywarka skanów</h2>
+<p class="help-tagline">Otwiera folder skanera na sieciowym udziale i pozwala nadać każdemu plikowi PDF właściwą nazwę na podstawie podglądu.</p>
+<div class="help-chips"><a class="help-chip help-chip-link" data-app-link="3007" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="help-chip">PDF</span><span class="help-chip">sieć</span></div>
+<div class="help-shot-wrap"><img class="help-shot" src="/instrukcja-images/12-nazywarka-skanow.png" alt="Aktualny ekran Nazywarki skanow" loading="lazy"><p class="help-shot-cap">Aktualny ekran narzedzia Nazywarka skanow.</p></div>
 </section>
-<section class="tool" id="tworzenie-folderow">
-<div class="tool-head"><div><span class="tool-eyebrow">11 / STRUKTURA FOLDERÓW</span><h2>Tworzenie folderów</h2><p class="tool-tagline">Na podstawie tabeli adresowej uzupełnia podfoldery inwestycji (WM, pompy, kolektory, kotły) w już istniejącym folderze.</p></div><div class="chips"><a class="chip chip-link" data-app-link="3013" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="chip">XLSX</span><span class="chip">foldery</span></div></div>
-<div class="shot-wrap"><img class="shot" src="/instrukcja-images/13-tworzenie-folderow.png" alt="Aktualny ekran Tworzenia folderow" loading="lazy"><p class="shot-cap">Aktualny ekran narzedzia Tworzenie folderow.</p></div>
+<hr>
+<section id="tworzenie-folderow">
+<h2>Tworzenie folderów</h2>
+<p class="help-tagline">Na podstawie tabeli adresowej uzupełnia podfoldery inwestycji (WM, pompy, kolektory, kotły) w już istniejącym folderze.</p>
+<div class="help-chips"><a class="help-chip help-chip-link" data-app-link="3013" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="help-chip">XLSX</span><span class="help-chip">foldery</span></div>
+<div class="help-shot-wrap"><img class="help-shot" src="/instrukcja-images/13-tworzenie-folderow.png" alt="Aktualny ekran Tworzenia folderow" loading="lazy"><p class="help-shot-cap">Aktualny ekran narzedzia Tworzenie folderow.</p></div>
 </section>
-<section class="tool" id="pomoc">
-<div class="tool-head"><div><span class="tool-eyebrow">POMOC</span><h2>Instrukcja i rozwiązywanie problemów</h2><p class="tool-tagline">Przycisk <strong>Pomoc</strong> na panelu głównym otwiera dokładnie tę lokalną instrukcję, dostępną także bez internetu.</p></div><div class="chips"><span class="chip">lokalnie</span><span class="chip">druk A4</span></div></div>
-<div class="callout info"><span class="callout-label">Ta strona jest pomocą wbudowaną</span><p>Instrukcja zachowuje rozbudowany układ z bocznym spisem treści i aktualnymi zrzutami wszystkich narzędzi. Można ją również wydrukować do PDF z przeglądarki.</p></div>
-<h3>Gdy coś nie działa</h3><dl class="errors"><div><dt>Kafelek długo pokazuje „uruchamianie”</dt><dd>Odczekaj kilkanaście sekund. Jeżeli status się nie zmieni, zamknij Scyzoryk i uruchom ponownie skrótem z pulpitu.</dd></div><div><dt>Panel się nie otwiera</dt><dd>Sprawdź adres <code>http://scyzoryk.localhost:3000</code>, a następnie uruchom ponownie skrót. Nie instaluj ręcznie Node.js ani paczek npm.</dd></div><div><dt>Word nie tworzy PDF</dt><dd>Sprawdź instalację i aktywację Microsoft Worda oraz dostępność plików offline.</dd></div><div><dt>Plik z Dysku Google nie jest znaleziony</dt><dd>Ustaw go jako dostępny offline i otwórz folder w Eksploratorze przed ponowieniem.</dd></div><div><dt>Ecodan zwraca trzy strony</dt><dd>To prawidłowe działanie. Program celowo zachowuje tylko strony 1–3.</dd></div></dl>
-<div class="callout warn"><span class="callout-label">Nie usuwaj danych bez potrzeby</span><p>Folder <code>%LOCALAPPDATA%\ScyzorykProjektowy\Data</code> może zawierać ustawienia, presety, stany zadań i wyniki. Usuń go tylko świadomie, gdy chcesz wyczyścić dane użytkownika.</p></div>
+<hr>
+<section id="pomoc">
+<h2>Instrukcja i rozwiązywanie problemów</h2>
+<p class="help-tagline">Przycisk <strong>Pomoc</strong> na panelu głównym i w każdym narzędziu otwiera dokładnie tę lokalną instrukcję, dostępną także bez internetu.</p>
+<div class="help-chips"><span class="help-chip">lokalnie</span><span class="help-chip">druk A4</span></div>
+<div class="help-callout info"><span class="help-callout-label">Ta strona jest pomocą wbudowaną</span><p>Instrukcja pokazuje wszystkie narzędzia z jednego miejsca, z aktualnymi zrzutami ekranów. Każde narzędzie (poza OCR) ma też własną, bardziej szczegółową stronę pomocy z pełną listą błędów i sposobem ich rozwiązania — link „Pełna instrukcja i rozwiązywanie problemów” przy każdym narzędziu wyżej. Tę stronę można też wydrukować do PDF z przeglądarki.</p></div>
+<h3>Gdy coś nie działa</h3>
+<dl class="help-errors"><div><dt>Kafelek długo pokazuje „uruchamianie”</dt><dd>Odczekaj kilkanaście sekund. Jeżeli status się nie zmieni, zamknij Scyzoryk i uruchom ponownie skrótem z pulpitu.</dd></div><div><dt>Panel się nie otwiera</dt><dd>Sprawdź adres <code>http://scyzoryk.localhost:3000</code>, a następnie uruchom ponownie skrót. Nie instaluj ręcznie Node.js ani paczek npm.</dd></div><div><dt>Word nie tworzy PDF</dt><dd>Sprawdź instalację i aktywację Microsoft Worda oraz dostępność plików offline.</dd></div><div><dt>Plik z Dysku Google nie jest znaleziony</dt><dd>Ustaw go jako dostępny offline i otwórz folder w Eksploratorze przed ponowieniem.</dd></div><div><dt>Ecodan zwraca trzy strony</dt><dd>To prawidłowe działanie. Program celowo zachowuje tylko strony 1–3.</dd></div></dl>
+<div class="help-callout warn"><span class="help-callout-label">Nie usuwaj danych bez potrzeby</span><p>Folder <code>%LOCALAPPDATA%\ScyzorykProjektowy\Data</code> może zawierać ustawienia, presety, stany zadań i wyniki. Usuń go tylko świadomie, gdy chcesz wyczyścić dane użytkownika.</p></div>
 </section>
-<footer class="page-foot">Scyzoryk Projektowy — instrukcja aktualnej wersji instalatora Windows. Zrzuty ekranów są aktualizowane automatycznie podczas pełnego testu świeżej instalacji.</footer>
+<footer class="help-page-foot">Scyzoryk Projektowy — instrukcja aktualnej wersji instalatora Windows. Zrzuty ekranów są aktualizowane automatycznie podczas pełnego testu świeżej instalacji.</footer>
