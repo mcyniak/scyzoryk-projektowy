@@ -101,7 +101,7 @@ Run-Test 'Instalacja na swiezym Windowsie' {
 Run-Test 'Kompletnosc zainstalowanej aplikacji' {
   $required = @(
     'Scyzoryk.exe',
-    'server.js','package.json','public\index.html','public\instrukcja.html','public\instrukcja.css',
+    'server.js','package.json','public\index.html','public\instrukcja.html','shared-styles\help.css',
     'node-runtime\node.exe','node-runtime\npm.cmd','unins000.exe',
     'apps\drukarka\node_modules\express',
     'apps\pieczatki-pdf\node_modules\express',
