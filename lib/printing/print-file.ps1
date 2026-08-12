@@ -232,7 +232,27 @@ function Invoke-PrintWithAcrobat([string]$path, [string]$targetPrinter) {
   $quotedPath = Quote-CmdArg $path
   $quotedPrinter = Quote-CmdArg $targetPrinter
   try {
-    $null = Start-Process -FilePath $AcrobatPath -ArgumentList ("/t $quotedPath $quotedPrinter") -PassThru -WindowStyle Hidden
+    $proc = Start-Process -FilePath $AcrobatPath -ArgumentList ("/t $quotedPath $quotedPrinter") -PassThru -WindowStyle Hidden
+    # Audyt 2026-08-12 (zlapane live na produkcji, drukarka WSD): -WindowStyle
+    # Hidden dziala tylko przy TWORZENIU procesu - Acrobat sam zarzadza
+    # widocznoscia wlasnego okna (np. glowne okno / splash) i potrafi je
+    # pokazac chwile po starcie, niezaleznie od tego flagu. Reuzywamy juz
+    # zdefiniowany ScyzorykFocusGuard (ten sam mechanizm co Restore-Foreground)
+    # zeby aktywnie chowac kazde widoczne okno tego konkretnego PID przez
+    # pierwsze ~3s po starcie - "/t" i tak drukuje w tle bez interakcji, wiec
+    # okno nie jest nigdy potrzebne uzytkownikowi.
+    if ($null -ne $proc) {
+      try {
+        $pidSet = New-Object 'System.Collections.Generic.HashSet[uint32]'
+        [void]$pidSet.Add([uint32]$proc.Id)
+        $hideDeadline = (Get-Date).AddSeconds(3)
+        while ((Get-Date) -lt $hideDeadline) {
+          $windows = [ScyzorykFocusGuard]::FindVisibleWindowsForProcesses($pidSet)
+          foreach ($hwnd in $windows) { [void][ScyzorykFocusGuard]::ShowWindowAsync($hwnd, 0) } # 0 = SW_HIDE
+          Start-Sleep -Milliseconds 150
+        }
+      } catch {}
+    }
     return $true
   } catch {
     return $false
