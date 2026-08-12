@@ -208,15 +208,40 @@ function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
 
 function Quote-CmdArg([string]$value) { return '"' + $value.Replace('"', '\"') + '"' }
 
-function Invoke-PrintWithSumatra([string]$path, [string]$targetPrinter) {
+function Invoke-PrintWithSumatra([string]$path, [string]$targetPrinter, $jobIdsBeforeSumatra) {
   if (-not (Test-Path $SumatraPath)) { return $false }
   try {
     $sumatraArgs = @("-print-to", $targetPrinter, "-silent", "-exit-when-done", $path)
     $proc = Start-Process -FilePath $SumatraPath -ArgumentList $sumatraArgs -PassThru -WindowStyle Hidden
     $finished = $proc.WaitForExit(15000)
     if (-not $finished) {
-      Write-PrintLog "Sumatra ZAWIESILA SIE (>15s), zabijam, przechodze na Acrobata"
+      # Audyt 2026-08-12 (zlapane live na produkcji, PODWOJNY wydruk zamiast
+      # zadanej liczby kopii): "-exit-when-done" na niektorych drukarkach WSD
+      # (Lexmark, "Flexi-archiwum2") nie dziala niezawodnie - Sumatra POTRAFI
+      # juz przekazac caly dokument do spoolera i mimo to nigdy nie zakonczyc
+      # wlasnego procesu. Poprzednia wersja zabijala proces i ZAWSZE probowala
+      # Acrobata jako "backup" - jesli Sumatra faktycznie wyslala dokument
+      # PRZED zawieszeniem sie, to podwajalo kazda kopie (2 zadane -> 4
+      # wydrukowane). Zanim uznamy to za porazke, sprawdzamy krotko, czy w
+      # kolejce drukarki juz pojawilo sie NOWE zadanie (ten sam mechanizm co
+      # koncowa petla potwierdzenia w tym pliku) - jesli tak, drukowanie sie
+      # faktycznie udalo i NIE wolno probowac Acrobata.
+      $jobAlreadyQueued = $false
+      if ($targetPrinter -and $null -ne $jobIdsBeforeSumatra) {
+        for ($i = 0; $i -lt 10 -and -not $jobAlreadyQueued; $i++) {
+          $jobIdsNow = Get-PrintJobIds $targetPrinter
+          if ($null -ne $jobIdsNow) {
+            foreach ($id in $jobIdsNow) { if (-not $jobIdsBeforeSumatra.Contains($id)) { $jobAlreadyQueued = $true; break } }
+          }
+          if (-not $jobAlreadyQueued) { Start-Sleep -Milliseconds 300 }
+        }
+      }
       try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+      if ($jobAlreadyQueued) {
+        Write-PrintLog "Sumatra ZAWIESILA SIE (>15s), ale zadanie JUZ jest w kolejce drukarki - NIE probuje Acrobata (uniknieto podwojnego wydruku)."
+        return $true
+      }
+      Write-PrintLog "Sumatra ZAWIESILA SIE (>15s), brak zadania w kolejce - przechodze na Acrobata"
       return $false
     }
     Write-PrintLog "Sumatra zakonczyla sie, kod wyjscia: $($proc.ExitCode)"
@@ -266,7 +291,7 @@ function Invoke-PrintWithAcrobat([string]$path, [string]$targetPrinter) {
 $isPdf = $FilePath.ToLower().EndsWith(".pdf")
 
 if ($hasTargetedPrinter -and $isPdf) {
-  $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName
+  $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName -jobIdsBeforeSumatra $jobIdsBefore
   if (-not $sent) {
     Write-PrintLog "Sumatra nie wyslala - probuje Acrobata"
     $sent = Invoke-PrintWithAcrobat -path $FilePath -targetPrinter $printerName
