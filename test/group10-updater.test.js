@@ -454,8 +454,22 @@ test('buildUpdaterInvocation: 4. argument to installDir (prawdziwy katalog insta
     '--apply-update',
     'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
     '1.2.0',
-    'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+    'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy',
+    String(process.pid)
   ]);
+});
+
+test('buildUpdaterInvocation: 5. argument to wlasny PID (audyt 2026-08-12) - UpdateApplier.cs dobija po nim proces-nadzorce, gdyby StopOwnedProcesses go pominal', () => {
+  const invocation = buildUpdaterInvocation({
+    launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
+    installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+    updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
+    expectedVersion: '1.2.0',
+    installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+  });
+  assert.equal(invocation.args.length, 5);
+  assert.equal(invocation.args[4], String(process.pid));
+  assert.match(invocation.args[4], /^\d+$/);
 });
 
 test('updateService: niezgodna suma SHA-256 - instalator jest odrzucony, nic nie jest odpalane', async () => {

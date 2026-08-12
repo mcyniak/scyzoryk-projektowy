@@ -90,4 +90,35 @@ public sealed class ArgsParserTests
         Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "  ", "C:\\fake\\install" }).Mode);
         Assert.Equal(LauncherMode.Unknown, ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "  " }).Mode);
     }
+
+    // Audyt 2026-08-12: 5. argument (PID procesu-nadzorcy, ktory spawnuje ta
+    // aktualizacje - patrz lib/updateService.js) jest OPCJONALNY, zeby wywolanie
+    // bez niego (np. stary, jeszcze nie zaktualizowany Scyzoryk.exe wykonujacy
+    // pierwsza aktualizacje po tej poprawce) dalej dzialalo bez zmian.
+    [Fact]
+    public void ApplyUpdate_WithParentPid_Recognized()
+    {
+        var parsed = ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "C:\\fake\\install", "4242" });
+
+        Assert.Equal(LauncherMode.ApplyUpdate, parsed.Mode);
+        Assert.Equal("4242", parsed.ParentPid);
+    }
+
+    [Fact]
+    public void ApplyUpdate_WithoutParentPid_BackwardCompatible_NullParentPid()
+    {
+        var parsed = ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "C:\\fake\\install" });
+
+        Assert.Equal(LauncherMode.ApplyUpdate, parsed.Mode);
+        Assert.Null(parsed.ParentPid);
+    }
+
+    [Fact]
+    public void ApplyUpdate_BlankParentPid_TreatedAsNull()
+    {
+        var parsed = ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "C:\\fake\\install", "  " });
+
+        Assert.Equal(LauncherMode.ApplyUpdate, parsed.Mode);
+        Assert.Null(parsed.ParentPid);
+    }
 }

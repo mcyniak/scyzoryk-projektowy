@@ -5,6 +5,9 @@ public sealed class FakeProcessManager : IProcessManager
     public SpawnResult SpawnResultToReturn { get; set; } = SpawnResult.Ok(1234);
     public IReadOnlyList<int> StopResultToReturn { get; set; } = Array.Empty<int>();
     public bool ProcessAliveResult { get; set; } = true;
+    public bool KillProcessByIdResult { get; set; } = true;
+    public int KillProcessByIdCallCount { get; private set; }
+    public List<int> KilledPids { get; } = new();
 
     public int StartServerCallCount { get; private set; }
     public string? LastInstallDir { get; private set; }
@@ -47,4 +50,11 @@ public sealed class FakeProcessManager : IProcessManager
     }
 
     public bool IsProcessStillAlive(int pid) => ProcessAliveResult;
+
+    public bool KillProcessById(int pid)
+    {
+        KillProcessByIdCallCount++;
+        KilledPids.Add(pid);
+        return KillProcessByIdResult;
+    }
 }

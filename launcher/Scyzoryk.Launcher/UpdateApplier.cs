@@ -17,7 +17,7 @@ public interface IUpdateApplier
     /// wynik do last-result.json - dokladnie ten sam kontrakt plikowy z Node
     /// (lib/updateService.js), niezmieniony wzgledem wersji PowerShell.
     /// </summary>
-    Task<int> ApplyAsync(string installerPath, string expectedVersion);
+    Task<int> ApplyAsync(string installerPath, string expectedVersion, string? parentPid = null);
 }
 
 public sealed class UpdateApplier : IUpdateApplier
@@ -50,7 +50,7 @@ public sealed class UpdateApplier : IUpdateApplier
         _installRetryDelay = installRetryDelay ?? TimeSpan.FromSeconds(2);
     }
 
-    public async Task<int> ApplyAsync(string installerPath, string expectedVersion)
+    public async Task<int> ApplyAsync(string installerPath, string expectedVersion, string? parentPid = null)
     {
         var logsDir = Path.Combine(_paths.UpdateRoot, "logs");
         Directory.CreateDirectory(logsDir);
@@ -100,6 +100,7 @@ public sealed class UpdateApplier : IUpdateApplier
             // NIGDY nie zamyka tej wlasnie dzialajacej kopii-aktualizatora (ta zyje
             // w oddzielnym katalogu Updates\<wersja>\, inna sciezka).
             await StopAllOwnedProcessesUntilConfirmedAsync().ConfigureAwait(false);
+            EnsureParentProcessStopped(parentPid);
 
             var attempt = await RunInstallerWithRetryAsync(installerPath).ConfigureAwait(false);
             exitCode = attempt.ExitCode;
@@ -252,6 +253,35 @@ public sealed class UpdateApplier : IUpdateApplier
             }
             await Task.Delay(_stopConfirmPollInterval).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Audyt 2026-08-12 (zlapane live na produkcji): StopAllOwnedProcessesUntilConfirmedAsync
+    /// dopasowuje procesy WYLACZNIE po nazwie+sciezce (Process.GetProcessesByName), co
+    /// przy realnej aktualizacji jednorazowo pominelo WLASNIE glowny proces-nadzorce
+    /// server.js - instalator probowal nadpisac pliki pod dzialajacym procesem, ktory
+    /// sam odradzal zabite dzieci w polowie nadpisywania (3 z 11 apek padly z
+    /// ECONNREFUSED, panel zostal na starej wersji). parentPid to PID TEGO KONKRETNEGO
+    /// procesu, ktory spawnowal ta aktualizacje (lib/updateService.js przekazuje wlasny
+    /// process.pid jako 5. argument) - wiadomo z calkowita pewnoscia, ze to on musi
+    /// zniknac, wiec dobijamy go jawnie po PID, niezaleznie od tego, czy szerszy skan po
+    /// nazwie/sciezce go zobaczyl. Brak parentPid (stare wywolanie bez 5. argumentu) jest
+    /// tolerowany - nic nowego sie wtedy nie dzieje wzgledem stanu sprzed tej poprawki.</summary>
+    private void EnsureParentProcessStopped(string? parentPid)
+    {
+        if (string.IsNullOrWhiteSpace(parentPid)) return;
+        if (!int.TryParse(parentPid, out var pid)) return;
+
+        if (!_processManager.IsProcessStillAlive(pid))
+        {
+            WriteLog($"Proces-nadzorca (PID {pid}) juz nie zyje - nic dodatkowego do zrobienia.");
+            return;
+        }
+
+        WriteLog($"Proces-nadzorca (PID {pid}) nadal zyje po StopOwnedProcesses - dobijam jawnie po PID.");
+        var killed = _processManager.KillProcessById(pid);
+        WriteLog(killed
+            ? $"Proces-nadzorca (PID {pid}) zabity jawnie po PID."
+            : $"Nie udalo sie zabic procesu-nadzorcy (PID {pid}) jawnie po PID - kontynuuje aktualizacje mimo to.");
     }
 
     private bool IsPrintingActive()

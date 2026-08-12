@@ -31,6 +31,20 @@ public interface IProcessManager
     IReadOnlyList<int> StopResidentTrayProcesses(string expectedScyzorykExeFullPath);
 
     bool IsProcessStillAlive(int pid);
+
+    /// <summary>Zabija DOKLADNIE ten jeden PID (bez dopasowania po nazwie/sciezce) -
+    /// zapasowa siatka bezpieczenstwa niezalezna od StopOwnedProcesses. Audyt
+    /// 2026-08-12: zlapane live na produkcji, ze StopOwnedProcesses potrafi (z
+    /// nieznanej, niedeterministycznej przyczyny - prawdopodobnie chwilowa
+    /// niespojnosc migawki Process.GetProcessesByName) pominac WLASNIE glowny
+    /// proces-nadzorce server.js, mimo ze jego sciezka identycznie pasuje jak
+    /// kazdego z jego dzieci. Poniewaz to WLASNIE ten proces spawnuje
+    /// --apply-update (patrz lib/updateService.js), jego PID jest znany z
+    /// calkowita pewnoscia (przekazywany jako jawny argument, nie zgadywany) -
+    /// ta metoda jest ostatnia, gwarantowana proba dobicia go po PID, niezalezna
+    /// od tego, czy szerszy skan po nazwie/sciezce go w ogole zobaczyl.
+    /// Zwraca true jesli proces zostal zabity albo juz nie zyl.</summary>
+    bool KillProcessById(int pid);
 }
 
 public sealed class ProcessManager : IProcessManager
@@ -151,13 +165,81 @@ public sealed class ProcessManager : IProcessManager
                 }
                 catch (Win32Exception)
                 {
-                    // Odmowa dostepu / proces w trakcie zamykania - pomijamy, kontynuujemy
-                    // z reszta kandydatow zamiast przerywac cala operacje.
+                    // entireProcessTree:true buduje wewnetrznie Job Object - w zasadzie
+                    // zawsze dziala nawet dla procesu juz nalezacego do INNEGO joba
+                    // (Windows 8+ obsluguje zagniezdzanie), ale to jest cudzy, zewnetrzny
+                    // Win32 (np. proces w trakcie zamykania traci uchwyt w polowie
+                    // wywolania) - zamiast rezygnowac calkowicie, probujemy jeszcze
+                    // zwyklego Kill() bez proby zbudowania drzewa/joba, zanim faktycznie
+                    // dodamy do listy pominietych.
+                    try
+                    {
+                        proc.Kill();
+                        stopped.Add(proc.Id);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                    catch (Win32Exception)
+                    {
+                        // Odmowa dostepu / proces w trakcie zamykania - pomijamy, kontynuujemy
+                        // z reszta kandydatow zamiast przerywac cala operacje.
+                    }
                 }
             }
         }
 
         return stopped;
+    }
+
+    public bool KillProcessById(int pid)
+    {
+        Process proc;
+        try
+        {
+            proc = Process.GetProcessById(pid);
+        }
+        catch (ArgumentException)
+        {
+            return true; // juz nie zyje
+        }
+
+        using (proc)
+        {
+            try
+            {
+                if (proc.HasExited) return true;
+                proc.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                return true; // juz nie zyje
+            }
+            catch (Win32Exception)
+            {
+                try
+                {
+                    proc.Kill();
+                }
+                catch (InvalidOperationException)
+                {
+                    return true;
+                }
+                catch (Win32Exception)
+                {
+                    return false;
+                }
+            }
+
+            try
+            {
+                return proc.WaitForExit(5000);
+            }
+            catch (InvalidOperationException)
+            {
+                return true;
+            }
+        }
     }
 
     public bool IsProcessStillAlive(int pid)

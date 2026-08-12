@@ -4,7 +4,7 @@ namespace Scyzoryk.Launcher;
 /// Wynik parsowania - dla wiekszosci trybow InstallerPath/ExpectedVersion/
 /// RealInstallDir sa puste (nieuzywane). Wypelnione wylacznie dla ApplyUpdate.
 /// </summary>
-public sealed record ParsedArgs(LauncherMode Mode, string? InstallerPath = null, string? ExpectedVersion = null, string? RealInstallDir = null);
+public sealed record ParsedArgs(LauncherMode Mode, string? InstallerPath = null, string? ExpectedVersion = null, string? RealInstallDir = null, string? ParentPid = null);
 
 /// <summary>
 /// Parsuje argumenty wiersza polecen. Kazdy argument jest analizowany jako
@@ -46,7 +46,11 @@ public static class ArgsParser
                     && !string.IsNullOrWhiteSpace(args[2])
                     && !string.IsNullOrWhiteSpace(args[3]))
                 {
-                    return new ParsedArgs(LauncherMode.ApplyUpdate, args[1], args[2], args[3]);
+                    // 5. argument (PID procesu-nadzorcy, ktory spawnuje ta aktualizacje) jest
+                    // OPCJONALNY - wstecznie kompatybilne ze starszymi wywolaniami bez niego.
+                    // Patrz KillProcessById w ProcessManager.cs po co jest uzywany.
+                    var parentPid = args.Length >= 5 && !string.IsNullOrWhiteSpace(args[4]) ? args[4] : null;
+                    return new ParsedArgs(LauncherMode.ApplyUpdate, args[1], args[2], args[3], parentPid);
                 }
                 return new ParsedArgs(LauncherMode.Unknown);
             default:

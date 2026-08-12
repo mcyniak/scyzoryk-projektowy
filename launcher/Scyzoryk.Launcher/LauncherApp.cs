@@ -75,7 +75,7 @@ public sealed class LauncherApp
             LauncherMode.Autostart => await RunAutostartAsync().ConfigureAwait(false),
             LauncherMode.Stop => await RunStopAsync().ConfigureAwait(false),
             LauncherMode.Health => await RunHealthAsync().ConfigureAwait(false),
-            LauncherMode.ApplyUpdate => await RunApplyUpdateAsync(args.InstallerPath!, args.ExpectedVersion!).ConfigureAwait(false),
+            LauncherMode.ApplyUpdate => await RunApplyUpdateAsync(args.InstallerPath!, args.ExpectedVersion!, args.ParentPid).ConfigureAwait(false),
             LauncherMode.RegisterAutostart => RunRegisterAutostart(),
             LauncherMode.UnregisterAutostart => RunUnregisterAutostart(),
             _ => LogUnknownArgumentAndExit(),
@@ -331,11 +331,11 @@ public sealed class LauncherApp
     /// przerazajacego okna bledu - wynik i tak trafia do last-result.json,
     /// ktore czyta panel.
     /// </summary>
-    private async Task<int> RunApplyUpdateAsync(string installerPath, string expectedVersion)
+    private async Task<int> RunApplyUpdateAsync(string installerPath, string expectedVersion, string? parentPid)
     {
         try
         {
-            await _updateApplier.ApplyAsync(installerPath, expectedVersion).ConfigureAwait(false);
+            await _updateApplier.ApplyAsync(installerPath, expectedVersion, parentPid).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

@@ -462,4 +462,65 @@ public sealed class UpdateApplierTests
         var result = ReadLastResult(roots.UpdateRoot);
         Assert.False(result.GetProperty("ok").GetBoolean());
     }
+
+    // Audyt 2026-08-12 (zlapane live na produkcji): StopOwnedProcesses dopasowuje
+    // procesy WYLACZNIE po nazwie+sciezce i przy realnej aktualizacji jednorazowo
+    // pominal glowny proces-nadzorce server.js mimo identycznej sciezki jak jego
+    // dzieci - instalator probowal nadpisac pliki pod dzialajacym procesem. parentPid
+    // to gwarantowana, jawnie znana siatka bezpieczenstwa niezalezna od tego skanu -
+    // patrz EnsureParentProcessStopped w UpdateApplier.cs.
+    [Fact]
+    public async Task ParentPidStillAlive_AfterStopOwnedProcesses_IsKilledExplicitlyByPid()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager { ProcessAliveResult = true, KillProcessByIdResult = true };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3", parentPid: "4242");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, process.KillProcessByIdCallCount);
+        Assert.Contains(4242, process.KilledPids);
+    }
+
+    [Fact]
+    public async Task ParentPidAlreadyDead_AfterStopOwnedProcesses_KillProcessByIdIsNotCalled()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager { ProcessAliveResult = false };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3", parentPid: "4242");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, process.KillProcessByIdCallCount);
+    }
+
+    [Fact]
+    public async Task NoParentPidProvided_BackwardCompatible_KillProcessByIdIsNotCalled()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager { ProcessAliveResult = true };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, process.KillProcessByIdCallCount);
+    }
 }
