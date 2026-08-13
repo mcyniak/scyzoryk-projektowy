@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Protokoły</title>
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-file"/></svg>
+          <strong>Protokoły</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <section class="panel intro-panel">
+      <div class="intro-text">
+        <div class="kicker">Zdjęcia protokołów → gotowy PDF</div>
+        <h1>Złóż zdjęcia protokołów w PDF do druku</h1>
+        <p class="lead">Wpisz folder bazowy z adresami (tak samo jak w drukarce projektów). Narzędzie wejdzie w każdy folder adresu, znajdzie zdjęcia protokołu, przytnie tło, zamieni na czarno-białe (mniej tuszu) i złoży w jeden PDF. Podgląd przed zapisem - nic nie trafia na dysk automatycznie.</p>
+      </div>
+    </section>
+
+    <section class="panel" id="scanPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Folder bazowy</h2>
+          <p class="panel-desc">Np. G:\Dyski współdzielone\...\Projekty\Wysłane do gminy</p>
+        </div>
+      </div>
+      <div class="field-row">
+        <label class="option-field" style="grid-column: 1 / -1;">
+          <span class="option-label">Ścieżka folderu z adresami</span>
+          <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\..." autocomplete="off" />
+        </label>
+      </div>
+      <div class="open-folder-row">
+        <button id="scanBtn" class="btn btn-primary" type="button">Skanuj</button>
+        <span id="scanError" class="hint error-hint"></span>
+      </div>
+    </section>
+
+    <section class="panel" id="resultsPanel" style="display:none;">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Adresy <span id="resultsSummary"></span></h2>
+          <p class="panel-desc">Kliknij "Podgląd", żeby zobaczyć wynik przed zapisem. "Zapisz" dopisuje PDF do folderu adresu (podfolder, w którym leżały zdjęcia).</p>
+        </div>
+        <div class="nav-actions">
+          <button id="saveAllBtn" class="btn btn-secondary" type="button">Zapisz wszystkie (z zdjęciami)</button>
+        </div>
+      </div>
+      <div id="resultsTable"></div>
+    </section>
+
+    <section class="panel" id="previewPanel" style="display:none;">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Podgląd: <span id="previewAdres"></span></h2>
+        </div>
+        <div class="nav-actions">
+          <button id="previewSaveBtn" class="btn btn-primary" type="button">Zapisz ten PDF do folderu</button>
+        </div>
+      </div>
+      <div class="doc-viewer-stage" style="height: 70vh;">
+        <iframe id="pdfPreview" title="Podgląd PDF"></iframe>
+      </div>
+      <div id="previewStatus" class="hint"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

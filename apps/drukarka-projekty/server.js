@@ -235,7 +235,15 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
   }));
 
   const missingCount = orderWithPaths.filter(o => !o.fileName).length;
-  return { ok: true, folderName, folderPath, attachmentsFound: attachmentsList, order: orderWithPaths, missingCount };
+  return {
+    ok: true,
+    folderName,
+    folderPath,
+    attachmentsFound: attachmentsList,
+    order: orderWithPaths,
+    missingCount,
+    folderReadWarnings: classifiedRaw.warnings && classifiedRaw.warnings.length ? classifiedRaw.warnings : undefined
+  };
 }
 
 app.post("/api/match", async (req, res) => {

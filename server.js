@@ -101,7 +101,8 @@ const apps = [
   { slug: 'ocr-audytow', name: 'OCR audytów', description: 'Rozpoznawanie tekstu (w tym pisma recznego) na zeskanowanych audytach, z podzialem zbundlowanych plikow na adresy.', dir: path.join(ROOT, 'apps', 'ocr-audytow'), port: Number(process.env.OCR_AUDYTOW_PORT || 3011), healthPath: '/api/health' },
   { slug: 'nazywarka-skanow', name: 'Nazywarka skanów', description: 'Zmiana nazw zeskanowanych PDF-ow w miejscu, na sieciowym udziale skanera.', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), port: Number(process.env.NAZYWARKA_SKANOW_PORT || 3007), healthPath: '/api/health' },
   { slug: 'formularze-varmero', name: 'Formularze Varmero', description: 'Automatyczne zgloszenia do kalkulatora doboru pompy ciepla Varmero na podstawie tabeli adresowej, z odbiorem kart wynikowych mailem.', dir: path.join(ROOT, 'apps', 'formularze-varmero'), port: Number(process.env.FORMULARZE_VARMERO_PORT || 3012), healthPath: '/api/health', extraEnv: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || '0' } },
-  { slug: 'tworzenie-folderow', name: 'Tworzenie folderów', description: 'Automatyczne tworzenie struktury podfolderow (WM/pompy/kolektory/kotly) w istniejacym folderze inwestycji, na podstawie tabeli adresowej.', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), port: Number(process.env.TWORZENIE_FOLDEROW_PORT || 3013), healthPath: '/api/health' }
+  { slug: 'tworzenie-folderow', name: 'Tworzenie folderów', description: 'Automatyczne tworzenie struktury podfolderow (WM/pompy/kolektory/kotly) w istniejacym folderze inwestycji, na podstawie tabeli adresowej.', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), port: Number(process.env.TWORZENIE_FOLDEROW_PORT || 3013), healthPath: '/api/health' },
+  { slug: 'protokoly', name: 'Protokoły', description: 'Sklada zdjecia protokolow (z folderow adresow, tak jak w drukarce projektow) w przyciete, czarno-biale PDF-y gotowe do druku.', dir: path.join(ROOT, 'apps', 'protokoly'), port: Number(process.env.PROTOKOLY_PORT || 3014), healthPath: '/api/health' }
 ];
 
 
@@ -116,7 +117,8 @@ const dependencyChecks = [
   { slug: 'ocr-audytow', dir: path.join(ROOT, 'apps', 'ocr-audytow'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib', 'pdf-parse', 'jimp', 'sanitize-filename', 'xlsx', 'exceljs'] },
   { slug: 'nazywarka-skanow', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), deps: ['express', 'express-rate-limit'] },
   { slug: 'formularze-varmero', dir: path.join(ROOT, 'apps', 'formularze-varmero'), deps: ['express', 'playwright', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx', 'imapflow', 'mailparser'], playwright: true },
-  { slug: 'tworzenie-folderow', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), deps: ['express', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx'] }
+  { slug: 'tworzenie-folderow', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), deps: ['express', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx'] },
+  { slug: 'protokoly', dir: path.join(ROOT, 'apps', 'protokoly'), deps: ['express', 'express-rate-limit', 'jimp', 'pdf-lib'] }
 ];
 
 function appHasDependencies(app) {

@@ -230,6 +230,25 @@ function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
 #   - zadanie utknelo bez postepu (albo nigdy sie nie pojawilo) -> prawdziwe
 #     zawieszenie, zabijamy i zwracamy porazke (wywolujacy decyduje o dalszym
 #     fallbacku)
+# Audyt na zywo 2026-08-13 (Flexi-archiwum2): zabicie PROCESU wysylajacego
+# (Sumatra/Ghostscript) nie usuwa samego ZADANIA z kolejki drukarki - jesli
+# zdazylo juz trafic do spoolera/urzadzenia, zostaje tam jako martwe,
+# zawieszone zadanie. Kolejne proby druku (nawet innym silnikiem, albo zupelnie
+# inny dokument pozniej) trafialy ZA nim w kolejce i same tez wygladaly na
+# zawieszone, bo fizycznie nie mogly wyprzedzic zombie'a z przodu - jedyny
+# realny sposob odblokowania byl wtedy recznie zabic caly Print Spooler.
+# Probujemy WIEC teraz posprzatac po sobie od razu, best-effort (jesli sie nie
+# uda, i tak i tak nic gorszego sie nie stanie niz stan sprzed tej poprawki).
+function Remove-StalledPrintJob([string]$targetPrinter, [Nullable[int]]$jobId, [string]$engineName) {
+  if (-not $jobId) { return }
+  try {
+    Remove-PrintJob -PrinterName $targetPrinter -ID $jobId -ErrorAction Stop
+    Write-PrintLog "$engineName - usunieto zawieszone zadanie Id=$jobId z kolejki drukarki."
+  } catch {
+    Write-PrintLog "$engineName - nie udalo sie usunac zawieszonego zadania Id=$jobId z kolejki: $($_.Exception.Message)"
+  }
+}
+
 function Wait-ForPrintJobProgress([System.Diagnostics.Process]$proc, [string]$targetPrinter, $jobIdsBeforeStart, [string]$engineName) {
   if (-not ($targetPrinter -and $null -ne $jobIdsBeforeStart)) {
     Write-PrintLog "$engineName - sledzenie kolejki niedostepne dla tej drukarki - nie da sie bezpiecznie odroznic zawieszenia od wyslanego zadania."
@@ -280,6 +299,7 @@ function Wait-ForPrintJobProgress([System.Diagnostics.Process]$proc, [string]$ta
       } elseif (((Get-Date) - $lastProgressAt) -gt $stallTimeout) {
         Write-PrintLog "$engineName - zadanie Id=$trackedJobId utknelo bez postepu przez $([int]$stallTimeout.TotalSeconds)s - zabijam proces."
         try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+        Remove-StalledPrintJob -targetPrinter $targetPrinter -jobId $trackedJobId -engineName $engineName
         return $false
       }
     }
@@ -288,6 +308,7 @@ function Wait-ForPrintJobProgress([System.Diagnostics.Process]$proc, [string]$ta
   }
   Write-PrintLog "$engineName - zadne zadanie nie pojawilo sie/nie zakonczylo w kolejce w rozsadnym czasie - zabijam proces."
   try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+  Remove-StalledPrintJob -targetPrinter $targetPrinter -jobId $trackedJobId -engineName $engineName
   return $false
 }
 
@@ -359,7 +380,20 @@ function Invoke-PrintWithGhostscript([string]$path, [string]$targetPrinter, $job
 # zeby zastosowac drukarke wybrana w panelu i nie dotykac Worda uzytkownika.
 $isPdf = $FilePath.ToLower().EndsWith(".pdf")
 
-if ($hasTargetedPrinter -and $isPdf) {
+if ($isPdf) {
+  # Audyt na zywo 2026-08-13: stara wersja tej galezi uzywala Sumatry/
+  # Ghostscripta TYLKO gdy uzytkownik jawnie wybral drukarke ($hasTargetedPrinter),
+  # a przy druku na "Domyslna systemu" (pusta wartosc w rozwijanej liscie -
+  # patrz apps/drukarka/public/index.html#printerSelectInput, wybierana tez
+  # gdy /api/printers nie zdazy sie jeszcze zaladowac) spadala na
+  # Invoke-PrintWithShell (Start-Process -Verb Print) - kruche podejscie
+  # zalezne od skojarzenia pliku PDF z aplikacja w Windows, ktore rzuca
+  # InvalidOperationException "nie skojarzono zadnej aplikacji" na maszynach
+  # bez zarejestrowanego domyslnego czytnika PDF (a Sumatra/Ghostscript same
+  # w sobie NIC takiego nie rejestruja). $printerName (patrz wyzej) jest JUZ
+  # poprawnie wyliczone na realna nazwe drukarki domyslnej nawet gdy
+  # $hasTargetedPrinter jest false, wiec Sumatra/Ghostscript moga byc uzyte
+  # zawsze - Invoke-PrintWithShell nie jest juz nigdzie potrzebny.
   $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName -jobIdsBeforeSumatra $jobIdsBefore
   if (-not $sent) {
     Write-PrintLog "Sumatra nie wyslala - probuje Ghostscript"
@@ -367,19 +401,16 @@ if ($hasTargetedPrinter -and $isPdf) {
     Write-PrintLog "Ghostscript wynik: $sent"
   }
   if (-not $sent) {
-    # Audyt v1.0.4, P0-1: wczesniej tu byl fallback na Invoke-PrintWithShell,
-    # ktory NIE przyjmuje nazwy drukarki (-Verb Print) - moglo to wysic
-    # dokument na zupelnie INNA (domyslna) drukarke niz ta, ktora uzytkownik
-    # jawnie wybral w panelu, bez zadnego ostrzezenia. Skoro drukarka zostala
-    # jawnie wskazana, a Sumatra i Ghostscript obie zawiodly, to jest realny
-    # blad - przerywamy, zamiast po cichu drukowac gdzie indziej.
-    Write-PrintLog "Sumatra i Ghostscript zawiodly dla jawnie wskazanej drukarki - PRZERYWAM (bez fallbacku na drukarke domyslna)."
-    throw "PRINT_TARGETED_FAILED: Nie udalo sie wyslac pliku na wskazana drukarke '$printerName' (Sumatra i Ghostscript zawiodly). Sprawdz, czy drukarka jest wlaczona i dostepna w sieci."
+    # Audyt v1.0.4, P0-1: przy JAWNIE wskazanej drukarce celowo NIE ma tu
+    # fallbacku na cokolwiek inne (np. drukarke domyslna) - uzytkownik mial
+    # jasny wybor, wiec cicha zmiana drukarki po awarii bylaby zaskoczeniem.
+    # Skoro Sumatra i Ghostscript obie zawiodly, to jest realny blad -
+    # przerywamy z czytelnym komunikatem zamiast probowac cos jeszcze.
+    Write-PrintLog "Sumatra i Ghostscript zawiodly dla drukarki '$printerName' - PRZERYWAM."
+    throw "PRINT_TARGETED_FAILED: Nie udalo sie wyslac pliku na drukarke '$printerName' (Sumatra i Ghostscript zawiodly). Sprawdz, czy drukarka jest wlaczona i dostepna w sieci."
   }
-} elseif (-not $isPdf) {
-  Invoke-PrintWithWordCom -FilePath $FilePath -PrinterName $printerName
 } else {
-  $null = Invoke-PrintWithShell -path $FilePath
+  Invoke-PrintWithWordCom -FilePath $FilePath -PrinterName $printerName
 }
 
 Restore-Foreground $originalForeground

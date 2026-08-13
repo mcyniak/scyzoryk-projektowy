@@ -463,6 +463,9 @@
       const statusHtml = needsReview
         ? `<span class="badge guess">⚠ ${reviewCount} do sprawdzenia</span>`
         : `<span class="badge ok">✓ komplet</span>`;
+      const readWarningHtml = (r.folderReadWarnings && r.folderReadWarnings.length)
+        ? `<div class="help-note" style="color:#b45309;">⚠️ Nie udało się w pełni odczytać folderu z dysku (możliwa chwilowa usterka dysku sieciowego) - dopasowanie może być niepełne. Spróbuj dopasować ten adres jeszcze raz.</div>`
+        : "";
       const collapsedClass = " collapsed";
       return `
       <div class="address-group${collapsedClass}" data-gidx="${gIdx}">
@@ -475,6 +478,7 @@
           <div class="group-status">${statusHtml}</div>
           <span class="chevron">▾</span>
         </div>
+        ${readWarningHtml}
         <ul class="order-list" data-gidx="${gIdx}"></ul>
       </div>
     `;

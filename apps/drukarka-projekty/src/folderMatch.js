@@ -95,24 +95,78 @@ function isTemporaryFile(fileName) {
   return TEMP_FILE_PATTERNS.some(re => re.test(base));
 }
 
+// Audyt na zywo 2026-08-13: prawdziwy przypadek na Google Drive
+// ("G:\Dyski wspoldzielone\...") - odczyt PODFOLDERU (depth>0) zawiodl
+// chwilowo (dokladnie przyczyna juz przewidziana w komentarzu przy
+// scanFilesRecursive ponizej), zostal cicho potraktowany jako "podfolder
+// pusty" bez zadnej proby ponowienia, a dopasowanie po cichu spadlo na
+// pliki robocze (DWG/BAK/TIF) lezace luzem w folderze adresu. Ponawiamy
+// TYLKO nieudany odczyt (rzadka sciezka), zanim faktycznie uznamy podfolder
+// za nieczytelny.
+const NESTED_READ_RETRY_ATTEMPTS = Number(process.env.DRUKARKA_PROJEKTY_NESTED_READ_RETRIES || 2);
+const NESTED_READ_RETRY_DELAY_MS = Number(process.env.DRUKARKA_PROJEKTY_NESTED_READ_RETRY_DELAY_MS || 400);
+
+// Brak Atomics.wait na glownym watku (Node rzuca wyjatkiem poza Workerem), a
+// zamiana scanFilesRecursive/classifyFiles na async pociagnelaby za soba
+// wszystkie miejsca ktore wolaja je synchronicznie, m.in.
+// test-sorting-regression.js - zwykle zajete-czekanie jest tu swiadomym
+// kompromisem: uruchamia sie WYLACZNIE po juz-nieudanej probie odczytu
+// podfolderu (rzadka sciezka), nigdy w typowym biegu.
+function blockingSleep(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) { /* busy-wait */ }
+}
+
+function readDirWithRetry(currentPath, depth) {
+  const maxAttempts = depth === 0 ? 1 : 1 + NESTED_READ_RETRY_ATTEMPTS;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return fs.readdirSync(currentPath, { withFileTypes: true });
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts) blockingSleep(NESTED_READ_RETRY_DELAY_MS);
+    }
+  }
+  throw lastErr;
+}
+
+// Priorytet dla podfolderu z dokumentami PDF (np. "<adres>-pdf") nad plikami
+// luzem w folderze adresu albo w innych podfolderach - real case 2026-08-13:
+// prawdziwe dokumenty czesto siedza w takim podfolderze, a w folderze
+// adresu leza tylko pliki robocze (DWG/BAK/TIF) o podobnych nazwach, ktore
+// bez tego priorytetu potrafily wygrac w .find()-ach klasyfikacji ponizej.
+// Array.prototype.sort jest stabilny (gwarancja specyfikacji od ES2019),
+// wiec w obrebie tej samej rangi kolejnosc naturalnego przechodzenia
+// katalogu jest zachowana.
+function pdfSubfolderRank(relPath) {
+  const dir = path.dirname(relPath);
+  if (dir === '.') return 1;
+  return /pdf/i.test(dir.split(path.sep)[0]) ? 0 : 1;
+}
+
 function scanFilesRecursive(folderPath) {
   const results = [];
+  const warnings = [];
   function walk(currentPath, relativePath, depth) {
     if (depth > MAX_SCAN_DEPTH) return;
     let entries;
     try {
-      entries = fs.readdirSync(currentPath, { withFileTypes: true });
+      entries = readDirWithRetry(currentPath, depth);
     } catch (err) {
       // Folder adresu sam w sobie nieczytelny (np. chwilowy problem sieciowego
       // dysku Google Drive, blokada uprawnien) - odrozniamy to od "folder
       // pusty". Bez tego rozroznienia caly komplet dokumentow wygladal jak
       // "BRAK PLIKU" dla kazdej pozycji, sugerujac ze pliki naprawde nie
       // istnieja, zamiast ze po prostu nie udalo sie ich odczytac. Zagniezdzone
-      // podfoldery (depth>0) zostaja tolerowane jak dawniej - pojedynczy dziwny
-      // podfolder nie powinien blokowac calego dopasowania adresu.
+      // podfoldery (depth>0) zostaja tolerowane PO probach ponowien powyzej -
+      // pojedynczy dalej-nieczytelny podfolder nie powinien blokowac calego
+      // dopasowania adresu, ale zglaszamy to jako ostrzezenie zamiast cicho
+      // udawac ze byl pusty.
       if (depth === 0) {
         throw new Error(`Nie udało się odczytać folderu "${currentPath}": ${err.message || err}`);
       }
+      warnings.push(`Podfolder "${relativePath}" nie został odczytany mimo ponowień (${err.message || err}) - pominięty, mógł zawierać pliki. Spróbuj dopasować ten adres jeszcze raz.`);
       return;
     }
     for (const entry of entries) {
@@ -129,11 +183,12 @@ function scanFilesRecursive(folderPath) {
     }
   }
   walk(folderPath, '', 0);
-  return results;
+  results.sort((a, b) => pdfSubfolderRank(a) - pdfSubfolderRank(b));
+  return { files: results, warnings };
 }
 
 function classifyFiles(folderPath) {
-  const allEntries = scanFilesRecursive(folderPath);
+  const { files: allEntries, warnings } = scanFilesRecursive(folderPath);
   const ignoredTemporary = allEntries.filter(isTemporaryFile);
   const entries = allEntries.filter(name => !isTemporaryFile(name));
 
@@ -178,7 +233,7 @@ function classifyFiles(folderPath) {
   if (printable.includes(techDescDocx)) usedSoFar.add(techDescDocx);
   const pool = printable.filter(n => !usedSoFar.has(n));
 
-  return { printable, skipped, ignoredTemporary, droppedDuplicates, titlePage, techDescPdf, techDescDocx, drawingLike, otStVariants, pool };
+  return { printable, skipped, ignoredTemporary, droppedDuplicates, titlePage, techDescPdf, techDescDocx, drawingLike, otStVariants, pool, warnings };
 }
 
 async function extractText(folderPath, techDescDocx, techDescPdf) {
@@ -337,7 +392,60 @@ function buildOrder(classified, attachmentsList, addressHint) {
     return found;
   }
   function takeFromPool(keywords) { return takeAllFromPool(f => keywords.some(kw => normalize(f).includes(kw))); }
-  function takeAllAddressNamedFiles() { if (!myTokens.length) return []; return takeAllFromPool(f => filenameMatchesOwnAddress(f, myTokens)); }
+
+  // Grupuje po "core" nazwy (bez rozszerzenia i bez ewentualnego doklejonego
+  // znacznika czasu zapisu _RRRRMMDD_GGMMSS) - patrz komentarz przy uzyciu
+  // ponizej w petli zalacznikow.
+  const TRAILING_TIMESTAMP_RE = /_\d{8}_\d{6}$/;
+  function coreDocumentName(fileName) {
+    const ext = path.extname(fileName);
+    const base = path.basename(fileName, ext);
+    return normalize(base.replace(TRAILING_TIMESTAMP_RE, ""));
+  }
+  function dedupeSameDocumentDifferentFormat(files) {
+    const byCore = new Map();
+    for (const f of files) {
+      const key = coreDocumentName(f);
+      if (!byCore.has(key)) byCore.set(key, []);
+      byCore.get(key).push(f);
+    }
+    const keep = [];
+    const extras = [];
+    for (const group of byCore.values()) {
+      if (group.length === 1) { keep.push(group[0]); continue; }
+      const pdfVersion = group.find(n => n.toLowerCase().endsWith(".pdf"));
+      const winner = pdfVersion || group[0];
+      keep.push(winner);
+      for (const n of group) { if (n !== winner) extras.push(n); }
+    }
+    return { keep, extras };
+  }
+  // Audyt na zywo 2026-08-13 (Kazimierz Biskupi, Ul. Reja 5, Posada): to jest
+  // AWARYJNY fallback dla protokolu (patrz uzycie ponizej), wiec musi byc
+  // waski. Prawdziwe pliki protokolu sa w praktyce nazwane SAMYM adresem
+  // (np. "Żarnów Spacerowa.pdf" - patrz przypiety test regresyjny), ale w
+  // tym samym folderze inne dokumenty (np. "Przedmiar robót - Ul. Reja 5,
+  // Posada.pdf") TEZ zawieraja adres w nazwie, jako sufiks przy wlasciwej
+  // tresciowej nazwie. Dawna wersja brala KAZDY plik pasujacy do adresu,
+  // wiec gdy w folderze faktycznie nie bylo protokolu, po cichu porywala
+  // pierwszy z brzegu inny dokument i podpisywala go jako protokol - a
+  // prawdziwy dokument (tu: Przedmiar robot) wychodzil potem jako "BRAK
+  // PLIKU", bo byl juz zajety. Teraz bierzemy TYLKO pliki, ktorych nazwa (po
+  // odjeciu tokenow adresu) nie zostawia zadnych innych sensownych slow -
+  // jesli takiego pliku nie ma, zwracamy pusto (protokol poprawnie wychodzi
+  // jako brak), zamiast zgadywac. Trzecia linia w petli zalacznikow ponizej
+  // (generyczny takeFromPool po slowach kluczowych, w tym "protok" z
+  // KEYWORD_MAP) nadal lapie prawdziwe pliki protokolu z dodatkowymi
+  // slowami w nazwie (np. "Protokol uzgodnien - Zarnow.pdf").
+  function takeAllAddressNamedFiles() {
+    if (!myTokens.length) return [];
+    return takeAllFromPool(f => {
+      if (!filenameMatchesOwnAddress(f, myTokens)) return false;
+      const base = path.basename(f, path.extname(f));
+      const leftoverWords = normalize(base).split(" ").filter(w => w && !myTokens.includes(w));
+      return leftoverWords.length === 0;
+    });
+  }
 
   let protokolByContent = classified.protokolFileByContent || null;
 
@@ -373,6 +481,7 @@ function buildOrder(classified, attachmentsList, addressHint) {
 
   const unmatchedAttachments = [];
   const satisfiedKeywordSets = [];
+  const duplicateFiles = [];
   for (const att of attachmentsList) {
     const isProtokolLike = /protok|uzgodni/i.test(att.name);
     const keywords = guessKeywordsForAttachment(att.name);
@@ -381,6 +490,20 @@ function buildOrder(classified, attachmentsList, addressHint) {
     if (isProtokolLike && protokolByContent) { foundFiles = [protokolByContent]; confidence = "pewne"; protokolByContent = null; }
     if (!foundFiles.length && isProtokolLike) { foundFiles = takeAllAddressNamedFiles(); confidence = "pewne"; }
     if (!foundFiles.length) { foundFiles = takeFromPool(keywords); }
+    if (foundFiles.length > 1) {
+      // Audyt na zywo 2026-08-13 (Bilans cieplny, Reja 5): takeFromPool celowo
+      // zbiera WSZYSTKIE dopasowania (kilka prawdziwie roznych plikow moze
+      // pasowac do jednego zalacznika, np. strony rysunku) - ale to samo
+      // zrodlowe zdjecie/dokument bywa dostepne w dwoch formatach z jednego
+      // eksportu (np. "OZC_....pdf" i "OZC..._20260730_143045.docx", gdzie
+      // docx to po prostu ten sam plik z doklejonym znacznikiem czasu
+      // zapisu), co bez tej deduplikacji dawalo DWA osobne wpisy tego samego
+      // zalacznika zamiast jednego. Ten sam "core" nazwy (bez rozszerzenia i
+      // bez ewentualnego sufiksu _RRRRMMDD_GGMMSS) -> jeden wpis, preferuj PDF.
+      const deduped = dedupeSameDocumentDifferentFormat(foundFiles);
+      foundFiles = deduped.keep;
+      duplicateFiles.push(...deduped.extras);
+    }
     if (foundFiles.length) {
       satisfiedKeywordSets.push(isProtokolLike ? ["protok"] : keywords);
       foundFiles.forEach((file, idx) => {
@@ -392,7 +515,6 @@ function buildOrder(classified, attachmentsList, addressHint) {
     }
   }
 
-  const duplicateFiles = [];
   for (let i = pool.length - 1; i >= 0; i -= 1) {
     const leftoverNorm = normalize(pool[i]);
     const isDuplicateOfSatisfied = satisfiedKeywordSets.some(kws => kws.some(kw => leftoverNorm.includes(kw)));
