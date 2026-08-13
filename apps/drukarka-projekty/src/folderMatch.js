@@ -184,11 +184,22 @@ function scanFilesRecursive(folderPath) {
   }
   walk(folderPath, '', 0);
   results.sort((a, b) => pdfSubfolderRank(a) - pdfSubfolderRank(b));
-  return { files: results, warnings };
+  // Audyt na zywo 2026-08-13 (zlapane przez CI, test/group6-workflows.test.js):
+  // scanFilesRecursive jest publicznie eksportowana i mial zewnetrzny test
+  // wywolujacy .sort() bezposrednio na wyniku ORAZ inny porownujacy go przez
+  // assert.deepStrictEqual, oba zakladajace ZWYKLA tablice. Zamiast lamac ten
+  // kontrakt (zwracanie {files, warnings}), doczepiamy warnings jako
+  // NIEENUMEROWALNA wlasciwosc NA tablicy - .sort()/.filter()/.map()/.length
+  // dzialaja dokladnie jak wczesniej, deepStrictEqual jej nie widzi (patrzy
+  // tylko na wlasne enumerowalne wlasciwosci), a classifyFiles ponizej i tak
+  // moze ja odczytac przez zwykly dostep do wlasciwosci.
+  Object.defineProperty(results, 'warnings', { value: warnings, enumerable: false });
+  return results;
 }
 
 function classifyFiles(folderPath) {
-  const { files: allEntries, warnings } = scanFilesRecursive(folderPath);
+  const allEntries = scanFilesRecursive(folderPath);
+  const warnings = allEntries.warnings || [];
   const ignoredTemporary = allEntries.filter(isTemporaryFile);
   const entries = allEntries.filter(name => !isTemporaryFile(name));
 

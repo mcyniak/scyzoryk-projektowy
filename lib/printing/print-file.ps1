@@ -128,11 +128,6 @@ try { $originalForeground = [ScyzorykFocusGuard]::GetForegroundWindow() } catch 
 $printerName = if ($hasTargetedPrinter) { $PrinterName.Trim() } else { Get-DefaultPrinterName }
 $jobIdsBefore = Get-PrintJobIds $printerName
 
-function Invoke-PrintWithShell([string]$path) {
-  try { return Start-Process -FilePath $path -Verb Print -PassThru -WindowStyle Hidden }
-  catch { return Start-Process -FilePath $path -Verb Print -PassThru }
-}
-
 function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
   $word = $null
   $doc = $null

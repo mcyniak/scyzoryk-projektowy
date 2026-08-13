@@ -176,14 +176,24 @@ test('print-file.ps1: brak cichego fallbacku na drukarke domyslna i wymog potwie
   const root = path.resolve(__dirname, '..');
   const script = fs.readFileSync(path.join(root, 'lib', 'printing', 'print-file.ps1'), 'utf8');
 
-  // P0-1a: gdy jawnie wskazana drukarka zawiedzie (Sumatra i Acrobat obie),
-  // skrypt MUSI przerwac z bledem - nie wolno mu juz przechodzic na
-  // Invoke-PrintWithShell (ktora nie przyjmuje nazwy drukarki i moglaby
-  // wydrukowac na drukarce domyslnej bez ostrzezenia).
+  // P0-1a: gdy druk PDF-a zawiedzie (Sumatra i Ghostscript obie), skrypt MUSI
+  // przerwac z bledem - nie wolno mu przechodzic na Invoke-PrintWithShell
+  // (Start-Process -Verb Print), ktora zalezy od skojarzenia pliku z
+  // aplikacja w Windows i rzuca InvalidOperationException na maszynach bez
+  // zarejestrowanego domyslnego czytnika PDF. Audyt 2026-08-13: funkcja ta
+  // zostala usunieta calkowicie (byla martwym kodem - jedyne jej wywolanie,
+  // uzywane wczesniej TYLKO gdy nie wskazano jawnie drukarki, zostalo
+  // zastapione uzyciem Sumatry/Ghostscriptu z realnie wyliczona drukarka
+  // domyslna, patrz $printerName wyzej w skrypcie).
   assert.match(script, /PRINT_TARGETED_FAILED/);
-  const targetedBlockMatch = script.match(/if \(\$hasTargetedPrinter -and \$isPdf\) \{[\s\S]*?\n\}/);
-  assert.ok(targetedBlockMatch, 'nie znaleziono bloku $hasTargetedPrinter -and $isPdf');
-  assert.doesNotMatch(targetedBlockMatch[0], /if \(-not \$sent\) \{ \$null = Invoke-PrintWithShell/);
+  // Funkcja zostala usunieta calkowicie, ale jej nazwa (i "-Verb Print")
+  // zostaja w komentarzach audytowych jako uzasadnienie usuniecia - sprawdzamy
+  // wiec brak DEFINICJI, nie kazde wystapienie samej nazwy w tekscie.
+  assert.doesNotMatch(script, /function Invoke-PrintWithShell/);
+  const targetedBlockMatch = script.match(/if \(\$isPdf\) \{[\s\S]*?\n\}/);
+  assert.ok(targetedBlockMatch, 'nie znaleziono bloku if ($isPdf)');
+  assert.match(targetedBlockMatch[0], /Invoke-PrintWithSumatra/);
+  assert.match(targetedBlockMatch[0], /Invoke-PrintWithGhostscript/);
 
   // P0-1b: "OK" na koncu skryptu nie moze juz byc bezwarunkowe, gdy sledzenie
   // kolejki bylo dostepne, a zadne nowe zadanie sie nie pojawilo.
