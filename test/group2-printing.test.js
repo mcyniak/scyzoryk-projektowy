@@ -215,6 +215,67 @@ test('skrypt nie dotyka cudzych okien i drukuje DOCX przez wlasny Word COM', () 
   }
 });
 
+test('print-file.ps1: Ghostscript zastapil Acrobata jako zapasowy silnik druku (audyt 2026-08-13)', () => {
+  const root = path.resolve(__dirname, '..');
+  const script = fs.readFileSync(path.join(root, 'lib', 'printing', 'print-file.ps1'), 'utf8');
+
+  // Acrobat usuniety jako silnik druku - nie da sie go legalnie dolaczyc do
+  // instalatora (komentarze WYJASNIAJACE dlaczego moga nadal wspominac nazwe
+  // historycznie, wiec sprawdzamy brak faktycznego KODU, nie brak slowa).
+  assert.doesNotMatch(script, /\$AcrobatPath/);
+  assert.doesNotMatch(script, /Invoke-PrintWithAcrobat/);
+  assert.doesNotMatch(script, /Close-AcrobatIfUsed/);
+  assert.doesNotMatch(script, /Acrobat\.exe|AcroRd32\.exe/);
+
+  // Ghostscript jako zapasowy silnik, wskazujacy na wendorowana binarke.
+  assert.match(script, /\$GhostscriptPath = Join-Path \$PSScriptRoot "ghostscript\\bin\\gswin64c\.exe"/);
+  assert.match(script, /Invoke-PrintWithGhostscript/);
+  assert.match(script, /-sDEVICE=mswinpr2/);
+
+  // -dNoCancel chowa wbudowany pasek postepu mswinpr2 (Devices.rst) - bez
+  // niego Ghostscript pokazuje wlasne male okienko przy kazdym druku
+  // (zlapane live 2026-08-13).
+  assert.match(script, /-dNoCancel/);
+
+  // SAFER musi pozostac aktywne (domyslne od gs 9.50) - nigdy nie wylaczamy
+  // go blankietowo dla tresci PDF-ow pochodzacych od uzytkownikow. Wolno
+  // przyznac WYLACZNIE zgode na wybor urzadzenia druku. Sprawdzamy faktyczna
+  // tablice argumentow gs ($gsArgs), nie caly plik - komentarz wyjasniajacy
+  // decyzje legalnie wspomina "-dNOSAFER" jako to, czego swiadomie NIE uzywamy.
+  const gsArgsMatch = script.match(/\$gsArgs = @\(([\s\S]*?)\)/);
+  assert.ok(gsArgsMatch, 'nie znaleziono definicji $gsArgs');
+  assert.doesNotMatch(gsArgsMatch[1], /-dNOSAFER/);
+  assert.match(script, /--permit-devices=mswinpr2/);
+
+  // Dispatch: Sumatra pozostaje pierwsza probą, Ghostscript zastepuje Acrobata
+  // jako druga (i ostatnia) - bez trzeciej linii.
+  assert.match(script, /Invoke-PrintWithSumatra[\s\S]*?Invoke-PrintWithGhostscript/);
+  assert.match(script, /PRINT_TARGETED_FAILED.*Sumatra i Ghostscript zawiodly/);
+});
+
+test('lib/printing/ghostscript: wendorowany runtime jest kompletny i ma dolaczona licencje AGPL', () => {
+  const root = path.resolve(__dirname, '..');
+  const gsDir = path.join(root, 'lib', 'printing', 'ghostscript');
+  for (const rel of [
+    'bin/gswin64c.exe',
+    'bin/gsdll64.dll',
+    'Resource/Init/gs_init.ps',
+    'COPYING',
+    'README.md'
+  ]) {
+    assert.ok(fs.existsSync(path.join(gsDir, rel)), `Brakuje wendorowanego pliku Ghostscript: ${rel}`);
+  }
+  // gswin64.exe (wariant z oknem GUI) i doc/examples nie sa potrzebne w
+  // uzyciu wylacznie jako biblioteka druku - swiadomie pominiete przy
+  // wendorowaniu, zeby nie rozdmuchiwac instalatora.
+  assert.equal(fs.existsSync(path.join(gsDir, 'bin', 'gswin64.exe')), false);
+  assert.equal(fs.existsSync(path.join(gsDir, 'doc')), false);
+  assert.equal(fs.existsSync(path.join(gsDir, 'examples')), false);
+
+  const copying = fs.readFileSync(path.join(gsDir, 'COPYING'), 'utf8');
+  assert.match(copying, /GNU AFFERO GENERAL PUBLIC LICENSE/);
+});
+
 // Audyt rozdz. 10/11, P0: scalanie sasiadujacych PDF-ow przy druku
 // dwustronnym nie moze pozwolic, zeby pierwsza strona kolejnego dokumentu
 // wyladowala na odwrocie ostatniej strony poprzedniego.

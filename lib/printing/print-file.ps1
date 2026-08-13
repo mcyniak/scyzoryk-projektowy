@@ -28,10 +28,17 @@ function Write-PrintLog([string]$msg) {
 Write-PrintLog "--- START druku: $FilePath | drukarka: $PrinterName ---"
 
 $SumatraPath = Join-Path $PSScriptRoot "SumatraPDF.exe"
-$AcrobatPath = "C:\Program Files\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
-if (-not (Test-Path $AcrobatPath)) {
-  $AcrobatPath = "C:\Program Files (x86)\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe"
-}
+# Audyt 2026-08-13: Adobe Acrobat (dawny zapasowy silnik druku) zastapiony
+# Ghostscriptem - Acrobata nie dalo sie legalnie dolaczyc do instalatora (na
+# maszynie bez zainstalowanego Acrobata druk po prostu by nie dzialal), a do
+# tego wymagal recznego chowania/zamykania wlasnego okna. Ghostscript jest
+# darmowy, redystrybuowalny (AGPL, patrz lib/printing/ghostscript/COPYING),
+# dzialajacy jako czyste narzedzie konsolowe (bez okna z definicji - "-dNoCancel"
+# wylacza nawet wbudowany maly pasek postepu, patrz Devices.rst z dystrybucji).
+# Uzywa urzadzenia "mswinpr2" - drukuje przez GDI Windows (jak kazda zwykla
+# aplikacja), a nie przez bezposrednie sterowniki PDF/PS, co omija dokladnie
+# ta klase problemow z portami WSD.
+$GhostscriptPath = Join-Path $PSScriptRoot "ghostscript\bin\gswin64c.exe"
 $hasTargetedPrinter = ($PrinterName -and $PrinterName.Trim())
 
 function Get-DefaultPrinterName {
@@ -206,7 +213,83 @@ function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
   }
 }
 
-function Quote-CmdArg([string]$value) { return '"' + $value.Replace('"', '\"') + '"' }
+# Audyt 2026-08-12/13: wspolna logika "proces sie nie konczy w rozsadnym
+# czasie, ale moze juz drukowac" - uzywana zarowno przez Sumatre (zawieszanie
+# sie "-exit-when-done" na portach WSD), jak i przez Ghostscript (zapasowy
+# silnik, patrz Invoke-PrintWithGhostscript - trzymany jako ta sama siatka
+# bezpieczenstwa, mimo ze w testach na prawdziwej drukarce WSD Ghostscript
+# zawsze konczyl sie sam). Zamiast zabijac proces na slepo po samym uplywie
+# czasu (co przy WSD potrafilo zostawic w kolejce NIEKOMPLETNY wydruk -
+# potwierdzone live: brakowalo jednego z polaczonych plikow po zabiciu
+# Sumatry w polowie transferu) albo ufac samej OBECNOSCI zadania w kolejce
+# (co nie odroznia niekompletnego zadania od prawdziwego sukcesu), SLEDZIMY
+# realny postep (Get-PrintJob's PagesPrinted):
+#   - zadanie robi postep -> NIE zabijamy, czekamy dalej
+#   - zadanie znika z kolejki PO potwierdzonym postepie -> drukarka je
+#     skonsumowala, prawdziwy sukces
+#   - zadanie utknelo bez postepu (albo nigdy sie nie pojawilo) -> prawdziwe
+#     zawieszenie, zabijamy i zwracamy porazke (wywolujacy decyduje o dalszym
+#     fallbacku)
+function Wait-ForPrintJobProgress([System.Diagnostics.Process]$proc, [string]$targetPrinter, $jobIdsBeforeStart, [string]$engineName) {
+  if (-not ($targetPrinter -and $null -ne $jobIdsBeforeStart)) {
+    Write-PrintLog "$engineName - sledzenie kolejki niedostepne dla tej drukarki - nie da sie bezpiecznie odroznic zawieszenia od wyslanego zadania."
+    try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+    return $false
+  }
+
+  $trackedJobId = $null
+  $lastPagesPrinted = -1
+  $lastProgressAt = Get-Date
+  $stallTimeout = [TimeSpan]::FromSeconds(20)
+  $hardDeadline = (Get-Date).AddSeconds(90)
+
+  while ((Get-Date) -lt $hardDeadline) {
+    if ($proc.HasExited) {
+      Write-PrintLog "$engineName zakonczyl sie po dluzszym oczekiwaniu, kod wyjscia: $($proc.ExitCode)"
+      return ($proc.ExitCode -eq 0)
+    }
+
+    $jobs = $null
+    try { $jobs = @(Get-PrintJob -PrinterName $targetPrinter -ErrorAction SilentlyContinue) } catch { $jobs = @() }
+
+    if ($null -eq $trackedJobId) {
+      foreach ($j in $jobs) {
+        if ($null -ne $j -and -not $jobIdsBeforeStart.Contains([int]$j.Id)) {
+          $trackedJobId = [int]$j.Id
+          $lastPagesPrinted = [int]$j.PagesPrinted
+          $lastProgressAt = Get-Date
+          Write-PrintLog "$engineName - znaleziono nowe zadanie w kolejce (Id=$trackedJobId) - sledze jego postep."
+          break
+        }
+      }
+    } else {
+      $trackedJob = $jobs | Where-Object { $null -ne $_ -and [int]$_.Id -eq $trackedJobId } | Select-Object -First 1
+      if ($null -eq $trackedJob) {
+        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+        if ($lastPagesPrinted -gt 0) {
+          Write-PrintLog "$engineName - zadanie Id=$trackedJobId zniknelo z kolejki po realnym postepie (PagesPrinted=$lastPagesPrinted) - traktuje jako sukces."
+          return $true
+        }
+        Write-PrintLog "$engineName - zadanie Id=$trackedJobId zniknelo z kolejki bez zadnego potwierdzonego postepu - porazka."
+        return $false
+      }
+      $currentPages = [int]$trackedJob.PagesPrinted
+      if ($currentPages -gt $lastPagesPrinted) {
+        $lastPagesPrinted = $currentPages
+        $lastProgressAt = Get-Date
+      } elseif (((Get-Date) - $lastProgressAt) -gt $stallTimeout) {
+        Write-PrintLog "$engineName - zadanie Id=$trackedJobId utknelo bez postepu przez $([int]$stallTimeout.TotalSeconds)s - zabijam proces."
+        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+        return $false
+      }
+    }
+
+    Start-Sleep -Milliseconds 500
+  }
+  Write-PrintLog "$engineName - zadne zadanie nie pojawilo sie/nie zakonczylo w kolejce w rozsadnym czasie - zabijam proces."
+  try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+  return $false
+}
 
 function Invoke-PrintWithSumatra([string]$path, [string]$targetPrinter, $jobIdsBeforeSumatra) {
   if (-not (Test-Path $SumatraPath)) { return $false }
@@ -224,150 +307,53 @@ function Invoke-PrintWithSumatra([string]$path, [string]$targetPrinter, $jobIdsB
     # Audyt 2026-08-12 (zlapane live na produkcji, drukarki WSD - Lexmark
     # "Flexi-archiwum2"): "-exit-when-done" na niektorych portach WSD nie
     # dziala niezawodnie - Sumatra potrafi juz wysylac dane do spoolera i mimo
-    # to NIGDY nie zakonczyc wlasnego procesu. Dwie wczesniejsze proby naprawy
-    # obie mialy realne wady:
-    #   1. "zawsze probuj Acrobata po zabiciu" -> podwajalo kazdy wydruk, gdy
-    #      Sumatra faktycznie juz wyslala dokument przed zawieszeniem.
-    #   2. "zabij i sprawdz czy JAKIEKOLWIEK zadanie jest w kolejce" -> Stop-
-    #      Process -Force w POLOWIE wysylania danych do portu WSD potrafil
-    #      zostawic w kolejce NIEKOMPLETNY wydruk (potwierdzone live: brakowalo
-    #      jednego z polaczonych plikow), a sam fakt istnienia zadania w
-    #      kolejce tego nie odroznial od prawdziwego sukcesu.
-    # Zamiast zgadywac po fakcie, SLEDZIMY realny postep zadania w kolejce
-    # (Get-PrintJob's PagesPrinted) zamiast polegac na zakonczeniu procesu:
-    #   - zadanie robi postep (PagesPrinted rosnie) -> NIE zabijamy, czekamy dalej
-    #   - zadanie znika z kolejki PO potwierdzonym postepie -> drukarka je
-    #     skonsumowala, prawdziwy sukces, Sumatre po prostu dobijamy (juz nic
-    #     nie robi) i NIE probujemy Acrobata (unika podwojnego wydruku)
-    #   - zadanie utknelo BEZ zadnego postepu przez dluzszy czas, albo nigdy
-    #     sie nie pojawilo w kolejce -> prawdziwe zawieszenie, zabijamy i
-    #     przechodzimy na Acrobata (nic realnie nie zdazylo dojsc do drukarki)
+    # to NIGDY nie zakonczyc wlasnego procesu.
     Write-PrintLog "Sumatra nie zakonczyla sie w 15s - sledze postep w kolejce drukarki zamiast od razu zabijac."
-    if ($targetPrinter -and $null -ne $jobIdsBeforeSumatra) {
-      $trackedJobId = $null
-      $lastPagesPrinted = -1
-      $lastProgressAt = Get-Date
-      $stallTimeout = [TimeSpan]::FromSeconds(20)
-      $hardDeadline = (Get-Date).AddSeconds(90)
-
-      while ((Get-Date) -lt $hardDeadline) {
-        if ($proc.HasExited) {
-          Write-PrintLog "Sumatra zakonczyla sie po dluzszym oczekiwaniu, kod wyjscia: $($proc.ExitCode)"
-          return ($proc.ExitCode -eq 0)
-        }
-
-        $jobs = $null
-        try { $jobs = @(Get-PrintJob -PrinterName $targetPrinter -ErrorAction SilentlyContinue) } catch { $jobs = @() }
-
-        if ($null -eq $trackedJobId) {
-          foreach ($j in $jobs) {
-            if ($null -ne $j -and -not $jobIdsBeforeSumatra.Contains([int]$j.Id)) {
-              $trackedJobId = [int]$j.Id
-              $lastPagesPrinted = [int]$j.PagesPrinted
-              $lastProgressAt = Get-Date
-              Write-PrintLog "Znaleziono nowe zadanie w kolejce (Id=$trackedJobId) - sledze jego postep."
-              break
-            }
-          }
-        } else {
-          $trackedJob = $jobs | Where-Object { $null -ne $_ -and [int]$_.Id -eq $trackedJobId } | Select-Object -First 1
-          if ($null -eq $trackedJob) {
-            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-            if ($lastPagesPrinted -gt 0) {
-              Write-PrintLog "Zadanie Id=$trackedJobId zniknelo z kolejki po realnym postepie (PagesPrinted=$lastPagesPrinted) - traktuje jako sukces, NIE probuje Acrobata."
-              return $true
-            }
-            Write-PrintLog "Zadanie Id=$trackedJobId zniknelo z kolejki bez zadnego potwierdzonego postepu - przechodze na Acrobata."
-            return $false
-          }
-          $currentPages = [int]$trackedJob.PagesPrinted
-          if ($currentPages -gt $lastPagesPrinted) {
-            $lastPagesPrinted = $currentPages
-            $lastProgressAt = Get-Date
-          } elseif (((Get-Date) - $lastProgressAt) -gt $stallTimeout) {
-            Write-PrintLog "Zadanie Id=$trackedJobId utknelo bez postepu przez $([int]$stallTimeout.TotalSeconds)s - zabijam Sumatre, przechodze na Acrobata."
-            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-            return $false
-          }
-        }
-
-        Start-Sleep -Milliseconds 500
-      }
-      Write-PrintLog "Zadne zadanie nie pojawilo sie/nie zakonczylo w kolejce w rozsadnym czasie - zabijam Sumatre, przechodze na Acrobata."
-    } else {
-      Write-PrintLog "Sledzenie kolejki niedostepne dla tej drukarki - nie da sie bezpiecznie odroznic zawieszenia od wyslanego zadania."
-    }
-    try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-    return $false
+    return Wait-ForPrintJobProgress -proc $proc -targetPrinter $targetPrinter -jobIdsBeforeStart $jobIdsBeforeSumatra -engineName "Sumatra"
   } catch {
     Write-PrintLog "Sumatra wyjatek: $($_.Exception.Message)"
     return $false
   }
 }
 
-$script:AcrobatProcessId = $null
-
-function Invoke-PrintWithAcrobat([string]$path, [string]$targetPrinter) {
-  if (-not (Test-Path $AcrobatPath)) { return $false }
-  $quotedPath = Quote-CmdArg $path
-  $quotedPrinter = Quote-CmdArg $targetPrinter
+function Invoke-PrintWithGhostscript([string]$path, [string]$targetPrinter, $jobIdsBeforeGs) {
+  if (-not (Test-Path $GhostscriptPath)) { return $false }
   try {
-    $proc = Start-Process -FilePath $AcrobatPath -ArgumentList ("/t $quotedPath $quotedPrinter") -PassThru -WindowStyle Hidden
-    # Audyt 2026-08-12 (zlapane live na produkcji, drukarka WSD): -WindowStyle
-    # Hidden dziala tylko przy TWORZENIU procesu - Acrobat sam zarzadza
-    # widocznoscia wlasnego okna (np. glowne okno / splash) i potrafi je
-    # pokazac chwile po starcie, niezaleznie od tego flagu. Reuzywamy juz
-    # zdefiniowany ScyzorykFocusGuard (ten sam mechanizm co Restore-Foreground)
-    # zeby aktywnie chowac kazde widoczne okno tego konkretnego PID przez
-    # pierwsze kilka sekund po starcie - "/t" i tak drukuje w tle bez
-    # interakcji, wiec okno nie jest nigdy potrzebne uzytkownikowi.
-    #
-    # Audyt 2026-08-12, druga runda (zlapane live na produkcji, dluzsza seria
-    # wydrukow): 3s bylo za malo przy druku wielu plikow pod rzad - okno
-    # zdazylo pokazac sie PO uplywie tego okna, a do tego Acrobat NIGDY nie byl
-    # zamykany po druku ("/t" nie zamyka wlasnej instancji), wiec przy kazdym
-    # kolejnym pliku dochodzila nastepna, osobna instancja - kazda mogla
-    # bysnac na ekranie przy WLASNYM starcie. Wydluzone do 8s (realistyczny
-    # czas startu+wczytania dla typowych plikow tej apki) I - kluczowe -
-    # PID zapisywany do $script:AcrobatProcessId, zeby koncowa czesc skryptu
-    # (po potwierdzeniu zadania w kolejce) mogla jawnie zamknac ten proces,
-    # zamiast zostawiac go dzialajacego w nieskonczonosc.
-    $script:AcrobatProcessId = $null
-    if ($null -ne $proc) {
-      $script:AcrobatProcessId = $proc.Id
-      try {
-        $pidSet = New-Object 'System.Collections.Generic.HashSet[uint32]'
-        [void]$pidSet.Add([uint32]$proc.Id)
-        $hideDeadline = (Get-Date).AddSeconds(8)
-        while ((Get-Date) -lt $hideDeadline) {
-          $windows = [ScyzorykFocusGuard]::FindVisibleWindowsForProcesses($pidSet)
-          foreach ($hwnd in $windows) { [void][ScyzorykFocusGuard]::ShowWindowAsync($hwnd, 0) } # 0 = SW_HIDE
-          Start-Sleep -Milliseconds 150
-        }
-      } catch {}
+    # -dNoCancel: chowa wbudowany pasek postepu/przycisk Anuluj urzadzenia
+    #   mswinpr2 (udokumentowane w Devices.rst - bez tej flagi Ghostscript
+    #   pokazuje wlasne male okienko w trakcie druku, zlapane live 2026-08-13).
+    # SAFER pozostaje domyslnie WLACZONE (gs 10.x) - NIE uzywamy -dNOSAFER,
+    #   zeby zlosliwa tresc PDF-a nie mogla wykorzystac interpretera do
+    #   odczytu/zapisu dowolnych plikow. --permit-devices=mswinpr2 dodaje
+    #   WYLACZNIE zgode na wybor urzadzenia druku (potrzebne pod SAFER dla
+    #   wyboru urzadzenia przez tresc dokumentu), nic wiecej.
+    $gsArgs = @(
+      "-dNoCancel", "-dNOPAUSE", "-dBATCH", "-q",
+      "-sDEVICE=mswinpr2", "--permit-devices=mswinpr2",
+      "-sOutputFile=%printer%$targetPrinter",
+      $path
+    )
+    $proc = Start-Process -FilePath $GhostscriptPath -ArgumentList $gsArgs -PassThru -WindowStyle Hidden
+
+    # Zweryfikowane live na realnej drukarce WSD (Brother HL-L8240CDW,
+    # 2026-08-13): Ghostscript konczy sie sam, czysto, kodem 0 (w przeciwienstwie
+    # do Sumatry na tych samych portach) - to jednak jedyny silnik druku, ktory
+    # nam zostal (bez Acrobata jako trzeciej linii), wiec i tak zabezpieczamy
+    # sie ta sama siatka co Sumatra, gdyby kiedys sie zawiesil.
+    if ($proc.WaitForExit(30000)) {
+      Write-PrintLog "Ghostscript zakonczyl sie, kod wyjscia: $($proc.ExitCode)"
+      return ($proc.ExitCode -eq 0)
     }
-    return $true
+
+    Write-PrintLog "Ghostscript nie zakonczyl sie w 30s - sledze postep w kolejce drukarki zamiast od razu zabijac."
+    return Wait-ForPrintJobProgress -proc $proc -targetPrinter $targetPrinter -jobIdsBeforeStart $jobIdsBeforeGs -engineName "Ghostscript"
   } catch {
+    Write-PrintLog "Ghostscript wyjatek: $($_.Exception.Message)"
     return $false
   }
 }
 
-# Audyt 2026-08-12: "/t" (druk cichy) nigdy nie zamyka wlasnej instancji
-# Acrobata - zostawiony sam sobie, kazdy plik w serii dodawal KOLEJNA,
-# nigdy niezamykana instancje w tle. Poza marnowaniem pamieci, kazda nowa
-# instancja moze na chwile pokazac wlasne okno przy WLASNYM starcie (patrz
-# komentarz w Invoke-PrintWithAcrobat) - im dluzej dzialaja stare instancje,
-# tym wiecej okazji do bysniecia w trakcie dlugiej serii wydrukow. Wywolane
-# PO potwierdzeniu (albo uplywie czasu oczekiwania na potwierdzenie) zadania
-# w kolejce drukarki - do tego momentu Acrobat na pewno juz przekazal
-# dokument do spoolera, wiec zamkniecie go jest bezpieczne.
-function Close-AcrobatIfUsed {
-  if ($null -eq $script:AcrobatProcessId) { return }
-  try { Stop-Process -Id $script:AcrobatProcessId -Force -ErrorAction SilentlyContinue } catch {}
-  $script:AcrobatProcessId = $null
-}
-
-# WAZNE: Sumatra i Acrobat "/t" umieja drukowac TYLKO pliki PDF. Dla Worda
+# WAZNE: Sumatra i Ghostscript umieja drukowac TYLKO pliki PDF. Dla Worda
 # (.docx) i innych formatow proba przez ktoregokolwiek z nich zawsze
 # zawodzi. Dla plikow Worda tworzymy wlasna, niewidoczna instancje COM,
 # zeby zastosowac drukarke wybrana w panelu i nie dotykac Worda uzytkownika.
@@ -376,19 +362,19 @@ $isPdf = $FilePath.ToLower().EndsWith(".pdf")
 if ($hasTargetedPrinter -and $isPdf) {
   $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName -jobIdsBeforeSumatra $jobIdsBefore
   if (-not $sent) {
-    Write-PrintLog "Sumatra nie wyslala - probuje Acrobata"
-    $sent = Invoke-PrintWithAcrobat -path $FilePath -targetPrinter $printerName
-    Write-PrintLog "Acrobat wynik: $sent"
+    Write-PrintLog "Sumatra nie wyslala - probuje Ghostscript"
+    $sent = Invoke-PrintWithGhostscript -path $FilePath -targetPrinter $printerName -jobIdsBeforeGs $jobIdsBefore
+    Write-PrintLog "Ghostscript wynik: $sent"
   }
   if (-not $sent) {
     # Audyt v1.0.4, P0-1: wczesniej tu byl fallback na Invoke-PrintWithShell,
     # ktory NIE przyjmuje nazwy drukarki (-Verb Print) - moglo to wysic
     # dokument na zupelnie INNA (domyslna) drukarke niz ta, ktora uzytkownik
     # jawnie wybral w panelu, bez zadnego ostrzezenia. Skoro drukarka zostala
-    # jawnie wskazana, a Sumatra i Acrobat obie zawiodly, to jest realny blad -
-    # przerywamy, zamiast po cichu drukowac gdzie indziej.
-    Write-PrintLog "Sumatra i Acrobat zawiodly dla jawnie wskazanej drukarki - PRZERYWAM (bez fallbacku na drukarke domyslna)."
-    throw "PRINT_TARGETED_FAILED: Nie udalo sie wyslac pliku na wskazana drukarke '$printerName' (Sumatra i Acrobat zawiodly). Sprawdz, czy drukarka jest wlaczona i dostepna w sieci."
+    # jawnie wskazana, a Sumatra i Ghostscript obie zawiodly, to jest realny
+    # blad - przerywamy, zamiast po cichu drukowac gdzie indziej.
+    Write-PrintLog "Sumatra i Ghostscript zawiodly dla jawnie wskazanej drukarki - PRZERYWAM (bez fallbacku na drukarke domyslna)."
+    throw "PRINT_TARGETED_FAILED: Nie udalo sie wyslac pliku na wskazana drukarke '$printerName' (Sumatra i Ghostscript zawiodly). Sprawdz, czy drukarka jest wlaczona i dostepna w sieci."
   }
 } elseif (-not $isPdf) {
   Invoke-PrintWithWordCom -FilePath $FilePath -PrinterName $printerName
@@ -421,7 +407,6 @@ while ($waited -lt $maxWaitMs) {
 }
 
 Restore-Foreground $originalForeground
-Close-AcrobatIfUsed
 
 # Audyt v1.0.4, P0-1: skrypt wczesniej ZAWSZE konczyl sie "OK", nawet gdy
 # sledzenie kolejki BYLO dostepne (mamy nazwe drukarki i dziala Get-PrintJob),

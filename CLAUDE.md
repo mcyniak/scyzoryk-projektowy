@@ -71,7 +71,7 @@ ESM per-app, no bundler, no jest/mocha).
 Each is a standalone Express app with its own `server.js`, `public/`, and (for the more complex ones)
 `src/` for logic split out of the route handlers. Current apps:
 
-- `drukarka` — print queue manager (uploads → prints via Acrobat/SumatraPDF in order).
+- `drukarka` — print queue manager (uploads → prints via SumatraPDF/Ghostscript in order).
 - `drukarka-projekty` — same idea but driven by an investment/project Excel sheet (`src/excelInvestment.js`,
   `src/folderMatch.js`, `src/printEngine.js`).
 - `pieczatki-pdf` — stamps PDFs with a positioned watermark/stamp image (uses `pdf-lib` + `pdfjs-dist` for
@@ -164,15 +164,26 @@ new app, copy this rather than inventing a new one:
   editing `shared-styles/base.css` affects any running app yet — check `shared-styles/README.md` before
   touching shared styling.
 - Printing apps (`drukarka`, `drukarka-projekty`) share printing logic via `lib/printing.js` +
-  `lib/printing/print-file.ps1` (+ vendored `SumatraPDF.exe`) — consolidated 2026-07-15 from two
-  bit-identical per-app copies that had already started drifting (virtual-printer filter regex, which
-  process names got closed after a batch). Each app passes its own `logDir` (`apps/<name>/data`) into
-  `printFileWindows()` so `print-log.txt` stays per-app despite the shared script.
-  `print-file.ps1` intentionally returns quickly (~5s) without waiting for the print job or
-  force-closing Acrobat, to keep Acrobat's print buffering intact (see README for the
-  `DRUKARKA_CLOSE_ACROBAT_AFTER_SECONDS` delayed-close behavior). Adobe Acrobat/Reader remains the
-  deliberate last-resort fallback after SumatraPDF in `print-file.ps1` — some WSD/network printers
-  (confirmed: Brother) have SumatraPDF silently report success while not physically printing.
+  `lib/printing/print-file.ps1` (+ vendored `SumatraPDF.exe` and `lib/printing/ghostscript/`) —
+  consolidated 2026-07-15 from two bit-identical per-app copies that had already started drifting
+  (virtual-printer filter regex, which process names got closed after a batch). Each app passes its own
+  `logDir` (`apps/<name>/data`) into `printFileWindows()` so `print-log.txt` stays per-app despite the
+  shared script. After sending the file, `print-file.ps1` polls the printer's own job queue
+  (`Get-PrintJob`) for up to 20s to confirm a new job actually appeared before reporting success — no
+  fire-and-forget confirmation.
+  - Engine order: SumatraPDF (`-print-to`) first, **Ghostscript** (`mswinpr2` device, GDI printing) as the
+    only fallback — replaced Adobe Acrobat 2026-08-13 (Acrobat couldn't legally ship inside the
+    installer; a machine without it installed simply couldn't print). Some WSD/network printers
+    (confirmed: Brother, Lexmark) have Sumatra's `-exit-when-done` hang indefinitely without ever
+    exiting, even after it has already handed the job to the spooler — `print-file.ps1` no longer
+    force-kills on a bare timeout (that truncated an in-flight WSD transfer once, losing a page — audit
+    2026-08-12); it tracks the job's own `PagesPrinted` in the queue (`Wait-ForPrintJobProgress`, shared
+    by both engines) and only kills+falls back once a job has genuinely stalled with no progress, never
+    while it's still advancing. Ghostscript needs `-dNoCancel` to suppress `mswinpr2`'s own built-in
+    progress/cancel dialog (documented in its `Devices.rst`, not a Scyzoryk-side window hack like the
+    old Acrobat hide-loop was) — runs with `SAFER` left at its (gs 9.50+) default and only
+    `--permit-devices=mswinpr2` granted, deliberately never `-dNOSAFER`, since this interprets
+    user-uploaded PDF content.
 
 ### Native launcher (`launcher/Scyzoryk.Launcher`, installed as `Scyzoryk.exe`)
 
