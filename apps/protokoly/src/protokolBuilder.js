@@ -15,18 +15,69 @@ const MAX_SCAN_DEPTH = 4;
 const A4_WIDTH_PT = 595.28;
 const A4_HEIGHT_PT = 841.89;
 
+// name moze byc relatywna sciezka z podfolderem kategorii (patrz
+// listAddressFolders ponizej) - adres wyliczamy zawsze z OSTATNIEGO segmentu
+// (nazwy samego folderu adresu), nie z calej sciezki.
 function addressFromFolderName(name) {
-  return String(name || "").replace(/^\d+\.\s*/, "").trim();
+  return path.basename(String(name || "")).replace(/^\d+\.\s*/, "").trim();
+}
+
+// Prawdziwe foldery adresow zawsze zaczynaja sie od numeru (np. "47.Ul.
+// Poludniowa 30, Bielawy", "41 - Zarnow, ul. Spacerowa") - foldery kategorii
+// (np. "Wyslane do gminy", "Gotowe do druku") nigdy. Audyt na zywo
+// 2026-08-14 (Kazimierz Biskupi, folder bazowy "Projekty" - kategoria WYZEJ
+// niz adresy): bez tego rozroznienia baseFolder z samymi podfolderami
+// kategorii listowal TE kategorie jako "adresy", a nastepne skanowanie zdjec
+// (rekurencyjne, patrz findProtocolPhotos) chwytalo WSZYSTKIE zdjecia ze
+// WSZYSTKICH adresow pod dana kategoria (dziesiatki/setki) i laczylo je w
+// jeden falszywy "protokol" pod nazwa kategorii zamiast pokazac osobne
+// adresy. Szukamy wiec teraz prawdziwych folderow adresu takze w
+// podfolderach kategorii, do ograniczonej glebokosci (ten sam wzorzec co
+// ADDRESS_FOLDER_SEARCH_MAX_DEPTH w drukarce-projektow).
+const ADDRESS_FOLDER_PATTERN = /^\d/;
+const CATEGORY_SEARCH_MAX_DEPTH = 3;
+
+// Realny przypadek zlapany na zywo 2026-08-14: sam numer na poczatku nazwy
+// nie wystarcza - "0.Gotowe do wyslania" tez zaczyna sie od cyfry, ale w
+// srodku ma 11 KOLEJNYCH numerowanych folderow adresu (kolejny "koszyk"
+// kategorii, nie pojedynczy adres). Folder, ktory sam zawiera KILKA (2+)
+// innych numerowanych podfolderow, jest wiec traktowany jako kolejna
+// kategoria do przeszukania dalej, a nie jako lisc/adres.
+function looksLikeAddressContainer(folderPath) {
+  let entries;
+  try {
+    entries = fs.readdirSync(folderPath, { withFileTypes: true }).filter(e => e.isDirectory());
+  } catch (_err) {
+    return false;
+  }
+  return entries.filter(e => ADDRESS_FOLDER_PATTERN.test(e.name.trim())).length >= 2;
 }
 
 function listAddressFolders(baseFolder) {
   if (!fs.existsSync(baseFolder) || !fs.statSync(baseFolder).isDirectory()) {
     throw new Error(`Folder bazowy nie istnieje: ${baseFolder}`);
   }
-  return fs.readdirSync(baseFolder, { withFileTypes: true })
-    .filter(e => e.isDirectory())
-    .map(e => e.name)
-    .sort((a, b) => a.localeCompare(b, "pl", { numeric: true, sensitivity: "base" }));
+  const results = [];
+  function walk(currentPath, relPath, depth) {
+    let entries;
+    try {
+      entries = fs.readdirSync(currentPath, { withFileTypes: true }).filter(e => e.isDirectory());
+    } catch (_err) {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = relPath ? path.join(relPath, entry.name) : entry.name;
+      const full = path.join(currentPath, entry.name);
+      const isAddressLike = ADDRESS_FOLDER_PATTERN.test(entry.name.trim()) && !looksLikeAddressContainer(full);
+      if (isAddressLike) {
+        results.push(rel);
+      } else if (depth < CATEGORY_SEARCH_MAX_DEPTH) {
+        walk(full, rel, depth + 1);
+      }
+    }
+  }
+  walk(baseFolder, "", 0);
+  return results.sort((a, b) => a.localeCompare(b, "pl", { numeric: true, sensitivity: "base" }));
 }
 
 // Rekurencyjnie znajduje zdjecia protokolu w folderze adresu - moga lezec
