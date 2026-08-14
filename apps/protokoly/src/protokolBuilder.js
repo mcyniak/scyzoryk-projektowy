@@ -134,6 +134,49 @@ const JPEG_QUALITY = Number(process.env.PROTOKOLY_JPEG_QUALITY || 82);
 // enkoder), nie tylko sam zapis.
 const MAX_OUTPUT_WIDTH = Number(process.env.PROTOKOLY_MAX_OUTPUT_WIDTH || 1700);
 
+// Audyt na zywo 2026-08-14 (realny plik: "47.Ul. Poludniowa 30, Bielawy" -
+// zdjecie robione telefonem rzuca WYRAZNY cien wlasnej reki/aparatu w
+// poprzek kartki): normalize() rozciaga histogram GLOBALNIE, wiec nie
+// naprawia CIENIA (lokalnego przyciemnienia jednej czesci kartki) - dla
+// normalize() cien i tak jest po prostu "najciemniejszym punktem kadru", a
+// reszta kartki i tak juz jest jasna, wiec globalne rozciagniecie niewiele
+// zmienia w cieniu samym. Cien przy druku czarno-bialym wychodzi jako gruba
+// czarna plama, marnujac tusz i psujac czytelnosc.
+//
+// Poprawka: wyrownanie lokalnego oswietlenia (flat-fielding) - szacujemy MAPE
+// TLA kartki przez agresywne pomniejszenie obrazu (do SHADING_BG_WIDTH px) i
+// ponowne powiekszenie z powrotem (dziala jak bardzo duzy blur/low-pass -
+// tanszy obliczeniowo niz prawdziwy gaussian blur o porownywalnym promieniu).
+// Kazdy piksel dzielimy przez odpowiadajaca mu wartosc tej mapy tla i
+// skalujemy do sredniej jasnosci calego tla - miejsca w cieniu (nizsza
+// wartosc mapy tla) dostaja WIEKSZE wzmocnienie niz miejsca juz jasne,
+// wyrownujac oswietlenie na calej kartce. Realny tekst/checkboxy (ciemne
+// kreski na jasnym tle) zostaja WZGLEDEM lokalnego tla ciemne niezaleznie od
+// tego, w cieniu czy nie, wiec czytelnosc tresci nie cierpi - zweryfikowane
+// wizualnie na dwoch prawdziwych zdjeciach z cieniem (jedno z gestym szkicem
+// odrecznym), SHADING_BG_WIDTH=12 usuwalo cien niemal calkowicie bez
+// zauwazalnej utraty tekstu; wieksze wartosci (25, 50) zostawialy widoczny
+// cien. Zbyt MALA wartosc (blur zbyt waski wzgledem realnych blokow gestego
+// tekstu) grozi odwrotnym efektem - tekst zlapany jako "czesc tla" i
+// wybielony - stad SHADING_BG_WIDTH pozostaje jawnie skonfigurowalny.
+const SHADING_BG_WIDTH = Number(process.env.PROTOKOLY_SHADING_BG_WIDTH || 12);
+
+function applyShadingCorrection(img) {
+  const { width, height } = img.bitmap;
+  const bg = img.clone().resize({ w: SHADING_BG_WIDTH }).resize({ w: width, h: height });
+  let sum = 0, count = 0;
+  bg.scan(0, 0, width, height, function (x, y, idx) { sum += this.bitmap.data[idx]; count += 1; });
+  const targetMean = sum / count;
+  img.scan(0, 0, width, height, function (x, y, idx) {
+    const bgVal = Math.max(1, bg.bitmap.data[idx]);
+    for (let c = 0; c < 3; c += 1) {
+      const corrected = (this.bitmap.data[idx + c] / bgVal) * targetMean;
+      this.bitmap.data[idx + c] = Math.max(0, Math.min(255, Math.round(corrected)));
+    }
+  });
+  return img;
+}
+
 // Przetwarza jedno zdjecie protokolu: przycina do samej kartki, prostuje,
 // rozjasnia i konwertuje na czarno-bialy z podbitym kontrastem. Korekta
 // orientacji EXIF (zdjecia robione "na boku" telefonem) jest stosowana
@@ -169,6 +212,7 @@ async function processPhoto(photoPath, { manualRotateDeg = 0 } = {}) {
   }
   if (manualRotateDeg % 360 !== 0) img.rotate(manualRotateDeg);
   if (img.bitmap.width > MAX_OUTPUT_WIDTH) img.resize({ w: MAX_OUTPUT_WIDTH });
+  applyShadingCorrection(img);
   img.normalize();
   img.greyscale();
   img.contrast(CONTRAST);
