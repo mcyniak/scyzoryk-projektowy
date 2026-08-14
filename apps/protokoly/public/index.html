@@ -63,6 +63,10 @@
           <p class="panel-desc">Kliknij "Podgląd", żeby zobaczyć wynik przed zapisem. "Zapisz" dopisuje PDF do folderu adresu (podfolder, w którym leżały zdjęcia).</p>
         </div>
         <div class="nav-actions">
+          <label class="option-field option-field-inline">
+            <input type="checkbox" id="overwriteAllCheckbox" />
+            <span class="option-label">Nadpisz też już zapisane</span>
+          </label>
           <button id="saveAllBtn" class="btn btn-secondary" type="button">Zapisz wszystkie (z zdjęciami)</button>
         </div>
       </div>
@@ -73,11 +77,13 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title">Podgląd: <span id="previewAdres"></span></h2>
+          <p class="panel-desc">Jeśli któreś zdjęcie jest do góry nogami albo źle obrócone, kliknij "Obróć" pod jego miniaturą - podgląd PDF-a odświeży się automatycznie.</p>
         </div>
         <div class="nav-actions">
           <button id="previewSaveBtn" class="btn btn-primary" type="button">Zapisz ten PDF do folderu</button>
         </div>
       </div>
+      <div id="photoThumbs" class="photo-thumbs"></div>
       <div class="doc-viewer-stage" style="height: 70vh;">
         <iframe id="pdfPreview" title="Podgląd PDF"></iframe>
       </div>

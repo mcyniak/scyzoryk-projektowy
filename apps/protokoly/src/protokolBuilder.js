@@ -98,7 +98,27 @@ const MIN_FRACTION = Number(process.env.PROTOKOLY_MIN_FRACTION || 0.4);
 // Jimp.brightness() w tej wersji (1.6.1) paradoksalnie PRZYCIEMNIA obraz
 // zamiast go rozjasnic (zweryfikowane empirycznie, nie tylko z dokumentacji)
 // - celowo pominiete w tym pipeline.
+//
+// Audyt na zywo 2026-08-14: przy niedoswietlonym zdjeciu (slabe oswietlenie w
+// terenie) sam contrast(0.35) na juz-ciemnych pikselach pcha je jeszcze
+// bardziej w czern zamiast rozjasnic - stad skargi na "cale czarne, mało
+// wyrazne" wydruki. img.normalize() (rozciaga histogram kazdego kanalu do
+// pelnego zakresu 0-255 na podstawie faktycznej najciemniejszej/najjasniejszej
+// wartosci w kadrze) NIE ma tej samej wady co brightness() w tej wersji
+// (zweryfikowane empirycznie na syntetycznym obrazie) i naprawia zarowno
+// niedoswietlone, jak i normalnie doswietlone zdjecia bez recznego strojenia -
+// wywolane PRZED greyscale/contrast, wiec dziala na oryginalnych kolorach.
 const CONTRAST = Number(process.env.PROTOKOLY_CONTRAST || 0.35);
+// Prawdziwy protokol na A4 jest zawsze w pionie - jesli po przycieciu do
+// samej kartki wynik jest WYRAZNIE szerszy niz wyzszy, kartka lezala bokiem
+// wzgledem aparatu (fizyczny obrot kartki na stole, nie telefonu - to drugie
+// juz koryguje EXIF przy dekodowaniu). Nie da sie stad wywnioskowac W KTORA
+// strone obrocic (mogla lezec bokiem w dowolnym z dwoch kierunkow) - zgadujemy
+// w prawo (90), a reczny przycisk "obroc" w podgladzie UI pozwala doprecyzowac
+// jesli zgadlismy zla strone albo trafil sie przypadek "do gory nogami" (180,
+// ktorego proporcje boku nie zdradzaja - to jedyny niezawodny sposob bez OCR,
+// ten sam kompromis co swiadoma decyzja o braku auto-rotacji w ocr-audytow).
+const SIDEWAYS_ASPECT_RATIO = Number(process.env.PROTOKOLY_SIDEWAYS_ASPECT_RATIO || 1.15);
 const CROP_PADDING = Number(process.env.PROTOKOLY_CROP_PADDING || 10);
 const THUMBNAIL_WIDTH = 400;
 const JPEG_QUALITY = Number(process.env.PROTOKOLY_JPEG_QUALITY || 82);
@@ -114,12 +134,16 @@ const JPEG_QUALITY = Number(process.env.PROTOKOLY_JPEG_QUALITY || 82);
 // enkoder), nie tylko sam zapis.
 const MAX_OUTPUT_WIDTH = Number(process.env.PROTOKOLY_MAX_OUTPUT_WIDTH || 1700);
 
-// Przetwarza jedno zdjecie protokolu: przycina do samej kartki, konwertuje
-// na czarno-bialy z podbitym kontrastem. Korekta orientacji EXIF (zdjecia
-// robione "na boku") jest stosowana automatycznie przez dekoder Jimp/jpeg -
-// nie trzeba jej robic recznie (zweryfikowane na realnym zdjeciu z
-// Orientation=8).
-async function processPhoto(photoPath) {
+// Przetwarza jedno zdjecie protokolu: przycina do samej kartki, prostuje,
+// rozjasnia i konwertuje na czarno-bialy z podbitym kontrastem. Korekta
+// orientacji EXIF (zdjecia robione "na boku" telefonem) jest stosowana
+// automatycznie przez dekoder Jimp/jpeg - nie trzeba jej robic recznie
+// (zweryfikowane na realnym zdjeciu z Orientation=8). manualRotateDeg (0/90/
+// 180/270) to DODATKOWY obrot na zyczenie uzytkownika z UI podgladu, stosowany
+// PO automatycznym prostowaniu - pozwala poprawic zgadniete-w-zla-strone
+// "bokiem" albo doprecyzowac "do gory nogami", ktorego auto-wykrycie nie
+// odroznia od normalnej orientacji (proporcje strony sie nie zmieniaja).
+async function processPhoto(photoPath, { manualRotateDeg = 0 } = {}) {
   const img = await Jimp.read(photoPath);
   const small = img.clone().resize({ w: THUMBNAIL_WIDTH });
   const scale = img.bitmap.width / small.bitmap.width;
@@ -140,7 +164,12 @@ async function processPhoto(photoPath) {
     height: Math.max(1, rawBottom - rawTop)
   };
   img.crop({ x: fullBox.left, y: fullBox.top, w: fullBox.width, h: fullBox.height });
+  if (img.bitmap.width > img.bitmap.height * SIDEWAYS_ASPECT_RATIO) {
+    img.rotate(90);
+  }
+  if (manualRotateDeg % 360 !== 0) img.rotate(manualRotateDeg);
   if (img.bitmap.width > MAX_OUTPUT_WIDTH) img.resize({ w: MAX_OUTPUT_WIDTH });
+  img.normalize();
   img.greyscale();
   img.contrast(CONTRAST);
   return img;
@@ -157,13 +186,17 @@ async function processPhoto(photoPath) {
 // zadania.
 const PROCESS_CONCURRENCY = Number(process.env.PROTOKOLY_CONCURRENCY || 3);
 
-async function buildProtocolPdf(photoPaths) {
+// rotations: obiekt { [indeks_zdjecia]: stopnie(0/90/180/270) } - reczne
+// poprawki obrotu z podgladu UI dla pojedynczych zdjec, ktorych auto-
+// prostowanie nie zgadlo (patrz processPhoto).
+async function buildProtocolPdf(photoPaths, rotations = {}) {
   const jpegBuffers = new Array(photoPaths.length);
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < photoPaths.length) {
       const idx = nextIndex++;
-      const img = await processPhoto(photoPaths[idx]);
+      const manualRotateDeg = Number(rotations[idx]) || 0;
+      const img = await processPhoto(photoPaths[idx], { manualRotateDeg });
       jpegBuffers[idx] = await img.getBuffer(JimpMime.jpeg, { quality: JPEG_QUALITY });
     }
   }

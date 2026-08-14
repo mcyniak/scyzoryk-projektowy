@@ -9,13 +9,18 @@ const resultsPanel = document.getElementById("resultsPanel");
 const resultsSummary = document.getElementById("resultsSummary");
 const resultsTable = document.getElementById("resultsTable");
 const saveAllBtn = document.getElementById("saveAllBtn");
+const overwriteAllCheckbox = document.getElementById("overwriteAllCheckbox");
 const previewPanel = document.getElementById("previewPanel");
 const previewAdres = document.getElementById("previewAdres");
 const previewSaveBtn = document.getElementById("previewSaveBtn");
 const previewStatus = document.getElementById("previewStatus");
 const pdfPreview = document.getElementById("pdfPreview");
+const photoThumbs = document.getElementById("photoThumbs");
 
-let state = { baseFolder: "", results: [], previewFolderName: null };
+// rotations: { [folderName]: { [indeks_zdjecia]: stopnie(0/90/180/270) } } -
+// reczne poprawki obrotu z podgladu, trwaja do nowego skanu (nie do
+// przelaczenia miedzy adresami).
+let state = { baseFolder: "", results: [], previewFolderName: null, rotations: {} };
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -88,6 +93,7 @@ scanBtn.addEventListener("click", async () => {
       body: JSON.stringify({ baseFolder })
     });
     state.baseFolder = baseFolder;
+    state.rotations = {};
     // existingPath (sprawdzone na dysku przez /api/scan) traktujemy tak samo
     // jak savedPath z tej sesji - bez tego ponowny skan tego samego folderu
     // bazowego pokazywal wszystko jako "do zapisania" na nowo, mimo ze plik
@@ -103,13 +109,60 @@ scanBtn.addEventListener("click", async () => {
   }
 });
 
+function rotationsForFolder(folderName) {
+  if (!state.rotations[folderName]) state.rotations[folderName] = {};
+  return state.rotations[folderName];
+}
+
+function buildPreviewUrl(folderName) {
+  const rotations = rotationsForFolder(folderName);
+  let url = `/api/preview?baseFolder=${encodeURIComponent(state.baseFolder)}&folderName=${encodeURIComponent(folderName)}`;
+  if (Object.keys(rotations).length) url += `&rotations=${encodeURIComponent(JSON.stringify(rotations))}`;
+  return url;
+}
+
+function refreshPdfPreview(folderName) {
+  pdfPreview.src = buildPreviewUrl(folderName);
+}
+
+async function renderPhotoThumbs(folderName) {
+  photoThumbs.innerHTML = "";
+  let data;
+  try {
+    data = await api(`/api/photos?baseFolder=${encodeURIComponent(state.baseFolder)}&folderName=${encodeURIComponent(folderName)}`);
+  } catch (err) {
+    return;
+  }
+  const rotations = rotationsForFolder(folderName);
+  photoThumbs.innerHTML = data.photos.map(p => {
+    const rotate = rotations[p.index] || 0;
+    return `
+      <div class="photo-thumb" data-index="${p.index}">
+        <img src="/api/photo-thumb?baseFolder=${encodeURIComponent(state.baseFolder)}&folderName=${encodeURIComponent(folderName)}&index=${p.index}&rotate=${rotate}" alt="Zdjęcie ${p.index + 1}" />
+        <span class="photo-thumb-label">Zdjęcie ${p.index + 1}</span>
+        <button class="btn btn-ghost btn-sm" data-action="rotate" data-index="${p.index}" type="button">Obróć</button>
+      </div>`;
+  }).join("");
+
+  photoThumbs.querySelectorAll('[data-action="rotate"]').forEach(btn => {
+    btn.addEventListener("click", () => {
+      const idx = btn.dataset.index;
+      const current = rotations[idx] || 0;
+      rotations[idx] = (current + 90) % 360;
+      const img = photoThumbs.querySelector(`.photo-thumb[data-index="${idx}"] img`);
+      if (img) img.src = `/api/photo-thumb?baseFolder=${encodeURIComponent(state.baseFolder)}&folderName=${encodeURIComponent(folderName)}&index=${idx}&rotate=${rotations[idx]}&t=${Date.now()}`;
+      refreshPdfPreview(folderName);
+    });
+  });
+}
+
 function openPreview(folderName) {
   state.previewFolderName = folderName;
   const entry = state.results.find(r => r.folderName === folderName);
   previewAdres.textContent = entry ? entry.adres : folderName;
   previewStatus.textContent = "";
-  const url = `/api/preview?baseFolder=${encodeURIComponent(state.baseFolder)}&folderName=${encodeURIComponent(folderName)}`;
-  pdfPreview.src = url;
+  refreshPdfPreview(folderName);
+  renderPhotoThumbs(folderName);
   previewPanel.style.display = "";
   previewPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -123,10 +176,11 @@ async function saveOne(folderName, triggerBtn, statusEl) {
   const originalText = triggerBtn ? triggerBtn.textContent : "";
   if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = "Zapisuję..."; }
   try {
+    const rotations = state.rotations[folderName] || {};
     const data = await api("/api/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ baseFolder: state.baseFolder, folderName })
+      body: JSON.stringify({ baseFolder: state.baseFolder, folderName, rotations })
     });
     const entry = state.results.find(r => r.folderName === folderName);
     if (entry) entry.savedPath = data.savedPath;
@@ -141,18 +195,23 @@ async function saveOne(folderName, triggerBtn, statusEl) {
 }
 
 saveAllBtn.addEventListener("click", async () => {
-  const targets = state.results.filter(r => r.photoCount > 0 && !r.error && !r.savedPath);
+  const overwriteAll = overwriteAllCheckbox.checked;
+  const targets = state.results.filter(r => r.photoCount > 0 && !r.error && (overwriteAll || !r.savedPath));
   if (!targets.length) { alert("Nie ma nic do zapisania (wszystko już zapisane albo brak zdjęć)."); return; }
-  if (!confirm(`Zapisać ${targets.length} PDF-ów do odpowiednich folderów adresów?`)) return;
+  const confirmMsg = overwriteAll
+    ? `Zapisać (i nadpisać już istniejące) ${targets.length} PDF-ów do odpowiednich folderów adresów?`
+    : `Zapisać ${targets.length} PDF-ów do odpowiednich folderów adresów?`;
+  if (!confirm(confirmMsg)) return;
   saveAllBtn.disabled = true;
   let done = 0;
   for (const r of targets) {
     saveAllBtn.textContent = `Zapisuję... (${done + 1}/${targets.length})`;
     try {
+      const rotations = state.rotations[r.folderName] || {};
       const data = await api("/api/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseFolder: state.baseFolder, folderName: r.folderName })
+        body: JSON.stringify({ baseFolder: state.baseFolder, folderName: r.folderName, rotations })
       });
       r.savedPath = data.savedPath;
     } catch (err) {

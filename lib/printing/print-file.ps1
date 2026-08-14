@@ -213,37 +213,19 @@ function Invoke-PrintWithWordCom($FilePath, $PrinterName) {
 # sie "-exit-when-done" na portach WSD), jak i przez Ghostscript (zapasowy
 # silnik, patrz Invoke-PrintWithGhostscript - trzymany jako ta sama siatka
 # bezpieczenstwa, mimo ze w testach na prawdziwej drukarce WSD Ghostscript
-# zawsze konczyl sie sam). Zamiast zabijac proces na slepo po samym uplywie
-# czasu (co przy WSD potrafilo zostawic w kolejce NIEKOMPLETNY wydruk -
-# potwierdzone live: brakowalo jednego z polaczonych plikow po zabiciu
-# Sumatry w polowie transferu) albo ufac samej OBECNOSCI zadania w kolejce
-# (co nie odroznia niekompletnego zadania od prawdziwego sukcesu), SLEDZIMY
-# realny postep (Get-PrintJob's PagesPrinted):
-#   - zadanie robi postep -> NIE zabijamy, czekamy dalej
-#   - zadanie znika z kolejki PO potwierdzonym postepie -> drukarka je
-#     skonsumowala, prawdziwy sukces
-#   - zadanie utknelo bez postepu (albo nigdy sie nie pojawilo) -> prawdziwe
-#     zawieszenie, zabijamy i zwracamy porazke (wywolujacy decyduje o dalszym
-#     fallbacku)
-# Audyt na zywo 2026-08-13 (Flexi-archiwum2): zabicie PROCESU wysylajacego
-# (Sumatra/Ghostscript) nie usuwa samego ZADANIA z kolejki drukarki - jesli
-# zdazylo juz trafic do spoolera/urzadzenia, zostaje tam jako martwe,
-# zawieszone zadanie. Kolejne proby druku (nawet innym silnikiem, albo zupelnie
-# inny dokument pozniej) trafialy ZA nim w kolejce i same tez wygladaly na
-# zawieszone, bo fizycznie nie mogly wyprzedzic zombie'a z przodu - jedyny
-# realny sposob odblokowania byl wtedy recznie zabic caly Print Spooler.
-# Probujemy WIEC teraz posprzatac po sobie od razu, best-effort (jesli sie nie
-# uda, i tak i tak nic gorszego sie nie stanie niz stan sprzed tej poprawki).
-function Remove-StalledPrintJob([string]$targetPrinter, [Nullable[int]]$jobId, [string]$engineName) {
-  if (-not $jobId) { return }
-  try {
-    Remove-PrintJob -PrinterName $targetPrinter -ID $jobId -ErrorAction Stop
-    Write-PrintLog "$engineName - usunieto zawieszone zadanie Id=$jobId z kolejki drukarki."
-  } catch {
-    Write-PrintLog "$engineName - nie udalo sie usunac zawieszonego zadania Id=$jobId z kolejki: $($_.Exception.Message)"
-  }
-}
-
+# zawsze konczyl sie sam).
+#
+# Audyt na zywo 2026-08-13 (Flexi-archiwum2, WSD): wczesniejsza wersja tej
+# funkcji probowala odroznic realny postep od zawieszenia sledzac
+# Get-PrintJob's PagesPrinted - ale na tej konkretnej drukarce PagesPrinted
+# konsekwentnie NIE rusza sie WCALE nawet dla zadan, ktore naprawde drukuja
+# (zweryfikowane dwukrotnie na zywo: zadanie zabite jako "zawieszone" po
+# braku postepu okazywalo sie chwile pozniej miec status "Complete" w
+# kolejce). Podnoszenie samego progu czasu nie pomagalo, bo brak postepu byl
+# trwaly, nie chwilowy. Zamiast dalej zgadywac czas, jak tylko zadanie
+# NAPRAWDE trafi do kolejki drukarki, uznajemy to za sukces - spooler/
+# drukarka przejmuja od tego momentu, a wywolujacy silnik (Sumatra/
+# Ghostscript) i tak juz swoja robote skonczyl (przekazal dane do spoolera).
 function Wait-ForPrintJobProgress([System.Diagnostics.Process]$proc, [string]$targetPrinter, $jobIdsBeforeStart, [string]$engineName) {
   if (-not ($targetPrinter -and $null -ne $jobIdsBeforeStart)) {
     Write-PrintLog "$engineName - sledzenie kolejki niedostepne dla tej drukarki - nie da sie bezpiecznie odroznic zawieszenia od wyslanego zadania."
@@ -251,10 +233,6 @@ function Wait-ForPrintJobProgress([System.Diagnostics.Process]$proc, [string]$ta
     return $false
   }
 
-  $trackedJobId = $null
-  $lastPagesPrinted = -1
-  $lastProgressAt = Get-Date
-  $stallTimeout = [TimeSpan]::FromSeconds(20)
   $hardDeadline = (Get-Date).AddSeconds(90)
 
   while ((Get-Date) -lt $hardDeadline) {
@@ -266,51 +244,35 @@ function Wait-ForPrintJobProgress([System.Diagnostics.Process]$proc, [string]$ta
     $jobs = $null
     try { $jobs = @(Get-PrintJob -PrinterName $targetPrinter -ErrorAction SilentlyContinue) } catch { $jobs = @() }
 
-    if ($null -eq $trackedJobId) {
-      foreach ($j in $jobs) {
-        if ($null -ne $j -and -not $jobIdsBeforeStart.Contains([int]$j.Id)) {
-          $trackedJobId = [int]$j.Id
-          $lastPagesPrinted = [int]$j.PagesPrinted
-          $lastProgressAt = Get-Date
-          Write-PrintLog "$engineName - znaleziono nowe zadanie w kolejce (Id=$trackedJobId) - sledze jego postep."
-          break
-        }
-      }
-    } else {
-      $trackedJob = $jobs | Where-Object { $null -ne $_ -and [int]$_.Id -eq $trackedJobId } | Select-Object -First 1
-      if ($null -eq $trackedJob) {
-        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-        if ($lastPagesPrinted -gt 0) {
-          Write-PrintLog "$engineName - zadanie Id=$trackedJobId zniknelo z kolejki po realnym postepie (PagesPrinted=$lastPagesPrinted) - traktuje jako sukces."
-          return $true
-        }
-        Write-PrintLog "$engineName - zadanie Id=$trackedJobId zniknelo z kolejki bez zadnego potwierdzonego postepu - porazka."
-        return $false
-      }
-      $currentPages = [int]$trackedJob.PagesPrinted
-      if ($currentPages -gt $lastPagesPrinted) {
-        $lastPagesPrinted = $currentPages
-        $lastProgressAt = Get-Date
-      } elseif (((Get-Date) - $lastProgressAt) -gt $stallTimeout) {
-        Write-PrintLog "$engineName - zadanie Id=$trackedJobId utknelo bez postepu przez $([int]$stallTimeout.TotalSeconds)s - zabijam proces."
-        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-        Remove-StalledPrintJob -targetPrinter $targetPrinter -jobId $trackedJobId -engineName $engineName
-        return $false
+    foreach ($j in $jobs) {
+      if ($null -ne $j -and -not $jobIdsBeforeStart.Contains([int]$j.Id)) {
+        Write-PrintLog "$engineName - znaleziono nowe zadanie w kolejce (Id=$([int]$j.Id))."
+        return $true
       }
     }
 
     Start-Sleep -Milliseconds 500
   }
-  Write-PrintLog "$engineName - zadne zadanie nie pojawilo sie/nie zakonczylo w kolejce w rozsadnym czasie - zabijam proces."
+  Write-PrintLog "$engineName - zadne zadanie nie pojawilo sie w kolejce w rozsadnym czasie - zabijam proces."
   try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-  Remove-StalledPrintJob -targetPrinter $targetPrinter -jobId $trackedJobId -engineName $engineName
   return $false
 }
 
 function Invoke-PrintWithSumatra([string]$path, [string]$targetPrinter, $jobIdsBeforeSumatra) {
   if (-not (Test-Path $SumatraPath)) { return $false }
   try {
-    $sumatraArgs = @("-print-to", $targetPrinter, "-silent", "-exit-when-done", $path)
+    # Audyt na zywo 2026-08-13: prawdziwa przyczyna niemal wszystkich
+    # tamtejszych awarii Sumatry na drukarka-projekty (ktora, w
+    # przeciwienstwie do zwyklej drukarki, generuje pliki wynikowe z
+    # SPACJAMI/przecinkami w nazwie, np. "... - Ul. Witkiewicza 12,
+    # Posada.pdf") - odsloniete dopiero po recznym wylaczeniu -silent: prawdziwy
+    # blad Sumatry to "Couldn't open file '...' for printing" ze SCIETA w
+    # polowie sciezka na spacji. -ArgumentList jako tablica bez recznie
+    # doklejonych cudzyslowow NIE cytuje niezawodnie argumentow ze spacjami w
+    # tym srodowisku - drukarki bywaja nazwane ze spacjami (np. "Brother
+    # HL-L8240CDW series Printer"), wiec dotyczy to obu argumentow, nie tylko
+    # sciezki pliku.
+    $sumatraArgs = "-print-to", "`"$targetPrinter`"", "-silent", "-exit-when-done", "`"$path`""
     $proc = Start-Process -FilePath $SumatraPath -ArgumentList $sumatraArgs -PassThru -WindowStyle Hidden
 
     # Szybka sciezka - normalny przypadek (wszystkie nie-WSD drukarki, i
@@ -343,11 +305,13 @@ function Invoke-PrintWithGhostscript([string]$path, [string]$targetPrinter, $job
     #   odczytu/zapisu dowolnych plikow. --permit-devices=mswinpr2 dodaje
     #   WYLACZNIE zgode na wybor urzadzenia druku (potrzebne pod SAFER dla
     #   wyboru urzadzenia przez tresc dokumentu), nic wiecej.
+    # Ta sama poprawka cytowania co w Invoke-PrintWithSumatra (patrz komentarz
+    # tam) - drukarki/sciezki ze spacjami inaczej nie byly niezawodnie cytowane.
     $gsArgs = @(
       "-dNoCancel", "-dNOPAUSE", "-dBATCH", "-q",
       "-sDEVICE=mswinpr2", "--permit-devices=mswinpr2",
-      "-sOutputFile=%printer%$targetPrinter",
-      $path
+      "`"-sOutputFile=%printer%$targetPrinter`"",
+      "`"$path`""
     )
     $proc = Start-Process -FilePath $GhostscriptPath -ArgumentList $gsArgs -PassThru -WindowStyle Hidden
 

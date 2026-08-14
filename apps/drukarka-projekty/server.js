@@ -196,7 +196,12 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
     return { ok: false, message: `Znaleziono wiecej niz jeden pasujacy folder dla numeru "${lpGmina}".`, matches };
   }
 
-  const folderName = matches[0];
+  const folderRelPath = matches[0];
+  // Folder adresu moze byc zagniezdzony w podfolderze kategorii (np.
+  // "Wyslane do gminy\19.Ul. Reja 5, Posada") - do walidacji/wyswietlania
+  // uzywamy samej nazwy folderu adresu, ale do faktycznej sciezki na dysku
+  // pelnej relatywnej sciezki znalezionej przez findAddressFolder.
+  const folderName = path.basename(folderRelPath);
   // Audyt P0-6b: dopasowanie po LP sprawdzalo WYLACZNIE numer na poczatku
   // nazwy folderu - addressHint (adres z Excela) byl odczytany, ale nigdy nie
   // porownywany z folderName. Dwie rozne inwestycje moga miec ten sam numer
@@ -215,7 +220,7 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
       };
     }
   }
-  const folderPath = path.join(baseFolder, folderName);
+  const folderPath = path.join(baseFolder, folderRelPath);
   const classifiedRaw = folderMatch.classifyFiles(folderPath);
   const classified = await folderMatch.detectByContent(folderPath, classifiedRaw);
 

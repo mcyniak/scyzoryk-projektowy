@@ -69,6 +69,65 @@ function resolveAddressFolder(baseFolder, folderName) {
 
 app.get("/api/health", (req, res) => res.json({ ok: true, name: "protokoly" }));
 
+// Parsuje reczne poprawki obrotu z query/body ({ "0": 180, "2": 90, ... },
+// indeks zgodny z kolejnoscia findProtocolPhotos/#api/photos) - JSON.parse
+// moze rzucic na zle sformowanym wejsciu, wiec traktujemy to jako "brak
+// poprawek" zamiast wywalac cale zadanie.
+function parseRotations(raw) {
+  if (!raw) return {};
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!parsed || typeof parsed !== "object") return {};
+    const out = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      const deg = Number(v);
+      if (Number.isFinite(deg) && deg % 90 === 0) out[k] = ((deg % 360) + 360) % 360;
+    }
+    return out;
+  } catch (_) {
+    return {};
+  }
+}
+
+// Lekki listing pojedynczych zdjec protokolu (bez przetwarzania obrazow) -
+// UI buduje z tego pasek miniatur w podgladzie, zeby uzytkownik mogl reczne
+// poprawic obrot pojedynczego zdjecia PRZED zlozeniem calego PDF-a.
+app.get("/api/photos", (req, res) => {
+  try {
+    const baseFolder = String(req.query.baseFolder || "").trim();
+    const folderName = String(req.query.folderName || "").trim();
+    const folderPath = resolveAddressFolder(baseFolder, folderName);
+    const photos = builder.findProtocolPhotos(folderPath);
+    res.json({ ok: true, photos: photos.map((p, index) => ({ index, fileName: path.basename(p.path) })) });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || "Nie udalo sie odczytac zdjec." });
+  }
+});
+
+// Zwraca POJEDYNCZE przetworzone zdjecie (ten sam pipeline co w PDF-ie) jako
+// JPEG - miniatura w UI do podgladu efektu recznego obrotu bez budowania
+// calego PDF-a od nowa przy kazdym kliknieciu.
+app.get("/api/photo-thumb", async (req, res) => {
+  try {
+    const baseFolder = String(req.query.baseFolder || "").trim();
+    const folderName = String(req.query.folderName || "").trim();
+    const index = Number(req.query.index);
+    const rotateDeg = Number(req.query.rotate) || 0;
+    const folderPath = resolveAddressFolder(baseFolder, folderName);
+    const photos = builder.findProtocolPhotos(folderPath);
+    if (!Number.isInteger(index) || index < 0 || index >= photos.length) {
+      return res.status(404).json({ ok: false, message: "Nie znaleziono zdjecia o tym indeksie." });
+    }
+    const img = await builder.processPhoto(photos[index].path, { manualRotateDeg: rotateDeg });
+    const jpegBuffer = await img.getBuffer("image/jpeg", { quality: 70 });
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(jpegBuffer);
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || "Nie udalo sie zbudowac miniatury." });
+  }
+});
+
 // Skanuje folder bazowy (tak samo jak drukarka-projekty) i dla kazdego
 // adresu zwraca liczbe znalezionych zdjec protokolu - bez przetwarzania
 // obrazow (szybkie, tylko listowanie plikow), zeby UI moglo od razu pokazac
@@ -129,7 +188,8 @@ app.get("/api/preview", async (req, res) => {
     const photos = builder.findProtocolPhotos(folderPath);
     if (!photos.length) return res.status(404).json({ ok: false, message: "Nie znaleziono zdjec protokolu w tym folderze." });
 
-    const pdfBytes = await builder.buildProtocolPdf(photos.map(p => p.path));
+    const rotations = parseRotations(req.query.rotations);
+    const pdfBytes = await builder.buildProtocolPdf(photos.map(p => p.path), rotations);
 
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
     res.setHeader(
@@ -156,7 +216,8 @@ app.post("/api/save", async (req, res) => {
     const photos = builder.findProtocolPhotos(folderPath);
     if (!photos.length) return res.status(404).json({ ok: false, message: "Nie znaleziono zdjec protokolu w tym folderze." });
 
-    const pdfBytes = await builder.buildProtocolPdf(photos.map(p => p.path));
+    const rotations = parseRotations(req.body?.rotations);
+    const pdfBytes = await builder.buildProtocolPdf(photos.map(p => p.path), rotations);
     const saveDir = builder.targetSaveDir(folderPath, photos);
     const fileName = builder.outputFileName(folderName);
     const savePath = path.join(saveDir, fileName);

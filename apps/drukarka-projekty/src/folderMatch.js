@@ -72,15 +72,44 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Realny przypadek 2026-08-14 (Kazimierz Biskupi): baseFolder bywa folderem
+// "kategorii" (np. "Projekty"), a faktyczne foldery adresow siedza dopiero w
+// jego podfolderach ("Wyslane do gminy", "Gotowe do druku"...) - bez
+// przeszukania podfolderow uzytkownik musial recznie wskazywac kazdy
+// podfolder kategorii z osobna. Szukamy wiec numeru LP takze w podfolderach,
+// do ograniczonej glebokosci (typowo 1-2 poziomy kategorii, nie cale drzewo
+// projektu).
+const ADDRESS_FOLDER_SEARCH_MAX_DEPTH = Number(process.env.DRUKARKA_PROJEKTY_ADDRESS_SEARCH_DEPTH || 3);
+
 function findAddressFolder(baseFolder, lpGmina) {
   if (!fs.existsSync(baseFolder) || !fs.statSync(baseFolder).isDirectory()) {
     throw new Error(`Folder bazowy nie istnieje: ${baseFolder}`);
   }
-  const entries = fs.readdirSync(baseFolder, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => e.name);
   const lpStr = String(lpGmina).trim();
   const re = new RegExp(`^${escapeRegExp(lpStr)}(?!\\d)`);
-  const matches = entries.filter(name => re.test(name.trim()));
-  return { matches, allFolders: entries };
+  const matches = [];
+  const allFolders = [];
+
+  function walk(currentPath, relPath, depth) {
+    let entries;
+    try {
+      entries = fs.readdirSync(currentPath, { withFileTypes: true }).filter(e => e.isDirectory());
+    } catch (_err) {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = relPath ? path.join(relPath, entry.name) : entry.name;
+      allFolders.push(rel);
+      if (re.test(entry.name.trim())) {
+        matches.push(rel);
+      } else if (depth < ADDRESS_FOLDER_SEARCH_MAX_DEPTH) {
+        walk(path.join(currentPath, entry.name), rel, depth + 1);
+      }
+    }
+  }
+
+  walk(baseFolder, "", 0);
+  return { matches, allFolders };
 }
 
 // Skanuje pliki BEZPOSREDNIO w folderze adresu ORAZ jeden poziom w glab
