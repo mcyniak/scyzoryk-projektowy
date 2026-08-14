@@ -187,16 +187,61 @@ app.post("/api/wm/scan", async (req, res) => {
   }
 });
 
+// Audyt na zywo 2026-08-14 (Kazimierz Biskupi): rekurencyjne szukanie w
+// podfolderach kategorii (patrz findAddressFolder) zaczelo tez znajdowac
+// PRAWDZIWE duplikaty tego samego adresu - uzytkownik skopiowal caly zestaw
+// folderow adresow do swiezego "Dla gminy 14.08.2026" (staging na dzisiejsza
+// wysylke), zostawiajac oryginaly na miejscu (np. w "Wyslane do gminy"), a w
+// nowej kopii folder bywa nazwany z dopiskiem "-pdf" (np. "68.Ul.Polna 7-pdf"
+// zamiast "68.Ul. Polna 7") - to WCIAZ ten sam adres, nie kolizja numeracji
+// miedzy inwestycjami, ktorej dotyczyl audyt P0-6b nizej, wiec "wiecej niz
+// jeden pasujacy folder" bylby tu falszywym alarmem. Uzywamy WIEC TEJ SAMEJ
+// funkcji co P0-6b (filenameMatchesOwnAddress, fuzzy dopasowanie po tokenach,
+// nie dokladna rownosc stringow) do przefiltrowania kandydatow do adresu z
+// Excela PRZED, nie tylko PO, wybraniu jednego z nich - jesli zostaje
+// dokladnie jeden pasujacy kandydat, uzywamy go. Jesli po filtrze wciaz jest
+// kilka (naprawde zduplikowany, identycznie nazwany folder) - bezpiecznie
+// wybieramy najswiezej zmodyfikowany (typowo najbardziej aktualna kopia).
+// Bez podpowiedzi adresu z Excela (rzadkie) nie ma jak bezpiecznie rozstrzygnac
+// - zostaje dawne zachowanie (blokujemy z czytelnym bledem).
+function resolveAmbiguousMatches(baseFolder, matches, addressHint) {
+  let candidates = matches;
+  if (addressHint?.adres) {
+    const tokens = folderMatch.addressTokens(addressHint.adres);
+    if (tokens.length) {
+      const filtered = matches.filter(m => folderMatch.filenameMatchesOwnAddress(path.basename(m), tokens));
+      if (filtered.length) candidates = filtered;
+    }
+  }
+  if (candidates.length === 1) return candidates[0];
+  const normalizedNames = new Set(candidates.map(m => folderMatch.normalize(path.basename(m))));
+  if (normalizedNames.size !== 1 && !addressHint?.adres) return null;
+  let best = candidates[0];
+  let bestMtime = -Infinity;
+  for (const rel of candidates) {
+    try {
+      const mtime = fs.statSync(path.join(baseFolder, rel)).mtimeMs;
+      if (mtime > bestMtime) { bestMtime = mtime; best = rel; }
+    } catch (_err) {}
+  }
+  return best;
+}
+
 async function matchOneAddress(baseFolder, lpGmina, addressHint) {
   const { matches, allFolders } = folderMatch.findAddressFolder(baseFolder, lpGmina);
   if (matches.length === 0) {
     return { ok: false, message: `Nie znaleziono folderu zaczynajacego sie od numeru "${lpGmina}".`, allFolders };
   }
+  let resolvedMatch = matches[0];
   if (matches.length > 1) {
-    return { ok: false, message: `Znaleziono wiecej niz jeden pasujacy folder dla numeru "${lpGmina}".`, matches };
+    const resolved = resolveAmbiguousMatches(baseFolder, matches, addressHint);
+    if (!resolved) {
+      return { ok: false, message: `Znaleziono wiecej niz jeden pasujacy folder dla numeru "${lpGmina}".`, matches };
+    }
+    resolvedMatch = resolved;
   }
 
-  const folderRelPath = matches[0];
+  const folderRelPath = resolvedMatch;
   // Folder adresu moze byc zagniezdzony w podfolderze kategorii (np.
   // "Wyslane do gminy\19.Ul. Reja 5, Posada") - do walidacji/wyswietlania
   // uzywamy samej nazwy folderu adresu, ale do faktycznej sciezki na dysku
