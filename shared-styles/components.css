@@ -63,7 +63,7 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible,
   display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
   height: 60px; padding: 0 var(--space-2) 0 var(--space-2); margin-bottom: var(--space-6);
   position: sticky; top: 0; z-index: 40;
-  background: rgba(251, 252, 253, .92);
+  background: var(--bg-header);
   backdrop-filter: none;
   border-bottom: 1px solid var(--border-default);
 }
@@ -139,8 +139,8 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible,
 .btn-block { width: 100%; }
 
 .btn-primary { --btn-bg: var(--brand-500); --btn-bg-hover: var(--brand-600); --btn-fg: #fff; }
-.btn-secondary { --btn-bg: var(--gray-0); --btn-bg-hover: var(--gray-50); --btn-fg: var(--text-primary); --btn-border: var(--border-strong); }
-.btn-ghost { --btn-bg: transparent; --btn-bg-hover: var(--gray-100); --btn-fg: var(--text-secondary); }
+.btn-secondary { --btn-bg: var(--bg-surface); --btn-bg-hover: var(--bg-surface-muted); --btn-fg: var(--text-primary); --btn-border: var(--border-strong); }
+.btn-ghost { --btn-bg: transparent; --btn-bg-hover: var(--bg-hover); --btn-fg: var(--text-secondary); }
 .btn-ghost:hover { color: var(--text-primary); }
 .btn-danger { --btn-bg: var(--danger-500); --btn-bg-hover: var(--danger-600); --btn-fg: #fff; }
 .btn-danger-ghost { --btn-bg: transparent; --btn-bg-hover: var(--danger-50); --btn-fg: var(--danger-600); }
@@ -161,7 +161,7 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible,
 input[type="text"], input[type="search"], input[type="number"], input[type="email"], input[type="password"],
 select, textarea, .input {
   width: 100%; min-height: var(--hit-min); padding: 0 var(--space-3);
-  background: var(--gray-0); color: var(--text-primary);
+  background: var(--bg-surface); color: var(--text-primary);
   border: 1px solid var(--border-strong); border-radius: var(--radius-md);
   font: inherit; font-size: var(--text-base);
   transition: border-color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
@@ -171,7 +171,7 @@ input::placeholder, textarea::placeholder { color: var(--text-tertiary); }
 input:focus-visible, select:focus-visible, textarea:focus-visible {
   border-color: var(--info-500); box-shadow: var(--shadow-focus); outline: none;
 }
-input:disabled, select:disabled, textarea:disabled { background: var(--gray-50); color: var(--text-tertiary); cursor: not-allowed; }
+input:disabled, select:disabled, textarea:disabled { background: var(--bg-surface-muted); color: var(--text-tertiary); cursor: not-allowed; }
 
 select { appearance: none; background-image: none; padding-right: var(--space-8); position: relative; }
 .select-wrap { position: relative; }
@@ -198,7 +198,7 @@ input[type="file"]::file-selector-button:hover { background: var(--brand-600); }
 /* Checkbox */
 input[type="checkbox"] {
   appearance: none; width: 20px; height: 20px; min-height: 0; flex: none;
-  border: 1.6px solid var(--border-strong); border-radius: 6px; background: var(--gray-0);
+  border: 1.6px solid var(--border-strong); border-radius: 6px; background: var(--bg-surface);
   display: inline-grid; place-content: center; cursor: pointer; margin: 0;
   transition: background var(--duration-fast), border-color var(--duration-fast);
 }
@@ -215,7 +215,7 @@ input[type="checkbox"]:indeterminate::before { transform: scale(1); clip-path: n
 /* Radio */
 input[type="radio"] {
   appearance: none; width: 20px; height: 20px; min-height: 0; flex: none; margin: 0;
-  border: 1.6px solid var(--border-strong); border-radius: 999px; background: var(--gray-0);
+  border: 1.6px solid var(--border-strong); border-radius: 999px; background: var(--bg-surface);
   display: inline-grid; place-content: center; cursor: pointer;
 }
 input[type="radio"]::before { content: ""; width: 9px; height: 9px; border-radius: 999px; background: #fff; transform: scale(0); transition: transform var(--duration-fast); }
@@ -226,7 +226,7 @@ input[type="radio"]:checked::before { transform: scale(1); }
 .switch { position: relative; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
 .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .switch .track {
-  width: 40px; height: 24px; border-radius: 999px; background: var(--gray-300); flex: none; position: relative;
+  width: 40px; height: 24px; border-radius: 999px; background: var(--border-strong); flex: none; position: relative;
   transition: background var(--duration-base) var(--ease-standard);
 }
 .switch .track::after {
@@ -343,14 +343,14 @@ input[type="radio"]:checked::before { transform: scale(1); }
 /* ---------- Badge / status ---------- */
 .badge {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px;
-  font-size: 11.5px; font-weight: 700; white-space: nowrap; background: var(--gray-100); color: var(--text-secondary);
+  font-size: 11.5px; font-weight: 700; white-space: nowrap; background: var(--bg-sunken); color: var(--text-secondary);
 }
 .badge .icon { width: 12px; height: 12px; }
 .badge-info { background: var(--info-50); color: var(--info-600); }
 .badge-success { background: var(--success-50); color: var(--success-600); }
 .badge-warning { background: var(--warning-50); color: var(--warning-600); }
 .badge-danger { background: var(--danger-50); color: var(--danger-600); }
-.badge-neutral { background: var(--gray-100); color: var(--text-secondary); }
+.badge-neutral { background: var(--bg-sunken); color: var(--text-secondary); }
 
 /* ---------- Alerty / komunikaty ---------- */
 .alert {
@@ -386,7 +386,7 @@ table.table td.col-actions, table.table th.col-actions { width: 1%; white-space:
 table.table td.col-checkbox, table.table th.col-checkbox { width: 1%; }
 
 /* ---------- Postep / skeleton ---------- */
-.progress { height: 10px; background: var(--gray-100); border-radius: 999px; overflow: hidden; }
+.progress { height: 10px; background: var(--bg-sunken); border-radius: 999px; overflow: hidden; }
 .progress > .bar, .progress > #progressBar { height: 100%; width: 0%; background: var(--brand-500); border-radius: 999px; transition: width var(--duration-slow) var(--ease-standard); }
 .progress.is-indeterminate > .bar, .progress.is-indeterminate > #progressBar { width: 40% !important; animation: scz-indeterminate 1.3s ease-in-out infinite; }
 @keyframes scz-indeterminate { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
@@ -400,7 +400,7 @@ table.table td.col-checkbox, table.table th.col-checkbox { width: 1%; }
 .status-box:not(.is-printing) .progress { display: none; }
 .status-box:not(.is-printing) #statusText:empty { display: none; }
 
-.skeleton { position: relative; overflow: hidden; background: var(--gray-100); border-radius: var(--radius-sm); color: transparent !important; }
+.skeleton { position: relative; overflow: hidden; background: var(--bg-sunken); border-radius: var(--radius-sm); color: transparent !important; }
 .skeleton::after {
   content: ""; position: absolute; inset: 0; transform: translateX(-100%);
   background: linear-gradient(90deg, transparent, rgba(255,255,255,.7), transparent);
@@ -415,7 +415,7 @@ table.table td.col-checkbox, table.table th.col-checkbox { width: 1%; }
 }
 .state .state-icon {
   width: 52px; height: 52px; border-radius: 999px; display: grid; place-items: center;
-  background: var(--gray-100); color: var(--text-tertiary); margin-bottom: var(--space-2);
+  background: var(--bg-sunken); color: var(--text-tertiary); margin-bottom: var(--space-2);
 }
 .state .state-icon .icon { width: 24px; height: 24px; }
 .state-success .state-icon { background: var(--success-50); color: var(--success-600); }
@@ -433,7 +433,7 @@ table.table td.col-checkbox, table.table th.col-checkbox { width: 1%; }
 }
 .stepper .step .step-index {
   width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center; flex: none;
-  background: var(--gray-100); color: var(--text-tertiary); font-size: 13px;
+  background: var(--bg-sunken); color: var(--text-tertiary); font-size: 13px;
   transition: background var(--duration-base), color var(--duration-base);
 }
 .stepper .step.is-done { color: var(--text-primary); border-color: var(--success-500); cursor: pointer; }
@@ -465,4 +465,4 @@ table.table td.col-checkbox, table.table th.col-checkbox { width: 1%; }
 .help-modal-box { background: var(--bg-surface); border-radius: var(--radius-xl); width: min(520px, 100%); box-shadow: var(--shadow-lg); overflow: hidden; }
 .help-modal-head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--border-default); }
 .help-modal-close { background: transparent; border: 0; width: 34px; height: 34px; border-radius: var(--radius-md); display: grid; place-items: center; cursor: pointer; color: var(--text-tertiary); }
-.help-modal-close:hover { background: var(--gray-100); color: var(--text-primary); }
+.help-modal-close:hover { background: var(--bg-hover); color: var(--text-primary); }

@@ -4,9 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Zdjęcia do PDF Protokołów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="stylesheet" href="/shared/tokens.css" />
   <link rel="stylesheet" href="/shared/components.css" />
   <link rel="stylesheet" href="app.css" />
+  <script src="/shared/theme.js"></script>
 </head>
 <body>
   <main class="shell">
@@ -17,11 +19,12 @@
         </a>
         <span class="app-divider"></span>
         <div class="app-current-tool">
-          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-file"/></svg>
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-file-pdf"/></svg>
           <strong>Zdjęcia do PDF Protokołów</strong>
         </div>
       </div>
       <div class="app-header-right">
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
         <a class="btn btn-ghost btn-sm" href="#" data-main-link>
           <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
           Panel główny
@@ -33,7 +36,7 @@
       <div class="intro-text">
         <div class="kicker">Zdjęcia protokołów → gotowy PDF</div>
         <h1>Złóż zdjęcia protokołów w PDF do druku</h1>
-        <p class="lead">Wpisz folder bazowy z adresami (tak samo jak w drukarce projektów). Narzędzie wejdzie w każdy folder adresu, znajdzie zdjęcia protokołu, przytnie tło, zamieni na czarno-białe (mniej tuszu) i złoży w jeden PDF. Podgląd przed zapisem - nic nie trafia na dysk automatycznie.</p>
+        <p class="lead">Wpisz folder bazowy z adresami (tak samo jak w drukarce projektów). Narzędzie wejdzie w każdy folder adresu, znajdzie zdjęcia protokołu, wytnie tło i cienie, zamieni na czarno-białe (mniej tuszu) i złoży w jeden PDF. Podgląd przed zapisem - nic nie trafia na dysk automatycznie.</p>
       </div>
     </section>
 
@@ -51,8 +54,19 @@
         </label>
       </div>
       <div class="open-folder-row">
-        <button id="scanBtn" class="btn btn-primary" type="button">Skanuj</button>
+        <button id="scanBtn" class="btn btn-primary" type="button">
+          <svg class="icon"><use href="/shared/icons.svg#i-search"/></svg>
+          Skanuj
+        </button>
         <span id="scanError" class="hint error-hint"></span>
+      </div>
+      <div id="scanProgress" class="progress is-indeterminate" style="display:none;"><div class="bar"></div></div>
+    </section>
+
+    <section class="panel" id="emptyPanel" style="display:none;">
+      <div class="state">
+        <span class="state-icon"><svg class="icon icon-lg"><use href="/shared/icons.svg#i-inbox"/></svg></span>
+        <span>W tym folderze bazowym nie znaleziono żadnych folderów adresu.</span>
       </div>
     </section>
 
@@ -60,14 +74,17 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title">Adresy <span id="resultsSummary"></span></h2>
-          <p class="panel-desc">Kliknij "Podgląd", żeby zobaczyć wynik przed zapisem. "Zapisz" dopisuje PDF do folderu adresu (podfolder, w którym leżały zdjęcia).</p>
+          <p class="panel-desc">Kliknij „Podgląd”, żeby zobaczyć wynik przed zapisem. „Zapisz” dopisuje PDF do folderu adresu (podfolder, w którym leżały zdjęcia).</p>
         </div>
         <div class="nav-actions">
           <label class="option-field option-field-inline">
             <input type="checkbox" id="overwriteAllCheckbox" />
             <span class="option-label">Nadpisz też już zapisane</span>
           </label>
-          <button id="saveAllBtn" class="btn btn-secondary" type="button">Zapisz wszystkie (z zdjęciami)</button>
+          <button id="saveAllBtn" class="btn btn-secondary" type="button">
+            <svg class="icon"><use href="/shared/icons.svg#i-download"/></svg>
+            Zapisz wszystkie
+          </button>
         </div>
       </div>
       <div id="resultsTable"></div>
@@ -77,15 +94,33 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title">Podgląd: <span id="previewAdres"></span></h2>
-          <p class="panel-desc">Jeśli któreś zdjęcie jest do góry nogami albo źle obrócone, kliknij "Obróć" pod jego miniaturą - podgląd PDF-a odświeży się automatycznie.</p>
+          <p class="panel-desc">Jeśli któreś zdjęcie jest do góry nogami albo źle obrócone, kliknij „Obróć” pod jego miniaturą - podgląd odświeży się automatycznie.</p>
         </div>
         <div class="nav-actions">
-          <button id="previewSaveBtn" class="btn btn-primary" type="button">Zapisz ten PDF do folderu</button>
+          <button id="previewSaveBtn" class="btn btn-primary" type="button">
+            <svg class="icon"><use href="/shared/icons.svg#i-download"/></svg>
+            Zapisz ten PDF do folderu
+          </button>
         </div>
       </div>
-      <div id="photoThumbs" class="photo-thumbs"></div>
-      <div class="doc-viewer-stage" style="height: 70vh;">
-        <iframe id="pdfPreview" title="Podgląd PDF"></iframe>
+
+      <div class="split workspace">
+        <div class="photo-thumbs-col">
+          <div id="photoThumbs" class="photo-thumbs"></div>
+        </div>
+        <aside class="doc-viewer">
+          <div class="doc-viewer-toolbar">
+            <span class="preview-title">Podgląd PDF</span>
+            <span style="flex:1"></span>
+            <button id="zoomOutBtn" class="btn btn-icon" type="button" title="Pomniejsz" aria-label="Pomniejsz"><svg class="icon"><use href="/shared/icons.svg#i-zoom-out"/></svg></button>
+            <button id="zoomFitBtn" class="btn btn-icon" type="button" title="Dopasuj do szerokości" aria-label="Dopasuj do szerokości"><svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg></button>
+            <button id="zoomInBtn" class="btn btn-icon" type="button" title="Powiększ" aria-label="Powiększ"><svg class="icon"><use href="/shared/icons.svg#i-zoom-in"/></svg></button>
+            <span id="zoomLabel" class="zoom-label">Dopasuj</span>
+          </div>
+          <div class="doc-viewer-stage">
+            <iframe id="pdfPreview" title="Podgląd PDF"></iframe>
+          </div>
+        </aside>
       </div>
       <div id="previewStatus" class="hint"></div>
     </section>

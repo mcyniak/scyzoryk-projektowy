@@ -60,6 +60,8 @@
   --bg-surface: var(--gray-0);
   --bg-surface-muted: var(--gray-25);
   --bg-sunken: var(--gray-100);
+  --bg-hover: var(--gray-100);
+  --bg-header: rgba(251, 252, 253, .92);
   --border-default: var(--gray-200);
   --border-strong: var(--gray-300);
   --text-primary: var(--gray-900);
@@ -123,9 +125,108 @@
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  /* Narzędzie jest projektowane jako jasny "workspace"; ciemny motyw
-     nie jest w zakresie tego redesignu, ale nie wymuszamy jasnych barw
-     na elementach natywnych przegladarki (scrollbary, kontrolki formularzy). */
-  :root { color-scheme: light; }
+/* ============================================================
+   Tryb ciemny (dodany 2026-08-17)
+   Przelacznik w naglowku kazdego modulu ustawia data-theme="dark"/"light"
+   na <html> i zapisuje wybor w localStorage (patrz /shared/theme.js).
+   Bez zapisanego wyboru motyw idzie za prefers-color-scheme systemu (blok
+   nizej) - jawny wybor uzytkownika (atrybut data-theme) zawsze wygrywa nad
+   preferencja systemowa, wiec te same tokeny sa zdefiniowane DWA razy
+   (w media query i w selektorze atrybutu), bo CSS nie ma tu wspolnego
+   mixina bez preprocesora.
+
+   Tylko znaczeniowe aliasy (--bg-*, --border-*, --text-*, kolory chipow)
+   sa tu nadpisywane - surowa skala --gray-0..900 zostaje NIEZMIENIONA w
+   obu motywach, bo kilka komponentow (.doc-viewer, .tooltip,
+   .alert-details pre) celowo uzywa jej wprost jako "zawsze ciemne tlo"
+   niezaleznie od motywu calej aplikacji - odwrocenie samej skali
+   zepsuloby te komponenty. */
+:root {
+  --dark-bg-page: #14171d;
+  --dark-bg-surface: #1b1f27;
+  --dark-bg-surface-muted: #20242e;
+  --dark-bg-sunken: #262b37;
+  --dark-bg-hover: #262b37;
+  --dark-bg-header: rgba(20, 23, 29, .88);
+  --dark-border-default: #313846;
+  --dark-border-strong: #3d4657;
+  --dark-text-primary: #f1f3f6;
+  --dark-text-secondary: #b7c0cc;
+  --dark-text-tertiary: #8993a3;
+  --dark-danger-50: rgba(225, 29, 72, .18);
+  --dark-danger-100: rgba(225, 29, 72, .3);
+  --dark-danger-600: #fb7185;
+  --dark-success-50: rgba(5, 150, 105, .18);
+  --dark-success-100: rgba(5, 150, 105, .3);
+  --dark-success-600: #34d399;
+  --dark-warning-50: rgba(217, 119, 6, .18);
+  --dark-warning-100: rgba(217, 119, 6, .3);
+  --dark-warning-600: #fbbf24;
+  --dark-info-50: rgba(37, 99, 235, .2);
+  --dark-info-100: rgba(37, 99, 235, .32);
+  --dark-info-600: #60a5fa;
+  --dark-brand-50: rgba(207, 23, 31, .18);
+  --dark-brand-100: rgba(207, 23, 31, .32);
 }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg-page: var(--dark-bg-page);
+    --bg-surface: var(--dark-bg-surface);
+    --bg-surface-muted: var(--dark-bg-surface-muted);
+    --bg-sunken: var(--dark-bg-sunken);
+    --bg-hover: var(--dark-bg-hover);
+    --bg-header: var(--dark-bg-header);
+    --border-default: var(--dark-border-default);
+    --border-strong: var(--dark-border-strong);
+    --text-primary: var(--dark-text-primary);
+    --text-secondary: var(--dark-text-secondary);
+    --text-tertiary: var(--dark-text-tertiary);
+    --danger-50: var(--dark-danger-50);
+    --danger-100: var(--dark-danger-100);
+    --danger-600: var(--dark-danger-600);
+    --success-50: var(--dark-success-50);
+    --success-100: var(--dark-success-100);
+    --success-600: var(--dark-success-600);
+    --warning-50: var(--dark-warning-50);
+    --warning-100: var(--dark-warning-100);
+    --warning-600: var(--dark-warning-600);
+    --info-50: var(--dark-info-50);
+    --info-100: var(--dark-info-100);
+    --info-600: var(--dark-info-600);
+    --brand-50: var(--dark-brand-50);
+    --brand-100: var(--dark-brand-100);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-page: var(--dark-bg-page);
+  --bg-surface: var(--dark-bg-surface);
+  --bg-surface-muted: var(--dark-bg-surface-muted);
+  --bg-sunken: var(--dark-bg-sunken);
+  --bg-hover: var(--dark-bg-hover);
+  --bg-header: var(--dark-bg-header);
+  --border-default: var(--dark-border-default);
+  --border-strong: var(--dark-border-strong);
+  --text-primary: var(--dark-text-primary);
+  --text-secondary: var(--dark-text-secondary);
+  --text-tertiary: var(--dark-text-tertiary);
+  --danger-50: var(--dark-danger-50);
+  --danger-100: var(--dark-danger-100);
+  --danger-600: var(--dark-danger-600);
+  --success-50: var(--dark-success-50);
+  --success-100: var(--dark-success-100);
+  --success-600: var(--dark-success-600);
+  --warning-50: var(--dark-warning-50);
+  --warning-100: var(--dark-warning-100);
+  --warning-600: var(--dark-warning-600);
+  --info-50: var(--dark-info-50);
+  --info-100: var(--dark-info-100);
+  --info-600: var(--dark-info-600);
+  --brand-50: var(--dark-brand-50);
+  --brand-100: var(--dark-brand-100);
+}
+
+:root[data-theme="light"] { color-scheme: light; }

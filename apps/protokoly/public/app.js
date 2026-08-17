@@ -5,6 +5,8 @@ document.querySelectorAll("[data-main-link]").forEach(link => { link.href = main
 const baseFolderInput = document.getElementById("baseFolderInput");
 const scanBtn = document.getElementById("scanBtn");
 const scanError = document.getElementById("scanError");
+const scanProgress = document.getElementById("scanProgress");
+const emptyPanel = document.getElementById("emptyPanel");
 const resultsPanel = document.getElementById("resultsPanel");
 const resultsSummary = document.getElementById("resultsSummary");
 const resultsTable = document.getElementById("resultsTable");
@@ -16,11 +18,17 @@ const previewSaveBtn = document.getElementById("previewSaveBtn");
 const previewStatus = document.getElementById("previewStatus");
 const pdfPreview = document.getElementById("pdfPreview");
 const photoThumbs = document.getElementById("photoThumbs");
+const zoomOutBtn = document.getElementById("zoomOutBtn");
+const zoomFitBtn = document.getElementById("zoomFitBtn");
+const zoomInBtn = document.getElementById("zoomInBtn");
+const zoomLabel = document.getElementById("zoomLabel");
 
 // rotations: { [folderName]: { [indeks_zdjecia]: stopnie(0/90/180/270) } } -
 // reczne poprawki obrotu z podgladu, trwaja do nowego skanu (nie do
 // przelaczenia miedzy adresami).
 let state = { baseFolder: "", results: [], previewFolderName: null, rotations: {} };
+let previewZoom = "page-width";
+const zoomLevels = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -40,6 +48,14 @@ async function api(path, options = {}) {
 }
 
 function renderResults() {
+  if (!state.results.length) {
+    resultsPanel.style.display = "none";
+    emptyPanel.style.display = "";
+    return;
+  }
+  emptyPanel.style.display = "none";
+  resultsPanel.style.display = "";
+
   const withPhotos = state.results.filter(r => r.photoCount > 0 && !r.error);
   resultsSummary.textContent = `(${withPhotos.length} z ${state.results.length} ma zdjęcia protokołu)`;
 
@@ -50,14 +66,14 @@ function renderResults() {
       <tbody>
         ${state.results.map(r => {
           if (r.error) {
-            return `<tr><td>${escapeHtml(r.adres)}</td><td>-</td><td><span class="badge unknown">błąd: ${escapeHtml(r.error)}</span></td><td></td></tr>`;
+            return `<tr><td>${escapeHtml(r.adres)}</td><td>-</td><td><span class="badge badge-danger"><svg class="icon"><use href="/shared/icons.svg#i-alert-circle"/></svg>błąd: ${escapeHtml(r.error)}</span></td><td></td></tr>`;
           }
           if (!r.photoCount) {
-            return `<tr><td>${escapeHtml(r.adres)}</td><td>0</td><td><span class="badge unknown">brak zdjęć</span></td><td></td></tr>`;
+            return `<tr><td>${escapeHtml(r.adres)}</td><td>0</td><td><span class="badge badge-neutral">brak zdjęć</span></td><td></td></tr>`;
           }
-          const savedBadge = r.savedPath ? `<span class="badge ok">zapisano</span>` : "";
+          const savedBadge = r.savedPath ? `<span class="badge badge-success"><svg class="icon"><use href="/shared/icons.svg#i-check-circle"/></svg>zapisano</span>` : "";
           const skippedBadge = (r.skippedPhotos && r.skippedPhotos.length)
-            ? ` <span class="badge unknown" title="${escapeHtml(r.skippedPhotos.join(", "))}">pominięto ${r.skippedPhotos.length} nieczytelnych</span>`
+            ? ` <span class="badge badge-warning" title="${escapeHtml(r.skippedPhotos.join(", "))}"><svg class="icon"><use href="/shared/icons.svg#i-alert-triangle"/></svg>pominięto ${r.skippedPhotos.length} nieczytelnych</span>`
             : "";
           return `
             <tr data-folder="${escapeHtml(r.folderName)}">
@@ -65,8 +81,14 @@ function renderResults() {
               <td>${r.photoCount}</td>
               <td>${savedBadge}${skippedBadge}</td>
               <td class="col-actions">
-                <button class="btn btn-ghost btn-sm" data-action="preview" data-folder="${escapeHtml(r.folderName)}" type="button">Podgląd</button>
-                <button class="btn btn-secondary btn-sm" data-action="save" data-folder="${escapeHtml(r.folderName)}" type="button">Zapisz</button>
+                <button class="btn btn-ghost btn-sm" data-action="preview" data-folder="${escapeHtml(r.folderName)}" type="button">
+                  <svg class="icon"><use href="/shared/icons.svg#i-eye"/></svg>
+                  Podgląd
+                </button>
+                <button class="btn btn-secondary btn-sm" data-action="save" data-folder="${escapeHtml(r.folderName)}" type="button">
+                  <svg class="icon"><use href="/shared/icons.svg#i-download"/></svg>
+                  Zapisz
+                </button>
               </td>
             </tr>`;
         }).join("")}
@@ -89,6 +111,8 @@ scanBtn.addEventListener("click", async () => {
   scanError.textContent = "";
   scanBtn.disabled = true;
   scanBtn.textContent = "Skanuję...";
+  scanProgress.style.display = "";
+  previewPanel.style.display = "none";
   try {
     const data = await api("/api/scan", {
       method: "POST",
@@ -102,13 +126,13 @@ scanBtn.addEventListener("click", async () => {
     // bazowego pokazywal wszystko jako "do zapisania" na nowo, mimo ze plik
     // juz naprawde tam byl.
     state.results = data.results.map(r => ({ ...r, savedPath: r.savedPath || r.existingPath || null }));
-    resultsPanel.style.display = "";
     renderResults();
   } catch (err) {
     scanError.textContent = err.message;
   } finally {
     scanBtn.disabled = false;
-    scanBtn.textContent = "Skanuj";
+    scanBtn.innerHTML = '<svg class="icon"><use href="/shared/icons.svg#i-search"/></svg>Skanuj';
+    scanProgress.style.display = "none";
   }
 });
 
@@ -121,12 +145,35 @@ function buildPreviewUrl(folderName) {
   const rotations = rotationsForFolder(folderName);
   let url = `/api/preview?baseFolder=${encodeURIComponent(state.baseFolder)}&folderName=${encodeURIComponent(folderName)}`;
   if (Object.keys(rotations).length) url += `&rotations=${encodeURIComponent(JSON.stringify(rotations))}`;
-  return url;
+  const zoomValue = previewZoom === "page-width" ? "page-width" : String(previewZoom);
+  return `${url}#zoom=${encodeURIComponent(zoomValue)}&toolbar=0`;
+}
+
+function updateZoomLabel() {
+  zoomLabel.textContent = previewZoom === "page-width" ? "Dopasuj" : `${previewZoom}%`;
 }
 
 function refreshPdfPreview(folderName) {
+  updateZoomLabel();
   pdfPreview.src = buildPreviewUrl(folderName);
 }
+
+function setNumericZoom(nextZoom) {
+  previewZoom = Math.max(50, Math.min(300, nextZoom));
+  if (state.previewFolderName) refreshPdfPreview(state.previewFolderName);
+}
+
+zoomFitBtn.addEventListener("click", () => { previewZoom = "page-width"; if (state.previewFolderName) refreshPdfPreview(state.previewFolderName); });
+zoomOutBtn.addEventListener("click", () => {
+  if (previewZoom === "page-width") { setNumericZoom(100); return; }
+  const currentIndex = zoomLevels.findIndex(x => x >= previewZoom);
+  setNumericZoom(zoomLevels[currentIndex <= 0 ? 0 : currentIndex - 1]);
+});
+zoomInBtn.addEventListener("click", () => {
+  if (previewZoom === "page-width") { setNumericZoom(125); return; }
+  const currentIndex = zoomLevels.findIndex(x => x > previewZoom);
+  setNumericZoom(currentIndex === -1 ? zoomLevels[zoomLevels.length - 1] : zoomLevels[currentIndex]);
+});
 
 async function renderPhotoThumbs(folderName) {
   photoThumbs.innerHTML = "";
@@ -142,8 +189,13 @@ async function renderPhotoThumbs(folderName) {
     return `
       <div class="photo-thumb" data-index="${p.index}">
         <img src="/api/photo-thumb?baseFolder=${encodeURIComponent(state.baseFolder)}&folderName=${encodeURIComponent(folderName)}&index=${p.index}&rotate=${rotate}" alt="Zdjęcie ${p.index + 1}" />
-        <span class="photo-thumb-label">Zdjęcie ${p.index + 1}</span>
-        <button class="btn btn-ghost btn-sm" data-action="rotate" data-index="${p.index}" type="button">Obróć</button>
+        <div class="photo-thumb-body">
+          <span class="photo-thumb-label">Zdjęcie ${p.index + 1}</span>
+          <button class="btn btn-ghost btn-sm" data-action="rotate" data-index="${p.index}" type="button">
+            <svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg>
+            Obróć
+          </button>
+        </div>
       </div>`;
   }).join("");
 
@@ -173,6 +225,7 @@ async function renderPhotoThumbs(folderName) {
 
 function openPreview(folderName) {
   state.previewFolderName = folderName;
+  previewZoom = "page-width";
   const entry = state.results.find(r => r.folderName === folderName);
   previewAdres.textContent = entry ? entry.adres : folderName;
   previewStatus.textContent = "";
@@ -188,7 +241,7 @@ previewSaveBtn.addEventListener("click", async () => {
 });
 
 async function saveOne(folderName, triggerBtn, statusEl) {
-  const originalText = triggerBtn ? triggerBtn.textContent : "";
+  const originalHtml = triggerBtn ? triggerBtn.innerHTML : "";
   if (triggerBtn) { triggerBtn.disabled = true; triggerBtn.textContent = "Zapisuję..."; }
   try {
     const rotations = state.rotations[folderName] || {};
@@ -210,7 +263,7 @@ async function saveOne(folderName, triggerBtn, statusEl) {
     if (statusEl) statusEl.textContent = `Błąd: ${err.message}`;
     else alert(`Nie udało się zapisać: ${err.message}`);
   } finally {
-    if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.textContent = originalText; }
+    if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.innerHTML = originalHtml; }
   }
 }
 
@@ -242,5 +295,5 @@ saveAllBtn.addEventListener("click", async () => {
     renderResults();
   }
   saveAllBtn.disabled = false;
-  saveAllBtn.textContent = "Zapisz wszystkie (z zdjęciami)";
+  saveAllBtn.innerHTML = '<svg class="icon"><use href="/shared/icons.svg#i-download"/></svg>Zapisz wszystkie';
 });

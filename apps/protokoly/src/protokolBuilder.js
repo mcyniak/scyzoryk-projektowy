@@ -153,12 +153,15 @@ const MIN_FRACTION = Number(process.env.PROTOKOLY_MIN_FRACTION || 0.4);
 // Audyt na zywo 2026-08-14: przy niedoswietlonym zdjeciu (slabe oswietlenie w
 // terenie) sam contrast(0.35) na juz-ciemnych pikselach pcha je jeszcze
 // bardziej w czern zamiast rozjasnic - stad skargi na "cale czarne, mało
-// wyrazne" wydruki. img.normalize() (rozciaga histogram kazdego kanalu do
-// pelnego zakresu 0-255 na podstawie faktycznej najciemniejszej/najjasniejszej
-// wartosci w kadrze) NIE ma tej samej wady co brightness() w tej wersji
-// (zweryfikowane empirycznie na syntetycznym obrazie) i naprawia zarowno
+// wyrazne" wydruki. Rozciagniecie histogramu (patrz applyPercentileLevels
+// nizej) do pelnego zakresu 0-255 na podstawie faktycznej jasnosci kadru NIE
+// ma tej samej wady co brightness() w tej wersji i naprawia zarowno
 // niedoswietlone, jak i normalnie doswietlone zdjecia bez recznego strojenia -
 // wywolane PRZED greyscale/contrast, wiec dziala na oryginalnych kolorach.
+// (Pierwotnie byl to wbudowany img.normalize() - zastapiony 2026-08-17
+// wariantem percentylowym, patrz audyt przy applyPercentileLevels: surowy
+// normalize() lapal sie na blasku/odbiciu flesza jako falszywym punkcie
+// bieli.)
 const CONTRAST = Number(process.env.PROTOKOLY_CONTRAST || 0.35);
 // Prawdziwy protokol na A4 jest zawsze w pionie - jesli po przycieciu do
 // samej kartki wynik jest WYRAZNIE szerszy niz wyzszy, kartka lezala bokiem
@@ -212,6 +215,238 @@ const MAX_OUTPUT_WIDTH = Number(process.env.PROTOKOLY_MAX_OUTPUT_WIDTH || 1700);
 // wybielony - stad SHADING_BG_WIDTH pozostaje jawnie skonfigurowalny.
 const SHADING_BG_WIDTH = Number(process.env.PROTOKOLY_SHADING_BG_WIDTH || 12);
 
+// Audyt na zywo 2026-08-17 (dalszy ciag skargi "czarne wydruki" po
+// applyShadingCorrection): telefon robiacy zdjecie protokolu w slabo
+// oswietlonym pomieszczeniu czesto uzywa lampy blyskowej, ktora daje ostry,
+// niewielki BLASK/odbicie na kartce (np. na laminowanej oklejce czy zaginajacym
+// sie rogu). img.normalize() rozciaga histogram na podstawie SUROWEGO min/max
+// calego kadru - ten pojedynczy jasny punkt staje sie punktem bieli dla calej
+// reszty strony, wiec normalize() nie ma juz zapasu, zeby podniesc realnie
+// ciemna wiekszosc kartki. Zweryfikowane empirycznie na syntetycznym obrazie:
+// ta sama niedoswietlona kartka (bez blasku) konczyla pipeline ze srednia
+// jasnoscia ~235/255 (dobrze), ale Z blaskiem od flesza spadala do ~107/255 -
+// dokladnie ten "czarny/ciemny wydruk", na ktory skarzy sie uzytkownik.
+// Naprawa: rozciaganie oparte na PERCENTYLACH histogramu zamiast surowego
+// min/max (ten sam pomysl co "Levels" w edytorach zdjec) - punkty czerni/bieli
+// sa tam, gdzie faktycznie lezy wiekszosc tresci kartki, wiec kilka procent
+// odstajacych pikseli (blask, ale tez odwrotnie: ciemny cien w samym rogu) nie
+// psuje rozciagniecia dla reszty. Ten sam test na tych samych syntetycznych
+// obrazach z blaskiem: wynik ~233-235/255 niezaleznie od tego, czy blask byl
+// duzy czy maly - PROTOKOLY_LEVELS_LOW_PCT/HIGH_PCT pozostaja konfigurowalne
+// na wypadek innego realnego przypadku, tak jak SHADING_BG_WIDTH wyzej.
+const LEVELS_LOW_PCT = Number(process.env.PROTOKOLY_LEVELS_LOW_PCT || 2);
+const LEVELS_HIGH_PCT = Number(process.env.PROTOKOLY_LEVELS_HIGH_PCT || 98);
+
+function applyPercentileLevels(img, lowPct = LEVELS_LOW_PCT, highPct = LEVELS_HIGH_PCT) {
+  const { width, height } = img.bitmap;
+  const hist = new Array(256).fill(0);
+  let total = 0;
+  img.scan(0, 0, width, height, function (x, y, idx) {
+    const r = this.bitmap.data[idx], g = this.bitmap.data[idx + 1], b = this.bitmap.data[idx + 2];
+    hist[Math.round(0.299 * r + 0.587 * g + 0.114 * b)] += 1;
+    total += 1;
+  });
+  const lowCount = total * (lowPct / 100);
+  const highCount = total * (highPct / 100);
+  let cum = 0, black = 0, white = 255;
+  for (let v = 0; v < 256; v += 1) { cum += hist[v]; if (cum > lowCount) { black = v; break; } }
+  cum = 0;
+  for (let v = 255; v >= 0; v -= 1) { cum += hist[v]; if (cum > total - highCount) { white = v; break; } }
+  if (white <= black) white = black + 1;
+  const range = white - black;
+  img.scan(0, 0, width, height, function (x, y, idx) {
+    for (let c = 0; c < 3; c += 1) {
+      const v = ((this.bitmap.data[idx + c] - black) / range) * 255;
+      this.bitmap.data[idx + c] = Math.max(0, Math.min(255, Math.round(v)));
+    }
+  });
+  return img;
+}
+
+// Audyt na zywo 2026-08-17 (realny plik "17.Wieruszew 3", zdjecie protokolu
+// trzymanego na desce z klipsem na tle sciany z czerwonej cegly): przycinanie
+// do bounding-boxa (findPageBoundingBox) jest prostokatem, a kartka na zdjeciu
+// prawie zawsze lezy pod lekkim katem wzgledem aparatu - w rogach/na krawedzi
+// prostokata zostaje wiec kawalek prawdziwego tla (cegla, sciana), ktore po
+// konwersji na czarno-bialy drukuje sie jako spory, ciemny/teksturowany
+// obszar i marnuje tusz. Zmierzone na tym realnym zdjeciu: czysta cegla ma
+// jasnosc ~74/255, czysta kartka (nawet w cieniu) ~163/255 - wystarczajaco
+// duza roznica, zeby to odroznic od tresci kartki.
+//
+// Detekcja: "zalewanie" (flood fill) od brzegu kadru przez piksele
+// CIEMNIEJSZE niz darkThreshold - wszystko, co da sie osiagnac z brzegu
+// obrazu bez przejscia przez jasna kartke, jest tlem. Realny tekst/checkboxy
+// na kartce (ciemne kreski/X-y) NIE sa zagrozone - sa odizolowanymi ciemnymi
+// wyspami otoczonymi jasna kartka, wiec zalewanie od brzegu nigdy do nich nie
+// dotrze, o ile sama kartka nie dotyka brzegu kadru (CROP_PADDING wyzej
+// celowo zostawia waski pasek tla dookola kartki na wypadek tej metody).
+// Zweryfikowane na zywo: threshold=110 usuwa cegle w 100% bez naruszenia
+// jednej litery/checkboxa na kartce.
+//
+// Audyt na zywo 2026-08-17 (drugie realne zdjecie z tej samej paczki,
+// "53.link.124303.jpg"): metalowy klips na gorze i postrzepiona krawedz stosu
+// luznych kartek pod spodem tworza mnostwo WASKICH, odizolowanych kieszeni tla
+// (kilka pikseli szerokosci) - sam flood fill od brzegu NIE dociera do nich,
+// bo po drodze przebiega przez piksele odrobine jasniejsze niz threshold
+// (rozmycie przy skalowaniu/JPEG). Naprawa: po flood-fillu domykamy male
+// przerwy prostym wielokrotnym rozrostem maski (dylatacja) - kilkanascie
+// przebiegow domyka wszystkie takie przerwy.
+//
+// Audyt na zywo 2026-08-17 (proba #1, ZANIECHANA - opis dla przyszlych zmian):
+// pierwsza wersja tej poprawki TWARDO wybielala wykryte tlo na 255 juz PRZED
+// applyShadingCorrection. To dzialalo na pojedynczych przykladach, ale
+// wprowadzalo OSTRA krawedz (realna tresc <-> sztuczna biel) tam, gdzie
+// wczesniej byl plynny gradient - a applyShadingCorrection estymuje lokalne
+// tlo przez mocno agresywny blur (resize w dol do SHADING_BG_WIDTH=12 i z
+// powrotem), ktory na takiej ostrej krawedzi wpada w "dzwonienie" (ringing) i
+// psuje jasnosc calego zdjecia (zweryfikowane empirycznie na syntetycznym
+// obrazie - luznie przycieta kartka konczyla z widoczna winieta zamiast
+// rownej bieli, srednia jasnosc spadala ze ~230 do ~161).
+//
+// Naprawa #2 (aktualna): zamiast TWARDO wybielac tlo przed korekta,
+// "rozciagamy" na nie NAJBLIZSZY piksel prawdziwej kartki (inpaintBackgroundFromEdges,
+// wielozrodlowy BFS) - kazdy piksel tla dostaje kolor najblizszego piksela
+// kartki, wiec nie ma juz ZADNEJ sztucznej ostrej krawedzi dla nastepujacego
+// po tym blura. Prawdziwe (twarde, biale) wybielenie tla robimy dopiero NA
+// SAMYM KONCU (po greyscale+contrast), gdy juz nic wiecej nie bluruje wynik.
+//
+// Audyt na zywo 2026-08-17 (trzecie realne zdjecie, "54.link.124310.jpg",
+// dwa osobne problemy):
+// 1) Czesc tla bywa jasniejsza niz MASK_DARK_THRESHOLD (np. ~120-160) - nie
+//    zostaje wykryta w pierwszym przebiegu (na surowych kolorach), a mimo to
+//    applyPercentileLevels+contrast i tak spychaja ja w czern (bo to nadal
+//    duzo ciemniejsze od bialej kartki) - lity czarny klin w rogu zdjecia.
+//    Naprawa: DRUGI przebieg detekcji na samym koncu (po contrast), gdzie
+//    prawdziwe tlo kartki jest juz blisko bieli (>180), wiec nizszy prog (90)
+//    bezpiecznie lapie WSZYSTKO nadal wyraznie ciemne, niezaleznie od przyczyny.
+// 2) Ten drugi (koncowy) przebieg detekcji, puszczony BEZ ograniczen,
+//    potrafil "przeciekac" wzdluz waskiego, przypadkowego kanalu ciemnych
+//    pikseli (np. wzdluz postrzepionego rozdarcia papieru blisko gory kadru)
+//    daleko w glab kartki i wybielic fragment prawdziwego tytulu strony.
+//    Naprawa: koncowy przebieg dostaje allowedRegion (pierwotna maska
+//    tla, mocno zdylatowana o MASK_SEARCH_MARGIN_PX) i moze wykrywac tlo
+//    WYLACZNIE w tym obszarze - wystarczajaco duzo, zeby zlapac defekt TUZ
+//    PRZY oryginalnym tle (jak ten rog), ale flood fill fizycznie nie moze
+//    juz tunelowac daleko w glab kartki przez przypadkowy kanal.
+// Zweryfikowane na zywo na wszystkich trzech zdjeciach z tej paczki (cegla,
+// klips+rozdarcie, klin w rogu) jednoczesnie, bez utraty jakiejkolwiek tresci.
+const MASK_DARK_THRESHOLD = Number(process.env.PROTOKOLY_MASK_DARK_THRESHOLD || 110);
+const MASK_GAP_CLOSE_PASSES = Number(process.env.PROTOKOLY_MASK_GAP_CLOSE_PASSES || 12);
+const FINAL_MASK_DARK_THRESHOLD = Number(process.env.PROTOKOLY_FINAL_MASK_DARK_THRESHOLD || 90);
+const MASK_SEARCH_MARGIN_PX = Number(process.env.PROTOKOLY_MASK_SEARCH_MARGIN_PX || 100);
+
+// Wykrywa tlo: flood fill od brzegu kadru przez piksele ciemniejsze niz
+// darkThreshold, potem domyka male przerwy (gapClosePasses przebiegow
+// dylatacji). Jesli podano allowedRegion (Uint8Array tej samej dlugosci co
+// liczba pikseli), zarowno flood fill, jak i sam test "czy piksel jest
+// ciemny" dzialaja WYLACZNIE wewnatrz tego obszaru - piksele poza nim nigdy
+// nie zostana uznane za tlo, niezaleznie od jasnosci.
+function detectBackgroundMask(img, darkThreshold, gapClosePasses, allowedRegion = null) {
+  const { width, height, data } = img.bitmap;
+  const total = width * height;
+  const isDark = new Uint8Array(total);
+  for (let p = 0; p < total; p += 1) {
+    if (allowedRegion && !allowedRegion[p]) continue;
+    const idx = p * 4;
+    const lum = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+    isDark[p] = lum < darkThreshold ? 1 : 0;
+  }
+  let mask = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  let qHead = 0, qTail = 0;
+  function tryPush(x, y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const p = y * width + x;
+    if (mask[p] || !isDark[p]) return;
+    mask[p] = 1;
+    queue[qTail] = p;
+    qTail += 1;
+  }
+  for (let x = 0; x < width; x += 1) { tryPush(x, 0); tryPush(x, height - 1); }
+  for (let y = 0; y < height; y += 1) { tryPush(0, y); tryPush(width - 1, y); }
+  while (qHead < qTail) {
+    const p = queue[qHead];
+    qHead += 1;
+    const x = p % width, y = (p / width) | 0;
+    tryPush(x + 1, y);
+    tryPush(x - 1, y);
+    tryPush(x, y + 1);
+    tryPush(x, y - 1);
+  }
+  return dilateMask(mask, width, height, gapClosePasses);
+}
+
+// Rozrasta (dylatuje) binarna maske o `passes` pikseli - kazdy piksel
+// stykajacy sie z juz-maska w danym przebiegu sam staje sie maska. Uzywana
+// zarowno do domykania waskich przerw po flood-fillu, jak i do wyliczenia
+// "dozwolonego obszaru poszukiwan" dla koncowego przebiegu detekcji.
+function dilateMask(mask, width, height, passes) {
+  let m = mask;
+  for (let iter = 0; iter < passes; iter += 1) {
+    const next = new Uint8Array(m);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const p = y * width + x;
+        if (m[p]) continue;
+        const touchesBg = (x > 0 && m[p - 1]) || (x < width - 1 && m[p + 1]) ||
+          (y > 0 && m[p - width]) || (y < height - 1 && m[p + width]);
+        if (touchesBg) next[p] = 1;
+      }
+    }
+    m = next;
+  }
+  return m;
+}
+
+// Wielozrodlowy BFS: kazdy piksel tla (mask=1) dostaje kolor NAJBLIZSZEGO
+// piksela prawdziwej kartki (mask=0) - "rozciaga" krawedz kartki na tlo bez
+// wprowadzania zadnej sztucznej, ostrej granicy (patrz audyt wyzej -
+// applyShadingCorrection nie znosi ostrych krawedzi w danych wejsciowych).
+function inpaintBackgroundFromEdges(img, mask) {
+  const { width, height, data } = img.bitmap;
+  const total = width * height;
+  const visited = new Uint8Array(total);
+  const queue = new Int32Array(total);
+  let qHead = 0, qTail = 0;
+  for (let p = 0; p < total; p += 1) { if (!mask[p]) visited[p] = 1; }
+  function propagate(fromP, x, y) {
+    const neighbors = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]];
+    for (const [nx, ny] of neighbors) {
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      const np = ny * width + nx;
+      if (!mask[np] || visited[np]) continue;
+      visited[np] = 1;
+      const idx = np * 4, srcIdx = fromP * 4;
+      data[idx] = data[srcIdx]; data[idx + 1] = data[srcIdx + 1]; data[idx + 2] = data[srcIdx + 2];
+      queue[qTail] = np;
+      qTail += 1;
+    }
+  }
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const p = y * width + x;
+      if (mask[p]) continue;
+      propagate(p, x, y);
+    }
+  }
+  while (qHead < qTail) {
+    const p = queue[qHead];
+    qHead += 1;
+    propagate(p, p % width, (p / width) | 0);
+  }
+  return img;
+}
+
+function whitenMask(img, mask) {
+  const { data } = img.bitmap;
+  for (let p = 0; p < mask.length; p += 1) {
+    if (!mask[p]) continue;
+    const idx = p * 4;
+    data[idx] = 255; data[idx + 1] = 255; data[idx + 2] = 255;
+  }
+  return img;
+}
+
 function applyShadingCorrection(img) {
   const { width, height } = img.bitmap;
   const bg = img.clone().resize({ w: SHADING_BG_WIDTH }).resize({ w: width, h: height });
@@ -263,10 +498,17 @@ async function processPhoto(photoPath, { manualRotateDeg = 0 } = {}) {
   }
   if (manualRotateDeg % 360 !== 0) img.rotate(manualRotateDeg);
   if (img.bitmap.width > MAX_OUTPUT_WIDTH) img.resize({ w: MAX_OUTPUT_WIDTH });
+
+  const originalMask = detectBackgroundMask(img, MASK_DARK_THRESHOLD, MASK_GAP_CLOSE_PASSES);
+  inpaintBackgroundFromEdges(img, originalMask);
   applyShadingCorrection(img);
-  img.normalize();
+  applyPercentileLevels(img);
   img.greyscale();
   img.contrast(CONTRAST);
+
+  const searchRegion = dilateMask(originalMask, img.bitmap.width, img.bitmap.height, MASK_SEARCH_MARGIN_PX);
+  const finalMask = detectBackgroundMask(img, FINAL_MASK_DARK_THRESHOLD, MASK_GAP_CLOSE_PASSES, searchRegion);
+  whitenMask(img, finalMask);
   return img;
 }
 
@@ -408,6 +650,11 @@ module.exports = {
   listAddressFolders,
   findProtocolPhotos,
   findPageBoundingBox,
+  applyPercentileLevels,
+  detectBackgroundMask,
+  dilateMask,
+  inpaintBackgroundFromEdges,
+  whitenMask,
   processPhoto,
   buildProtocolPdf,
   outputFileName,
