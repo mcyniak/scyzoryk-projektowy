@@ -523,4 +523,112 @@ public sealed class UpdateApplierTests
         Assert.Equal(0, exitCode);
         Assert.Equal(0, process.KillProcessByIdCallCount);
     }
+
+    // Audyt 2026-08-17 (zlapane live na produkcji, dwie proby aktualizacji 1.1.10->1.1.15
+    // pod rzad, obie exitCode 5 - "Scyzoryk.exe wciaz w uzyciu"): StopResidentTrayProcesses
+    // (ten sam skan po nazwie+sciezce co StopOwnedProcesses) zglosil ZERO trafien mimo
+    // ze rezydentna ikona realnie zyla i naprawde blokowala plik (potwierdzone niezaleznie
+    // przez RestartManager w logu Inno Setup). residentTrayPid to ta sama, gwarantowana
+    // siatka bezpieczenstwa co parentPid powyzej - w odroznieniu od parentPid (ufany
+    // bezwarunkowo), tu PID pochodzi z pliku (patrz InstallPaths.ResidentTrayPidFilePath)
+    // i jest weryfikowany po nazwie+sciezce (KillProcessByIdIfPathMatches), nie samym
+    // KillProcessById - dlatego test sprawdza WYWOLANIE weryfikowanej wersji.
+    [Fact]
+    public async Task ResidentTrayPidStillAlive_AfterNameScanFindsNothing_IsKilledExplicitlyByVerifiedPid()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        // Dokladnie odtworzona rzeczywista awaria: skan po nazwie zwraca PUSTA liste
+        // (jak dwukrotnie na produkcji), ale IsProcessStillAlive potwierdza, ze PID z
+        // pliku wciaz zyje.
+        var process = new FakeProcessManager
+        {
+            StopResidentTrayResultToReturn = Array.Empty<int>(),
+            ProcessAliveResult = true,
+            KillProcessByIdIfPathMatchesResult = true
+        };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3", residentTrayPid: "16204");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, process.KillProcessByIdIfPathMatchesCallCount);
+        Assert.Equal(0, process.KillProcessByIdCallCount); // to NIE jest bezwarunkowe zabicie
+        var call = Assert.Single(process.KillIfPathMatchesCalls);
+        Assert.Equal(16204, call.Pid);
+        Assert.Equal(paths.ScyzorykExePath, call.ExpectedFullPath);
+    }
+
+    [Fact]
+    public async Task ResidentTrayPidAlreadyDead_KillProcessByIdIfPathMatchesIsNotCalled()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager { ProcessAliveResult = false };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3", residentTrayPid: "16204");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, process.KillProcessByIdIfPathMatchesCallCount);
+    }
+
+    [Fact]
+    public async Task NoResidentTrayPidProvided_BackwardCompatible_KillProcessByIdIfPathMatchesIsNotCalled()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        var process = new FakeProcessManager { ProcessAliveResult = true };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, process.KillProcessByIdIfPathMatchesCallCount);
+    }
+
+    // Audyt 2026-08-17: OBIE proby instalatora padly identycznie na produkcji (exitCode 5
+    // dwa razy pod rzad), bo zabezpieczenie istnialo tylko przed PIERWSZA proba. Test
+    // pilnuje, ze retry (RunInstallerWithRetryAsync) tez wola EnsureResidentTrayStopped,
+    // nie tylko poczatkowy StopAllOwnedProcessesUntilConfirmedAsync.
+    [Fact]
+    public async Task ResidentTrayPidStillAlive_OnRetryAfterFirstAttemptFails_IsKilledAgainOnRetry()
+    {
+        using var dir = new TempInstallDir();
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        // Kazde apps\* w stagingu potrzebuje niepustego node_modules, zeby
+        // DescribeIntegrityIssue nie zglosilo problemu integralnosci niezaleznie
+        // od exitCode - tu celowo uzywamy TempInstallDir bez apps\*, wiec
+        // integrityIssue bedzie null, a jedynym powodem retry jest exitCode != 0.
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 5);
+
+        var process = new FakeProcessManager
+        {
+            StopResidentTrayResultToReturn = Array.Empty<int>(),
+            ProcessAliveResult = true,
+            KillProcessByIdIfPathMatchesResult = true
+        };
+        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            installRetryDelay: TimeSpan.FromMilliseconds(1));
+
+        await applier.ApplyAsync(installerPath, "1.2.3", residentTrayPid: "16204");
+
+        // Raz przed pierwsza proba, raz przed druga (retry) - dokladnie to, czego
+        // zabraklo na produkcji.
+        Assert.Equal(2, process.KillProcessByIdIfPathMatchesCallCount);
+    }
 }

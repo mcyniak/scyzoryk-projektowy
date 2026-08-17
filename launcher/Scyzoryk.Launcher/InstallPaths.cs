@@ -24,10 +24,30 @@ public sealed class InstallPaths
     public string UpdateRoot { get; }
     public string DataRoot { get; }
 
+    /// <summary>
+    /// Audyt 2026-08-17 (zlapane live na produkcji): StopResidentTrayProcesses
+    /// (skan Process.GetProcessesByName + porownanie MainModule) potrafi tak samo
+    /// niedeterministycznie pominac rezydentna ikone w zasobniku, jak wczesniej
+    /// (audyt 2026-08-12) pomijal glownego nadzorce server.js - instalator wtedy
+    /// nie moze nadpisac WLASNIE dzialajacego Scyzoryk.exe (DeleteFile: plik w
+    /// uzyciu, kod 5), aktualizacja pada w kolko tym samym sposobem. Dla
+    /// nadzorcy server.js PID jest znany z calkowita pewnoscia (Node przekazuje
+    /// wlasny process.pid) - dla rezydentnej ikony NIE MA takiego pewnego zrodla
+    /// po stronie Node, wiec NotifyIconTrayHost sam zapisuje tu wlasny PID w
+    /// momencie przejecia ikony (i usuwa przy zamknieciu) - lib/updateService.js
+    /// odczytuje ten plik tuz przed spawnowaniem aktualizatora i przekazuje PID
+    /// dalej jako jawny argument. W przeciwienstwie do PID nadzorcy server.js, ten
+    /// PID NIE jest ufany bezwarunkowo (plik moze byc nieaktualny, PID moze zostac
+    /// ponownie uzyty przez zupelnie inny proces) - UpdateApplier.EnsureResidentTrayStopped
+    /// weryfikuje nazwe+sciezke przed zabiciem (patrz ProcessManager.KillProcessByIdIfPathMatches).
+    /// </summary>
+    public string ResidentTrayPidFilePath { get; }
+
     private InstallPaths(
         string installDir, string nodeExePath, string serverJsPath, string scyzorykExePath,
         string host, int port, string panelUrl, string healthUrl,
-        string logFilePath, string mutexName, string trayMutexName, string updateRoot, string dataRoot)
+        string logFilePath, string mutexName, string trayMutexName, string updateRoot, string dataRoot,
+        string residentTrayPidFilePath)
     {
         InstallDir = installDir;
         NodeExePath = nodeExePath;
@@ -42,6 +62,7 @@ public sealed class InstallPaths
         TrayMutexName = trayMutexName;
         UpdateRoot = updateRoot;
         DataRoot = dataRoot;
+        ResidentTrayPidFilePath = residentTrayPidFilePath;
     }
 
     /// <summary>
@@ -111,7 +132,12 @@ public sealed class InstallPaths
             ? Path.Combine(localAppData, "ScyzorykProjektowy", "Data")
             : Path.GetFullPath(dataRootOverride);
 
-        return new InstallPaths(installDir, nodeExePath, serverJsPath, scyzorykExePath, host, port, panelUrl, healthUrl, logFilePath, mutexName, trayMutexName, updateRoot, dataRoot);
+        // Ten sam podkatalog "runtime" co juz istniejacy runtime\printing\active.lock
+        // (patrz UpdateApplier.IsPrintingActive) - miejsce na efemeryczne znaczniki
+        // stanu procesu, nie na trwale dane uzytkownika.
+        var residentTrayPidFilePath = Path.Combine(dataRoot, "runtime", "resident-tray.pid");
+
+        return new InstallPaths(installDir, nodeExePath, serverJsPath, scyzorykExePath, host, port, panelUrl, healthUrl, logFilePath, mutexName, trayMutexName, updateRoot, dataRoot, residentTrayPidFilePath);
     }
 
     /// <summary>

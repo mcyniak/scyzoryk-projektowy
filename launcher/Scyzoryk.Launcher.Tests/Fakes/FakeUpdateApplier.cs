@@ -9,13 +9,15 @@ public sealed class FakeUpdateApplier : IUpdateApplier
     public string? LastInstallerPath { get; private set; }
     public string? LastExpectedVersion { get; private set; }
     public string? LastParentPid { get; private set; }
+    public string? LastResidentTrayPid { get; private set; }
 
-    public Task<int> ApplyAsync(string installerPath, string expectedVersion, string? parentPid = null)
+    public Task<int> ApplyAsync(string installerPath, string expectedVersion, string? parentPid = null, string? residentTrayPid = null)
     {
         ApplyCallCount++;
         LastInstallerPath = installerPath;
         LastExpectedVersion = expectedVersion;
         LastParentPid = parentPid;
+        LastResidentTrayPid = residentTrayPid;
         if (ExceptionToThrow is not null) throw ExceptionToThrow;
         return Task.FromResult(ExitCodeToReturn);
     }

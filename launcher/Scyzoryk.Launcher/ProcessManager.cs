@@ -45,6 +45,19 @@ public interface IProcessManager
     /// od tego, czy szerszy skan po nazwie/sciezce go w ogole zobaczyl.
     /// Zwraca true jesli proces zostal zabity albo juz nie zyl.</summary>
     bool KillProcessById(int pid);
+
+    /// <summary>Jak KillProcessById, ale NAJPIERW weryfikuje, ze podany PID wciaz
+    /// zyje I jego glowny modul zgadza sie ze wskazana pelna sciezka (dokladnie
+    /// IsOwnedNodeProcess) - w odroznieniu od KillProcessById (gdzie PID jest
+    /// zawsze ufany bezwarunkowo, bo pochodzi z wlasnego process.pid wywolujacego),
+    /// tutaj PID moze pochodzic z pliku zapisanego przez INNY, juz nieistniejacy
+    /// proces (patrz InstallPaths.ResidentTrayPidFilePath) - system moglby w
+    /// miedzyczasie ponownie uzyc tego samego numeru dla zupelnie niepowiazanego
+    /// procesu, ktorego NIGDY nie wolno zabic tylko dlatego, ze zgadza sie numer.
+    /// Zwraca true jesli docelowy proces zostal zabity albo juz nie zyl; false
+    /// jesli PID zyje, ale NIE jest oczekiwanym procesem (nic nie robimy) albo
+    /// zabicie sie nie udalo.</summary>
+    bool KillProcessByIdIfPathMatches(int pid, string expectedFullPath);
 }
 
 public sealed class ProcessManager : IProcessManager
@@ -214,6 +227,79 @@ public sealed class ProcessManager : IProcessManager
             catch (InvalidOperationException)
             {
                 return true; // juz nie zyje
+            }
+            catch (Win32Exception)
+            {
+                try
+                {
+                    proc.Kill();
+                }
+                catch (InvalidOperationException)
+                {
+                    return true;
+                }
+                catch (Win32Exception)
+                {
+                    return false;
+                }
+            }
+
+            try
+            {
+                return proc.WaitForExit(5000);
+            }
+            catch (InvalidOperationException)
+            {
+                return true;
+            }
+        }
+    }
+
+    public bool KillProcessByIdIfPathMatches(int pid, string expectedFullPath)
+    {
+        Process proc;
+        try
+        {
+            proc = Process.GetProcessById(pid);
+        }
+        catch (ArgumentException)
+        {
+            return true; // juz nie zyje - nic do zrobienia
+        }
+
+        using (proc)
+        {
+            string? mainModulePath;
+            try
+            {
+                if (proc.HasExited) return true;
+                mainModulePath = proc.MainModule?.FileName;
+            }
+            catch (Win32Exception)
+            {
+                // Brak dostepu do MainModule - nie zgadujemy, nie zabijamy.
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                return true; // zdazyl sie zakonczyc miedzy sprawdzeniem a odczytem
+            }
+
+            if (mainModulePath is null || !IsOwnedNodeProcess(mainModulePath, expectedFullPath))
+            {
+                // PID zyje, ale to NIE jest oczekiwany proces (numer zostal ponownie
+                // uzyty przez cos innego, albo plik z PID-em jest po prostu nieaktualny) -
+                // nigdy nie zabijamy cudzego, niepowiazanego procesu.
+                return false;
+            }
+
+            try
+            {
+                proc.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                return true;
             }
             catch (Win32Exception)
             {

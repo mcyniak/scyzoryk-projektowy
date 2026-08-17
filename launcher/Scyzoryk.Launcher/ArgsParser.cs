@@ -4,7 +4,7 @@ namespace Scyzoryk.Launcher;
 /// Wynik parsowania - dla wiekszosci trybow InstallerPath/ExpectedVersion/
 /// RealInstallDir sa puste (nieuzywane). Wypelnione wylacznie dla ApplyUpdate.
 /// </summary>
-public sealed record ParsedArgs(LauncherMode Mode, string? InstallerPath = null, string? ExpectedVersion = null, string? RealInstallDir = null, string? ParentPid = null);
+public sealed record ParsedArgs(LauncherMode Mode, string? InstallerPath = null, string? ExpectedVersion = null, string? RealInstallDir = null, string? ParentPid = null, string? ResidentTrayPid = null);
 
 /// <summary>
 /// Parsuje argumenty wiersza polecen. Kazdy argument jest analizowany jako
@@ -50,7 +50,12 @@ public static class ArgsParser
                     // OPCJONALNY - wstecznie kompatybilne ze starszymi wywolaniami bez niego.
                     // Patrz KillProcessById w ProcessManager.cs po co jest uzywany.
                     var parentPid = args.Length >= 5 && !string.IsNullOrWhiteSpace(args[4]) ? args[4] : null;
-                    return new ParsedArgs(LauncherMode.ApplyUpdate, args[1], args[2], args[3], parentPid);
+                    // 6. argument (PID rezydentnej ikony w zasobniku, odczytany przez
+                    // lib/updateService.js z InstallPaths.ResidentTrayPidFilePath) jest
+                    // rowniez OPCJONALNY z tego samego powodu - patrz
+                    // UpdateApplier.EnsureResidentTrayStopped, audyt 2026-08-17.
+                    var residentTrayPid = args.Length >= 6 && !string.IsNullOrWhiteSpace(args[5]) ? args[5] : null;
+                    return new ParsedArgs(LauncherMode.ApplyUpdate, args[1], args[2], args[3], parentPid, residentTrayPid);
                 }
                 return new ParsedArgs(LauncherMode.Unknown);
             default:

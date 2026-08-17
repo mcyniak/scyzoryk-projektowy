@@ -44,6 +44,19 @@ $Root = Split-Path -Parent $PSScriptRoot
 if (-not $OutputDir) { $OutputDir = Join-Path $Root 'release' }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
+# Audyt 2026-08-17 (zmierzone na zywo w CI, ten sam "npm install-all" 5-15x
+# wolniejszy tutaj niz chwile wczesniej przy repo root): na hostowanych
+# windowsowych runnerach GitHub Actions $env:TEMP wskazuje na dysk C:, a
+# checkout repo (i $env:RUNNER_TEMP) siedzi na wyraznie szybszym D:\a\...
+# (potwierdzone w logu: "Working directory is 'D:\a\...'" kontra
+# "C:\Users\RUNNER~1\AppData\Local\Temp\..." dla stagingu). Wypakowywanie
+# node_modules kilkunastu aplikacji (tysiace malych plikow) na wolniejszym
+# dysku to byl najwiekszy pojedynczy koszt czasowy calego workflow (~6,5
+# minuty zamiast ~1). $env:RUNNER_TEMP istnieje tylko w CI - lokalny build
+# wlasciciela (np. ZBUDUJ-INSTALATOR.cmd) nadal dostaje dotychczasowe
+# zachowanie przez fallback do $env:TEMP.
+$fastTempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+
 function Find-ISCC {
   $candidates = @(
     (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
@@ -92,10 +105,10 @@ Write-Host "Wersja instalatora: $Version (commit $commitHash)"
 # zglaszal jako nieczytelne "the system cannot find the path specified" przy
 # zupelnie innym, kolejnym Source (patrz walidacja node_modules ponizej,
 # ktora teraz lapie to WCZESNIEJ, z czytelnym komunikatem).
-$stagingDir = Join-Path $env:TEMP ("sct-" + [guid]::NewGuid().ToString('N').Substring(0, 10))
+$stagingDir = Join-Path $fastTempRoot ("sct-" + [guid]::NewGuid().ToString('N').Substring(0, 10))
 New-Item -ItemType Directory -Force -Path $stagingDir | Out-Null
 
-$archiveZip = Join-Path $env:TEMP ("scyzoryk-archive-" + [guid]::NewGuid().ToString('N') + '.zip')
+$archiveZip = Join-Path $fastTempRoot ("scyzoryk-archive-" + [guid]::NewGuid().ToString('N') + '.zip')
 try {
   & git -C $Root archive --format=zip -o $archiveZip HEAD
   if ($LASTEXITCODE -ne 0) { throw "git archive nie powiodl sie (kod $LASTEXITCODE)" }
@@ -115,7 +128,7 @@ $buildInfo = [ordered]@{
 Write-Host 'Zapisano build-info.json.'
 
 # --- 2) Bundlowany, portable Node.js (Windows x64) ---
-$nodeCacheDir = Join-Path $env:TEMP 'scyzoryk-node-cache'
+$nodeCacheDir = Join-Path $fastTempRoot 'scyzoryk-node-cache'
 New-Item -ItemType Directory -Force -Path $nodeCacheDir | Out-Null
 $nodeZipName = "node-v$NodeVersion-win-x64.zip"
 $nodeZipPath = Join-Path $nodeCacheDir $nodeZipName
@@ -128,7 +141,7 @@ if (-not (Test-Path $nodeZipPath)) {
   Write-Host "Portable Node.js juz w cache: $nodeZipPath"
 }
 
-$nodeExtractDir = Join-Path $env:TEMP ("scyzoryk-node-extract-" + [guid]::NewGuid().ToString('N'))
+$nodeExtractDir = Join-Path $fastTempRoot ("scyzoryk-node-extract-" + [guid]::NewGuid().ToString('N'))
 Expand-Archive -Path $nodeZipPath -DestinationPath $nodeExtractDir -Force
 $nodeSourceDir = Join-Path $nodeExtractDir "node-v$NodeVersion-win-x64"
 if (-not (Test-Path $nodeSourceDir)) {

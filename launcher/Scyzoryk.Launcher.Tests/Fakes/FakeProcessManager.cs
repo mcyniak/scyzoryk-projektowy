@@ -8,6 +8,9 @@ public sealed class FakeProcessManager : IProcessManager
     public bool KillProcessByIdResult { get; set; } = true;
     public int KillProcessByIdCallCount { get; private set; }
     public List<int> KilledPids { get; } = new();
+    public bool KillProcessByIdIfPathMatchesResult { get; set; } = true;
+    public int KillProcessByIdIfPathMatchesCallCount { get; private set; }
+    public List<(int Pid, string ExpectedFullPath)> KillIfPathMatchesCalls { get; } = new();
 
     public int StartServerCallCount { get; private set; }
     public string? LastInstallDir { get; private set; }
@@ -56,5 +59,12 @@ public sealed class FakeProcessManager : IProcessManager
         KillProcessByIdCallCount++;
         KilledPids.Add(pid);
         return KillProcessByIdResult;
+    }
+
+    public bool KillProcessByIdIfPathMatches(int pid, string expectedFullPath)
+    {
+        KillProcessByIdIfPathMatchesCallCount++;
+        KillIfPathMatchesCalls.Add((pid, expectedFullPath));
+        return KillProcessByIdIfPathMatchesResult;
     }
 }

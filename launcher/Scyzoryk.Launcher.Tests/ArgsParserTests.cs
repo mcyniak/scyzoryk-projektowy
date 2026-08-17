@@ -121,4 +121,35 @@ public sealed class ArgsParserTests
         Assert.Equal(LauncherMode.ApplyUpdate, parsed.Mode);
         Assert.Null(parsed.ParentPid);
     }
+
+    // Audyt 2026-08-17: 6. argument (PID rezydentnej ikony w zasobniku, patrz
+    // InstallPaths.ResidentTrayPidFilePath) - ten sam wzorzec opcjonalnosci co
+    // ParentPid powyzej, dla wstecznej kompatybilnosci.
+    [Fact]
+    public void ApplyUpdate_WithResidentTrayPid_Recognized()
+    {
+        var parsed = ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "C:\\fake\\install", "4242", "9999" });
+
+        Assert.Equal(LauncherMode.ApplyUpdate, parsed.Mode);
+        Assert.Equal("4242", parsed.ParentPid);
+        Assert.Equal("9999", parsed.ResidentTrayPid);
+    }
+
+    [Fact]
+    public void ApplyUpdate_WithoutResidentTrayPid_BackwardCompatible_NullResidentTrayPid()
+    {
+        var parsed = ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "C:\\fake\\install", "4242" });
+
+        Assert.Equal(LauncherMode.ApplyUpdate, parsed.Mode);
+        Assert.Null(parsed.ResidentTrayPid);
+    }
+
+    [Fact]
+    public void ApplyUpdate_BlankResidentTrayPid_TreatedAsNull()
+    {
+        var parsed = ArgsParser.Parse(new[] { "--apply-update", "C:\\fake\\Setup-1.2.3.exe", "1.2.3", "C:\\fake\\install", "4242", "  " });
+
+        Assert.Equal(LauncherMode.ApplyUpdate, parsed.Mode);
+        Assert.Null(parsed.ResidentTrayPid);
+    }
 }

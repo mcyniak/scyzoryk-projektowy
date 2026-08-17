@@ -443,33 +443,131 @@ test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready" -> "insta
 });
 
 test('buildUpdaterInvocation: 4. argument to installDir (prawdziwy katalog instalacji), nie katalog kopii launchera (incydent na zywo 2026-08-06)', () => {
-  const invocation = buildUpdaterInvocation({
-    launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
-    installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-    updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
-    expectedVersion: '1.2.0',
-    installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
-  });
-  assert.deepEqual(invocation.args, [
-    '--apply-update',
-    'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-    '1.2.0',
-    'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy',
-    String(process.pid)
-  ]);
+  // Izolacja SCYZORYK_DATA_ROOT - patrz uzasadnienie przy "5. argument" ponizej
+  // (audyt 2026-08-17, readResidentTrayPid).
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  const dataRoot = tempDir('scz-invocation-installdir-');
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  try {
+    const invocation = buildUpdaterInvocation({
+      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
+      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
+      expectedVersion: '1.2.0',
+      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+    });
+    assert.deepEqual(invocation.args, [
+      '--apply-update',
+      'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+      '1.2.0',
+      'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy',
+      String(process.pid)
+    ]);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
+    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test('buildUpdaterInvocation: 5. argument to wlasny PID (audyt 2026-08-12) - UpdateApplier.cs dobija po nim proces-nadzorce, gdyby StopOwnedProcesses go pominal', () => {
-  const invocation = buildUpdaterInvocation({
-    launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
-    installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-    updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
-    expectedVersion: '1.2.0',
-    installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
-  });
-  assert.equal(invocation.args.length, 5);
-  assert.equal(invocation.args[4], String(process.pid));
-  assert.match(invocation.args[4], /^\d+$/);
+  // Izolacja SCYZORYK_DATA_ROOT (pusty tymczasowy katalog, bez resident-tray.pid) -
+  // bez tego test cicho zalezalby od tego, czy na maszynie uruchamiajacej akurat
+  // istnieje PRAWDZIWY plik PID rezydentnej ikony (patrz readResidentTrayPid, audyt
+  // 2026-08-17) - wtedy args.length niedeterministycznie wynosiloby 5 albo 6.
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  const dataRoot = tempDir('scz-invocation-no-tray-');
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  try {
+    const invocation = buildUpdaterInvocation({
+      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
+      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
+      expectedVersion: '1.2.0',
+      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+    });
+    assert.equal(invocation.args.length, 5);
+    assert.equal(invocation.args[4], String(process.pid));
+    assert.match(invocation.args[4], /^\d+$/);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
+    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+// Audyt 2026-08-17 (zlapane live na produkcji, dwie proby aktualizacji pod rzad,
+// obie exitCode 5 - "Scyzoryk.exe wciaz w uzyciu"): StopResidentTrayProcesses po
+// stronie C# zglosil ZERO trafien mimo ze rezydentna ikona realnie zyla i blokowala
+// plik. TrayIconHost.cs zapisuje wlasny PID do pliku (InstallPaths.ResidentTrayPidFilePath) -
+// buildUpdaterInvocation musi go odczytac i dopisac jako 6. argument.
+test('buildUpdaterInvocation: 6. argument to PID rezydentnej ikony w zasobniku, jesli plik istnieje', () => {
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  const dataRoot = tempDir('scz-invocation-tray-');
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  try {
+    const runtimeDir = path.join(dataRoot, 'runtime');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, 'resident-tray.pid'), '16204');
+
+    const invocation = buildUpdaterInvocation({
+      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
+      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
+      expectedVersion: '1.2.0',
+      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+    });
+    assert.equal(invocation.args.length, 6);
+    assert.equal(invocation.args[5], '16204');
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
+    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('buildUpdaterInvocation: brak pliku resident-tray.pid - 6. argument nie jest dopisywany (wstecznie kompatybilne)', () => {
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  const dataRoot = tempDir('scz-invocation-no-tray-file-');
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  try {
+    const invocation = buildUpdaterInvocation({
+      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
+      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
+      expectedVersion: '1.2.0',
+      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+    });
+    assert.equal(invocation.args.length, 5);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
+    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
+});
+
+test('buildUpdaterInvocation: nieczytelna/zla tresc resident-tray.pid (np. "abc") jest ignorowana jak brak pliku', () => {
+  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+  const dataRoot = tempDir('scz-invocation-bad-tray-');
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  try {
+    const runtimeDir = path.join(dataRoot, 'runtime');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(path.join(runtimeDir, 'resident-tray.pid'), 'abc');
+
+    const invocation = buildUpdaterInvocation({
+      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
+      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
+      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
+      expectedVersion: '1.2.0',
+      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
+    });
+    assert.equal(invocation.args.length, 5);
+  } finally {
+    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
+    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
+    fs.rmSync(dataRoot, { recursive: true, force: true });
+  }
 });
 
 test('updateService: niezgodna suma SHA-256 - instalator jest odrzucony, nic nie jest odpalane', async () => {

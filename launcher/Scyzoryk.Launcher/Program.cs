@@ -49,7 +49,7 @@ public static class Program
                 new MessageBoxFatalErrorPresenter(),
                 new UpdateApplier(processManager, health, paths, logger),
                 new AutostartManager(),
-                tray: new NotifyIconTrayHost(paths.TrayMutexName, logger));
+                tray: new NotifyIconTrayHost(paths.TrayMutexName, paths.ResidentTrayPidFilePath, logger));
 
             return app.RunAsync(parsedArgs).GetAwaiter().GetResult();
         }

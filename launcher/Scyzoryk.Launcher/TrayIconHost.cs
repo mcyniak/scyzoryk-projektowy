@@ -29,11 +29,13 @@ public interface ITrayIconHost
 public sealed class NotifyIconTrayHost : ITrayIconHost
 {
     private readonly string _trayMutexName;
+    private readonly string _residentTrayPidFilePath;
     private readonly ILauncherLogger _logger;
 
-    public NotifyIconTrayHost(string trayMutexName, ILauncherLogger logger)
+    public NotifyIconTrayHost(string trayMutexName, string residentTrayPidFilePath, ILauncherLogger logger)
     {
         _trayMutexName = trayMutexName;
+        _residentTrayPidFilePath = residentTrayPidFilePath;
         _logger = logger;
     }
 
@@ -58,7 +60,15 @@ public sealed class NotifyIconTrayHost : ITrayIconHost
 
         try
         {
-            RunTrayLoop(onOpenPanel, onQuit);
+            WriteResidentPidFile();
+            try
+            {
+                RunTrayLoop(onOpenPanel, onQuit);
+            }
+            finally
+            {
+                DeleteResidentPidFile();
+            }
         }
         finally
         {
@@ -66,6 +76,46 @@ public sealed class NotifyIconTrayHost : ITrayIconHost
         }
 
         return true;
+    }
+
+    /// <summary>Audyt 2026-08-17: zapisuje wlasny PID, zeby lib/updateService.js moglo
+    /// go odczytac tuz przed aktualizacja i przekazac dalej do UpdateApplier jako
+    /// zapasowa, jawna proba zamkniecia TEJ WLASNIE rezydentnej ikony (patrz
+    /// InstallPaths.ResidentTrayPidFilePath / UpdateApplier.EnsureResidentTrayStopped) -
+    /// bez tego, jedynym sposobem znalezienia jej byl niedeterministyczny skan
+    /// Process.GetProcessesByName, ktory realnie potrafi ja pominac. Zapis/usuniecie
+    /// jest CELOWO best-effort (nigdy nie wywala rezydentnego trybu z powodu bledu I/O) -
+    /// to tylko podpowiedz, weryfikowana pozniej po nazwie+sciezce, nie zrodlo prawdy.</summary>
+    private void WriteResidentPidFile()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(_residentTrayPidFilePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(_residentTrayPidFilePath, Environment.ProcessId.ToString());
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Error, "Nie udalo sie zapisac pliku PID rezydentnej ikony (nie krytyczne).", new Dictionary<string, string>
+            {
+                ["exception"] = ex.ToString(),
+            });
+        }
+    }
+
+    private void DeleteResidentPidFile()
+    {
+        try
+        {
+            File.Delete(_residentTrayPidFilePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.Log(LogLevel.Error, "Nie udalo sie usunac pliku PID rezydentnej ikony (nie krytyczne).", new Dictionary<string, string>
+            {
+                ["exception"] = ex.ToString(),
+            });
+        }
     }
 
     private void RunTrayLoop(Action onOpenPanel, Action onQuit)

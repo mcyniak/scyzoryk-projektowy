@@ -17,7 +17,7 @@ public interface IUpdateApplier
     /// wynik do last-result.json - dokladnie ten sam kontrakt plikowy z Node
     /// (lib/updateService.js), niezmieniony wzgledem wersji PowerShell.
     /// </summary>
-    Task<int> ApplyAsync(string installerPath, string expectedVersion, string? parentPid = null);
+    Task<int> ApplyAsync(string installerPath, string expectedVersion, string? parentPid = null, string? residentTrayPid = null);
 }
 
 public sealed class UpdateApplier : IUpdateApplier
@@ -50,7 +50,7 @@ public sealed class UpdateApplier : IUpdateApplier
         _installRetryDelay = installRetryDelay ?? TimeSpan.FromSeconds(2);
     }
 
-    public async Task<int> ApplyAsync(string installerPath, string expectedVersion, string? parentPid = null)
+    public async Task<int> ApplyAsync(string installerPath, string expectedVersion, string? parentPid = null, string? residentTrayPid = null)
     {
         var logsDir = Path.Combine(_paths.UpdateRoot, "logs");
         Directory.CreateDirectory(logsDir);
@@ -101,8 +101,9 @@ public sealed class UpdateApplier : IUpdateApplier
             // w oddzielnym katalogu Updates\<wersja>\, inna sciezka).
             await StopAllOwnedProcessesUntilConfirmedAsync().ConfigureAwait(false);
             EnsureParentProcessStopped(parentPid);
+            EnsureResidentTrayStopped(residentTrayPid);
 
-            var attempt = await RunInstallerWithRetryAsync(installerPath).ConfigureAwait(false);
+            var attempt = await RunInstallerWithRetryAsync(installerPath, residentTrayPid).ConfigureAwait(false);
             exitCode = attempt.ExitCode;
             ok = attempt.Ok;
             message = ok ? $"Zainstalowano wersje {expectedVersion}." : attempt.FailureReason!;
@@ -284,6 +285,31 @@ public sealed class UpdateApplier : IUpdateApplier
             : $"Nie udalo sie zabic procesu-nadzorcy (PID {pid}) jawnie po PID - kontynuuje aktualizacje mimo to.");
     }
 
+    /// <summary>Audyt 2026-08-17 (zlapane live na produkcji, patrz InstallPaths.ResidentTrayPidFilePath):
+    /// zapasowa, jawna proba dobicia rezydentnej ikony w zasobniku PO PID, niezalezna
+    /// od tego, czy StopAllOwnedProcessesUntilConfirmedAsync/StopResidentTrayProcesses
+    /// w ogole ja zobaczyly. W odroznieniu od EnsureParentProcessStopped (gdzie PID jest
+    /// ufany bezwarunkowo), tu PID pochodzi z pliku zapisanego przez inny proces - moze
+    /// byc nieaktualny, wiec KillProcessByIdIfPathMatches weryfikuje nazwe+sciezke przed
+    /// zabiciem (nigdy nie zabija przypadkowego, niepowiazanego procesu o tym samym numerze).</summary>
+    private void EnsureResidentTrayStopped(string? residentTrayPid)
+    {
+        if (string.IsNullOrWhiteSpace(residentTrayPid)) return;
+        if (!int.TryParse(residentTrayPid, out var pid)) return;
+
+        if (!_processManager.IsProcessStillAlive(pid))
+        {
+            WriteLog($"Rezydentna ikona w zasobniku (PID {pid}) juz nie zyje - nic dodatkowego do zrobienia.");
+            return;
+        }
+
+        WriteLog($"Rezydentna ikona w zasobniku (PID {pid}) nadal zyje - dobijam jawnie po PID (z weryfikacja sciezki).");
+        var killed = _processManager.KillProcessByIdIfPathMatches(pid, _paths.ScyzorykExePath);
+        WriteLog(killed
+            ? $"Rezydentna ikona w zasobniku (PID {pid}) zabita jawnie po PID."
+            : $"Nie udalo sie zabic rezydentnej ikony w zasobniku (PID {pid}) jawnie po PID (albo PID juz nie pasowal do oczekiwanej sciezki) - kontynuuje aktualizacje mimo to.");
+    }
+
     private bool IsPrintingActive()
     {
         var lockPath = Path.Combine(_paths.DataRoot, "runtime", "printing", "active.lock");
@@ -351,7 +377,7 @@ public sealed class UpdateApplier : IUpdateApplier
     // nizej w tym samym duchu) - sprawdzamy realnie na dysku, ze KAZDA
     // apka w apps\* ma niepusty node_modules, dokladnie ten sam test co
     // scripts\build-installer.ps1 robi PRZED spakowaniem instalatora.
-    private async Task<InstallAttemptResult> RunInstallerWithRetryAsync(string installerPath)
+    private async Task<InstallAttemptResult> RunInstallerWithRetryAsync(string installerPath, string? residentTrayPid)
     {
         const int maxAttempts = 2;
         var logsDir = Path.Combine(_paths.UpdateRoot, "logs");
@@ -379,6 +405,11 @@ public sealed class UpdateApplier : IUpdateApplier
             {
                 WriteLog("Instalacja niekompletna - ponawiam po krotkiej przerwie...");
                 await StopAllOwnedProcessesUntilConfirmedAsync().ConfigureAwait(false);
+                // Audyt 2026-08-17: exitCode 5 na pierwszej probie byl DOKLADNIE
+                // "plik Scyzoryk.exe wciaz w uzyciu" - bez ponowienia tego
+                // konkretnego zabezpieczenia tutaj, druga proba pada identycznie
+                // (i realnie padla, live na produkcji).
+                EnsureResidentTrayStopped(residentTrayPid);
                 await Task.Delay(_installRetryDelay).ConfigureAwait(false);
             }
             else

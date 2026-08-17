@@ -68,7 +68,13 @@ Write-Host "`n=== dotnet test (testy launchera musza przejsc przed budowa) ==="
 & $dotnet test $TestProjectPath -c $Configuration --nologo | Out-Host
 if ($LASTEXITCODE -ne 0) { throw "Testy launchera nie przeszly (kod $LASTEXITCODE) - budowa Scyzoryk.exe przerwana." }
 
-$publishDir = Join-Path $env:TEMP ("scyzoryk-launcher-publish-" + [guid]::NewGuid().ToString('N'))
+# Audyt 2026-08-17: $env:RUNNER_TEMP (dysk D: na hostowanych windowsowych
+# runnerach GitHub Actions) zamiast $env:TEMP (dysk C:, wyraznie wolniejszy) -
+# patrz ten sam audyt w build-installer.ps1 dla pelnego uzasadnienia i
+# zmierzonych czasow. Poza CI ($env:RUNNER_TEMP nieustawione) zachowanie
+# bez zmian.
+$fastTempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+$publishDir = Join-Path $fastTempRoot ("scyzoryk-launcher-publish-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 
 Write-Host "`n=== dotnet publish (self-contained, single-file, win-x64) ==="
