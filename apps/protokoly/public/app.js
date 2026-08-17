@@ -56,11 +56,14 @@ function renderResults() {
             return `<tr><td>${escapeHtml(r.adres)}</td><td>0</td><td><span class="badge unknown">brak zdjęć</span></td><td></td></tr>`;
           }
           const savedBadge = r.savedPath ? `<span class="badge ok">zapisano</span>` : "";
+          const skippedBadge = (r.skippedPhotos && r.skippedPhotos.length)
+            ? ` <span class="badge unknown" title="${escapeHtml(r.skippedPhotos.join(", "))}">pominięto ${r.skippedPhotos.length} nieczytelnych</span>`
+            : "";
           return `
             <tr data-folder="${escapeHtml(r.folderName)}">
               <td>${escapeHtml(r.adres)}</td>
               <td>${r.photoCount}</td>
-              <td>${savedBadge}</td>
+              <td>${savedBadge}${skippedBadge}</td>
               <td class="col-actions">
                 <button class="btn btn-ghost btn-sm" data-action="preview" data-folder="${escapeHtml(r.folderName)}" type="button">Podgląd</button>
                 <button class="btn btn-secondary btn-sm" data-action="save" data-folder="${escapeHtml(r.folderName)}" type="button">Zapisz</button>
@@ -154,6 +157,18 @@ async function renderPhotoThumbs(folderName) {
       refreshPdfPreview(folderName);
     });
   });
+
+  // Audyt na zywo 2026-08-14: pojedyncze zdjecie potrafi byc nieczytelne dla
+  // dekodera (strukturalnie poprawny JPEG, ktorego pure-JS dekoder Jimpa mimo
+  // to nie otwiera) - PDF sobie z tym radzi (pomija taka strone, patrz
+  // buildProtocolPdf), ale miniatura bez tego wygladala jak zwykla martwa
+  // ikonka przegladarki, bez wyjasnienia. Podmieniamy ja na czytelny opis.
+  photoThumbs.querySelectorAll(".photo-thumb img").forEach(img => {
+    img.addEventListener("error", () => {
+      const wrap = img.closest(".photo-thumb");
+      if (wrap) wrap.classList.add("photo-thumb-broken");
+    }, { once: true });
+  });
 }
 
 function openPreview(folderName) {
@@ -183,8 +198,13 @@ async function saveOne(folderName, triggerBtn, statusEl) {
       body: JSON.stringify({ baseFolder: state.baseFolder, folderName, rotations })
     });
     const entry = state.results.find(r => r.folderName === folderName);
-    if (entry) entry.savedPath = data.savedPath;
-    if (statusEl) statusEl.textContent = `Zapisano: ${data.savedPath}`;
+    if (entry) { entry.savedPath = data.savedPath; entry.skippedPhotos = data.skippedPhotos || []; }
+    const skipped = data.skippedPhotos || [];
+    if (statusEl) {
+      statusEl.textContent = skipped.length
+        ? `Zapisano: ${data.savedPath} (pominięto ${skipped.length} nieczytelnych zdjęć: ${skipped.join(", ")})`
+        : `Zapisano: ${data.savedPath}`;
+    }
     renderResults();
   } catch (err) {
     if (statusEl) statusEl.textContent = `Błąd: ${err.message}`;
@@ -214,6 +234,7 @@ saveAllBtn.addEventListener("click", async () => {
         body: JSON.stringify({ baseFolder: state.baseFolder, folderName: r.folderName, rotations })
       });
       r.savedPath = data.savedPath;
+      r.skippedPhotos = data.skippedPhotos || [];
     } catch (err) {
       r.error = `zapis nieudany: ${err.message}`;
     }

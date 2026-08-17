@@ -284,21 +284,71 @@ const PROCESS_CONCURRENCY = Number(process.env.PROTOKOLY_CONCURRENCY || 3);
 // rotations: obiekt { [indeks_zdjecia]: stopnie(0/90/180/270) } - reczne
 // poprawki obrotu z podgladu UI dla pojedynczych zdjec, ktorych auto-
 // prostowanie nie zgadlo (patrz processPhoto).
+//
+// Audyt na zywo 2026-08-14 (JOZWIN 15A, zdjecie 426.link.085515.jpg):
+// strukturalnie poprawny JPEG (prawidlowe SOI/EOI, normalny naglowek JFIF/
+// Exif) potrafi mimo to wywrocic czysto-JS dekoder Jimpa ("unexpected
+// marker: ffd9") - zapewne telefon zakodowal go w wariancie, ktorego ten
+// minimalny dekoder nie obsluguje w pelni, mimo ze prawdziwa przegladarka
+// otwiera go bez problemu. Przed ta poprawka JEDNO takie zdjecie wywalalo
+// CALY PDF calego adresu (i podglad, i zapis) - uzytkownik widzial blad, a
+// potem "wywalone" okno podgladu (bo iframe probowal wyswietlic strone bledu
+// serwera, co samo w sobie lamalo CSP frame-ancestors). Zamiast tego
+// pojedyncze nieudane zdjecie jest teraz POMIJANE (nie przerywa reszty) - PDF
+// powstaje z pozostalych stron, a wywolujacy dostaje liste pominietych plikow
+// (nieenumerowalna wlasciwosc na zwroconym Bufferze, ten sam wzorzec co
+// "warnings" w scanFilesRecursive) do pokazania uzytkownikowi.
+//
+// Audyt na zywo 2026-08-14: to samo zdjecie (426.link.085515.jpg) 5/5 razy
+// pod rzad przetworzylo sie PRAWIDLOWO w kolejnym teście, mimo ze chwile
+// wczesniej rzucalo "unexpected marker: ffd9" - blad jest wiec PRZEJSCIOWY
+// (albo rzadka scieżka w rownoleglym dekodowaniu JPEG-a przez pure-JS
+// dekoder Jimpa, albo chwilowa awaria odczytu z dysku sieciowego, ten sam
+// wzorzec co retry w folderMatch.js#readDirWithRetry), nie trwale uszkodzony
+// plik. Ponawiamy wiec przetwarzanie pojedynczego zdjecia PARE razy przed
+// ostatecznym uznaniem go za nieczytelne - w wiekszosci przypadkow to
+// wystarczy, zeby w ogole nie trzeba bylo niczego pomijac.
+const PHOTO_RETRY_ATTEMPTS = Number(process.env.PROTOKOLY_PHOTO_RETRY_ATTEMPTS || 2);
+const PHOTO_RETRY_DELAY_MS = Number(process.env.PROTOKOLY_PHOTO_RETRY_DELAY_MS || 300);
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function buildProtocolPdf(photoPaths, rotations = {}) {
   const jpegBuffers = new Array(photoPaths.length);
+  const failures = [];
   let nextIndex = 0;
   async function worker() {
     while (nextIndex < photoPaths.length) {
       const idx = nextIndex++;
       const manualRotateDeg = Number(rotations[idx]) || 0;
-      const img = await processPhoto(photoPaths[idx], { manualRotateDeg });
-      jpegBuffers[idx] = await img.getBuffer(JimpMime.jpeg, { quality: JPEG_QUALITY });
+      let lastErr;
+      let done = false;
+      for (let attempt = 1; attempt <= 1 + PHOTO_RETRY_ATTEMPTS && !done; attempt += 1) {
+        try {
+          const img = await processPhoto(photoPaths[idx], { manualRotateDeg });
+          jpegBuffers[idx] = await img.getBuffer(JimpMime.jpeg, { quality: JPEG_QUALITY });
+          done = true;
+        } catch (err) {
+          lastErr = err;
+          if (attempt <= PHOTO_RETRY_ATTEMPTS) await sleep(PHOTO_RETRY_DELAY_MS);
+        }
+      }
+      if (!done) {
+        failures.push({ index: idx, path: photoPaths[idx], message: lastErr?.message || String(lastErr) });
+      }
     }
   }
   await Promise.all(Array.from({ length: Math.min(PROCESS_CONCURRENCY, photoPaths.length) }, worker));
 
+  const usableBuffers = jpegBuffers.filter(Boolean);
+  if (!usableBuffers.length) {
+    throw new Error("Zadnego zdjecia nie udalo sie przetworzyc (wszystkie sa nieczytelne albo uszkodzone).");
+  }
+
   const pdfDoc = await PDFDocument.create();
-  for (const jpegBuffer of jpegBuffers) {
+  for (const jpegBuffer of usableBuffers) {
     const jpgImage = await pdfDoc.embedJpg(jpegBuffer);
     // Realny blad zlapany na zywo 2026-08-13: strona byla tworzona w
     // wymiarach PIKSELI obrazu, ale pdf-lib interpretuje addPage() jako
@@ -321,7 +371,11 @@ async function buildProtocolPdf(photoPaths, rotations = {}) {
       height: drawHeight
     });
   }
-  return Buffer.from(await pdfDoc.save());
+  const pdfBytes = Buffer.from(await pdfDoc.save());
+  if (failures.length) {
+    Object.defineProperty(pdfBytes, 'photoFailures', { value: failures, enumerable: false });
+  }
+  return pdfBytes;
 }
 
 // Nazwa musi zawierac "protokół" i "uzgodnień", zeby drukarka-projekty

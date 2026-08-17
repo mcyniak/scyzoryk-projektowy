@@ -225,9 +225,13 @@ app.post("/api/save", async (req, res) => {
     if (!isPathInsideFolder(savePath, folderPath)) {
       return res.status(400).json({ ok: false, message: "Niepoprawna sciezka zapisu." });
     }
+    // photoFailures (patrz buildProtocolPdf) - pojedyncze nieczytelne zdjecie
+    // nie przerywa zapisu, ale uzytkownik musi wiedziec, ze PDF nie zawiera
+    // wszystkich stron.
+    const skippedPhotos = (pdfBytes.photoFailures || []).map(f => path.basename(f.path));
 
     fs.writeFileSync(savePath, pdfBytes);
-    res.json({ ok: true, savedPath: savePath, pageCount: photos.length });
+    res.json({ ok: true, savedPath: savePath, pageCount: photos.length - skippedPhotos.length, skippedPhotos });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || "Nie udalo sie zapisac pliku." });
   }

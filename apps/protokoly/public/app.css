@@ -10,3 +10,12 @@
 .photo-thumb { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 140px; }
 .photo-thumb img { width: 140px; height: 180px; object-fit: contain; background: #eee; border: 1px solid var(--border-color, #d0d0d0); border-radius: 4px; }
 .photo-thumb .photo-thumb-label { font-size: 12px; color: var(--text-tertiary, #666); }
+.photo-thumb-broken img { visibility: hidden; }
+.photo-thumb-broken { position: relative; }
+.photo-thumb-broken::before {
+  content: "Nie można wczytać - plik pominięty w PDF";
+  position: absolute; top: 0; left: 0; width: 140px; height: 180px;
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  font-size: 12px; padding: 8px; box-sizing: border-box; color: var(--danger-600, #dc2626);
+  background: #fff2f2; border: 1px solid var(--danger-600, #dc2626); border-radius: 4px;
+}
