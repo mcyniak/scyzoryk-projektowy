@@ -3,6 +3,12 @@ const mainPanelUrl = `http://${mainPanelHost}:3000`;
 document.querySelectorAll("[data-main-link]").forEach(link => { link.href = mainPanelUrl; link.removeAttribute("target"); });
 
 const baseFolderInput = document.getElementById("baseFolderInput");
+const browseFolderBtn = document.getElementById("browseFolderBtn");
+const folderBrowseModal = document.getElementById("folderBrowseModal");
+const folderBrowseClose = document.getElementById("folderBrowseClose");
+const folderBrowseCurrentPath = document.getElementById("folderBrowseCurrentPath");
+const folderBrowseList = document.getElementById("folderBrowseList");
+const folderBrowseSelect = document.getElementById("folderBrowseSelect");
 const scanBtn = document.getElementById("scanBtn");
 const scanError = document.getElementById("scanError");
 const scanProgress = document.getElementById("scanProgress");
@@ -104,6 +110,70 @@ function renderResults() {
     btn.addEventListener("click", () => saveOne(btn.dataset.folder, btn));
   });
 }
+
+// Przegladarka folderow w stronie zamiast recznego wpisywania sciezki -
+// ten sam mechanizm co apps/drukarka-projekty (patrz lib/folderBrowse.js).
+let currentBrowsePath = null;
+
+function closeFolderBrowser() {
+  folderBrowseModal.classList.remove("open");
+}
+
+async function openFolderBrowser(startPath) {
+  folderBrowseModal.classList.add("open");
+  await loadFolderBrowse(startPath);
+}
+
+async function loadFolderBrowse(targetPath) {
+  folderBrowseList.innerHTML = '<div class="folder-row">Wczytuję...</div>';
+  try {
+    const url = targetPath ? `/api/browse-folder?path=${encodeURIComponent(targetPath)}` : "/api/browse-folder";
+    const res = await fetch(url);
+    const json = await res.json().catch(() => null);
+    if (!json || !json.ok) {
+      folderBrowseList.innerHTML = `<div class="folder-row">${escapeHtml((json && json.error) || "Nie udało się wczytać folderów.")}</div>`;
+      return;
+    }
+    currentBrowsePath = json.path;
+    folderBrowseCurrentPath.textContent = json.path || "Wybierz dysk";
+
+    const rows = [];
+    if (json.path !== null) {
+      const isDriveRoot = json.parent === null;
+      const upTarget = isDriveRoot ? "" : json.parent;
+      rows.push(`<div class="folder-row clickable up-nav" data-path="${escapeHtml(upTarget)}">${isDriveRoot ? "⬆ Lista dysków" : "⬆ .."}</div>`);
+    }
+    for (const entry of json.entries) {
+      rows.push(`<div class="folder-row clickable" data-path="${escapeHtml(entry.path)}">📁 ${escapeHtml(entry.name)}</div>`);
+    }
+    folderBrowseList.innerHTML = rows.join("") || '<div class="folder-row">Brak podfolderów.</div>';
+  } catch (error) {
+    folderBrowseList.innerHTML = `<div class="folder-row">${escapeHtml(String(error.message || error))}</div>`;
+  }
+}
+
+browseFolderBtn.addEventListener("click", () => {
+  const startPath = baseFolderInput.value.trim();
+  openFolderBrowser(startPath || null);
+});
+folderBrowseClose.addEventListener("click", closeFolderBrowser);
+folderBrowseModal.addEventListener("click", (event) => {
+  if (event.target.id === "folderBrowseModal") closeFolderBrowser();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && folderBrowseModal.classList.contains("open")) closeFolderBrowser();
+});
+folderBrowseList.addEventListener("click", (event) => {
+  const row = event.target.closest("[data-path]");
+  if (!row) return;
+  loadFolderBrowse(row.dataset.path);
+});
+folderBrowseSelect.addEventListener("click", () => {
+  if (!currentBrowsePath) return;
+  baseFolderInput.value = currentBrowsePath;
+  closeFolderBrowser();
+  baseFolderInput.dispatchEvent(new Event("change"));
+});
 
 scanBtn.addEventListener("click", async () => {
   const baseFolder = baseFolderInput.value.trim();

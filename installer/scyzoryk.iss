@@ -125,6 +125,7 @@ Source: "{#StagingDir}\apps\karty-katalogowe\node_modules\*"; DestDir: "{app}\ap
 Source: "{#StagingDir}\apps\nazywarka-skanow\node_modules\*"; DestDir: "{app}\apps\nazywarka-skanow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\ocr-audytow\node_modules\*"; DestDir: "{app}\apps\ocr-audytow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\pieczatki-pdf\node_modules\*"; DestDir: "{app}\apps\pieczatki-pdf\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\protokoly\node_modules\*"; DestDir: "{app}\apps\protokoly\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\tworzenie-folderow\node_modules\*"; DestDir: "{app}\apps\tworzenie-folderow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\wnioski-powykonawcze\node_modules\*"; DestDir: "{app}\apps\wnioski-powykonawcze\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 #endif

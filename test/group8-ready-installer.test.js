@@ -147,3 +147,21 @@ test('Pomoc prowadzi do rozbudowanej lokalnej instrukcji z aktualnymi zrzutami',
   assert.match(fullGuide, /pierwsze trzy strony/i);
   assert.match(fullGuide, /nie trzeba ustawiać klucza/i);
 });
+
+test('kazda aplikacja z apps\\ ma wlasna linie node_modules w wariancie "full" instalatora (audyt 2026-08-17: protokoly zapomniana przy dodaniu apki, zlapane na zywym CI)', async () => {
+  // server.js jest zrodlem prawdy dla listy aplikacji (patrz CLAUDE.md: "kazda
+  // apka ma wlasna, jawna linie" w scyzoryk.iss - Inno Setup nie wspiera
+  // wzorca "apps\*\node_modules\*" jako Source). Brak wpisu tu oznacza, ze
+  // wariant "full" instalatora NIE zawiera node_modules tej apki wcale -
+  // apka pada z MODULE_NOT_FOUND dopiero po instalacji, bo staging (gdzie
+  // walidacja node_modules faktycznie dziala) i finalny EXE to inne rzeczy.
+  const serverSource = await read('server.js');
+  const issSource = await read('installer/scyzoryk.iss');
+
+  const slugMatches = [...serverSource.matchAll(/slug:\s*'([a-z0-9-]+)',\s*dir:\s*path\.join\(ROOT,\s*'apps',/g)];
+  const slugs = [...new Set(slugMatches.map((m) => m[1]))];
+  assert.ok(slugs.length >= 10, 'Nie udalo sie sparsowac listy aplikacji z server.js - regex mogl przestac pasowac.');
+
+  const missing = slugs.filter((slug) => !issSource.includes(`apps\\${slug}\\node_modules\\*`));
+  assert.deepEqual(missing, [], `Brak linii node_modules w scyzoryk.iss dla: ${missing.join(', ')}`);
+});

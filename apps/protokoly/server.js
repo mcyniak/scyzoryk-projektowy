@@ -5,6 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const { setupProcessDiagnostics, applyHttpTimeouts } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
+const { browseFolder } = require("../../lib/folderBrowse");
 const builder = require("./src/protokolBuilder");
 
 const app = express();
@@ -68,6 +69,15 @@ function resolveAddressFolder(baseFolder, folderName) {
 }
 
 app.get("/api/health", (req, res) => res.json({ ok: true, name: "protokoly" }));
+
+app.get("/api/browse-folder", (req, res) => {
+  try {
+    const result = browseFolder(req.query.path);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
 
 // Parsuje reczne poprawki obrotu z query/body ({ "0": 180, "2": 90, ... },
 // indeks zgodny z kolejnoscia findProtocolPhotos/#api/photos) - JSON.parse
