@@ -1,4 +1,5 @@
-# Testy Pester dla lib/printing/PrintEngine.psm1 (audyt 2026-08-14).
+# Testy Pester dla lib/printing/PrintEngine.psm1 (audyt 2026-08-14, poprawka
+# skladni na Pester 5+ 2026-08-17).
 #
 # Celuja DOKLADNIE w dwa mechanizmy, ktore padly na zywo w nocy 2026-08-13/14
 # i nigdy nie byly pokryte prawdziwym testem behawioralnym (tylko wzorcami
@@ -13,53 +14,75 @@
 #      NIE zabija zadania po prostu dlatego, ze brak postepu.
 #
 # Uruchomienie: powershell -NoProfile -Command "Invoke-Pester -Path test/print-engine.Tests.ps1 -EnableExit"
+#
+# Audyt na zywo 2026-08-17: pierwszy prawdziwy przebieg tego pliku przez CI
+# (windows-latest) ujawnil, ze dev-machine ma TYLKO Pester 3.4.0 (wbudowany w
+# Windows PowerShell 5.1), a runner CI ma Pester 5+ jako domyslnie
+# rozwiazywana wersje - stara (bez myslnika) skladnia "Should Be $x" nie jest
+# juz wspierana, a funkcje/typy zdefiniowane na poziomie skryptu WEWNATRZ
+# Describe (poza BeforeAll) nie przetrwaly do fazy Run (Pester 5 rozdziela
+# faze Discovery i Run - kod poza BeforeAll/It wykonuje sie TYLKO raz, w
+# Discovery). Naprawa: skladnia "Should -Be" wszedzie, a cala jednorazowa
+# konfiguracja (Import-Module, Add-Type, funkcje pomocnicze) przeniesiona do
+# BeforeAll. Zweryfikowane lokalnie po zainstalowaniu Pester 6.1.0 obok
+# istniejacego 3.4.0 (side-by-side, oba zostaja).
 
-$moduleRoot = Split-Path -Parent $PSScriptRoot
-$modulePath = Join-Path $moduleRoot "lib\printing\PrintEngine.psm1"
-Import-Module $modulePath -Force
+BeforeAll {
+  $moduleRoot = Split-Path -Parent $PSScriptRoot
+  $modulePath = Join-Path $moduleRoot "lib\printing\PrintEngine.psm1"
+  Import-Module $modulePath -Force
 
-# Dekoduje command-line string PRAWDZIWYM Windows API (nie wlasna, przyblizona
-# implementacja) - to samo API, ktorego Windows uzywa do zbudowania argv[]
-# dla kazdego nowego procesu. Zamiast zgadywac/stubowac SumatraPDF.exe,
-# sprawdzamy dokladnie ten sam mechanizm, ktory realnie ucinal argumenty.
-if (-not ("ScyzorykTest.Shell32" -as [type])) {
-  # CharSet.Unicode jest KONIECZNY - bez jawnego okreslenia, .NET marshaluje
-  # string parametr jako ANSI mimo ze funkcja to wariant "W" (szeroki znak),
-  # co po cichu psuje CALY command-line string na wejsciu (zlapane empirycznie
-  # przy pisaniu tego testu: argc wychodzilo 1 zamiast 5, a argv[0] byl
-  # nieczytelnym smieciem).
-  Add-Type -Namespace ScyzorykTest -Name Shell32 -MemberDefinition @"
+  # Dekoduje command-line string PRAWDZIWYM Windows API (nie wlasna,
+  # przyblizona implementacja) - to samo API, ktorego Windows uzywa do
+  # zbudowania argv[] dla kazdego nowego procesu. Zamiast zgadywac/stubowac
+  # SumatraPDF.exe, sprawdzamy dokladnie ten sam mechanizm, ktory realnie
+  # ucinal argumenty.
+  if (-not ("ScyzorykTest.Shell32" -as [type])) {
+    # CharSet.Unicode jest KONIECZNY - bez jawnego okreslenia, .NET marshaluje
+    # string parametr jako ANSI mimo ze funkcja to wariant "W" (szeroki znak),
+    # co po cichu psuje CALY command-line string na wejsciu (zlapane empirycznie
+    # przy pisaniu tego testu: argc wychodzilo 1 zamiast 5, a argv[0] byl
+    # nieczytelnym smieciem).
+    Add-Type -Namespace ScyzorykTest -Name Shell32 -MemberDefinition @"
 [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
 public static extern IntPtr CommandLineToArgvW(string lpCmdLine, out int pNumArgs);
 [DllImport("kernel32.dll")]
 public static extern IntPtr LocalFree(IntPtr hMem);
 "@
-}
-
-function ConvertTo-ArgvArray {
-  param([string]$CommandLine)
-  $argc = 0
-  $argvPtr = [ScyzorykTest.Shell32]::CommandLineToArgvW($CommandLine, [ref]$argc)
-  if ($argvPtr -eq [IntPtr]::Zero) { throw "CommandLineToArgvW zwrocilo NULL dla: $CommandLine" }
-  try {
-    $result = New-Object string[] $argc
-    for ($i = 0; $i -lt $argc; $i++) {
-      $strPtr = [System.Runtime.InteropServices.Marshal]::ReadIntPtr($argvPtr, $i * [IntPtr]::Size)
-      $result[$i] = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($strPtr)
-    }
-    return $result
-  } finally {
-    [void][ScyzorykTest.Shell32]::LocalFree($argvPtr)
   }
-}
 
-# Start-Process -ArgumentList <tablica> laczy elementy SPACJA w jeden
-# command-line string (potwierdzone empirycznie 2026-08-13 przez podejrzenie
-# prawdziwego okna bledu Sumatry) - odtwarzamy to tutaj, bez spawnowania
-# zadnego procesu.
-function ConvertTo-StartProcessCommandLine {
-  param([string[]]$ArgumentList)
-  return ($ArgumentList -join ' ')
+  function ConvertTo-ArgvArray {
+    param([string]$CommandLine)
+    $argc = 0
+    $argvPtr = [ScyzorykTest.Shell32]::CommandLineToArgvW($CommandLine, [ref]$argc)
+    if ($argvPtr -eq [IntPtr]::Zero) { throw "CommandLineToArgvW zwrocilo NULL dla: $CommandLine" }
+    try {
+      $result = New-Object string[] $argc
+      for ($i = 0; $i -lt $argc; $i++) {
+        $strPtr = [System.Runtime.InteropServices.Marshal]::ReadIntPtr($argvPtr, $i * [IntPtr]::Size)
+        $result[$i] = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($strPtr)
+      }
+      return $result
+    } finally {
+      [void][ScyzorykTest.Shell32]::LocalFree($argvPtr)
+    }
+  }
+
+  # Start-Process -ArgumentList <tablica> laczy elementy SPACJA w jeden
+  # command-line string (potwierdzone empirycznie 2026-08-13 przez podejrzenie
+  # prawdziwego okna bledu Sumatry) - odtwarzamy to tutaj, bez spawnowania
+  # zadnego procesu.
+  function ConvertTo-StartProcessCommandLine {
+    param([string[]]$ArgumentList)
+    return ($ArgumentList -join ' ')
+  }
+
+  # Realny, dlugo dzialajacy proces (do testow "wciaz zywy, czekamy") -
+  # $proc.HasExited musi byc realna wlasciwoscia System.Diagnostics.Process,
+  # nie da sie tego podrobic fake obiektem przy typowanym parametrze funkcji.
+  function New-TestProcess {
+    return Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 30" -PassThru -WindowStyle Hidden
+  }
 }
 
 Describe "New-SumatraPrintArgs - cytowanie argumentow ze spacjami (audyt 2026-08-13)" {
@@ -70,28 +93,26 @@ Describe "New-SumatraPrintArgs - cytowanie argumentow ze spacjami (audyt 2026-08
     $commandLine = ConvertTo-StartProcessCommandLine $built
     $argv = ConvertTo-ArgvArray $commandLine
 
-    # Pester 3.4's "Should Contain" testuje ZAWARTOSC PLIKU (Get-Content), nie
-    # przynaleznosc do tablicy - dla tablic uzywamy natywnego -contains.
-    ($argv -contains $printerName) | Should Be $true
-    ($argv -contains $path) | Should Be $true
+    ($argv -contains $printerName) | Should -Be $true
+    ($argv -contains $path) | Should -Be $true
     # Realny blad z nocy: "Couldn't open file '...test-sid_..._Adres'" -
     # sciezka ucieta na pierwszej spacji. Sprawdzamy explicite, ze ZADEN
     # fragment argv nie jest samym "Witkiewicza" (czesc sciezki po ucieciu).
-    ($argv -contains "Witkiewicza") | Should Be $false
+    ($argv -contains "Witkiewicza") | Should -Be $false
   }
 
   It "sciezka pliku z przecinkiem i spacjami (realna nazwa z drukarki-projektow) przetrwa jako jeden argument" {
     $path = "C:\merged\6d1b8c40 - Ul. Fredry 3A, Posada.pdf"
     $built = New-SumatraPrintArgs -path $path -targetPrinter "Zwykla Drukarka"
     $argv = ConvertTo-ArgvArray (ConvertTo-StartProcessCommandLine $built)
-    ($argv -contains $path) | Should Be $true
+    ($argv -contains $path) | Should -Be $true
   }
 
   It "drukarka bez spacji w nazwie dalej dziala poprawnie (brak regresji dla prostego przypadku)" {
     $built = New-SumatraPrintArgs -path "C:\a.pdf" -targetPrinter "HP1"
     $argv = ConvertTo-ArgvArray (ConvertTo-StartProcessCommandLine $built)
-    ($argv -contains "HP1") | Should Be $true
-    ($argv -contains "C:\a.pdf") | Should Be $true
+    ($argv -contains "HP1") | Should -Be $true
+    ($argv -contains "C:\a.pdf") | Should -Be $true
   }
 }
 
@@ -102,25 +123,17 @@ Describe "New-GhostscriptPrintArgs - cytowanie argumentow ze spacjami (audyt 202
     $built = New-GhostscriptPrintArgs -path $path -targetPrinter $printerName
     $argv = ConvertTo-ArgvArray (ConvertTo-StartProcessCommandLine $built)
 
-    ($argv -contains "-sOutputFile=%printer%$printerName") | Should Be $true
-    ($argv -contains $path) | Should Be $true
+    ($argv -contains "-sOutputFile=%printer%$printerName") | Should -Be $true
+    ($argv -contains $path) | Should -Be $true
   }
 
   It "nie wlacza -dNOSAFER (audyt bezpieczenstwa - tresc PDF-a nie moze dostac pelnego dostepu do plikow)" {
     $built = New-GhostscriptPrintArgs -path "C:\a.pdf" -targetPrinter "HP1"
-    ($built -contains "-dNOSAFER") | Should Be $false
+    ($built -contains "-dNOSAFER") | Should -Be $false
   }
 }
 
 Describe "Wait-ForPrintJobProgress - decyzje zabij/nie-zabij (audyt 2026-08-13, Flexi-archiwum2)" {
-
-  function New-TestProcess {
-    # Realny, dlugo dzialajacy proces (do testow "wciaz zywy, czekamy") -
-    # $proc.HasExited musi byc realna wlasciwoscia System.Diagnostics.Process,
-    # nie da sie tego podrobic fake obiektem przy typowanym parametrze funkcji.
-    return Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-Command", "Start-Sleep -Seconds 30" -PassThru -WindowStyle Hidden
-  }
-
   It "zadanie pojawia sie w kolejce, PagesPrinted zostaje 0 - zwraca TRUE od razu, nie czeka na cala pule czasu" {
     $proc = New-TestProcess
     try {
@@ -131,10 +144,10 @@ Describe "Wait-ForPrintJobProgress - decyzje zabij/nie-zabij (audyt 2026-08-13, 
       $result = Wait-ForPrintJobProgress -proc $proc -targetPrinter "Flexi-archiwum2" -jobIdsBeforeStart $before -engineName "Test" -HardDeadlineSeconds 8
       $sw.Stop()
 
-      $result | Should Be $true
+      $result | Should -Be $true
       # Nie powinno czekac na pelne 8s - zadanie zostaje uznane za sukces
       # przy PIERWSZYM odpytaniu kolejki.
-      ($sw.Elapsed.TotalSeconds -lt 4) | Should Be $true
+      ($sw.Elapsed.TotalSeconds -lt 4) | Should -Be $true
     } finally {
       try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
     }
@@ -149,8 +162,8 @@ Describe "Wait-ForPrintJobProgress - decyzje zabij/nie-zabij (audyt 2026-08-13, 
       $before = New-Object 'System.Collections.Generic.HashSet[int]'
       $result = Wait-ForPrintJobProgress -proc $proc -targetPrinter "TestPrinter" -jobIdsBeforeStart $before -engineName "Test" -HardDeadlineSeconds 2
 
-      $result | Should Be $false
-      Assert-MockCalled Stop-Process -ModuleName PrintEngine -Times 1
+      $result | Should -Be $false
+      Should -Invoke Stop-Process -ModuleName PrintEngine -Times 1
     } finally {
       try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
     }
@@ -164,9 +177,9 @@ Describe "Wait-ForPrintJobProgress - decyzje zabij/nie-zabij (audyt 2026-08-13, 
       $result = Wait-ForPrintJobProgress -proc $proc -targetPrinter "" -jobIdsBeforeStart $null -engineName "Test" -HardDeadlineSeconds 30
       $sw.Stop()
 
-      $result | Should Be $false
-      ($sw.Elapsed.TotalSeconds -lt 3) | Should Be $true
-      Assert-MockCalled Stop-Process -ModuleName PrintEngine -Times 1
+      $result | Should -Be $false
+      ($sw.Elapsed.TotalSeconds -lt 3) | Should -Be $true
+      Should -Invoke Stop-Process -ModuleName PrintEngine -Times 1
     } finally {
       try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
     }
@@ -181,6 +194,6 @@ Describe "Wait-ForPrintJobProgress - decyzje zabij/nie-zabij (audyt 2026-08-13, 
     $before = New-Object 'System.Collections.Generic.HashSet[int]'
     $result = Wait-ForPrintJobProgress -proc $proc -targetPrinter "TestPrinter" -jobIdsBeforeStart $before -engineName "Test" -HardDeadlineSeconds 5
 
-    $result | Should Be $true
+    $result | Should -Be $true
   }
 }

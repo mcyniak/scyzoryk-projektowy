@@ -32,11 +32,19 @@ const tests = [
   // Audyt 2026-08-14: testy Pester dla lib/printing/PrintEngine.psm1 (glowna
   // przyczyna dzisiejszych awarii druku - cudzyslowowanie -ArgumentList -
   // nigdy nie byla pokryta prawdziwym testem behawioralnym, tylko wzorcami
-  // tekstowymi). powershell.exe (nie pwsh) - Pester 3.4.0 jest wbudowany w
-  // Windows PowerShell 5.1, ten sam runtime co print-file.ps1 na produkcji i
-  // co windows-latest w CI (ten sam wzorzec exe co lib/hardening.js#runPowerShell).
+  // tekstowymi). powershell.exe (nie pwsh), ten sam wzorzec exe co
+  // lib/hardening.js#runPowerShell.
+  // Audyt na zywo 2026-08-17: pierwszy prawdziwy przebieg tego kroku przez CI
+  // ujawnil, ze dev-machine mial TYLKO wbudowany w Windows PowerShell 5.1
+  // Pester 3.4.0, a windows-latest w CI domyslnie rozwiazuje nowszy Pester
+  // 5+ (skladnia "Should -X" z myslnikiem, brak parametru -EnableExit -
+  // usunietego w Pester 5+). Naprawa: jawnie wymagamy Pester >=5.0.0 (musi
+  // byc zainstalowany oddzielnie, patrz README/onboarding dla
+  // `Install-Module Pester -Scope CurrentUser`) i uzywamy -PassThru +
+  // FailedCount zamiast -EnableExit, bo ta wlasciwosc istnieje identycznie
+  // w Pester 3 i 5+ - odporne na to, ktora wersja faktycznie sie zaladuje.
   ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-    'Invoke-Pester -Path test/print-engine.Tests.ps1 -EnableExit']]
+    'Import-Module Pester -MinimumVersion 5.0.0 -Force; $result = Invoke-Pester -Path test/print-engine.Tests.ps1 -PassThru; if ($result.FailedCount -gt 0) { exit 1 }']]
 ];
 
 for (const [exe, args] of tests) {
