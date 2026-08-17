@@ -265,7 +265,7 @@ test('print-file.ps1: Ghostscript zastapil Acrobata jako zapasowy silnik druku (
   // tablice argumentow gs (New-GhostscriptPrintArgs w PrintEngine.psm1), nie
   // caly plik - komentarz wyjasniajacy decyzje legalnie wspomina "-dNOSAFER"
   // jako to, czego swiadomie NIE uzywamy.
-  const gsArgsMatch = engineModule.match(/return @\(([\s\S]*?)\)\n\}/);
+  const gsArgsMatch = engineModule.match(/return @\(([\s\S]*?)\)\r?\n\}/);
   assert.ok(gsArgsMatch, 'nie znaleziono tablicy argumentow w New-GhostscriptPrintArgs');
   assert.doesNotMatch(gsArgsMatch[1], /-dNOSAFER/);
   assert.match(combined, /--permit-devices=mswinpr2/);
