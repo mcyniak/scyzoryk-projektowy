@@ -145,13 +145,26 @@ Run-Test 'Aktualny panel i instrukcja w instalatorze' {
     'data-app="dokumenty-seryjne"',
     'data-app="wnioski-powykonawcze"',
     'data-app="formularze-ecodan"',
+    'data-app="formularze-varmero"',
     'data-app="pieczatki-pdf"',
+    'data-app="nazywarka-skanow"',
+    'data-app="protokoly"',
     'data-app="karty-katalogowe"',
     'data-app="ocr-audytow"',
+    'data-app="tworzenie-folderow"',
     'href="/instrukcja.html"',
     '<h3>Drukarka dokumentów</h3>',
+    '<h3>Drukarka projektów</h3>',
     '<h3>Dokumenty seryjne PDF</h3>',
-    '<h3>OCR audytów</h3>'
+    '<h3>Wnioski powykonawcze PDF</h3>',
+    '<h3>Dobory myEcodan</h3>',
+    '<h3>Dobory Varmero</h3>',
+    '<h3>Pieczątki PDF</h3>',
+    '<h3>Nazywarka skanów</h3>',
+    '<h3>Zdjęcia do PDF Protokołów</h3>',
+    '<h3>Karty katalogowe</h3>',
+    '<h3>OCR audytów</h3>',
+    '<h3>Tworzenie folderów</h3>'
   )
   $missing = @($requiredFragments | Where-Object { -not $html.Contains($_) })
   Assert-True ($missing.Count -eq 0) "W panelu brakuje stabilnych elementow: $($missing -join ' | ')"
@@ -161,16 +174,22 @@ Run-Test 'Aktualny panel i instrukcja w instalatorze' {
     'Instrukcja obsługi Scyzoryka Projektowego',
     'Drukarka dokumentów',
     'Drukarka projektów',
+    'Zdjęcia do PDF Protokołów',
     'Dokumenty seryjne PDF',
     'Wnioski powykonawcze PDF',
-    'Formularze Ecodan',
+    'Dobory myEcodan',
     'Pieczątki PDF',
     'Karty katalogowe',
     'OCR audytów',
+    'Dobory Varmero',
+    'Nazywarka skanów',
+    'Tworzenie folderów',
     'pierwsze trzy strony'
   )
   $missingInstruction = @($instructionFragments | Where-Object { -not $instruction.Contains($_) })
   Assert-True ($missingInstruction.Count -eq 0) "Instrukcja jest niekompletna: $($missingInstruction -join ' | ')"
+  Assert-True (-not $instruction.Contains('Formularze Ecodan')) 'Instrukcja nadal zawiera stara nazwe Formularze Ecodan.'
+  Assert-True (-not $instruction.Contains('Formularze Varmero')) 'Instrukcja nadal zawiera stara nazwe Formularze Varmero.'
 }
 
 Run-Test 'Regresje zainstalowanej wersji' {
