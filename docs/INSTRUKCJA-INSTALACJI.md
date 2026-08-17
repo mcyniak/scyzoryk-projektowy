@@ -166,7 +166,7 @@ Microsoft Word musi być zainstalowany i aktywowany.
 5. Sprawdź znalezione kategorie.
 6. Kliknij **Przerób zaznaczone i zapisz w folderach**.
 
-## 10. Formularze Ecodan
+## 10. Dobory myEcodan
 
 1. Dodaj Excel inwestycji.
 2. Uzupełnij nazwę inwestycji.

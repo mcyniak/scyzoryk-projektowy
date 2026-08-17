@@ -23,7 +23,7 @@ STARTUJ-SCYZORYK.cmd
         ├── panel główny                 port 3000
         ├── Drukarka                     port 3001
         ├── Pieczątki PDF                port 3002
-        ├── Formularze Ecodan            port 3003
+        ├── Dobory myEcodan            port 3003
         ├── Dokumenty seryjne            port 3004
         ├── Wnioski powykonawcze         port 3005
         ├── Karty katalogowe             port 3006
@@ -240,7 +240,7 @@ Narzędzie otwiera dokument PDF i tworzy nową wersję z naniesioną pieczątką
 
 Oryginalny plik nie jest modyfikowany.
 
-### 7.4 Formularze Ecodan
+### 7.4 Dobory myEcodan
 
 Narzędzie odczytuje dane z arkusza Excel, sprawdza ich poprawność, a następnie steruje prawdziwą przeglądarką Chromium przez Playwright.
 

@@ -1,4 +1,4 @@
-/* Formularze Varmero - style specyficzne dla tego modulu (reszta: /shared/*.css) */
+/* Dobory Varmero - style specyficzne dla tego modulu (reszta: /shared/*.css) */
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); align-items: end; }
 /* align-items:start (nie odziedziczone "end") - "Strefa klimatyczna" ma pod

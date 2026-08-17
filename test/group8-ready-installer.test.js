@@ -114,23 +114,31 @@ test('Pomoc prowadzi do rozbudowanej lokalnej instrukcji z aktualnymi zrzutami',
   for (const title of [
     'Drukarka dokumentów',
     'Drukarka projektów',
+    'Zdjęcia do PDF Protokołów',
     'Dokumenty seryjne PDF',
     'Wnioski powykonawcze PDF',
-    'Formularze Ecodan',
+    'Dobory myEcodan',
     'Pieczątki PDF',
     'Karty katalogowe',
     'OCR audytów',
-    'Formularze Varmero',
+    'Dobory Varmero',
     'Nazywarka skanów',
     'Tworzenie folderów'
   ]) {
     assert.ok(fullGuide.includes(title), `Instrukcja nie zawiera sekcji: ${title}`);
   }
+  // Audyt 2026-08-17 (redesign + tryb ciemny): stare nazwy modulow zmienione
+  // w calym Scyzoryku (Formularze Ecodan -> Dobory myEcodan, Formularze
+  // Varmero -> Dobory Varmero) - instrukcja nie moze juz uczyc uzytkownika
+  // nazw, ktorych nie ma nigdzie w prawdziwym interfejsie.
+  assert.doesNotMatch(fullGuide, /Formularze Ecodan/);
+  assert.doesNotMatch(fullGuide, /Formularze Varmero/);
   for (const image of [
     '01-panel.png', '02-drukarka.png', '03-pieczatki.png', '04-formularze.png',
     '05-dokumenty-seryjne.png', '06-wnioski.png', '07-karty.png',
     '08-drukarka-projekty.png', '09-ocr.png',
-    '11-varmero.png', '12-nazywarka-skanow.png', '13-tworzenie-folderow.png'
+    '11-varmero.png', '12-nazywarka-skanow.png', '13-tworzenie-folderow.png',
+    '14-protokoly.png'
   ]) {
     assert.ok(fullGuide.includes(`/instrukcja-images/${image}`), `Brakuje miejsca na aktualny zrzut: ${image}`);
   }

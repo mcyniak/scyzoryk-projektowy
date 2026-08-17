@@ -36,7 +36,7 @@ Zamiast otwierać wiele programów i wykonywać te same kroki dla każdego adres
 | 🖨️ **Drukarka dokumentów** | Dodaje wiele plików PDF/DOC/DOCX, pozwala ustawić kolejność, liczbę kopii, drukarkę i tryb jednostronny lub dwustronny. |
 | 🗂️ **Drukarka projektów** | Na podstawie Excela i folderów adresów wyszukuje dokumentację, układa ją w kolejności i przygotowuje do druku. Obsługuje również wnioski materiałowe WM. |
 | 🧾 **Pieczątki PDF** | Dodaje jedną lub wiele pieczątek do plików PDF, z podglądem, presetami, zakresem stron i ustawieniem pozycji. |
-| 📋 **Formularze Ecodan** | Pobiera dane z Excela, automatycznie wypełnia formularze i zapisuje raporty PDF. Wynik zachowuje wyłącznie pierwsze trzy potrzebne strony. |
+| 📋 **Dobory myEcodan** | Pobiera dane z Excela, automatycznie wypełnia formularze i zapisuje raporty PDF. Wynik zachowuje wyłącznie pierwsze trzy potrzebne strony. |
 | 📄 **Dokumenty seryjne PDF** | Łączy folder wzorów Worda z tabelą Excel i tworzy osobne dokumenty dla wybranych adresów i wariantów. |
 | 📝 **Wnioski powykonawcze PDF** | Zamienia wnioski materiałowe Word na dokumentację powykonawczą pojedynczo albo dla całego folderu WM. |
 | 📚 **Karty katalogowe** | Dobiera właściwe karty urządzeń według UID z Excela i kopiuje je do odpowiednich folderów klientów. |
@@ -110,7 +110,7 @@ Nie jest wymagane ręczne instalowanie Node.js, npm, Playwrighta, Chromium ani k
 
 Panel oraz narzędzia nasłuchują wyłącznie lokalnie na `127.0.0.1`.
 
-Większość operacji odbywa się na komputerze użytkownika. Wyjątkiem jest **OCR audytów**, który wysyła strony wymagające rozpoznania do Google Cloud Document AI. Formularze Ecodan komunikują się z zewnętrznym systemem formularzy.
+Większość operacji odbywa się na komputerze użytkownika. Wyjątkiem jest **OCR audytów**, który wysyła strony wymagające rozpoznania do Google Cloud Document AI. Dobory myEcodan komunikują się z zewnętrznym systemem formularzy.
 
 Dane runtime, ustawienia i zapisane wzory znajdują się domyślnie w:
 

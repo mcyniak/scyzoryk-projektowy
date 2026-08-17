@@ -98,7 +98,8 @@ jobs:
             '09-ocr.png',
             '11-varmero.png',
             '12-nazywarka-skanow.png',
-            '13-tworzenie-folderow.png'
+            '13-tworzenie-folderow.png',
+            '14-protokoly.png'
           )
 
           New-Item -ItemType Directory -Force -Path $target | Out-Null

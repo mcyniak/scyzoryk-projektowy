@@ -12,14 +12,14 @@ const npmCmd = process.env.NPM_CMD || (isWin ? 'npm.cmd' : 'npm');
 const apps = [
   { name: 'Drukarka', dir: path.join(ROOT, 'apps', 'drukarka'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib'] },
   { name: 'Pieczatki PDF', dir: path.join(ROOT, 'apps', 'pieczatki-pdf'), deps: ['express', 'multer', 'pdf-lib', 'archiver', '@pdf-lib/fontkit', 'pdfjs-dist', 'express-rate-limit'] },
-  { name: 'Formularze Ecodan', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), deps: ['express', 'playwright', 'read-excel-file', 'pdf-parse', 'pdf-lib', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'], playwright: true },
+  { name: 'Dobory myEcodan', dir: path.join(ROOT, 'apps', 'formularze-ecodan'), deps: ['express', 'playwright', 'read-excel-file', 'pdf-parse', 'pdf-lib', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'], playwright: true },
   { name: 'Dokumenty seryjne PDF', dir: path.join(ROOT, 'apps', 'dokumenty-seryjne'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
   { name: 'Wnioski powykonawcze PDF', dir: path.join(ROOT, 'apps', 'wnioski-powykonawcze'), deps: ['express', 'multer', 'sanitize-filename', 'archiver', 'express-rate-limit'] },
   { name: 'Karty katalogowe', dir: path.join(ROOT, 'apps', 'karty-katalogowe'), deps: ['express', 'multer', 'read-excel-file', 'sanitize-filename', 'express-rate-limit'] },
   { name: 'Drukarka projekty', dir: path.join(ROOT, 'apps', 'drukarka-projekty'), deps: ['express', 'multer', 'express-rate-limit', 'xlsx', 'mammoth', 'pdf-parse', 'pdf-lib', 'sanitize-filename'] },
   { name: 'OCR audytów', dir: path.join(ROOT, 'apps', 'ocr-audytow'), deps: ['express', 'multer', 'express-rate-limit', 'pdf-lib', 'pdf-parse', 'jimp', 'sanitize-filename', 'xlsx', 'exceljs'] },
   { name: 'Nazywarka skanów', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), deps: ['express', 'express-rate-limit'] },
-  { name: 'Formularze Varmero', dir: path.join(ROOT, 'apps', 'formularze-varmero'), deps: ['express', 'playwright', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx', 'imapflow', 'mailparser'], playwright: true },
+  { name: 'Dobory Varmero', dir: path.join(ROOT, 'apps', 'formularze-varmero'), deps: ['express', 'playwright', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx', 'imapflow', 'mailparser'], playwright: true },
   { name: 'Tworzenie folderów', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), deps: ['express', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx'] },
   { name: 'Protokoły', dir: path.join(ROOT, 'apps', 'protokoly'), deps: ['express', 'express-rate-limit', 'jimp', 'pdf-lib'] }
 ];

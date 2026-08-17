@@ -1,4 +1,4 @@
-/* Formularze Ecodan - style specyficzne dla tego modulu (reszta: /shared/*.css) */
+/* Dobory myEcodan - style specyficzne dla tego modulu (reszta: /shared/*.css) */
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); align-items: end; }
 .grid.two { grid-template-columns: 1fr 1.4fr; margin-top: var(--space-3); }

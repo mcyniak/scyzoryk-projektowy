@@ -326,7 +326,8 @@ Run-Test 'Zrzuty ekranow wszystkich narzedzi i instrukcji' {
     @{slug='10-instrukcja'; url='http://127.0.0.1:3000/instrukcja.html'},
     @{slug='11-varmero'; url='http://127.0.0.1:3012/'},
     @{slug='12-nazywarka-skanow'; url='http://127.0.0.1:3007/'},
-    @{slug='13-tworzenie-folderow'; url='http://127.0.0.1:3013/'}
+    @{slug='13-tworzenie-folderow'; url='http://127.0.0.1:3013/'},
+    @{slug='14-protokoly'; url='http://127.0.0.1:3014/'}
   ) | ConvertTo-Json | Set-Content $targetsPath -Encoding utf8
 
   $env:NODE_PATH = Join-Path $InstallDir 'apps\formularze-ecodan\node_modules'
