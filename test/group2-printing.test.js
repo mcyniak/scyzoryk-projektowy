@@ -175,6 +175,11 @@ test('duplex jest przywracany w finally po bledzie serii', async () => {
 test('print-file.ps1: brak cichego fallbacku na drukarke domyslna i wymog potwierdzenia kolejki (audyt v1.0.4, P0-1/P1-10)', () => {
   const root = path.resolve(__dirname, '..');
   const script = fs.readFileSync(path.join(root, 'lib', 'printing', 'print-file.ps1'), 'utf8');
+  // Audyt 2026-08-14: silnik druku (Invoke-PrintWith*, Wait-ForPrintJobProgress)
+  // zostal wydzielony do PrintEngine.psm1, zeby Pester (test/print-engine.Tests.ps1)
+  // mogl go testowac w izolacji - czesc asercji ponizej sprawdza wiec ten
+  // modul zamiast/oprocz samego print-file.ps1.
+  const engineModule = fs.readFileSync(path.join(root, 'lib', 'printing', 'PrintEngine.psm1'), 'utf8');
 
   // P0-1a: gdy druk PDF-a zawiedzie (Sumatra i Ghostscript obie), skrypt MUSI
   // przerwac z bledem - nie wolno mu przechodzic na Invoke-PrintWithShell
@@ -190,6 +195,7 @@ test('print-file.ps1: brak cichego fallbacku na drukarke domyslna i wymog potwie
   // zostaja w komentarzach audytowych jako uzasadnienie usuniecia - sprawdzamy
   // wiec brak DEFINICJI, nie kazde wystapienie samej nazwy w tekscie.
   assert.doesNotMatch(script, /function Invoke-PrintWithShell/);
+  assert.doesNotMatch(engineModule, /function Invoke-PrintWithShell/);
   const targetedBlockMatch = script.match(/if \(\$isPdf\) \{[\s\S]*?\n\}/);
   assert.ok(targetedBlockMatch, 'nie znaleziono bloku if ($isPdf)');
   assert.match(targetedBlockMatch[0], /Invoke-PrintWithSumatra/);
@@ -202,9 +208,9 @@ test('print-file.ps1: brak cichego fallbacku na drukarke domyslna i wymog potwie
 
   // P1-10: petla oczekiwania na Word COM ma teraz limit czasu (wczesniej byla
   // nieskonczona - zawieszony sterownik/spooler blokowalby caly proces na
-  // zawsze).
-  assert.match(script, /\$printWaitDeadline = \(Get-Date\)\.AddSeconds\(60\)/);
-  const wordWaitMatch = script.match(/while \(\$word\.BackgroundPrintingStatus -ne 0\) \{[\s\S]*?\n    \}/);
+  // zawsze). Ta petla mieszka teraz w PrintEngine.psm1 (Invoke-PrintWithWordCom).
+  assert.match(engineModule, /\$printWaitDeadline = \(Get-Date\)\.AddSeconds\(60\)/);
+  const wordWaitMatch = engineModule.match(/while \(\$word\.BackgroundPrintingStatus -ne 0\) \{[\s\S]*?\n    \}/);
   assert.ok(wordWaitMatch, 'nie znaleziono petli oczekiwania BackgroundPrintingStatus');
   assert.match(wordWaitMatch[0], /printWaitDeadline/);
 });
@@ -212,10 +218,13 @@ test('print-file.ps1: brak cichego fallbacku na drukarke domyslna i wymog potwie
 test('skrypt nie dotyka cudzych okien i drukuje DOCX przez wlasny Word COM', () => {
   const root = path.resolve(__dirname, '..');
   const script = fs.readFileSync(path.join(root, 'lib', 'printing', 'print-file.ps1'), 'utf8');
+  const engineModule = fs.readFileSync(path.join(root, 'lib', 'printing', 'PrintEngine.psm1'), 'utf8');
   assert.doesNotMatch(script, /Set-PrintAppWindowsMinimized/);
+  assert.doesNotMatch(engineModule, /Set-PrintAppWindowsMinimized/);
   assert.doesNotMatch(script, /Get-Process\s+-Name\s+(?:Acrobat|AcroRd32|WINWORD)/i);
-  assert.match(script, /New-Object -ComObject Word\.Application/);
-  assert.match(script, /\$word\.ActivePrinter = \$PrinterName/);
+  assert.doesNotMatch(engineModule, /Get-Process\s+-Name\s+(?:Acrobat|AcroRd32|WINWORD)/i);
+  assert.match(engineModule, /New-Object -ComObject Word\.Application/);
+  assert.match(engineModule, /\$word\.ActivePrinter = \$PrinterName/);
 
   for (const file of ['apps/drukarka/server.js', 'apps/drukarka-projekty/server.js']) {
     const source = fs.readFileSync(path.join(root, file), 'utf8');
@@ -228,39 +237,63 @@ test('skrypt nie dotyka cudzych okien i drukuje DOCX przez wlasny Word COM', () 
 test('print-file.ps1: Ghostscript zastapil Acrobata jako zapasowy silnik druku (audyt 2026-08-13)', () => {
   const root = path.resolve(__dirname, '..');
   const script = fs.readFileSync(path.join(root, 'lib', 'printing', 'print-file.ps1'), 'utf8');
+  const engineModule = fs.readFileSync(path.join(root, 'lib', 'printing', 'PrintEngine.psm1'), 'utf8');
+  const combined = script + '\n' + engineModule;
 
   // Acrobat usuniety jako silnik druku - nie da sie go legalnie dolaczyc do
   // instalatora (komentarze WYJASNIAJACE dlaczego moga nadal wspominac nazwe
   // historycznie, wiec sprawdzamy brak faktycznego KODU, nie brak slowa).
-  assert.doesNotMatch(script, /\$AcrobatPath/);
-  assert.doesNotMatch(script, /Invoke-PrintWithAcrobat/);
-  assert.doesNotMatch(script, /Close-AcrobatIfUsed/);
-  assert.doesNotMatch(script, /Acrobat\.exe|AcroRd32\.exe/);
+  assert.doesNotMatch(combined, /\$AcrobatPath/);
+  assert.doesNotMatch(combined, /Invoke-PrintWithAcrobat/);
+  assert.doesNotMatch(combined, /Close-AcrobatIfUsed/);
+  assert.doesNotMatch(combined, /Acrobat\.exe|AcroRd32\.exe/);
 
-  // Ghostscript jako zapasowy silnik, wskazujacy na wendorowana binarke.
-  assert.match(script, /\$GhostscriptPath = Join-Path \$PSScriptRoot "ghostscript\\bin\\gswin64c\.exe"/);
-  assert.match(script, /Invoke-PrintWithGhostscript/);
-  assert.match(script, /-sDEVICE=mswinpr2/);
+  // Ghostscript jako zapasowy silnik, wskazujacy na wendorowana binarke
+  // (patrz PrintEngine.psm1 - $script:GhostscriptPath).
+  assert.match(engineModule, /\$script:GhostscriptPath = Join-Path \$PSScriptRoot "ghostscript\\bin\\gswin64c\.exe"/);
+  assert.match(combined, /Invoke-PrintWithGhostscript/);
+  assert.match(combined, /-sDEVICE=mswinpr2/);
 
   // -dNoCancel chowa wbudowany pasek postepu mswinpr2 (Devices.rst) - bez
   // niego Ghostscript pokazuje wlasne male okienko przy kazdym druku
   // (zlapane live 2026-08-13).
-  assert.match(script, /-dNoCancel/);
+  assert.match(combined, /-dNoCancel/);
 
   // SAFER musi pozostac aktywne (domyslne od gs 9.50) - nigdy nie wylaczamy
   // go blankietowo dla tresci PDF-ow pochodzacych od uzytkownikow. Wolno
   // przyznac WYLACZNIE zgode na wybor urzadzenia druku. Sprawdzamy faktyczna
-  // tablice argumentow gs ($gsArgs), nie caly plik - komentarz wyjasniajacy
-  // decyzje legalnie wspomina "-dNOSAFER" jako to, czego swiadomie NIE uzywamy.
-  const gsArgsMatch = script.match(/\$gsArgs = @\(([\s\S]*?)\)/);
-  assert.ok(gsArgsMatch, 'nie znaleziono definicji $gsArgs');
+  // tablice argumentow gs (New-GhostscriptPrintArgs w PrintEngine.psm1), nie
+  // caly plik - komentarz wyjasniajacy decyzje legalnie wspomina "-dNOSAFER"
+  // jako to, czego swiadomie NIE uzywamy.
+  const gsArgsMatch = engineModule.match(/return @\(([\s\S]*?)\)\n\}/);
+  assert.ok(gsArgsMatch, 'nie znaleziono tablicy argumentow w New-GhostscriptPrintArgs');
   assert.doesNotMatch(gsArgsMatch[1], /-dNOSAFER/);
-  assert.match(script, /--permit-devices=mswinpr2/);
+  assert.match(combined, /--permit-devices=mswinpr2/);
 
   // Dispatch: Sumatra pozostaje pierwsza probą, Ghostscript zastepuje Acrobata
   // jako druga (i ostatnia) - bez trzeciej linii.
   assert.match(script, /Invoke-PrintWithSumatra[\s\S]*?Invoke-PrintWithGhostscript/);
   assert.match(script, /PRINT_TARGETED_FAILED.*Sumatra i Ghostscript zawiodly/);
+});
+
+test('print-file.ps1: silnik druku wydzielony do PrintEngine.psm1 pod testy Pester (audyt 2026-08-14)', () => {
+  const root = path.resolve(__dirname, '..');
+  const script = fs.readFileSync(path.join(root, 'lib', 'printing', 'print-file.ps1'), 'utf8');
+  const engineModule = fs.readFileSync(path.join(root, 'lib', 'printing', 'PrintEngine.psm1'), 'utf8');
+
+  assert.match(script, /Import-Module \(Join-Path \$PSScriptRoot "PrintEngine\.psm1"\) -Force/);
+  assert.match(engineModule, /function New-SumatraPrintArgs/);
+  assert.match(engineModule, /function New-GhostscriptPrintArgs/);
+  assert.match(engineModule, /function Wait-ForPrintJobProgress/);
+  // Cudzyslowowanie argumentow (audyt 2026-08-13, glowna przyczyna awarii
+  // druku tej nocy) - obie funkcje budujace argumenty musza recznie
+  // doklejac cudzyslowy wokol nazwy drukarki I sciezki pliku, nie polegac na
+  // automatycznym cytowaniu przez Start-Process -ArgumentList (ktore w tym
+  // srodowisku zawodzi dla argumentow ze spacjami - patrz
+  // test/print-engine.Tests.ps1 dla behawioralnego dowodu).
+  assert.match(engineModule, /"`"\$targetPrinter`""/);
+  assert.match(engineModule, /"`"\$path`""/);
+  assert.ok(fs.existsSync(path.join(root, 'test', 'print-engine.Tests.ps1')), 'brak test/print-engine.Tests.ps1');
 });
 
 test('lib/printing/ghostscript: wendorowany runtime jest kompletny i ma dolaczona licencje AGPL', () => {

@@ -27,12 +27,20 @@ function discoverGroupTestFiles() {
 }
 
 const tests = [
-  ['--test', ...discoverGroupTestFiles()],
-  ['apps/drukarka-projekty/test-sorting-regression.js']
+  [process.execPath, ['--test', ...discoverGroupTestFiles()]],
+  [process.execPath, ['apps/drukarka-projekty/test-sorting-regression.js']],
+  // Audyt 2026-08-14: testy Pester dla lib/printing/PrintEngine.psm1 (glowna
+  // przyczyna dzisiejszych awarii druku - cudzyslowowanie -ArgumentList -
+  // nigdy nie byla pokryta prawdziwym testem behawioralnym, tylko wzorcami
+  // tekstowymi). powershell.exe (nie pwsh) - Pester 3.4.0 jest wbudowany w
+  // Windows PowerShell 5.1, ten sam runtime co print-file.ps1 na produkcji i
+  // co windows-latest w CI (ten sam wzorzec exe co lib/hardening.js#runPowerShell).
+  ['powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
+    'Invoke-Pester -Path test/print-engine.Tests.ps1 -EnableExit']]
 ];
 
-for (const args of tests) {
-  const result = spawnSync(process.execPath, args, { cwd: ROOT, stdio: 'inherit' });
+for (const [exe, args] of tests) {
+  const result = spawnSync(exe, args, { cwd: ROOT, stdio: 'inherit' });
   if (result.status !== 0) process.exit(result.status || 1);
 }
 

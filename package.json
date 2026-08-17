@@ -24,6 +24,7 @@
     "test:group13": "node --test test/group13-drukarka-projekty-powykonawcza.test.js",
     "test:group14": "node --test test/group14-nazywarka-skanow.test.js",
     "test:group15": "node --test test/group15-session-cookie-isolation.test.js",
+    "test:pester": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"Invoke-Pester -Path test/print-engine.Tests.ps1 -EnableExit\"",
     "test:regressions": "node scripts/run-regression-tests.js",
     "security-smoke": "node scripts/security-smoke-test.js",
     "audit": "node scripts/check-project.js",

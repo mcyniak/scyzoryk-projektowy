@@ -17,7 +17,7 @@ const {
 const { isTruthyMark, loadWorkbookFromBuffer, listCandidates } = require('../apps/drukarka-projekty/src/excelInvestment');
 const XLSX = require('../apps/drukarka-projekty/node_modules/xlsx');
 const { findCategoryFolders } = require('../apps/drukarka-projekty/src/wmFolder');
-const { buildQueueFromGroups } = require('../apps/drukarka-projekty/server');
+const { buildQueueFromGroups, matchOneAddress } = require('../apps/drukarka-projekty/server');
 const { isAffirmativeFlag } = require('../lib/businessFlags');
 const { normalizeDate } = require('../apps/wnioski-powykonawcze/src/dateValidation');
 const { app: wmApp, isPathInsideFolder: wmIsPathInsideFolder } = require('../apps/wnioski-powykonawcze/server');
@@ -296,6 +296,73 @@ test('drukarka-projekty: matchOneAddress w server.js blokuje niezgodny adres i p
   assert.match(source, /computeFileKey\(req\.file\.buffer\)/);
   assert.match(source, /crypto\.createHash\("sha256"\)/);
   assert.match(source, /saveLastFolder\(lastFolderKey\(fileKey, sheetName\), baseFolder\)/);
+});
+
+// Audyt na zywo 2026-08-14 (Kazimierz Biskupi): rekurencyjne szukanie w
+// podfolderach kategorii zaczelo tez znajdowac PRAWDZIWE duplikaty tego
+// samego adresu (uzytkownik skopiowal foldery do swiezego stagingu "Dla
+// gminy DD.MM.YYYY", zostawiajac oryginaly na miejscu) - "wiecej niz jeden
+// pasujacy folder" byl falszywym alarmem blokujacym prawidlowe adresy (10
+// numerow z arkusza przestalo sie dopasowywac tego samego wieczoru).
+test('drukarka-projekty: matchOneAddress rozstrzyga prawdziwe duplikaty adresu, ale nie zgaduje przy realnej kolizji (audyt 2026-08-14)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-dup-address-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+
+  async function makeDupFolder(relPath, mtimeOffsetMs) {
+    const full = path.join(root, relPath);
+    await fsp.mkdir(full, { recursive: true });
+    const stamp = new Date(Date.now() + mtimeOffsetMs);
+    await fsp.utimes(full, stamp, stamp);
+  }
+
+  // Scenariusz 1: identycznie nazwany duplikat w dwoch kategoriach, BEZ
+  // podpowiedzi adresu z Excela - nazwy sa identyczne, wiec nie ma tu
+  // realnej niejednoznacznosci CO DO ADRESU (to na pewno ta sama
+  // nieruchomosc), tylko pytanie ktora kopia jest aktualniejsza - mtime
+  // wystarcza do bezpiecznego rozstrzygniecia nawet bez podpowiedzi z Excela.
+  await makeDupFolder('Wyslane do gminy/65.Mokra 1', -60000);
+  await makeDupFolder('Dla gminy 14.08.2026/65.Mokra 1', 0);
+  const identicalNoHint = await matchOneAddress(root, '65', {});
+  assert.equal(identicalNoHint.ok, true, identicalNoHint.message);
+  assert.match(identicalNoHint.folderPath, /Dla gminy 14\.08\.2026/);
+
+  // Scenariusz 1b: DWA ROZNE (nie identyczne) foldery pod tym samym numerem,
+  // BEZ podpowiedzi adresu - tu bez adresu z Excela nie ma jak bezpiecznie
+  // rozstrzygnac ktory jest "prawdziwy" (moze to byc realna kolizja numeracji
+  // miedzy inwestycjami, audyt P0-6b) - musi nadal blokowac.
+  await makeDupFolder('Wyslane do gminy/66.Ul. Reymonta 11', -60000);
+  await makeDupFolder('Dla gminy 14.08.2026/66.Ul.Reymonta 11-pdf', 0);
+  const differentNoHint = await matchOneAddress(root, '66', {});
+  assert.equal(differentNoHint.ok, false);
+  assert.match(differentNoHint.message, /wiecej niz jeden pasujacy folder/);
+
+  // Scenariusz 2: identyczny duplikat, ale Z podpowiedzia adresu z Excela - obie kopie
+  // pasuja do adresu (to naprawde ten sam adres), wiec rozstrzygamy na
+  // najswiezej zmodyfikowana (staging "Dla gminy" zrobiony pozniej).
+  const withHint = await matchOneAddress(root, '65', { adres: 'Mokra 1' });
+  assert.equal(withHint.ok, true, withHint.message);
+  assert.match(withHint.folderPath, /Dla gminy 14\.08\.2026/);
+
+  // Scenariusz 3: duplikat z dopiskiem "-pdf" w nazwie (realny przypadek -
+  // Kazimierz Biskupi, np. "68.Ul.Polna 7-pdf") - fuzzy dopasowanie
+  // (filenameMatchesOwnAddress) musi rozpoznac to jako ten sam adres mimo
+  // innej dokladnej nazwy folderu.
+  await makeDupFolder('Wyslane do gminy/68.Ul. Polna 7', -60000);
+  await makeDupFolder('Dla gminy 14.08.2026/68.Ul.Polna 7-pdf', 0);
+  const pdfSuffixHint = await matchOneAddress(root, '68', { adres: 'Ul. Polna 7' });
+  assert.equal(pdfSuffixHint.ok, true, pdfSuffixHint.message);
+  assert.match(pdfSuffixHint.folderPath, /68\.Ul\.Polna 7-pdf/);
+
+  // Scenariusz 4: NAPRAWDE rozne adresy pod tym samym numerem LP (kolizja
+  // numeracji miedzy inwestycjami, audyt P0-6b) - podpowiedz adresu pasuje
+  // TYLKO do jednego z nich, wiec matchOneAddress musi wybrac wlasnie ten, a
+  // nie zgadywac na podstawie samej daty modyfikacji.
+  await makeDupFolder('Wyslane do gminy/70.Zarnow, ul. Spacerowa', -60000);
+  await makeDupFolder('Dla gminy 14.08.2026/70.Kolektory, ul. Polna 7', 0);
+  const crossInvestmentHint = await matchOneAddress(root, '70', { adres: 'Zarnow, ul. Spacerowa' });
+  assert.equal(crossInvestmentHint.ok, true, crossInvestmentHint.message);
+  assert.match(crossInvestmentHint.folderPath, /Zarnow, ul\. Spacerowa/);
+  assert.doesNotMatch(crossInvestmentHint.folderPath, /Kolektory/);
 });
 
 test('drukarka-projekty: buildQueueFromGroups zachowuje przeplot PDF/DOCX/PDF zamiast grupowac (audyt P1-3)', async (t) => {

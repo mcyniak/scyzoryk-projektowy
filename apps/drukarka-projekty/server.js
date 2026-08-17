@@ -1151,4 +1151,4 @@ if (require.main === module) {
   applyHttpTimeouts(server, "DRUKARKA_PROJEKTY");
 }
 
-module.exports = { app, buildQueueFromGroups, prepareStampedQueue, buildQueueItem, isMergedFile, buildSaveAsPdfOutputs, clearSaveAsPdfOutputDir, SAVE_AS_PDF_SENTINEL, SAVE_AS_PDF_OUTPUT_DIR };
+module.exports = { app, buildQueueFromGroups, prepareStampedQueue, buildQueueItem, isMergedFile, buildSaveAsPdfOutputs, clearSaveAsPdfOutputDir, SAVE_AS_PDF_SENTINEL, SAVE_AS_PDF_OUTPUT_DIR, matchOneAddress, resolveAmbiguousMatches };
