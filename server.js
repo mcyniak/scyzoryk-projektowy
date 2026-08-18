@@ -59,17 +59,6 @@ function resolveUpdateRoot() {
   if (!localData) throw new Error('Brak SCYZORYK_UPDATE_ROOT, LOCALAPPDATA i APPDATA - nie mozna wyznaczyc katalogu aktualizacji.');
   return path.join(localData, 'ScyzorykProjektowy', 'Updates');
 }
-const UPDATE_DRY_RUN = process.env.SCYZORYK_UPDATE_DRY_RUN === '1';
-const updateServiceDeps = UPDATE_DRY_RUN ? {
-  // Tryb wylacznie do testow/lokalnego sprawdzania: prawdziwe sprawdzenie
-  // GitHub, prawdziwe pobieranie i weryfikacja SHA-256 przechodza normalnie,
-  // ale FAKTYCZNE odpalenie instalatora jest tylko zalogowane, nigdy nie
-  // uruchamiamy prawdziwego PowerShella/Inno Setup w tym trybie.
-  spawnUpdaterProcess(invocation) {
-    diagnostics.log('info', 'update-dry-run-spawn', { exe: invocation.exe, args: invocation.args });
-    return null;
-  }
-} : {};
 const updateService = createUpdateService({
   rootDir: ROOT,
   getInstalledVersion: () => getInstalledVersion(ROOT),
@@ -77,8 +66,7 @@ const updateService = createUpdateService({
   updateRoot: resolveUpdateRoot(),
   enabled: UPDATE_ENABLED,
   apiBaseUrl: process.env.SCYZORYK_UPDATE_API_BASE_URL || undefined,
-  log: diagnostics.log,
-  deps: updateServiceDeps
+  log: diagnostics.log
 });
 
 const SECURITY_HEADERS = {

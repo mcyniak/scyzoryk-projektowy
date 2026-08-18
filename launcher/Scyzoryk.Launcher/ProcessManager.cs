@@ -15,6 +15,16 @@ public interface IProcessManager
     /// Nigdy przez cmd/PowerShell/VBS - bezposredni ProcessStartInfo.</summary>
     SpawnResult StartServer(string installDir, string nodeExePath);
 
+    /// <summary>Odpala dowolny plik wykonywalny z podanymi argumentami i CZEKA na
+    /// jego zakonczenie, zwracajac prawdziwy kod wyjscia - w odroznieniu od
+    /// StartServer/dawnego spawnUpdaterProcess (odlaczony, fire-and-forget proces).
+    /// Uzywane wylacznie przez ApplyPendingUpdateIfAnyAsync (cold-start apply, patrz
+    /// LauncherApp.cs) do odpalenia skopiowanego Scyzoryk.exe --apply-update PRZED
+    /// jakimkolwiek probowaniem startu wlasnego serwera - w tym momencie nic jeszcze
+    /// nie zyje, wiec nie ma potrzeby (ani sensu) odlaczac tego procesu od
+    /// rodzica.</summary>
+    Task<int> RunAndWaitAsync(string exePath, IReadOnlyList<string> args);
+
     /// <summary>Zatrzymuje WYLACZNIE procesy node.exe, ktorych pelna sciezka pliku
     /// wykonywalnego zgadza sie z bundlowanym node-runtime\node.exe tej instalacji -
     /// dokladnie logika scripts\stop-scyzoryk.ps1. Zwraca PID-y faktycznie zabitych
@@ -108,6 +118,22 @@ public sealed class ProcessManager : IProcessManager
         {
             return SpawnResult.Failed(ex.Message);
         }
+    }
+
+    public async Task<int> RunAndWaitAsync(string exePath, IReadOnlyList<string> args)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = exePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args) startInfo.ArgumentList.Add(arg);
+
+        using var process = Process.Start(startInfo);
+        if (process is null) return -1;
+        await process.WaitForExitAsync().ConfigureAwait(false);
+        return process.ExitCode;
     }
 
     public IReadOnlyList<int> StopOwnedProcesses(string expectedNodeExeFullPath)

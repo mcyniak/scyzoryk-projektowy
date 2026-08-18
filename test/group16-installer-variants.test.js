@@ -164,7 +164,6 @@ function makeVariantDeps({ fullBytes, updateBytes, remoteFingerprint, fingerprin
 
 function makeVariantTestService({ rootDir, currentVersion, release, deps }) {
   const updateRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scz-variant-svc-'));
-  const spawned = [];
   const service = createUpdateService({
     rootDir,
     getInstalledVersion: () => ({ version: currentVersion }),
@@ -174,12 +173,10 @@ function makeVariantTestService({ rootDir, currentVersion, release, deps }) {
     log: () => {},
     deps: {
       fetchLatestRelease: async () => release,
-      spawnUpdaterProcess: (invocation) => { spawned.push(invocation); return null; },
-      confirmUpdaterStarted: async () => true,
       ...deps
     }
   });
-  return { service, updateRoot, spawned };
+  return { service, updateRoot };
 }
 
 test('chooseInstallerAssets: fingerprint lokalny zgadza sie ze zdalnym -> pobiera MALY wariant aktualizacyjny', async () => {
@@ -302,7 +299,7 @@ test('chooseInstallerAssets: blad sieci przy sprawdzaniu fingerprinta -> bezpiec
     await install.flowPromise;
 
     const status = service.getStatusPayload();
-    assert.equal(status.state, 'installing'); // nie "error" - upadek sprawdzenia fingerprinta nie psuje calej aktualizacji
+    assert.equal(status.state, 'ready-for-restart'); // nie "error" - upadek sprawdzenia fingerprinta nie psuje calej aktualizacji
     assert.equal(fs.existsSync(path.join(updateRoot, '2.0.0', assetFileName('2.0.0'))), true);
   } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });

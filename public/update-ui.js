@@ -3,10 +3,19 @@
 // inline-1.js, zeby nie miesac logiki statusu narzedzi z logika aktualizacji.
 // Zero inline JS/HTML z zewnatrz: opis wydania jest wstawiany WYLACZNIE przez
 // textContent, nigdy innerHTML.
+//
+// Cold-start apply (patrz plan "Aktualizacja przy zimnym starcie"): klikniecie
+// "Zainstaluj" juz NIGDY nie zabija/restartuje serwera na zywo - pobiera i
+// weryfikuje instalator, po czym backend wchodzi w trwaly stan
+// "ready-for-restart". Rzeczywista podmiana plikow dzieje sie dopiero przy
+// NASTEPNYM zimnym starcie Scyzoryka (uzytkownik recznie zamyka przez ikone w
+// zasobniku i otwiera ponownie). Dzieki temu ten plik nigdy nie musi juz
+// "czekac az polaczenie padnie" ani sprawdzac dzialajacej wersji po
+// restarcie - caly ten dawny mechanizm (trackProgressUntilServerStops/
+// waitForRestart) znika razem z zywym restartem.
 (function () {
   const STATUS_POLL_MS = 60000;
   const PROGRESS_POLL_MS = 1000;
-  const HEALTH_POLL_MS = 2000;
   const HEADERS = { 'X-Scyzoryk-Request': '1' };
 
   const btn = document.getElementById('updateAvailableBtn');
@@ -30,6 +39,12 @@
   const errorMessage = document.getElementById('updateErrorMessage');
 
   let lastStatus = null;
+  // Prawda WYLACZNIE podczas trwajacej petli odpytywania po kliknieciu
+  // "Zainstaluj" (pollUntilReadyOrError) - w odroznieniu od dawnej wersji tego
+  // pliku, NIE blokuje juz zamykania modala: pobieranie jest w calosci
+  // nieniszczace (Node nigdy nie jest restartowany/zabijany w tym kroku), wiec
+  // uzytkownik moze bezpiecznie zamknac karte/modal w dowolnym momencie - petla
+  // dziala dalej w tle i tak czy inaczej wyladuje w last-result/ready-for-restart.
   let installStarted = false;
   let openerElement = null;
   // Audyt rozdz. 4, P2: ustawiane gdy modal zostal otwarty AUTOMATYCZNIE, bo
@@ -62,8 +77,11 @@
   }
 
   function renderButtonFromStatus(status) {
-    if (installStarted) return; // przycisk pozostaje zgodny z modalem podczas instalacji
-    if (status.available && status.state !== 'installing' && status.state !== 'restarting') {
+    if (installStarted) return; // przycisk pozostaje zgodny z modalem podczas trwajacego pobierania
+    if (status.state === 'ready-for-restart') {
+      btnLabel.textContent = 'Aktualizacja gotowa – uruchom ponownie';
+      show(btn);
+    } else if (status.available && status.state !== 'downloading' && status.state !== 'ready') {
       btnLabel.textContent = `Dostępna aktualizacja ${status.latestVersion}`;
       show(btn);
     } else {
@@ -105,9 +123,10 @@
   }
 
   function closeModal() {
-    // Po rozpoczeciu instalacji modal nie da sie zamknac (Escape ani "Później")
-    // - uzytkownik nie moze zgubic z oczu jedynego miejsca, gdzie zobaczy wynik.
-    if (installStarted) return;
+    // W odroznieniu od dawnej wersji tego modala, nic tu juz nie blokuje
+    // zamkniecia - pobieranie w tle jest nieniszczace (patrz komentarz przy
+    // installStarted powyzej), wiec uzytkownik moze zamknac okno w dowolnym
+    // momencie bez utraty postepu.
     acknowledgeResultIfPending();
     modal.classList.remove('open');
     modal.setAttribute('aria-hidden', 'true');
@@ -115,12 +134,40 @@
     if (openerElement && typeof openerElement.focus === 'function') openerElement.focus();
   }
 
+  function resetInstallControls() {
+    installStarted = false;
+    installBtn.disabled = false;
+    installBtn.removeAttribute('aria-disabled');
+    laterBtn.disabled = false;
+    closeBtn.disabled = false;
+  }
+
+  // Trwaly stan sukcesu: instalator jest juz na dysku i zweryfikowany (SHA-256),
+  // ale zostanie zastosowany dopiero przy nastepnym zimnym starcie Scyzoryka
+  // (LauncherApp.ApplyPendingUpdateIfAnyAsync) - "Zainstaluj" jest juz
+  // bezcelowe (kolejne pobranie tego samego wydania), wiec zostaje trwale
+  // wylaczone, ale modal da sie normalnie zamknac/otworzyc.
+  function showReadyForRestartMessage() {
+    installBtn.disabled = true;
+    installBtn.setAttribute('aria-disabled', 'true');
+    laterBtn.disabled = false;
+    closeBtn.disabled = false;
+    hide(errorBox);
+    setProgress(
+      'Aktualizacja pobrana i zweryfikowana. Zamknij Scyzoryka (ikona w zasobniku → „Zamknij Scyzoryka”) i uruchom go ponownie, aby ją zastosować.',
+      PHASE_DONE
+    );
+  }
+
   async function refreshFromStatus() {
     try {
       const status = await fetchStatus();
       lastStatus = status;
       renderButtonFromStatus(status);
-      if (modal.classList.contains('open') && !installStarted) renderModalData(status);
+      if (modal.classList.contains('open') && !installStarted) {
+        renderModalData(status);
+        if (status.state === 'ready-for-restart') showReadyForRestartMessage();
+      }
       return status;
     } catch (_) {
       return null;
@@ -129,8 +176,15 @@
 
   btn.addEventListener('click', () => {
     if (lastStatus) renderModalData(lastStatus);
-    hide(progressBox);
     hide(errorBox);
+    if (!installStarted) {
+      if (lastStatus && lastStatus.state === 'ready-for-restart') {
+        showReadyForRestartMessage();
+      } else {
+        hide(progressBox);
+        resetInstallControls();
+      }
+    }
     openModal();
   });
 
@@ -164,141 +218,75 @@
   laterBtn.addEventListener('click', closeModal);
   modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
 
-  // Cala droga (pobieranie -> weryfikacja -> instalacja -> restart -> health)
-  // jest mapowana na JEDEN pasek 0-100% - 100% ma znaczyc "gotowe, dziala
-  // nowa wersja", NIE "plik sie pobral". Bez tego uzytkownik widzial 100%
-  // zaraz po pobraniu i musial jeszcze dlugo czekac, co wygladalo jak
-  // zawieszenie mimo ze wszystko szlo poprawnie.
-  const PHASE_DOWNLOAD_MAX = 70;   // pobieranie: 0-70%, proporcjonalnie do realnego postepu
-  const PHASE_READY = 75;          // suma kontrolna sprawdzona
-  const PHASE_CLOSING = 85;        // serwer jeszcze odpowiada, ale za chwile zacznie sie zamykac
-  const PHASE_INSTALLING = 90;     // polaczenie przestalo odpowiadac - instalator dziala
-  const PHASE_RESTART_START = 90;
-  const PHASE_RESTART_CAP = 99;    // rosnie stopniowo, nigdy nie dobija do 100 samo z siebie
-  const PHASE_DONE = 100;          // WYLACZNIE w momencie, gdy /api/health juz odpowiada
+  // Cala droga widoczna z panelu (pobieranie -> weryfikacja SHA-256) jest
+  // mapowana na JEDEN pasek 0-100% - 100% ma znaczyc "pobrano i zweryfikowano,
+  // gotowe do zastosowania przy nastepnym starcie", NIE "nowa wersja juz
+  // dziala" (to ostatnie nie jest juz nawet obserwowalne z tej karty - stosowanie
+  // dzieje sie przy NASTEPNYM uruchomieniu Scyzoryka, poza cyklem zycia tej
+  // strony).
+  const PHASE_DOWNLOAD_MAX = 90;   // pobieranie: 0-90%, proporcjonalnie do realnego postepu
+  const PHASE_VERIFYING = 95;      // suma kontrolna sprawdzana, kopiowanie launchera
+  const PHASE_DONE = 100;          // pobrano + zweryfikowano - znacznik pending-update.json zapisany
 
-  // Po kliknieciu "Zaktualizuj i uruchom ponownie" serwer odpowiada szybko
-  // (202) i sam kontynuuje w tle - postep sledzimy przez osobne, czeste
-  // odpytywanie /api/update/status, az polaczenie zacznie zawodzic (serwer
-  // zostal zatrzymany przez Scyzoryk.exe --apply-update), a potem czekamy na powrot
-  // /api/health, zeby bezpiecznie odswiezyc strone.
-  async function trackProgressUntilServerStops(expectedVersion) {
-    // Audyt v1.1.7: zlapane live na produkcji - stary (osierocony) proces
-    // potrafil PRZETRWAC zabicie i dalej normalnie odpowiadac na
-    // /api/update/status z wlasnym, nigdy-juz-nieaktualizowanym stanem
-    // "installing" w nieskonczonosc (fetchStatus() nigdy nie rzucal, bo
-    // polaczenie realnie nigdy nie padalo) - uzytkownik siedzial na 85% bez
-    // konca, bez zadnego bledu. Prawdziwa aktualizacja konczy sie w
-    // kilkanascie sekund (patrz UpdateApplier.cs), wiec jesli stan siedzi w
-    // "installing"/"restarting" NADAL POLACZONY (nie: polaczenie padlo -
-    // to normalny, oczekiwany przypadek ponizej) dluzej niz
-    // STUCK_INSTALLING_THRESHOLD_MS, traktujemy to jako realne utkniecie i
-    // pokazujemy blad z instrukcja, zamiast czekac w nieskonczonosc.
-    const STUCK_INSTALLING_THRESHOLD_MS = 45000;
-    let installingSinceMs = null;
-
-    for (let i = 0; i < 90; i++) {
+  // Po kliknieciu "Pobierz aktualizacje" serwer odpowiada szybko (202) i sam
+  // kontynuuje w tle - postep sledzimy przez osobne, czeste odpytywanie
+  // /api/update/status, az backend osiagnie stan koncowy ("ready-for-restart"
+  // albo "error"). W odroznieniu od dawnej wersji, polaczenie z serwerem NIGDY
+  // nie ma tu padac - Node nie jest restartowany w tym kroku - wiec chwilowy
+  // blad sieci (fetch) jest tolerowany i po prostu probujemy ponownie przy
+  // kolejnym tyknieciu, zamiast interpretowac go jako "serwer sie zamyka".
+  async function pollUntilReadyOrError(expectedVersion) {
+    for (let i = 0; i < 300; i++) {
       await sleep(PROGRESS_POLL_MS);
       let status;
       try {
         status = await fetchStatus();
       } catch (_) {
-        setProgress('Zamykanie Scyzoryka…', PHASE_INSTALLING);
-        return waitForRestart(expectedVersion);
+        continue;
       }
+      lastStatus = status;
+      renderButtonFromStatus(status);
       if (status.state === 'downloading') {
-        installingSinceMs = null;
         const downloadPercent = status.percent == null ? 0 : status.percent;
         setProgress(`Pobieranie aktualizacji… ${downloadPercent}%`, Math.round((downloadPercent / 100) * PHASE_DOWNLOAD_MAX));
       } else if (status.state === 'ready') {
-        installingSinceMs = null;
-        setProgress('Sprawdzanie pobranego pliku…', PHASE_READY);
-      } else if (status.state === 'installing' || status.state === 'restarting') {
-        if (installingSinceMs === null) installingSinceMs = Date.now();
-        if (Date.now() - installingSinceMs > STUCK_INSTALLING_THRESHOLD_MS) {
-          showError('Aktualizacja utknęła (Scyzoryk cały czas odpowiada na starej wersji). Zamknij tę kartę, poczekaj chwilę i odśwież panel ręcznie - jeśli to nie pomoże, uruchom Scyzoryka ponownie.');
-          resetInstallControls();
-          return;
-        }
-        setProgress('Zamykanie Scyzoryka…', PHASE_CLOSING);
+        setProgress('Sprawdzanie pobranego pliku…', PHASE_VERIFYING);
+      } else if (status.state === 'ready-for-restart') {
+        installStarted = false;
+        showReadyForRestartMessage();
+        return;
       } else if (status.state === 'error') {
         showError(status.error || 'Aktualizacja nie powiodła się.');
         resetInstallControls();
         return;
+      } else {
+        // Nieoczekiwany stan (np. instalacja zostala anulowana/nadpisana z
+        // innej karty) - traktujemy jak blad zamiast czekac w nieskonczonosc.
+        showError('Aktualizacja nie powiodła się.');
+        resetInstallControls();
+        return;
       }
     }
-    return waitForRestart(expectedVersion);
-  }
-
-  async function waitForRestart(expectedVersion) {
-    let percent = PHASE_RESTART_START;
-    setProgress('Instalowanie aktualizacji…', percent);
-    // Audyt v1.1.7: skrocone ze 150 (5 min) - prawdziwy restart konczy sie w
-    // kilkanascie sekund (patrz UpdateApplier.cs), 2 minuty to i tak spory
-    // zapas na wolniejsze komputery/antywirusa, a nie zostawia uzytkownika
-    // czekajacego bez zadnej informacji przez kwadrans.
-    for (let i = 0; i < 60; i++) {
-      await sleep(HEALTH_POLL_MS);
-      try {
-        const res = await fetch('/api/health', { cache: 'no-store' });
-        if (res.ok) {
-          // Audyt v1.0.4, P0-8: samo "/api/health odpowiada 200" nie znaczy
-          // "nowa wersja dziala" - jesli restart przywrocil STARA wersje
-          // (np. instalator po cichu pominal zablokowany plik), health
-          // odpowiada normalnie, tylko ze to wciaz ta sama, stara wersja.
-          // Sprawdzamy pole "version" z odpowiedzi, jesli znamy oczekiwana.
-          let runningVersion = null;
-          try { runningVersion = (await res.json()).version || null; } catch (_) {}
-          if (expectedVersion && runningVersion && runningVersion !== expectedVersion) {
-            showError(`Po ponownym uruchomieniu nadal działa wersja ${runningVersion} (oczekiwano ${expectedVersion}). Sprawdź log aktualizacji i spróbuj ponownie.`);
-            resetInstallControls();
-            return;
-          }
-          // Dopiero TERAZ nowa wersja faktycznie dziala - to jest jedyny
-          // moment, w ktorym pasek pokazuje 100%. Krotka pauza, zeby
-          // uzytkownik zdazyl to zobaczyc przed odswiezeniem strony.
-          setProgress('Gotowe. Wczytuję nową wersję…', PHASE_DONE);
-          await sleep(400);
-          location.reload();
-          return;
-        }
-      } catch (_) {
-        // Serwer jeszcze wstaje - tolerowane, probujemy dalej.
-      }
-      // Rosnie stopniowo w strone PHASE_RESTART_CAP, ale nigdy sama z siebie
-      // nie dobija do 100% - to zarezerwowane wylacznie dla potwierdzonego
-      // powrotu /api/health powyzej.
-      percent = Math.min(PHASE_RESTART_CAP, percent + 1);
-      setProgress('Ponowne uruchamianie…', percent);
-    }
-    showError('Nie udało się potwierdzić ponownego uruchomienia Scyzoryka. Odśwież stronę ręcznie.');
-  }
-
-  function resetInstallControls() {
-    installStarted = false;
-    installBtn.disabled = false;
-    installBtn.removeAttribute('aria-disabled');
-    laterBtn.disabled = false;
-    closeBtn.disabled = false;
+    showError('Pobieranie aktualizacji trwa zbyt długo. Sprawdź połączenie i spróbuj ponownie.');
+    resetInstallControls();
   }
 
   installBtn.addEventListener('click', async () => {
-    if (installStarted) return; // blokada wielokrotnego kliknięcia
+    if (installStarted) return; // odpytywanie juz trwa
+    if (lastStatus && lastStatus.state === 'ready-for-restart') return; // juz pobrano - nic do zrobienia
     installStarted = true;
     installBtn.disabled = true;
     installBtn.setAttribute('aria-disabled', 'true');
-    laterBtn.disabled = true;
-    closeBtn.disabled = true;
     hide(errorBox);
     setProgress('Przygotowywanie aktualizacji…', 0);
     // Zapamietujemy TERAZ, do jakiej wersji dazymy - status.latestVersion moze
-    // sie zmienic (albo zniknac) do czasu, az waitForRestart() go potrzebuje.
+    // sie zmienic (albo zniknac) do czasu zakonczenia pobierania.
     const expectedVersion = lastStatus ? lastStatus.latestVersion : null;
     try {
       const res = await fetch('/api/update/install', { method: 'POST', headers: HEADERS });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się rozpocząć aktualizacji.');
-      await trackProgressUntilServerStops(expectedVersion);
+      await pollUntilReadyOrError(expectedVersion);
     } catch (err) {
       showError(err.message || 'Nie udało się zainstalować aktualizacji.');
       resetInstallControls();

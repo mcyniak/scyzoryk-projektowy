@@ -34,8 +34,9 @@ public static class ArgsParser
                 // dla jakiegokolwiek innego nierozpoznanego wywolania.
                 //
                 // Incydent na zywo (2026-08-06): ten proces to KOPIA Scyzoryk.exe
-                // uruchomiona z katalogu aktualizacji (patrz komentarz przy
-                // buildUpdaterInvocation w lib/updateService.js), wiec
+                // uruchomiona z katalogu aktualizacji (patrz LauncherApp.cs#
+                // ApplyPendingUpdateIfAnyAsync, ktora go spawnuje przy zimnym
+                // starcie na podstawie Updates\pending-update.json), wiec
                 // InstallPaths.FromBaseDirectory() dla NIEGO wskazywalby na zly
                 // katalog - node.exe nigdy nie zostawal zatrzymany (StopOwnedProcesses
                 // szukal go pod zla sciezka), a restart probowal odpalic

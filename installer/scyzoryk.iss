@@ -212,8 +212,10 @@ Filename: "{app}\Scyzoryk.exe"; Parameters: "--stop"; Flags: runhidden; RunOnceI
 
 [Code]
 // Rozpoznaje ciche wywolanie ze Scyzoryk.exe --apply-update (patrz
-// launcher\Scyzoryk.Launcher\UpdateApplier.cs i lib/updateService.js
-// buildUpdaterInvocation): "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+// launcher\Scyzoryk.Launcher\UpdateApplier.cs, spawniete przez
+// launcher\Scyzoryk.Launcher\LauncherApp.cs#ApplyPendingUpdateIfAnyAsync przy
+// zimnym starcie - patrz Updates\pending-update.json pisany przez
+// lib/updateService.js): "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
 // /SCYZORYKUPDATE /DIR=...". W tym trybie: bez kreatora (juz zapewnia
 // /VERYSILENT), bez ponownej rejestracji autostartu, bez
 // ponownego pytania o skrot na pulpicie, bez postinstall-autorun aplikacji -

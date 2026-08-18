@@ -453,4 +453,154 @@ public sealed class LauncherAppTests
         Assert.Equal(ExitCodes.Ok, code);
         Assert.True(logger.HasEntryAt(LogLevel.Error));
     }
+
+    // =====================================================================
+    // Cold-start apply (ApplyPendingUpdateIfAnyAsync, wolane na poczatku
+    // RunEnsureAndReportAsync - patrz plan "Aktualizacja przy zimnym starcie").
+    // SCYZORYK_UPDATE_ROOT jest tu zawsze izolowane do swiezego tymczasowego
+    // katalogu (ten sam wzorzec co InstallPathsTests/UpdateApplierTests) -
+    // testy NIGDY nie moga dotykac prawdziwego %LOCALAPPDATA%\ScyzorykProjektowy\Updates
+    // uzytkownika uruchamiajacego testy. Parallelizacja jest wylaczona dla calego
+    // zestawu testow (AssemblyInfo.cs), wiec mutowanie zmiennej srodowiskowej
+    // procesu jest tu bezpieczne.
+    // =====================================================================
+
+    private static string ScopedUpdateRoot()
+    {
+        var updateRoot = Path.Combine(Path.GetTempPath(), "scyzoryk-pending-update-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(updateRoot);
+        return updateRoot;
+    }
+
+    private static void WritePendingUpdateMarker(string updateRoot, PendingUpdate pending)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(pending);
+        File.WriteAllText(Path.Combine(updateRoot, "pending-update.json"), json);
+    }
+
+    private static string ComputeSha256Hex(string filePath)
+        => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(filePath)));
+
+    [Fact]
+    public async Task ApplyPendingUpdate_NoMarker_NeverCallsRunAndWait()
+    {
+        var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
+        var updateRoot = ScopedUpdateRoot();
+        Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", updateRoot);
+        try
+        {
+            using var dir = new TempInstallDir();
+            var (app, health, process, browser, gate, _, _, _, _) = CreateApp(dir.Paths);
+            health.AlreadyRunningResult = true;
+
+            var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+            Assert.Equal(ExitCodes.Ok, code);
+            Assert.Equal(0, process.RunAndWaitCallCount);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", previousUpdateRoot);
+            try { Directory.Delete(updateRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPendingUpdate_ValidMarker_CallsRunAndWaitWithApplyUpdateArgs_ThenDeletesMarker()
+    {
+        var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
+        var updateRoot = ScopedUpdateRoot();
+        Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", updateRoot);
+        try
+        {
+            var installerPath = Path.Combine(updateRoot, "ScyzorykProjektowy-Setup-1.2.3.exe");
+            File.WriteAllText(installerPath, "# fake installer bytes");
+            var launcherExePath = Path.Combine(updateRoot, "Scyzoryk.exe");
+            File.WriteAllText(launcherExePath, "# fake launcher copy");
+            var pending = new PendingUpdate(launcherExePath, installerPath, ComputeSha256Hex(installerPath), "1.2.3", @"C:\fake-install-dir");
+            WritePendingUpdateMarker(updateRoot, pending);
+
+            using var dir = new TempInstallDir();
+            var (app, health, process, _, _, _, _, _, _) = CreateApp(dir.Paths);
+            health.AlreadyRunningResult = true;
+
+            var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+            Assert.Equal(ExitCodes.Ok, code);
+            Assert.Equal(1, process.RunAndWaitCallCount);
+            Assert.Equal(launcherExePath, process.LastRunAndWaitExePath);
+            Assert.NotNull(process.LastRunAndWaitArgs);
+            Assert.Equal(new[] { "--apply-update", installerPath, "1.2.3", @"C:\fake-install-dir" }, process.LastRunAndWaitArgs);
+            Assert.False(File.Exists(Path.Combine(updateRoot, "pending-update.json")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", previousUpdateRoot);
+            try { Directory.Delete(updateRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPendingUpdate_Sha256Mismatch_SkipsApply_DeletesMarker_NeverCallsRunAndWait()
+    {
+        var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
+        var updateRoot = ScopedUpdateRoot();
+        Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", updateRoot);
+        try
+        {
+            var installerPath = Path.Combine(updateRoot, "ScyzorykProjektowy-Setup-1.2.3.exe");
+            File.WriteAllText(installerPath, "# fake installer bytes, zmienione po zapisaniu znacznika");
+            var launcherExePath = Path.Combine(updateRoot, "Scyzoryk.exe");
+            File.WriteAllText(launcherExePath, "# fake launcher copy");
+            var pending = new PendingUpdate(launcherExePath, installerPath, new string('a', 64), "1.2.3", @"C:\fake-install-dir");
+            WritePendingUpdateMarker(updateRoot, pending);
+
+            using var dir = new TempInstallDir();
+            var (app, health, process, _, _, logger, _, _, _) = CreateApp(dir.Paths);
+            health.AlreadyRunningResult = true;
+
+            var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+            Assert.Equal(ExitCodes.Ok, code);
+            Assert.Equal(0, process.RunAndWaitCallCount);
+            Assert.False(File.Exists(Path.Combine(updateRoot, "pending-update.json")));
+            Assert.True(logger.HasEntryAt(LogLevel.Warning));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", previousUpdateRoot);
+            try { Directory.Delete(updateRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPendingUpdate_MissingInstallerFile_SkipsApply_DeletesMarker_NeverCallsRunAndWait()
+    {
+        var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
+        var updateRoot = ScopedUpdateRoot();
+        Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", updateRoot);
+        try
+        {
+            var installerPath = Path.Combine(updateRoot, "does-not-exist.exe"); // nigdy nie zapisany na dysk
+            var launcherExePath = Path.Combine(updateRoot, "Scyzoryk.exe");
+            File.WriteAllText(launcherExePath, "# fake launcher copy");
+            var pending = new PendingUpdate(launcherExePath, installerPath, new string('a', 64), "1.2.3", @"C:\fake-install-dir");
+            WritePendingUpdateMarker(updateRoot, pending);
+
+            using var dir = new TempInstallDir();
+            var (app, health, process, _, _, _, _, _, _) = CreateApp(dir.Paths);
+            health.AlreadyRunningResult = true;
+
+            var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+            Assert.Equal(ExitCodes.Ok, code);
+            Assert.Equal(0, process.RunAndWaitCallCount);
+            Assert.False(File.Exists(Path.Combine(updateRoot, "pending-update.json")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", previousUpdateRoot);
+            try { Directory.Delete(updateRoot, recursive: true); } catch { }
+        }
+    }
 }

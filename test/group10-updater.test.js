@@ -17,7 +17,7 @@ const {
 } = require('../lib/updateVersion');
 const { assetFileName, findExactAsset, fetchLatestRelease } = require('../lib/updateGithub');
 const { downloadText, downloadToPartialFile, parseSha256File } = require('../lib/updateDownload');
-const { createUpdateService, cleanupUpdatesDir, buildUpdaterInvocation } = require('../lib/updateService');
+const { createUpdateService, cleanupUpdatesDir } = require('../lib/updateService');
 
 function withEnvironment(values, body) {
   const previous = {};
@@ -327,8 +327,10 @@ test('Blokada polaczen innych niz HTTPS (poza wyjatkiem loopback do testow)', as
 
 // =====================================================================
 // Maszyna stanow / orkiestracja (lib/updateService.js) - z prawdziwym
-// mockiem HTTP dla check, ale z WSTRZYKNIETYM spawnUpdaterProcess, zeby
-// zaden test nigdy nie odpalal prawdziwego PowerShella/instalatora.
+// mockiem HTTP dla check. Cold-start apply: ten plik juz nigdy sam nie
+// spawnuje zadnego procesu aktualizatora - po udanym pobraniu+weryfikacji
+// zapisuje tylko Updates/pending-update.json (patrz test nizej), wiec nie
+// ma tu juz niczego do "wstrzykiwania zamiast prawdziwego PowerShella".
 // =====================================================================
 
 function buildFakeRelease(version, installerBytes) {
@@ -342,17 +344,11 @@ function buildFakeRelease(version, installerBytes) {
 
 function makeTestService(overrides = {}) {
   const updateRoot = tempDir('scz-svc-');
-  const spawned = [];
   const deps = {
     fetchLatestRelease: overrides.fetchLatestRelease || (async () => null),
     downloadText: overrides.downloadText,
     downloadToPartialFile: overrides.downloadToPartialFile,
-    parseSha256File: overrides.parseSha256File,
-    spawnUpdaterProcess: (invocation) => { spawned.push(invocation); return null; },
-    // Domyslnie "wystartowal natychmiast" - testy skupione na innych etapach
-    // (pobieranie/weryfikacja) nie powinny czekac na realny fs-check/delay.
-    // Testy tej konkretnej weryfikacji podstawiaja wlasna wersje nizej.
-    confirmUpdaterStarted: overrides.confirmUpdaterStarted || (async () => true)
+    parseSha256File: overrides.parseSha256File
   };
   const service = createUpdateService({
     rootDir: overrides.rootDir || path.join(__dirname, '..'),
@@ -364,7 +360,7 @@ function makeTestService(overrides = {}) {
     log: () => {},
     deps
   });
-  return { service, updateRoot, spawned };
+  return { service, updateRoot };
 }
 
 test('updateService: wykrywa dostepna nowsza wersje i nie pokazuje downgrade', async () => {
@@ -391,7 +387,7 @@ test('updateService: lokalna wersja rowna albo wyzsza od wydania - stan up-to-da
   assert.equal(status.available, false);
 });
 
-test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready" -> "installing" (spawn TYLKO zarejestrowany, nie odpalony naprawde)', async () => {
+test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready-for-restart" (znacznik pending-update.json zapisany, NIC nie jest spawnowane/zabijane)', async () => {
   const bytes = crypto.randomBytes(20000);
   const hash = sha256Hex(bytes);
   const release = buildFakeRelease('9.9.9', bytes);
@@ -399,7 +395,7 @@ test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready" -> "insta
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
 
-  const { service, updateRoot, spawned } = makeTestService({
+  const { service, updateRoot } = makeTestService({
     rootDir,
     currentVersion: '1.0.0',
     fetchLatestRelease: async () => release,
@@ -420,154 +416,32 @@ test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready" -> "insta
   await install.flowPromise;
 
   const status = service.getStatusPayload();
-  assert.equal(status.state, 'installing');
+  assert.equal(status.state, 'ready-for-restart');
   assert.equal(status.percent, 100);
-  assert.equal(spawned.length, 1);
-  // Kopia juz zainstalowanego Scyzoryk.exe (nie PowerShell) - patrz
-  // buildUpdaterInvocation() w lib/updateService.js.
-  assert.match(spawned[0].exe, /Scyzoryk\.exe$/i);
-  assert.equal(spawned[0].args[0], '--apply-update');
-  assert.ok(spawned[0].args.includes('9.9.9'));
-  // Incydent na zywo (2026-08-06): 4. argument musi byc PRAWDZIWY katalog
-  // instalacji (rootDir), nie katalog aktualizacji, w ktorym fizycznie lezy
-  // wlasnie spawnowana kopia Scyzoryk.exe (launcherExePath powyzej) - bez
-  // tego C#-owy InstallPaths.FromBaseDirectory() dla tej kopii wskazywalby
-  // na zly katalog i node.exe nigdy nie zostawal zatrzymany.
-  assert.equal(spawned[0].args[3], rootDir);
-  assert.notEqual(spawned[0].args[3], path.dirname(spawned[0].exe), 'katalog instalacji NIE moze byc tym samym katalogiem co kopia launchera uzyta do aktualizacji');
 
   const installedExe = path.join(updateRoot, '9.9.9', release.installerAsset.name);
   assert.equal(fs.existsSync(installedExe), true);
   assert.equal(fs.readFileSync(installedExe).equals(bytes), true);
+
+  // Znacznik dla launcher/Scyzoryk.Launcher/LauncherApp.cs
+  // (ApplyPendingUpdateIfAnyAsync) - odczytywany i stosowany dopiero przy
+  // nastepnym zimnym starcie Scyzoryka, nigdy tutaj.
+  const pendingPath = path.join(updateRoot, 'pending-update.json');
+  assert.equal(fs.existsSync(pendingPath), true);
+  const pending = JSON.parse(fs.readFileSync(pendingPath, 'utf8'));
+  assert.match(pending.launcherExePath, /Scyzoryk\.exe$/i);
+  assert.equal(fs.existsSync(pending.launcherExePath), true);
+  assert.equal(pending.installerPath, installedExe);
+  assert.equal(pending.installerSha256, hash);
+  assert.equal(pending.expectedVersion, '9.9.9');
+  // Incydent na zywo (2026-08-06, dawny buildUpdaterInvocation): musi byc
+  // PRAWDZIWY katalog instalacji (rootDir), nie katalog aktualizacji, w
+  // ktorym fizycznie lezy skopiowany Scyzoryk.exe (launcherExePath) - ten
+  // sam wymog przenosi sie teraz na pending-update.json.installDir.
+  assert.equal(pending.installDir, rootDir);
+  assert.notEqual(pending.installDir, path.dirname(pending.launcherExePath), 'katalog instalacji NIE moze byc tym samym katalogiem co kopia launchera uzyta do aktualizacji');
+
   fs.rmSync(rootDir, { recursive: true, force: true });
-});
-
-test('buildUpdaterInvocation: 4. argument to installDir (prawdziwy katalog instalacji), nie katalog kopii launchera (incydent na zywo 2026-08-06)', () => {
-  // Izolacja SCYZORYK_DATA_ROOT - patrz uzasadnienie przy "5. argument" ponizej
-  // (audyt 2026-08-17, readResidentTrayPid).
-  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
-  const dataRoot = tempDir('scz-invocation-installdir-');
-  process.env.SCYZORYK_DATA_ROOT = dataRoot;
-  try {
-    const invocation = buildUpdaterInvocation({
-      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
-      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
-      expectedVersion: '1.2.0',
-      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
-    });
-    assert.deepEqual(invocation.args, [
-      '--apply-update',
-      'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-      '1.2.0',
-      'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy',
-      String(process.pid)
-    ]);
-  } finally {
-    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
-    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
-    fs.rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('buildUpdaterInvocation: 5. argument to wlasny PID (audyt 2026-08-12) - UpdateApplier.cs dobija po nim proces-nadzorce, gdyby StopOwnedProcesses go pominal', () => {
-  // Izolacja SCYZORYK_DATA_ROOT (pusty tymczasowy katalog, bez resident-tray.pid) -
-  // bez tego test cicho zalezalby od tego, czy na maszynie uruchamiajacej akurat
-  // istnieje PRAWDZIWY plik PID rezydentnej ikony (patrz readResidentTrayPid, audyt
-  // 2026-08-17) - wtedy args.length niedeterministycznie wynosiloby 5 albo 6.
-  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
-  const dataRoot = tempDir('scz-invocation-no-tray-');
-  process.env.SCYZORYK_DATA_ROOT = dataRoot;
-  try {
-    const invocation = buildUpdaterInvocation({
-      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
-      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
-      expectedVersion: '1.2.0',
-      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
-    });
-    assert.equal(invocation.args.length, 5);
-    assert.equal(invocation.args[4], String(process.pid));
-    assert.match(invocation.args[4], /^\d+$/);
-  } finally {
-    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
-    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
-    fs.rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-// Audyt 2026-08-17 (zlapane live na produkcji, dwie proby aktualizacji pod rzad,
-// obie exitCode 5 - "Scyzoryk.exe wciaz w uzyciu"): StopResidentTrayProcesses po
-// stronie C# zglosil ZERO trafien mimo ze rezydentna ikona realnie zyla i blokowala
-// plik. TrayIconHost.cs zapisuje wlasny PID do pliku (InstallPaths.ResidentTrayPidFilePath) -
-// buildUpdaterInvocation musi go odczytac i dopisac jako 6. argument.
-test('buildUpdaterInvocation: 6. argument to PID rezydentnej ikony w zasobniku, jesli plik istnieje', () => {
-  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
-  const dataRoot = tempDir('scz-invocation-tray-');
-  process.env.SCYZORYK_DATA_ROOT = dataRoot;
-  try {
-    const runtimeDir = path.join(dataRoot, 'runtime');
-    fs.mkdirSync(runtimeDir, { recursive: true });
-    fs.writeFileSync(path.join(runtimeDir, 'resident-tray.pid'), '16204');
-
-    const invocation = buildUpdaterInvocation({
-      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
-      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
-      expectedVersion: '1.2.0',
-      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
-    });
-    assert.equal(invocation.args.length, 6);
-    assert.equal(invocation.args[5], '16204');
-  } finally {
-    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
-    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
-    fs.rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('buildUpdaterInvocation: brak pliku resident-tray.pid - 6. argument nie jest dopisywany (wstecznie kompatybilne)', () => {
-  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
-  const dataRoot = tempDir('scz-invocation-no-tray-file-');
-  process.env.SCYZORYK_DATA_ROOT = dataRoot;
-  try {
-    const invocation = buildUpdaterInvocation({
-      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
-      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
-      expectedVersion: '1.2.0',
-      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
-    });
-    assert.equal(invocation.args.length, 5);
-  } finally {
-    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
-    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
-    fs.rmSync(dataRoot, { recursive: true, force: true });
-  }
-});
-
-test('buildUpdaterInvocation: nieczytelna/zla tresc resident-tray.pid (np. "abc") jest ignorowana jak brak pliku', () => {
-  const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
-  const dataRoot = tempDir('scz-invocation-bad-tray-');
-  process.env.SCYZORYK_DATA_ROOT = dataRoot;
-  try {
-    const runtimeDir = path.join(dataRoot, 'runtime');
-    fs.mkdirSync(runtimeDir, { recursive: true });
-    fs.writeFileSync(path.join(runtimeDir, 'resident-tray.pid'), 'abc');
-
-    const invocation = buildUpdaterInvocation({
-      launcherExePath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\Scyzoryk.exe',
-      installerPath: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates\\1.2.0\\ScyzorykProjektowy-Update-1.2.0.exe',
-      updateRoot: 'C:\\Users\\x\\AppData\\Local\\ScyzorykProjektowy\\Updates',
-      expectedVersion: '1.2.0',
-      installDir: 'C:\\Users\\x\\AppData\\Local\\Programs\\ScyzorykProjektowy'
-    });
-    assert.equal(invocation.args.length, 5);
-  } finally {
-    if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
-    else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
-    fs.rmSync(dataRoot, { recursive: true, force: true });
-  }
 });
 
 test('updateService: niezgodna suma SHA-256 - instalator jest odrzucony, nic nie jest odpalane', async () => {
@@ -577,7 +451,7 @@ test('updateService: niezgodna suma SHA-256 - instalator jest odrzucony, nic nie
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
 
-  const { service, spawned } = makeTestService({
+  const { service, updateRoot } = makeTestService({
     rootDir,
     currentVersion: '1.0.0',
     fetchLatestRelease: async () => release,
@@ -597,7 +471,7 @@ test('updateService: niezgodna suma SHA-256 - instalator jest odrzucony, nic nie
   const status = service.getStatusPayload();
   assert.equal(status.state, 'error');
   assert.match(status.error, /suma kontrolna/i);
-  assert.equal(spawned.length, 0);
+  assert.equal(fs.existsSync(path.join(updateRoot, 'pending-update.json')), false);
   fs.rmSync(rootDir, { recursive: true, force: true });
 });
 
@@ -704,7 +578,7 @@ test('updateService: brak blokady druku (albo osierocony lock z martwym PID) nie
     const install = service.startInstall();
     assert.equal(install.started, true);
     await install.flowPromise;
-    assert.equal(service.getStatusPayload().state, 'installing');
+    assert.equal(service.getStatusPayload().state, 'ready-for-restart');
     fs.rmSync(rootDir, { recursive: true, force: true });
   } finally {
     if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
@@ -749,7 +623,7 @@ test('updateService: restart po nieudanej/przerwanej instalacji pokazuje blad za
     updateRoot,
     port: 3000,
     log: () => {},
-    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+    deps: { fetchLatestRelease: async () => null }
   });
   const status = service.getStatusPayload();
   assert.equal(status.state, 'error');
@@ -774,7 +648,7 @@ test('updateService: restart PO udanej instalacji rozpoznaje sukces, mimo ze ost
     updateRoot,
     port: 3000,
     log: () => {},
-    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+    deps: { fetchLatestRelease: async () => null }
   });
   const status = service.getStatusPayload();
   assert.equal(status.state, 'idle');
@@ -799,7 +673,7 @@ test('updateService: restart, gdy ostatni stan to zwykle "available" (nigdy nie 
     updateRoot,
     port: 3000,
     log: () => {},
-    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+    deps: { fetchLatestRelease: async () => null }
   });
   const status = service.getStatusPayload();
   assert.equal(status.state, 'available');
@@ -807,103 +681,59 @@ test('updateService: restart, gdy ostatni stan to zwykle "available" (nigdy nie 
   fs.rmSync(updateRoot, { recursive: true, force: true });
 });
 
-// Audyt v1.0.4/P0-8, kontynuacja (zlapane REALNIE na produkcji 2026-08-04,
-// trzeci raz): spawn() z {detached:true} na Windows zawsze zglasza kod
-// wyjscia 0 w zdarzeniu 'exit', niezaleznie od realnego wyniku procesu -
-// zweryfikowane bezposrednio testem na tej samej maszynie (skrypt kończący
-// sie kodem 7 byl widziany jako kod 0). Nasluch na 'exit' z ta logika NIGDY
-// nie mogl wiec wykryc realnej awarii na Windows - zastapiony sprawdzeniem
-// nowego pliku logu na dysku (deps.confirmUpdaterStarted).
-function makeInstallableService({ confirmUpdaterStarted, spawnUpdaterProcess }) {
-  const bytes = crypto.randomBytes(2000);
-  const hash = sha256Hex(bytes);
-  const release = buildFakeRelease('5.0.0', bytes);
-  const rootDir = tempDir('scz-svc-root-confirm-');
-  fs.mkdirSync(rootDir, { recursive: true });
-  fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
-  const updateRoot = tempDir('scz-svc-root-confirm2-');
-
+// Cold-start apply: reconciliacja przy starcie musi rozpoznawac "ready-for-restart"
+// dokladnie tak samo jak wczesniej rozpoznawala "installing"/"restarting" (patrz
+// INSTALL_ACTIVE_STATES w lib/updateService.js) - stan zapisany na dysku PRZED
+// restartem Node (ktory zawsze towarzyszy zastosowaniu aktualizacji przez
+// LauncherApp.ApplyPendingUpdateIfAnyAsync).
+test('updateService: restart z cached "ready-for-restart" PO udanym zimnym-startowym zastosowaniu aktualizacji rozpoznaje sukces (wersja juz dogonila)', () => {
+  const updateRoot = tempDir('scz-svc-restart-ready-ok-');
+  fs.writeFileSync(path.join(updateRoot, 'state.json'), JSON.stringify({
+    enabled: true,
+    state: 'ready-for-restart',
+    available: true,
+    latestVersion: '2.0.0',
+    lastCheckedAt: '2026-01-01T00:00:00Z'
+  }));
   const service = createUpdateService({
-    rootDir,
-    getInstalledVersion: () => ({ version: '1.0.0' }),
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '2.0.0' }), // dogonila latestVersion - aktualizacja przy zimnym starcie sie udala
     repo: 'o/r',
     updateRoot,
+    port: 3000,
     log: () => {},
-    deps: {
-      fetchLatestRelease: async () => release,
-      downloadText: async () => `${hash}  ${release.installerAsset.name}`,
-      parseSha256File: (text) => text.split(/\s+/)[0],
-      downloadToPartialFile: async (url, dest, opts) => {
-        opts.onProgress({ downloadedBytes: bytes.length, totalBytes: bytes.length });
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(`${dest}.partial`, bytes);
-        return { bytes: bytes.length, sha256: hash, partialPath: `${dest}.partial` };
-      },
-      spawnUpdaterProcess: spawnUpdaterProcess || (() => null),
-      confirmUpdaterStarted
-    }
+    deps: { fetchLatestRelease: async () => null }
   });
-  return { service, rootDir, updateRoot };
-}
+  const status = service.getStatusPayload();
+  assert.equal(status.state, 'idle');
+  assert.equal(status.available, false);
+  assert.equal(status.error, null);
+  fs.rmSync(updateRoot, { recursive: true, force: true });
+});
 
-test('updateService: proces aktualizatora "startuje" (spawn bez bledu), ale nigdy nie tworzy logu - wykryte jako blad', async () => {
-  // Kod wyjscia 0 z detached procesu (patrz komentarz wyzej) wyglada
-  // identycznie na "sukces" i na "padl natychmiast" - dlatego confirmUpdaterStarted
-  // (a nie 'exit') jest tu jedynym wiarygodnym sygnalem.
-  const { service, rootDir, updateRoot } = makeInstallableService({
-    confirmUpdaterStarted: async () => false // brak nowego logu = nie ruszylo
+test('updateService: restart z cached "ready-for-restart", ale wersja NADAL stara (zastosowanie przy zimnym starcie sie nie udalo/zostalo pominiete) - pokazuje blad', () => {
+  const updateRoot = tempDir('scz-svc-restart-ready-fail-');
+  fs.writeFileSync(path.join(updateRoot, 'state.json'), JSON.stringify({
+    enabled: true,
+    state: 'ready-for-restart',
+    available: true,
+    latestVersion: '2.0.0',
+    lastCheckedAt: '2026-01-01T00:00:00Z'
+  }));
+  const service = createUpdateService({
+    rootDir: path.join(__dirname, '..'),
+    getInstalledVersion: () => ({ version: '1.0.0' }), // nadal stara
+    repo: 'o/r',
+    updateRoot,
+    port: 3000,
+    log: () => {},
+    deps: { fetchLatestRelease: async () => null }
   });
-
-  await service.checkForUpdate();
-  const install = service.startInstall();
-  await install.flowPromise;
-
   const status = service.getStatusPayload();
   assert.equal(status.state, 'error');
-  assert.match(status.error, /nie uruchomil sie/);
-  fs.rmSync(rootDir, { recursive: true, force: true });
+  assert.match(status.error, /2\.0\.0/);
+  assert.match(status.error, /1\.0\.0/);
   fs.rmSync(updateRoot, { recursive: true, force: true });
-});
-
-test('updateService: potwierdzony start aktualizatora (log sie pojawil) NIE generuje falszywego bledu', async () => {
-  const { service, rootDir, updateRoot } = makeInstallableService({
-    confirmUpdaterStarted: async () => true // log sie pojawil - naprawde ruszylo
-  });
-
-  await service.checkForUpdate();
-  const install = service.startInstall();
-  await install.flowPromise;
-
-  const status = service.getStatusPayload();
-  assert.equal(status.state, 'installing');
-  assert.equal(status.error, null);
-  fs.rmSync(rootDir, { recursive: true, force: true });
-  fs.rmSync(updateRoot, { recursive: true, force: true });
-});
-
-test('updateService: realConfirmUpdaterStarted (implementacja produkcyjna) rozpoznaje nowy log, a stary/brakujacy log odrzuca', async () => {
-  const { realConfirmUpdaterStarted } = require('../lib/updateService');
-  const dir = tempDir('scz-confirm-real-');
-  const logsDir = path.join(dir, 'logs');
-  fs.mkdirSync(logsDir, { recursive: true });
-
-  // Brak jakiegokolwiek logu.
-  assert.equal(await realConfirmUpdaterStarted({ updateRoot: dir, sinceMs: Date.now(), waitMs: 10 }), false);
-
-  // Stary log (starszy niz "sinceMs") - to np. log z POPRZEDNIEJ, juz
-  // zakonczonej aktualizacji, nie dowod ze TA aktualizacja ruszyla.
-  const staleLogPath = path.join(logsDir, 'update-stale.log');
-  fs.writeFileSync(staleLogPath, 'stary log');
-  const sinceMs = Date.now() + 200;
-  assert.equal(await realConfirmUpdaterStarted({ updateRoot: dir, sinceMs, waitMs: 10 }), false);
-
-  // Nowy log (mtime >= sinceMs) - to jest realny dowod, ze proces
-  // aktualizatora zaczal dzialac.
-  await new Promise(r => setTimeout(r, 250));
-  fs.writeFileSync(path.join(logsDir, 'update-fresh.log'), 'nowy log');
-  assert.equal(await realConfirmUpdaterStarted({ updateRoot: dir, sinceMs, waitMs: 10 }), true);
-
-  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('cleanupUpdatesDir: zachowuje najwyzej 2 najnowsze wersje i usuwa pliki .partial', () => {
@@ -941,7 +771,7 @@ test('acknowledgeLastResult: nieoznaczony wynik pokazuje lastResultAcknowledged=
     repo: 'o/r',
     updateRoot,
     log: () => {},
-    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+    deps: { fetchLatestRelease: async () => null }
   });
 
   const before = service.getStatusPayload();
@@ -969,7 +799,7 @@ test('acknowledgeLastResult: potwierdzenie przetrwa restart procesu (ten sam wyn
     repo: 'o/r',
     updateRoot,
     log: () => {},
-    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+    deps: { fetchLatestRelease: async () => null }
   });
 
   const first = makeService();
@@ -1002,7 +832,7 @@ test('acknowledgeLastResult: potwierdzenie przetrwa restart TAKZE gdy sprawdzani
     updateRoot,
     enabled: false,
     log: () => {},
-    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+    deps: { fetchLatestRelease: async () => null }
   });
 
   const first = makeService();
@@ -1028,7 +858,7 @@ test('acknowledgeLastResult: NOWY wynik (kolejna proba aktualizacji) znowu wymag
     repo: 'o/r',
     updateRoot,
     log: () => {},
-    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+    deps: { fetchLatestRelease: async () => null }
   });
 
   const first = makeService();
@@ -1056,7 +886,7 @@ test('acknowledgeLastResult: brak lastResult - wywolanie jest bezpiecznym no-ope
     repo: 'o/r',
     updateRoot,
     log: () => {},
-    deps: { fetchLatestRelease: async () => null, spawnUpdaterProcess: () => null }
+    deps: { fetchLatestRelease: async () => null }
   });
   const result = service.acknowledgeLastResult();
   assert.equal(result.ok, true);
@@ -1218,20 +1048,32 @@ test('gotowy instalator nie ma juz bramki prywatnosci repo (nie ma zadnego sekre
   assert.doesNotMatch(workflow, /OCR_DOCAI/);
 });
 
-test('update-ui.js: pasek nie reloaduje strony, jesli po restarcie dziala inna wersja niz oczekiwana (audyt v1.0.4, P0-8)', async () => {
+// Cold-start apply: update-ui.js juz nigdy sam nie "czeka az polaczenie
+// padnie" ani nie weryfikuje wersji po restarcie z poziomu przegladarki (ten
+// caly dawny mechanizm - trackProgressUntilServerStops/waitForRestart -
+// zakladal, ze klikniecie "zainstaluj" zabija/restartuje serwer NA ZYWO, co
+// juz nigdy sie nie dzieje: LauncherApp.ApplyPendingUpdateIfAnyAsync stosuje
+// aktualizacje dopiero przy nastepnym zimnym starcie, poza cyklem zycia tej
+// karty). Rownowazna weryfikacja "czy po restarcie faktycznie dziala
+// oczekiwana wersja" zyje teraz po stronie C# (UpdateApplier.cs +
+// UpdateApplierTests.cs), nie tutaj.
+test('update-ui.js: pobieranie NIGDY nie blokuje zamkniecia modala (nieniszczace - Node nie jest restartowany w tym kroku)', async () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'update-ui.js'), 'utf8');
-  // Wczesniej jedynym kryterium sukcesu bylo "res.ok" z /api/health - nie
-  // sprawdzalo, KTORA wersja faktycznie odpowiedziala. Restart mogl przywrocic
-  // stara wersje (np. instalator po cichu pominal zablokowany plik), a pasek
-  // i tak pokazywalby 100% i przeladowywal strone.
-  assert.match(source, /async function waitForRestart\(expectedVersion\)/);
-  assert.match(source, /runningVersion = \(await res\.json\(\)\)\.version/);
-  assert.match(source, /expectedVersion && runningVersion && runningVersion !== expectedVersion/);
-  const waitForRestartFn = source.match(/async function waitForRestart\(expectedVersion\) \{[\s\S]*?\n  \}/);
-  assert.ok(waitForRestartFn, 'nie znaleziono waitForRestart');
-  assert.match(waitForRestartFn[0], /resetInstallControls\(\);\s*\n\s*return;/);
+  assert.doesNotMatch(source, /async function waitForRestart/);
+  assert.doesNotMatch(source, /async function trackProgressUntilServerStops/);
+  assert.doesNotMatch(source, /location\.reload/);
+  const closeModalFn = source.match(/function closeModal\(\) \{[\s\S]*?\n  \}/);
+  assert.ok(closeModalFn, 'nie znaleziono closeModal');
+  assert.doesNotMatch(closeModalFn[0], /if \(installStarted\) return;/);
+});
+
+test('update-ui.js: po pobraniu odpytuje status az do stanu koncowego "ready-for-restart"/"error", z zapamietana oczekiwana wersja', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'update-ui.js'), 'utf8');
+  assert.match(source, /async function pollUntilReadyOrError\(expectedVersion\)/);
+  assert.match(source, /status\.state === 'ready-for-restart'/);
+  assert.match(source, /showReadyForRestartMessage/);
   // expectedVersion musi byc przekazywane od momentu kliknięcia "zainstaluj",
   // nie zgadywane pozniej.
   assert.match(source, /const expectedVersion = lastStatus \? lastStatus\.latestVersion : null;/);
-  assert.match(source, /trackProgressUntilServerStops\(expectedVersion\)/);
+  assert.match(source, /pollUntilReadyOrError\(expectedVersion\)/);
 });
