@@ -969,18 +969,10 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     if (!templateFiles.length) return res.status(400).json({ ok: false, message: 'Dodaj co najmniej jeden szablon Word DOCX.' });
     for (const t of templateFiles) validateOfficeFile(t, ['.docx']);
 
-    // Podfolder bezposrednio nad kazdym plikiem (np. "VARMERO VPM 9020"),
-    // wysylany przez klienta jako JSON tablica rownolegla do pola 'templates'
-    // (kolejnosc plikow w tym polu jest zachowana przez multer). Pole
-    // 'template' (pojedynczy, starszy sposob uploadu) nie ma podfolderow.
-    let relFoldersByTemplatesField = [];
-    try { relFoldersByTemplatesField = JSON.parse(req.body?.templateRelFolders || '[]'); } catch (_) { relFoldersByTemplatesField = []; }
     const singleTemplateFiles = req.files?.template || [];
     const multiTemplateFiles = req.files?.templates || [];
-    const templateInfos = [
-      ...singleTemplateFiles.map(t => ({ path: t.path, originalName: decodeOriginalName(t.originalname), relFolder: '' })),
-      ...multiTemplateFiles.map((t, i) => ({ path: t.path, originalName: decodeOriginalName(t.originalname), relFolder: String(relFoldersByTemplatesField[i] || '') }))
-    ];
+    const templateInfos = [...singleTemplateFiles, ...multiTemplateFiles]
+      .map(t => ({ path: t.path, originalName: decodeOriginalName(t.originalname) }));
 
     const sheetNames = (await loadExcelWorkbook(excel.path)).worksheets.map(sheet => sheet.name);
     // Niektore szablony (np. Slesin) maja na stale podpiety przez Word

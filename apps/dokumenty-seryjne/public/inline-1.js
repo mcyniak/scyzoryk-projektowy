@@ -132,18 +132,8 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       fd.append('excel', excel);
 
       const templateFiles = [...$('templateFile').files].filter(f => /\.docx$/i.test(f.name));
-      if (!templateFiles.length) return status($('uploadStatus'), 'Dodaj najpierw folder z szablonami Word.', 'err');
-      // Podfolder bezposrednio nad plikiem (np. "VARMERO VPM 9020") - dla
-      // szablonow lezacych wprost w wybranym folderze (jak dzis Kolektory)
-      // zostaje pusty, bo tam wariant siedzi w samej nazwie pliku (sufiks
-      // _250/_300/_400), nie w strukturze folderow.
-      const templateRelFolders = templateFiles.map(f => {
-        const rel = f.webkitRelativePath || '';
-        const parts = rel.split('/').filter(Boolean);
-        return parts.length >= 3 ? parts[parts.length - 2] : '';
-      });
+      if (!templateFiles.length) return status($('uploadStatus'), 'Dodaj pliki szablonów Word.', 'err');
       for (const f of templateFiles) fd.append('templates', f);
-      fd.append('templateRelFolders', JSON.stringify(templateRelFolders));
 
       setBusy(true); status($('uploadStatus'), 'Wczytuję pliki i sprawdzam tabelę...', 'warn');
       try {
