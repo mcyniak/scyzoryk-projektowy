@@ -1,4 +1,4 @@
-// Stempel "DOKUMENTACJA POWYKONAWCZA" w lewym gornym rogu kazdej strony -
+// Stempel "DOKUMENTACJA POWYKONAWCZA" w prawym gornym rogu kazdej strony -
 // uzywane tylko gdy uzytkownik zaznaczy "Drukuj jako dokumentacje
 // powykonawcza" w drukarce projektow. Logika obliczania pozycji z
 // uwzglednieniem obrotu strony jest skopiowana/zaadaptowana z
@@ -51,7 +51,7 @@ function drawStampOnPage(page, font) {
   const visual = visualPageSize(page);
   const stampWidth = Math.max(8, visual.width * STAMP_WIDTH_PCT / 100);
   const stampHeight = Math.max(8, visual.height * STAMP_HEIGHT_PCT / 100);
-  const visualBoxX = STAMP_MARGIN_PT;
+  const visualBoxX = visual.width - STAMP_MARGIN_PT - stampWidth;
   const visualBoxY = visual.height - STAMP_MARGIN_PT - stampHeight;
 
   const fontSize = Math.max(6, Math.min(stampHeight / STAMP_LINES.length * 0.6, stampWidth / 9, MAX_FONT_SIZE));

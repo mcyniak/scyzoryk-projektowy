@@ -59,7 +59,25 @@ AppPublisher={#MyAppPublisher}
 ; Instalacja per-uzytkownik, bez wymogu uprawnien administratora - to lokalne
 ; narzedzie biurowe, nie ma powodu wymagac podniesionych uprawnien do instalacji
 ; (patrz CLAUDE.md: "brak logowania/rol/PIN-ow", to samo podejscie "jak najprosciej").
-DefaultDirName={localappdata}\Programs\ScyzorykProjektowy
+;
+; Audyt 2026-08-18 (zlapane live u drugiej osoby, real bug): dawne
+; "{localappdata}\Programs\ScyzorykProjektowy" bylo wystarczajaco dlugie, zeby
+; przy dluzszej nazwie profilu Windows (np. "j.bandziarowska" - nazwiska
+; dwuczlonowe/z inicjalem) pojedynczy plik glebko zagniezdzony w bundlowanym
+; Chromium Playwrighta (apps\formularze-ecodan\node_modules\playwright-core\
+; .local-browsers\chromium_headless_shell-*\...\PrivacySandboxAttestationsPreloaded\
+; privacy-sandbox-attestations.dat) przekroczyl legacy Windows MAX_PATH (260
+; znakow) - instalator padal na "Blad podczas wykonywania MoveFile; kod 3.".
+; chromium_headless_shell jest NAPRAWDE potrzebny (Playwright uzywa go
+; domyslnie dla headless:true - sprawdzone empirycznie, --no-shell przy
+; instalacji browserow psuje realne uruchomienie), wiec jedynym bezpiecznym
+; rozwiazaniem jest skrocic sama sciezke instalacji. NIE "{localappdata}\Scyzoryk"
+; (zajete - patrz USER_CONFIG_PATH w geminiFieldEngine.js, klucz API Gemini) i
+; NIE "{localappdata}\ScyzorykProjektowy" (zajete - katalog danych roboczych,
+; patrz lib/appPaths.js getDataRoot). AppId ponizej jest STALY, wiec ta zmiana
+; NIE dotyka juz zainstalowanych kopii (Inno pamieta ich katalog z rejestru,
+; niezaleznie od DefaultDirName) - wplywa tylko na NOWE instalacje od teraz.
+DefaultDirName={localappdata}\ScyzorykApp
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest

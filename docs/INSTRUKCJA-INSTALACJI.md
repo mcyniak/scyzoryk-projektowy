@@ -63,7 +63,7 @@ Finalny artefakt jest publikowany dopiero po zainstalowaniu go na świeżym runn
 Domyślny folder programu:
 
 ```text
-%LOCALAPPDATA%\Programs\ScyzorykProjektowy
+%LOCALAPPDATA%\ScyzorykApp
 ```
 
 Dane użytkownika, ustawienia, wzory i pliki robocze są przechowywane oddzielnie:
