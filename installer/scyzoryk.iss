@@ -83,6 +83,23 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 DisableWelcomePage=no
+; Zlapane live (2026-08-18, prawdziwa aktualizacja na produkcyjnej maszynie):
+; bez tych dwoch dyrektyw Inno Setup 6 DOMYSLNIE samo probuje uzyc Windows
+; Restart Managera do zamkniecia i, po instalacji, PONOWNEGO URUCHOMIENIA
+; procesow blokujacych podmieniane pliki - rownolegle i bez koordynacji z
+; wlasna logika tego projektu (ProcessManager.StopOwnedProcesses/
+; StopResidentTrayProcesses, UpdateApplier.cs). W realnym logu z tego
+; incydentu widac dokladnie ten wyscig: miedzy pierwsza a druga proba
+; instalatora pojawilo sie 12 zupelnie nowych PID-ow node.exe i ta sama
+; ikonka w zasobniku "ozyla" ponownie mimo wczesniejszego jawnego zabicia -
+; cos (Inno/RestartManager) samo je odpalilo z powrotem w trakcie instalacji,
+; blokujac plik na nowo, zanim druga proba zdazyla wystartowac - kod wyjscia
+; 5 ("plik w uzyciu") obiema probami mimo poprawnie dzialajacego,
+; przetestowanego kodu zabijania procesow. Wlasna logika tego projektu jest
+; jedynym zamierzonym mechanizmem zamykania/restartu - Inno nie powinno
+; nigdy probowac robic tego samodzielnie.
+CloseApplications=no
+RestartApplications=no
 OutputDir={#OutputDir}
 #if BuildVariant == "full"
 OutputBaseFilename=ScyzorykProjektowy-Setup-{#AppVersion}
