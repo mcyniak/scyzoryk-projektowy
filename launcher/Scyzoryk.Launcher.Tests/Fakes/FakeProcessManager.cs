@@ -15,10 +15,10 @@ public sealed class FakeProcessManager : IProcessManager
     public int StartServerCallCount { get; private set; }
     public string? LastInstallDir { get; private set; }
     public string? LastNodeExePath { get; private set; }
-    public int RunAndWaitCallCount { get; private set; }
-    public string? LastRunAndWaitExePath { get; private set; }
-    public IReadOnlyList<string>? LastRunAndWaitArgs { get; private set; }
-    public int RunAndWaitExitCodeToReturn { get; set; } = 0;
+    public int StartDetachedCallCount { get; private set; }
+    public string? LastStartDetachedExePath { get; private set; }
+    public IReadOnlyList<string>? LastStartDetachedArgs { get; private set; }
+    public SpawnResult StartDetachedResultToReturn { get; set; } = SpawnResult.Ok(5678);
     public int StopOwnedProcessesCallCount { get; private set; }
     public string? LastExpectedNodeExeFullPath { get; private set; }
     public int StopResidentTrayProcessesCallCount { get; private set; }
@@ -40,12 +40,12 @@ public sealed class FakeProcessManager : IProcessManager
         return SpawnResultToReturn;
     }
 
-    public Task<int> RunAndWaitAsync(string exePath, IReadOnlyList<string> args)
+    public SpawnResult StartDetached(string exePath, IReadOnlyList<string> args)
     {
-        RunAndWaitCallCount++;
-        LastRunAndWaitExePath = exePath;
-        LastRunAndWaitArgs = args;
-        return Task.FromResult(RunAndWaitExitCodeToReturn);
+        StartDetachedCallCount++;
+        LastStartDetachedExePath = exePath;
+        LastStartDetachedArgs = args;
+        return StartDetachedResultToReturn;
     }
 
     public IReadOnlyList<int> StopOwnedProcesses(string expectedNodeExeFullPath)

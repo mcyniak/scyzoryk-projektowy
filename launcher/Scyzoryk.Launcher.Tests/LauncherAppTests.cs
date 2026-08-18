@@ -482,7 +482,7 @@ public sealed class LauncherAppTests
         => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(filePath)));
 
     [Fact]
-    public async Task ApplyPendingUpdate_NoMarker_NeverCallsRunAndWait()
+    public async Task ApplyPendingUpdate_NoMarker_NeverCallsStartDetached_NormalStartupProceeds()
     {
         var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
         var updateRoot = ScopedUpdateRoot();
@@ -496,7 +496,8 @@ public sealed class LauncherAppTests
             var code = await app.RunAsync(Args(LauncherMode.Normal));
 
             Assert.Equal(ExitCodes.Ok, code);
-            Assert.Equal(0, process.RunAndWaitCallCount);
+            Assert.Equal(0, process.StartDetachedCallCount);
+            Assert.Equal(1, health.ProbeAlreadyRunningCallCount); // normalny start dalej sie wykonal
         }
         finally
         {
@@ -505,8 +506,17 @@ public sealed class LauncherAppTests
         }
     }
 
+    // Audyt na zywo (2026-08-18, real installer): pierwsza wersja tej metody
+    // uzywala RunAndWaitAsync (czekala na zakonczenie --apply-update w TYM SAMYM
+    // procesie) - realny test z prawdziwym instalatorem pokazal, ze wywolujacy
+    // proces caly czas trzymal otwarty wlasny installDir\Scyzoryk.exe, przez co
+    // instalator konsekwentnie padal kodem 5 ("plik w uzyciu"). Poprawka: metoda
+    // TYLKO odpala (StartDetached, bez czekania) i wywolujacy MUSI natychmiast
+    // zakonczyc dzialanie - stad ten test sprawdza NIE TYLKO poprawne argumenty
+    // odpalenia, ale TAKZE ze RunEnsureAndReportAsync przerywa sie od razu i
+    // NIGDY nie probuje probowac zdrowia serwera ani otwierac przegladarki.
     [Fact]
-    public async Task ApplyPendingUpdate_ValidMarker_CallsRunAndWaitWithApplyUpdateArgs_ThenDeletesMarker()
+    public async Task ApplyPendingUpdate_ValidMarker_StartsDetachedWithApplyUpdateArgs_ThenExitsImmediately()
     {
         var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
         var updateRoot = ScopedUpdateRoot();
@@ -521,17 +531,23 @@ public sealed class LauncherAppTests
             WritePendingUpdateMarker(updateRoot, pending);
 
             using var dir = new TempInstallDir();
-            var (app, health, process, _, _, _, _, _, _) = CreateApp(dir.Paths);
+            var (app, health, process, browser, gate, _, _, _, _) = CreateApp(dir.Paths);
             health.AlreadyRunningResult = true;
 
             var code = await app.RunAsync(Args(LauncherMode.Normal));
 
             Assert.Equal(ExitCodes.Ok, code);
-            Assert.Equal(1, process.RunAndWaitCallCount);
-            Assert.Equal(launcherExePath, process.LastRunAndWaitExePath);
-            Assert.NotNull(process.LastRunAndWaitArgs);
-            Assert.Equal(new[] { "--apply-update", installerPath, "1.2.3", @"C:\fake-install-dir" }, process.LastRunAndWaitArgs);
+            Assert.Equal(1, process.StartDetachedCallCount);
+            Assert.Equal(launcherExePath, process.LastStartDetachedExePath);
+            Assert.NotNull(process.LastStartDetachedArgs);
+            Assert.Equal(new[] { "--apply-update", installerPath, "1.2.3", @"C:\fake-install-dir" }, process.LastStartDetachedArgs);
             Assert.False(File.Exists(Path.Combine(updateRoot, "pending-update.json")));
+            // Wywolujacy proces MUSI zakonczyc sie natychmiast po odpaleniu - zero
+            // prob sprawdzenia zdrowia serwera, zero otwarcia przegladarki, zero
+            // prob przejecia muteksu startu.
+            Assert.Equal(0, health.ProbeAlreadyRunningCallCount);
+            Assert.Equal(0, browser.OpenCallCount);
+            Assert.Equal(0, gate.TryAcquireCallCount);
         }
         finally
         {
@@ -541,7 +557,7 @@ public sealed class LauncherAppTests
     }
 
     [Fact]
-    public async Task ApplyPendingUpdate_Sha256Mismatch_SkipsApply_DeletesMarker_NeverCallsRunAndWait()
+    public async Task ApplyPendingUpdate_Sha256Mismatch_SkipsApply_DeletesMarker_NormalStartupProceeds()
     {
         var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
         var updateRoot = ScopedUpdateRoot();
@@ -562,9 +578,10 @@ public sealed class LauncherAppTests
             var code = await app.RunAsync(Args(LauncherMode.Normal));
 
             Assert.Equal(ExitCodes.Ok, code);
-            Assert.Equal(0, process.RunAndWaitCallCount);
+            Assert.Equal(0, process.StartDetachedCallCount);
             Assert.False(File.Exists(Path.Combine(updateRoot, "pending-update.json")));
             Assert.True(logger.HasEntryAt(LogLevel.Warning));
+            Assert.Equal(1, health.ProbeAlreadyRunningCallCount); // niewazny znacznik nie blokuje normalnego startu
         }
         finally
         {
@@ -574,7 +591,7 @@ public sealed class LauncherAppTests
     }
 
     [Fact]
-    public async Task ApplyPendingUpdate_MissingInstallerFile_SkipsApply_DeletesMarker_NeverCallsRunAndWait()
+    public async Task ApplyPendingUpdate_MissingInstallerFile_SkipsApply_DeletesMarker_NormalStartupProceeds()
     {
         var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
         var updateRoot = ScopedUpdateRoot();
@@ -594,8 +611,44 @@ public sealed class LauncherAppTests
             var code = await app.RunAsync(Args(LauncherMode.Normal));
 
             Assert.Equal(ExitCodes.Ok, code);
-            Assert.Equal(0, process.RunAndWaitCallCount);
+            Assert.Equal(0, process.StartDetachedCallCount);
             Assert.False(File.Exists(Path.Combine(updateRoot, "pending-update.json")));
+            Assert.Equal(1, health.ProbeAlreadyRunningCallCount);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", previousUpdateRoot);
+            try { Directory.Delete(updateRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ApplyPendingUpdate_StartDetachedFails_DeletesMarker_NormalStartupProceeds()
+    {
+        var previousUpdateRoot = Environment.GetEnvironmentVariable("SCYZORYK_UPDATE_ROOT");
+        var updateRoot = ScopedUpdateRoot();
+        Environment.SetEnvironmentVariable("SCYZORYK_UPDATE_ROOT", updateRoot);
+        try
+        {
+            var installerPath = Path.Combine(updateRoot, "ScyzorykProjektowy-Setup-1.2.3.exe");
+            File.WriteAllText(installerPath, "# fake installer bytes");
+            var launcherExePath = Path.Combine(updateRoot, "Scyzoryk.exe");
+            File.WriteAllText(launcherExePath, "# fake launcher copy");
+            var pending = new PendingUpdate(launcherExePath, installerPath, ComputeSha256Hex(installerPath), "1.2.3", @"C:\fake-install-dir");
+            WritePendingUpdateMarker(updateRoot, pending);
+
+            using var dir = new TempInstallDir();
+            var (app, health, process, _, _, logger, _, _, _) = CreateApp(dir.Paths);
+            health.AlreadyRunningResult = true;
+            process.StartDetachedResultToReturn = SpawnResult.Failed("ENOENT (symulacja)");
+
+            var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+            Assert.Equal(ExitCodes.Ok, code);
+            Assert.Equal(1, process.StartDetachedCallCount);
+            Assert.False(File.Exists(Path.Combine(updateRoot, "pending-update.json")));
+            Assert.True(logger.HasEntryAt(LogLevel.Error));
+            Assert.Equal(1, health.ProbeAlreadyRunningCallCount); // odpalenie sie nie udalo - normalny start i tak proboje
         }
         finally
         {

@@ -104,12 +104,20 @@ public sealed class LauncherApp
     private async Task<int> RunEnsureAndReportAsync(bool openBrowserOnSuccess)
     {
         // Cold-start apply (patrz plan "Aktualizacja przy zimnym starcie") - MUSI
-        // sie wykonac PRZED jakakolwiek proba sprawdzenia/odpalenia serwera, bo to
-        // wlasnie ten moment (zaden node.exe, zadna rezydentna ikona jeszcze nie
-        // zyje) czyni cala reszte procedury zbedna: nie ma czego wykrywac ani z
-        // czym walczyc o blokade pliku Scyzoryk.exe. Dotyczy zarowno zwyklego
-        // startu, jak i --autostart.
-        await ApplyPendingUpdateIfAnyAsync().ConfigureAwait(false);
+        // sie sprawdzic PRZED jakakolwiek proba sprawdzenia/odpalenia serwera.
+        // Jesli zwroci true, TEN proces wlasnie odpalil (odlaczony, bez czekania)
+        // kopie Scyzoryk.exe z argumentem --apply-update i MUSI natychmiast
+        // zakonczyc dzialanie - zweryfikowane REALNIE (nie w testach z fejkami
+        // procesu), ze czekanie tutaj powodowalo dokladnie ten sam blad "plik w
+        // uzyciu" (kod 5), ktory cala ta przebudowa miala wyeliminowac: TEN
+        // proces jest uruchomiony z installDir\Scyzoryk.exe, dokladnie tego
+        // pliku, ktory instalator zaraz bedzie probowal nadpisac - musi przestac
+        // go trzymac otwartym, zanim ktokolwiek inny sprobuje go zastapic.
+        // Dotyczy zarowno zwyklego startu, jak i --autostart.
+        if (await ApplyPendingUpdateIfAnyAsync().ConfigureAwait(false))
+        {
+            return ExitCodes.Ok;
+        }
 
         if (!_paths.TryValidate(out var missingFriendlyName, out var missingFullPath))
         {
@@ -373,23 +381,37 @@ public sealed class LauncherApp
 
     /// <summary>
     /// Cold-start apply: sprawdza czy Node (lib/updateService.js) zostawil znacznik
-    /// juz pobranej i zweryfikowanej (SHA-256) aktualizacji, i jesli tak - stosuje ja
-    /// TERAZ, zanim cokolwiek innego w tym procesie ruszy. Zastepuje dawny
-    /// mechanizm "Node spawnuje --apply-update na zywo, w trakcie gdy stara wersja
-    /// jeszcze dziala" (seria awarii v1.1.14-1.1.17: rezydentny proces
-    /// niedeterministycznie przezywal probe zabicia i blokowal plik Scyzoryk.exe).
-    /// Tutaj z definicji nic jeszcze nie zyje (to poczatek startu), wiec caly ten
-    /// problem znika - UpdateApplier.cs jest wolany z tymi samymi argumentami co
-    /// dawniej, po prostu SYNCHRONICZNIE (czekamy na jego zakonczenie) zamiast
-    /// odlaczonego, fire-and-forget spawnu. Nigdy nie rzuca - kazdy blad jest
-    /// zalogowany i skutkuje po prostu pominieciem/skasowaniem znacznika, tak zeby
-    /// jeden zepsuty znacznik nie blokowal normalnego startu Scyzoryka w
-    /// nieskonczonosc.
+    /// juz pobranej i zweryfikowanej (SHA-256) aktualizacji, i jesli tak - odpala ja
+    /// TERAZ. Zastepuje dawny mechanizm "Node spawnuje --apply-update na zywo, w
+    /// trakcie gdy stara wersja jeszcze dziala" (seria awarii v1.1.14-1.1.17:
+    /// rezydentny proces niedeterministycznie przezywal probe zabicia i blokowal
+    /// plik Scyzoryk.exe).
+    ///
+    /// KRYTYCZNE i zweryfikowane REALNIE (nie w testach z fejkami procesu, tylko
+    /// prawdziwym instalatorem na prawdziwej instalacji): TEN proces (wywolujacy
+    /// te metode) jest sam uruchomiony z installDir\Scyzoryk.exe - dokladnie tego
+    /// pliku, ktory zaraz zostanie nadpisany. Pierwsza wersja tej metody czekala
+    /// synchronicznie na zakonczenie --apply-update (RunAndWaitAsync) - w efekcie
+    /// TEN proces caly czas trzymal otwarty wlasny plik .exe, i instalator
+    /// konsekwentnie padal kodem 5 ("plik w uzyciu"), DOKLADNIE ten sam problem,
+    /// ktory cala ta przebudowa (cold-start apply) miala wyeliminowac. Dlatego ta
+    /// metoda TYLKO odpala kopie Scyzoryk.exe --apply-update (StartDetached, bez
+    /// czekania) i zwraca true - wywolujacy (RunEnsureAndReportAsync) MUSI wtedy
+    /// natychmiast zakonczyc dzialanie calego procesu, zanim zdazy cokolwiek
+    /// jeszcze otworzyc/zablokowac. Odpalona kopia (dzialajaca z Updates\<wersja>\,
+    /// INNEJ sciezki) przejmuje reszte: UpdateApplier.cs stosuje aktualizacje w
+    /// warunkach, gdzie faktycznie nic juz nie zyje z installDir.
+    ///
+    /// Zwraca false (nie ma nic do zrobienia, wywolujacy kontynuuje normalny
+    /// start) gdy: brak znacznika, znacznik jest uszkodzony/niepelny, wskazane
+    /// pliki nie istnieja, suma SHA-256 sie nie zgadza, albo samo odpalenie
+    /// (StartDetached) sie nie udalo - w kazdym z tych przypadkow znacznik jest
+    /// kasowany, zeby jeden zepsuty wpis nie blokowal startu w nieskonczonosc.
     /// </summary>
-    private async Task ApplyPendingUpdateIfAnyAsync()
+    private async Task<bool> ApplyPendingUpdateIfAnyAsync()
     {
         var pendingPath = Path.Combine(_paths.UpdateRoot, "pending-update.json");
-        if (!File.Exists(pendingPath)) return;
+        if (!File.Exists(pendingPath)) return false;
 
         PendingUpdate? pending;
         try
@@ -401,13 +423,13 @@ public sealed class LauncherApp
         {
             _logger.Log(LogLevel.Warning, "Nieczytelny znacznik oczekujacej aktualizacji - pomijam.", new Dictionary<string, string> { ["exception"] = ex.Message });
             TryDeletePendingUpdateMarker(pendingPath);
-            return;
+            return false;
         }
 
         if (pending is null || string.IsNullOrWhiteSpace(pending.InstallerPath) || string.IsNullOrWhiteSpace(pending.LauncherExePath))
         {
             TryDeletePendingUpdateMarker(pendingPath);
-            return;
+            return false;
         }
 
         if (!File.Exists(pending.InstallerPath) || !File.Exists(pending.LauncherExePath))
@@ -418,7 +440,7 @@ public sealed class LauncherApp
                 ["launcherExePath"] = pending.LauncherExePath,
             });
             TryDeletePendingUpdateMarker(pendingPath);
-            return;
+            return false;
         }
 
         string actualHash;
@@ -431,7 +453,7 @@ public sealed class LauncherApp
         {
             _logger.Log(LogLevel.Warning, "Nie udalo sie policzyc sumy SHA-256 oczekujacego instalatora - pomijam.", new Dictionary<string, string> { ["exception"] = ex.Message });
             TryDeletePendingUpdateMarker(pendingPath);
-            return;
+            return false;
         }
 
         if (!string.Equals(actualHash, pending.InstallerSha256, StringComparison.OrdinalIgnoreCase))
@@ -441,31 +463,32 @@ public sealed class LauncherApp
                 ["installerPath"] = pending.InstallerPath,
             });
             TryDeletePendingUpdateMarker(pendingPath);
-            return;
+            return false;
         }
 
-        _logger.Log(LogLevel.Info, "Stosuje oczekujaca aktualizacje przy zimnym starcie.", new Dictionary<string, string>
+        _logger.Log(LogLevel.Info, "Odpalam oczekujaca aktualizacje przy zimnym starcie (bez czekania - patrz komentarz przy tej metodzie).", new Dictionary<string, string>
         {
             ["expectedVersion"] = pending.ExpectedVersion,
         });
-        try
+
+        // Bez parentPid/residentTrayPid - w tym momencie z definicji nic jeszcze
+        // nie zyje (poza TYM wlasnie procesem, ktory zaraz sie zakonczy), wiec
+        // UpdateApplier.EnsureParentProcessStopped/EnsureResidentTrayStopped maja i
+        // tak nic do zrobienia (patrz UpdateApplier.cs).
+        var spawn = _processManager.StartDetached(pending.LauncherExePath, new[]
         {
-            // Bez parentPid/residentTrayPid - w tym momencie z definicji nic jeszcze
-            // nie zyje, wiec UpdateApplier.EnsureParentProcessStopped/EnsureResidentTrayStopped
-            // maja i tak nic do zrobienia (patrz UpdateApplier.cs).
-            await _processManager.RunAndWaitAsync(pending.LauncherExePath, new[]
-            {
-                "--apply-update", pending.InstallerPath, pending.ExpectedVersion, pending.InstallDir,
-            }).ConfigureAwait(false);
-        }
-        catch (Exception ex)
+            "--apply-update", pending.InstallerPath, pending.ExpectedVersion, pending.InstallDir,
+        });
+
+        TryDeletePendingUpdateMarker(pendingPath);
+
+        if (!spawn.Success)
         {
-            _logger.Log(LogLevel.Error, "Blad podczas stosowania oczekujacej aktualizacji.", new Dictionary<string, string> { ["exception"] = ex.Message });
+            _logger.Log(LogLevel.Error, "Nie udalo sie odpalic oczekujacej aktualizacji.", new Dictionary<string, string> { ["error"] = spawn.ErrorMessage ?? string.Empty });
+            return false;
         }
-        finally
-        {
-            TryDeletePendingUpdateMarker(pendingPath);
-        }
+
+        return true;
     }
 
     private void TryDeletePendingUpdateMarker(string pendingPath)

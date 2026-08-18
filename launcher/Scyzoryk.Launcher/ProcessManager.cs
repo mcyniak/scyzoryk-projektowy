@@ -15,15 +15,21 @@ public interface IProcessManager
     /// Nigdy przez cmd/PowerShell/VBS - bezposredni ProcessStartInfo.</summary>
     SpawnResult StartServer(string installDir, string nodeExePath);
 
-    /// <summary>Odpala dowolny plik wykonywalny z podanymi argumentami i CZEKA na
-    /// jego zakonczenie, zwracajac prawdziwy kod wyjscia - w odroznieniu od
-    /// StartServer/dawnego spawnUpdaterProcess (odlaczony, fire-and-forget proces).
+    /// <summary>Odpala dowolny plik wykonywalny z podanymi argumentami i wraca
+    /// NATYCHMIAST, bez czekania na jego zakonczenie - w odroznieniu od StartServer
+    /// (ktore rowniez nie czeka, ale ma wlasna semantyke node.exe/server.js/PATH).
     /// Uzywane wylacznie przez ApplyPendingUpdateIfAnyAsync (cold-start apply, patrz
-    /// LauncherApp.cs) do odpalenia skopiowanego Scyzoryk.exe --apply-update PRZED
-    /// jakimkolwiek probowaniem startu wlasnego serwera - w tym momencie nic jeszcze
-    /// nie zyje, wiec nie ma potrzeby (ani sensu) odlaczac tego procesu od
-    /// rodzica.</summary>
-    Task<int> RunAndWaitAsync(string exePath, IReadOnlyList<string> args);
+    /// LauncherApp.cs) do odpalenia skopiowanego Scyzoryk.exe --apply-update.
+    /// KRYTYCZNE, zeby nie czekac: wywolujacy proces sam jest uruchomiony z
+    /// installDir\Scyzoryk.exe - dokladnie tego pliku, ktory instalator zaraz
+    /// bedzie probowal nadpisac. Zweryfikowane REALNIE (nie w testach z fejkami):
+    /// pierwsza wersja tej metody (RunAndWaitAsync) czekala synchronicznie na
+    /// zakonczenie --apply-update, przez co wywolujacy proces caly czas trzymal
+    /// otwarty wlasny plik .exe - instalator konsekwentnie padal kodem 5 ("plik w
+    /// uzyciu"), dokladnie ten sam problem, ktory cala ta przebudowa (cold-start
+    /// apply) miala wyeliminowac. Wywolujacy MUSI natychmiast zakonczyc dzialanie
+    /// po tym wywolaniu, zanim cokolwiek innego otworzy/zablokuje ten plik.</summary>
+    SpawnResult StartDetached(string exePath, IReadOnlyList<string> args);
 
     /// <summary>Zatrzymuje WYLACZNIE procesy node.exe, ktorych pelna sciezka pliku
     /// wykonywalnego zgadza sie z bundlowanym node-runtime\node.exe tej instalacji -
@@ -120,20 +126,26 @@ public sealed class ProcessManager : IProcessManager
         }
     }
 
-    public async Task<int> RunAndWaitAsync(string exePath, IReadOnlyList<string> args)
+    public SpawnResult StartDetached(string exePath, IReadOnlyList<string> args)
     {
-        var startInfo = new ProcessStartInfo
+        try
         {
-            FileName = exePath,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        foreach (var arg in args) startInfo.ArgumentList.Add(arg);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            foreach (var arg in args) startInfo.ArgumentList.Add(arg);
 
-        using var process = Process.Start(startInfo);
-        if (process is null) return -1;
-        await process.WaitForExitAsync().ConfigureAwait(false);
-        return process.ExitCode;
+            var process = Process.Start(startInfo);
+            if (process is null) return SpawnResult.Failed("Process.Start zwrocil null.");
+            return SpawnResult.Ok(process.Id);
+        }
+        catch (Exception ex)
+        {
+            return SpawnResult.Failed(ex.Message);
+        }
     }
 
     public IReadOnlyList<int> StopOwnedProcesses(string expectedNodeExeFullPath)
