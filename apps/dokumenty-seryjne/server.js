@@ -896,6 +896,14 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
   const allCreated = [];
   const allErrors = [];
   const originalTemplate = job.template;
+  // Realny blad zlapany przez wlasciciela: pole "Przedrostek nazwy pliku" w
+  // UI pokazywalo zywy podglad nazwy, ale ponizej i tak zawsze uzywano
+  // task.groupName (automatycznie wykrytej nazwy typu dokumentu) - wpisany
+  // przedrostek nigdy nie trafial do prawdziwej nazwy pliku. Teraz wpisany
+  // przez uzytkownika przedrostek (jesli niepusty) ZASTEPUJE automatyczna
+  // nazwe dla WSZYSTKICH wybranych dokumentow (jeden wspolny przedrostek) -
+  // puste pole dalej daje dawne zachowanie (automatyczna nazwa typu).
+  const userFilePrefix = cleanFilePrefix(options.filePrefix || '');
   let first = true;
   let cancelledEarly = false;
   for (let i = 0; i < tasks.length; i += 1) {
@@ -912,7 +920,7 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
     const task = tasks[i];
     if (!task.rowRecords.length) continue;
     job.template = { path: task.templatePath, originalName: task.templateOriginalName };
-    const taskOptions = { ...options, selectedRows: task.rowRecords, _keepLog: !first, filePrefix: task.groupName };
+    const taskOptions = { ...options, selectedRows: task.rowRecords, _keepLog: !first, filePrefix: userFilePrefix || task.groupName };
     try {
       const result = await startGeneration(job, taskOptions);
       if (result && Array.isArray(result.created)) allCreated.push(...result.created);

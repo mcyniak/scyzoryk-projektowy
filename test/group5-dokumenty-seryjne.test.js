@@ -49,6 +49,21 @@ test('anulowanie zatrzymuje CALA paczke szablonow, nie tylko biezacy proces (aud
   assert.match(loopFn[0], /job\.status = cancelledEarly \? 'cancelled'/);
 });
 
+test('generate: wpisany przez uzytkownika przedrostek nazwy pliku faktycznie trafia do wygenerowanych plikow (nie tylko do podgladu)', async () => {
+  const source = await fsp.readFile(serverPath, 'utf8');
+  // Zlapane realnie: pole "Przedrostek nazwy pliku" w UI pokazywalo zywy
+  // podglad, ale runMultiTemplateGeneration ZAWSZE nadpisywala filePrefix
+  // wartoscia task.groupName (automatycznie wykryta nazwa typu dokumentu) -
+  // to, co uzytkownik wpisal, nigdy nie trafialo do prawdziwej nazwy pliku.
+  // Teraz niepusty wpis uzytkownika ma pierwszenstwo przed automatyczna
+  // nazwa (dla wszystkich wybranych dokumentow naraz) - puste pole dalej
+  // daje dawne zachowanie (automatyczna nazwa typu per dokument).
+  assert.match(source, /const userFilePrefix = cleanFilePrefix\(options\.filePrefix \|\| ''\);/);
+  const loopFn = source.match(/async function runMultiTemplateGeneration[\s\S]*?\n\}/);
+  assert.ok(loopFn, 'nie znaleziono runMultiTemplateGeneration');
+  assert.match(loopFn[0], /filePrefix: userFilePrefix \|\| task\.groupName/);
+});
+
 test('generate: kazde uruchomienie czysci poprzedni katalog wyjsciowy PO walidacji, przed faktycznym startem (audyt rozdz. 12, P0/P1)', async () => {
   const source = await fsp.readFile(serverPath, 'utf8');
   const generateRoute = source.match(/app\.post\('\/api\/generate\/:jobId'[\s\S]*?\n\}\);/);
