@@ -61,6 +61,18 @@
       </div>
 
       <div class="kk-field">
+        <label for="excelFile" id="kkExcelLabel">Plik Excel (.xlsx)</label>
+        <input type="file" id="excelFile" accept=".xlsx">
+        <p class="kk-hint" id="kkSheetHint">Wybierz plik, żeby wczytać listę arkuszy.</p>
+      </div>
+
+      <div class="kk-field" id="kkSheetBox" hidden>
+        <label for="sheetSelect">Arkusz</label>
+        <select id="sheetSelect"></select>
+        <p class="kk-hint">Wybierz arkusz, który zawiera dane (kolumny: LP gminy, Adres, UID/Rodzaj zestawu...) - nazwa arkusza może być dowolna, program już jej nie zgaduje.</p>
+      </div>
+
+      <div class="kk-field">
         <label>Rodzaj</label>
         <div class="kk-mode-row">
           <label class="kk-mode-option"><input type="radio" name="kkMode" value="solary" id="kkModeSolary" checked> Solary (karty katalogowe)</label>
@@ -69,11 +81,6 @@
           <label class="kk-mode-option"><input type="radio" name="kkMode" value="schematy" id="kkModeSchematy"> Dodaj schematy elektryczne</label>
           <label class="kk-mode-option"><input type="radio" name="kkMode" value="dokumenty-seryjne" id="kkModeDokumentySeryjne"> Dodaj dokumenty seryjne</label>
         </div>
-      </div>
-
-      <div class="kk-field">
-        <label for="excelFile" id="kkExcelLabel">Plik Excel (.xlsx) z arkuszem „Solary”</label>
-        <input type="file" id="excelFile" accept=".xlsx">
       </div>
 
       <div class="kk-field">

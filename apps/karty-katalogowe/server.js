@@ -561,8 +561,17 @@ async function dopasujISkopiujDodatek({ trafienia, folderKlienta, istniejace, dr
 // wiersza); pusta tablica = zrodlo podane, ale nic sie w nim nie znalazlo
 // (kazdy wiersz dostanie ostrzezenie 'brak'). Patrz komentarz przy
 // znajdzPlikiPoAdresie/znajdzSchemat.
-async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki = null, dokumentySeryjnePliki = null, schematyIndeks = null, pominKarty = false }) {
-  const rozpoznany = rozpoznajArkuszSolarow(sheetName);
+async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki = null, dokumentySeryjnePliki = null, schematyIndeks = null, pominKarty = false, wymuszony = false }) {
+  // wymuszony: uzytkownik JAWNIE wybral ten arkusz z listy (patrz /api/sheets
+  // i /api/run w server.js) - pomijamy rozpoznawanie po nazwie ("Solary"/
+  // "Solary <gmina>") calkowicie, bo realne tabele czesto maja arkusz
+  // nazwany inaczej (np. "PV_", zweryfikowane na prawdziwym pliku
+  // Wierzchlas), a wybor z listy jest jednoznaczny sam w sobie. Bez jawnego
+  // wyboru zostaje stare automatyczne dopasowanie po nazwie (wsteczna
+  // zgodnosc API). "gmina: ''" = nowsza, plaska konwencja (foldery klientow
+  // wprost pod Projekty/, bez posredniej warstwy gminy) - takie tez jest
+  // domyslne zachowanie testu tej samej sciezki dla nienazwanych arkuszy.
+  const rozpoznany = wymuszony ? { gmina: '' } : rozpoznajArkuszSolarow(sheetName);
   const wyniki = [];
   if (!rozpoznany) return wyniki; // arkusz nie dotyczy solarow (np. Pompy, Kotly, adresy)
   const { gmina } = rozpoznany;
@@ -877,9 +886,11 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
 // ("Karty katalogowe.pdf") zamiast zestawu zaleznego od rozmiaru zasobnika.
 // Dopasowanie folderu klienta (LP + potwierdzenie adresem) jest identyczne -
 // ta sama zbudujMapeFolderow/adresPasujeDoFolderu co dla solarow.
-async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun }) {
+async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszony = false }) {
   const wyniki = [];
-  if (!rozpoznajArkuszPomp(sheetName)) return wyniki; // arkusz nie dotyczy pomp (np. Solary, Kotly, adresy)
+  // wymuszony: patrz komentarz przy przetworzArkusz - jawny wybor arkusza z
+  // listy pomija rozpoznawanie po nazwie ("Pompy ciepła" itp.) calkowicie.
+  if (!wymuszony && !rozpoznajArkuszPomp(sheetName)) return wyniki; // arkusz nie dotyczy pomp (np. Solary, Kotly, adresy)
 
   // Nazewnictwo folderu pomp na poziomie inwestycji ROZNI SIE miedzy
   // inwestycjami (zweryfikowane realnie): niektore maja "PC powietrzne"
@@ -1049,6 +1060,24 @@ async function rozstrzygnijZrodloDodatku(req, etykieta, zipPole, sciezkaPole) {
   return null;
 }
 
+// Lista nazw arkuszy z wgranego Excela - krok "Arkusz" w UI (dodane
+// 2026-08-19, wlasciciel: automatyczne rozpoznawanie po nazwie "Solary" nie
+// dzialalo dla prawdziwej tabeli z arkuszem nazwanym "PV_"). Plik jest tylko
+// odczytywany i od razu kasowany - to nie jest krok "run", zaden dobor kart
+// tu jeszcze nie zachodzi.
+app.post('/api/sheets', uploadWieloplikowy.fields([{ name: 'excel', maxCount: 1 }]), async (req, res) => {
+  const excelFile = req.files?.excel?.[0];
+  try {
+    if (!excelFile) throw new Error('Dodaj plik Excel (.xlsx).');
+    const wszystkieArkusze = await readXlsxFile(excelFile.path, { getSheets: true });
+    res.json({ ok: true, sheets: wszystkieArkusze.map(a => a.sheet) });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message });
+  } finally {
+    if (excelFile) fsp.unlink(excelFile.path).catch(() => {});
+  }
+});
+
 app.post('/api/run', uploadWieloplikowy.fields([
   { name: 'excel', maxCount: 1 },
   { name: 'audytyZip', maxCount: 1 },
@@ -1135,19 +1164,37 @@ app.post('/api/run', uploadWieloplikowy.fields([
     // wiec nie trzeba osobno doczytywac kazdego arkusza.
     const wszystkieArkusze = await readXlsxFile(excelFile.path, { getSheets: true });
 
+    // sheetName: uzytkownik jawnie wybral arkusz z listy (patrz /api/sheets +
+    // krok "Arkusz" w UI, dodane 2026-08-19) - realny problem znaleziony na
+    // Wierzchlasie: prawdziwy arkusz nazywal sie "PV_", wiec automatyczne
+    // rozpoznawanie po nazwie ("Solary"/"Solary <gmina>") nigdy by go nie
+    // zlapalo. Bez jawnego wyboru zostaje stare zachowanie (petla po
+    // WSZYSTKICH arkuszach, kazdy sam rozpoznaje czy go dotyczy) - wsteczna
+    // zgodnosc API, gdyby ktos wywolywal /api/run bez kroku wyboru arkusza.
+    const sheetNameWybrany = normalizujTekst(req.body.sheetName);
     const wynikiWszystkie = [];
-    for (const arkusz of wszystkieArkusze) {
-      const sheetName = arkusz.sheet;
-      const rows = arkusz.data;
-      // Kazda funkcja sama rozpoznaje, czy dany arkusz jej dotyczy (i cicho
-      // nic nie zwraca, jesli nie) - np. arkusz "Kotly"/"obreby" nie pasuje.
-      // Uruchamiamy WYLACZNIE funkcje pasujaca do wybranego rodzaju.
+    if (sheetNameWybrany) {
+      const arkusz = wszystkieArkusze.find(a => a.sheet === sheetNameWybrany);
+      if (!arkusz) throw new Error(`Nie znaleziono arkusza "${sheetNameWybrany}" w wgranym pliku Excel.`);
       if (typ === 'pompy') {
-        const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
-        wynikiWszystkie.push(...wynikiPompy);
+        wynikiWszystkie.push(...await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath, dryRun, wymuszony: true }));
       } else {
-        const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, schematyIndeks, pominKarty });
-        wynikiWszystkie.push(...wynikiSolary);
+        wynikiWszystkie.push(...await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, schematyIndeks, pominKarty, wymuszony: true }));
+      }
+    } else {
+      for (const arkusz of wszystkieArkusze) {
+        const sheetName = arkusz.sheet;
+        const rows = arkusz.data;
+        // Kazda funkcja sama rozpoznaje, czy dany arkusz jej dotyczy (i cicho
+        // nic nie zwraca, jesli nie) - np. arkusz "Kotly"/"obreby" nie pasuje.
+        // Uruchamiamy WYLACZNIE funkcje pasujaca do wybranego rodzaju.
+        if (typ === 'pompy') {
+          const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
+          wynikiWszystkie.push(...wynikiPompy);
+        } else {
+          const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, schematyIndeks, pominKarty });
+          wynikiWszystkie.push(...wynikiSolary);
+        }
       }
     }
 

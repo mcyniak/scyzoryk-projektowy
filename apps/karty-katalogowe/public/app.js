@@ -54,37 +54,32 @@ const summaryEl = document.getElementById('kkSummary');
 // przetwarza WYLACZNIE arkusze pasujace do wybranego rodzaju.
 const MODE_COPY = {
   solary: {
-    desc: 'Solary: program sam znajdzie w środku folder „karty” albo „wzór” (źródłowe PDF-y) oraz „Projekty\\{gmina}\\{id} - adres” (bez gminy, jeśli arkusz nazywa się po prostu „Solary”). Arkusz w Excelu: „Solary” (z albo bez nazwy gminy).',
-    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Solary”',
+    desc: 'Solary: program sam znajdzie w środku folder „karty” albo „wzór” (źródłowe PDF-y) oraz „Projekty\\{gmina}\\{id} - adres” (bez gminy, jeśli w arkuszu nie ma osobnej kolumny gminy).',
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „karty”/„wzór” i „Projekty”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
   },
   pompy: {
-    desc: 'Pompy powietrzne Varmero: program sam znajdzie „PC powietrzne\\wzór\\{model}\\Karty katalogowe.pdf” oraz „PC powietrzne\\Projekty\\{id} - adres”. Arkusz w Excelu: „Pompy ciepła”, kolumna „Model pompy”.',
-    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Pompy ciepła”',
+    desc: 'Pompy powietrzne Varmero: program sam znajdzie „PC powietrzne\\wzór\\{model}\\Karty katalogowe.pdf” oraz „PC powietrzne\\Projekty\\{id} - adres”. Kolumna „Model pompy”.',
     rootPathLabel: 'Ścieżka do głównego folderu INWESTYCJI (zawiera podfolder „PC powietrzne”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\20. Zagórów'
   },
   // Te trzy tryby NIE dobieraja/kopiuja kart katalogowych w ogole - kazdy
   // dodaje TYLKO swoj jeden rodzaj pliku do folderu klienta, wg tego samego
-  // arkusza "Solary" co tryb Solary powyzej (adres/moc zestawu). Osobne
-  // opcje zamiast jednego wspolnego formularza z 3 zipami naraz - wlasciciel
-  // chcial dodawac kazdy dodatek osobno, tak jak wybiera sie Solary/Pompy.
+  // arkusza co tryb Solary powyzej (adres/moc zestawu). Osobne opcje zamiast
+  // jednego wspolnego formularza z 3 zipami naraz - wlasciciel chcial
+  // dodawac kazdy dodatek osobno, tak jak wybiera sie Solary/Pompy.
   audyty: {
-    desc: 'Dodaj audyty PV: dopasowuje pliki z audytami do adresu z arkusza „Solary” i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
-    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Solary”',
+    desc: 'Dodaj audyty PV: dopasowuje pliki z audytami do adresu z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
   },
   schematy: {
-    desc: 'Dodaj schematy elektryczne: dopasowuje pliki schematów do mocy zestawu (i fazy, gdy trzeba) z arkusza „Solary” i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
-    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Solary”',
+    desc: 'Dodaj schematy elektryczne: dopasowuje pliki schematów do mocy zestawu (i fazy, gdy trzeba) z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
   },
   'dokumenty-seryjne': {
-    desc: 'Dodaj dokumenty seryjne: dopasowuje pliki po adresie z arkusza „Solary” i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
-    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Solary”',
+    desc: 'Dodaj dokumenty seryjne: dopasowuje pliki po adresie z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
   }
@@ -106,7 +101,6 @@ function odswiezOpisyRodzaju() {
   const tryb = aktualnyRodzajKart();
   const copy = MODE_COPY[tryb];
   document.getElementById('kkModeDesc').textContent = copy.desc;
-  document.getElementById('kkExcelLabel').textContent = copy.excelLabel;
   document.getElementById('kkRootPathLabel').textContent = copy.rootPathLabel;
   document.getElementById('rootPath').placeholder = copy.placeholder;
   // Dokladnie jedna z trzech sekcji dodatku widoczna naraz (albo zadna, dla
@@ -118,6 +112,38 @@ function odswiezOpisyRodzaju() {
 
 document.querySelectorAll('input[name="kkMode"]').forEach(el => el.addEventListener('change', odswiezOpisyRodzaju));
 odswiezOpisyRodzaju();
+
+// Wybor arkusza jest JAWNY (dodane 2026-08-19) - wczesniej program sam
+// zgadywal, ktory arkusz dotyczy solarow/pomp po nazwie ("Solary <gmina>"),
+// co nie dzialalo dla prawdziwej tabeli z arkuszem nazwanym np. "PV_".
+// Lista arkuszy wczytuje sie od razu po wybraniu pliku Excel (osobne, lekkie
+// wywolanie /api/sheets - plik jest tylko odczytany i skasowany, zaden dobor
+// kart tu jeszcze nie zachodzi), PRZED wyborem rodzaju.
+const sheetBox = document.getElementById('kkSheetBox');
+const sheetSelect = document.getElementById('sheetSelect');
+const sheetHint = document.getElementById('kkSheetHint');
+
+document.getElementById('excelFile').addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  sheetBox.hidden = true;
+  sheetSelect.innerHTML = '';
+  if (!file) { sheetHint.textContent = 'Wybierz plik, żeby wczytać listę arkuszy.'; return; }
+
+  sheetHint.textContent = 'Wczytuję listę arkuszy...';
+  const formData = new FormData();
+  formData.append('excel', file);
+  try {
+    const resp = await fetch('/api/sheets', { method: 'POST', body: formData, headers: { 'X-Scyzoryk-Request': '1' } });
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.message || 'Nie udało się wczytać arkuszy.');
+    if (!data.sheets.length) throw new Error('Plik Excel nie ma żadnego arkusza.');
+    sheetSelect.innerHTML = data.sheets.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    sheetBox.hidden = false;
+    sheetHint.textContent = `Wczytano ${data.sheets.length} arkusz(y).`;
+  } catch (err) {
+    sheetHint.textContent = 'Błąd: ' + err.message;
+  }
+});
 
 // Dwa kroki zamiast checkboxa "tylko podglad": "Sprawdz tabele" zawsze
 // najpierw analizuje bez kopiowania (dryRun=true); dopiero po tym pojawia
@@ -131,11 +157,13 @@ async function runJob(dryRun) {
   statusEl.textContent = '';
 
   if (!fileInput.files.length) { statusEl.className = 'err'; statusEl.textContent = 'Wybierz plik Excel.'; return; }
+  if (sheetBox.hidden || !sheetSelect.value) { statusEl.className = 'err'; statusEl.textContent = 'Wybierz arkusz z listy (poczekaj, aż się wczyta po wybraniu pliku Excel).'; return; }
   if (!rootPath) { statusEl.className = 'err'; statusEl.textContent = 'Podaj ścieżkę do głównego folderu.'; return; }
 
   const tryb = aktualnyRodzajKart();
   const formData = new FormData();
   formData.append('excel', fileInput.files[0]);
+  formData.append('sheetName', sheetSelect.value);
   formData.append('rootPath', rootPath);
   formData.append('typ', tryb);
   formData.append('dryRun', String(dryRun));

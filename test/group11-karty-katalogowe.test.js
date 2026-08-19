@@ -953,3 +953,105 @@ test('POST /api/run: typ="audyty" bez podania zrodla (ani zip, ani sciezka) zwra
   assert.equal(data.ok, false);
   assert.match(data.message, /audyty/);
 });
+
+test('POST /api/sheets: zwraca liste nazw arkuszy z wgranego pliku, bez zadnego przetwarzania', async (t) => {
+  const { file: excelFile, dir: xlsxDir } = await napiszArkuszPV('PV_', [
+    [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const server = kkApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('excel', new Blob([await fsp.readFile(excelFile)]), 'dane.xlsx');
+  const res = await fetch(`${base}/api/sheets`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const data = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(data));
+  assert.deepEqual(data.sheets, ['PV_']);
+});
+
+test('POST /api/run: sheetName jawnie wybrany dziala dla arkusza nazwanego "PV_" (realny przypadek Wierzchlas - automatyczne rozpoznawanie po nazwie "Solary" nigdy by go nie zlapalo)', async (t) => {
+  // Budowane recznie (nie przygotujRoot, ktore zawsze wklada gmine "Zarnow"
+  // miedzy Projekty a foldery klientow) - sheetName "PV_" wymusza plaska
+  // konwencje (gmina: '', patrz przetworzArkusz#wymuszony), wiec foldery
+  // klientow leza WPROST pod Projekty/, bez posredniej warstwy gminy.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-pv-podkreslnik-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const kartyDir = path.join(root, 'karty');
+  await fsp.mkdir(kartyDir, { recursive: true });
+  for (const nazwa of WYMAGANE_KARTY) await fsp.writeFile(path.join(kartyDir, nazwa), 'tresc');
+  const projektyDir = path.join(root, 'Projekty');
+  await fsp.mkdir(path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26'), { recursive: true });
+
+  // Arkusz celowo nazwany "PV_" (nie "Solary"/"Solary <gmina>") - bez
+  // jawnego sheetName rozpoznajArkuszSolarow('PV_') zwrocilby null i cala
+  // tabela zostalaby cicho pominieta (0 wynikow).
+  const { file: excelFile, dir: xlsxDir } = await napiszArkuszPV('PV_', [
+    [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const server = kkApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('excel', new Blob([await fsp.readFile(excelFile)]), 'dane.xlsx');
+  form.append('sheetName', 'PV_');
+  form.append('rootPath', root);
+  form.append('typ', 'solary');
+  form.append('dryRun', 'false');
+
+  const res = await fetch(`${base}/api/run`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const data = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(data));
+  assert.equal(data.ok, true);
+  assert.equal(data.wyniki.length, 1);
+  assert.equal(data.wyniki[0].status, 'skopiowano');
+  assert.equal(data.wyniki[0].gmina, '', 'arkusz spoza konwencji nazewnictwa -> plaska konwencja (bez gminy)');
+
+  const folderKlienta = path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26');
+  assert.ok(fs.existsSync(path.join(folderKlienta, 'Grupa pompowa.pdf')));
+});
+
+test('POST /api/run: sheetName wskazujacy na nieistniejacy arkusz zwraca czytelny blad', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-zly-arkusz-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  await fsp.mkdir(path.join(root, 'Projekty'), { recursive: true });
+
+  const { file: excelFile, dir: xlsxDir } = await napiszArkuszPV('PV_', [
+    [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const server = kkApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('excel', new Blob([await fsp.readFile(excelFile)]), 'dane.xlsx');
+  form.append('sheetName', 'Nie-istnieje');
+  form.append('rootPath', root);
+  form.append('typ', 'solary');
+  form.append('dryRun', 'false');
+
+  const res = await fetch(`${base}/api/run`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const data = await res.json();
+  assert.equal(res.status, 400);
+  assert.equal(data.ok, false);
+  assert.match(data.message, /Nie-istnieje/);
+});
