@@ -4,6 +4,7 @@ const express = require('express');
 const multer = require('multer');
 const sanitize = require('sanitize-filename');
 const readXlsxFile = require('read-excel-file/node');
+const AdmZip = require('adm-zip');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
@@ -85,13 +86,26 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({
+// Trzy niezalezne pola pliku w jednym requescie: "excel" (zawsze wymagany),
+// oraz opcjonalne "audytyZip"/"schematyZip" - alternatywa dla wpisania
+// sciezki do folderu na dysku (audytyPath/schematyPath), bo audyty/schematy
+// czesto leza na dysku Google innego dzialu, do ktorego nie ma stalej,
+// zmapowanej sciezki (patrz komentarz przy rozpakujZipDoTemp nizej).
+const MAX_ZIP_MB = Number(process.env.KK_MAX_ZIP_MB || 500);
+const uploadWieloplikowy = multer({
   storage,
-  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 1 },
+  limits: { fileSize: Math.max(MAX_FILE_MB, MAX_ZIP_MB) * 1024 * 1024, files: 3 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(decodeOriginalName(file.originalname || '')).toLowerCase();
-    if (ext === '.xlsx') return cb(null, true);
-    return cb(new Error('Wybierz plik Excel .xlsx.'));
+    if (file.fieldname === 'excel') {
+      if (ext === '.xlsx') return cb(null, true);
+      return cb(new Error('Wybierz plik Excel .xlsx.'));
+    }
+    if (file.fieldname === 'audytyZip' || file.fieldname === 'schematyZip') {
+      if (ext === '.zip') return cb(null, true);
+      return cb(new Error('Audyty/schematy przyjmowane sa wylacznie jako plik .zip.'));
+    }
+    return cb(new Error('Nieoczekiwane pole pliku.'));
   }
 });
 
@@ -404,7 +418,145 @@ async function istniejacePlikiWFolderze(dirPath) {
   }
 }
 
-async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
+// --- Audyty (PV) i schematy elektryczne wg mocy - dolaczane do folderu
+// klienta OBOK kart katalogowych (wylacznie arkusz Solary/PV - schematy sa
+// dobierane po mocy zestawu fotowoltaicznego). W odroznieniu od kart
+// katalogowych (komplet-albo-nic, patrz FAZA A/B w przetworzArkusz) brak
+// audytu/schematu dla adresu NIGDY nie blokuje skopiowania kart - to tylko
+// ostrzezenie w wyniku wiersza (decyzja wlasciciela, 2026-08-19: audyty
+// czesto nie sa jeszcze gotowe dla wszystkich adresow w momencie doboru kart).
+
+// Zrodlo audytow/schematow bywa zipem (czesty przypadek: pliki leza na
+// dysku Google INNEGO dzialu, do ktorego uzytkownik ma dostep tylko przez
+// pobranie/wgranie zipa, bez stalej, zmapowanej sciezki) albo zwyklym
+// folderem na dysku (jak reszta tego narzedzia) - oba warianty rownolegle,
+// wybor per uruchomienie. Zip jest rozpakowywany do wlasnego podfolderu w
+// UPLOAD_DIR (juz objetego scheduleCleanup) i jawnie usuwany w finally w
+// /api/run - nigdy nie zostaje jako trwaly artefakt.
+async function rozpakujZipDoTemp(zipPath, jobId, etykieta) {
+  const destDir = path.join(UPLOAD_DIR, `${jobId}-${etykieta}`);
+  await fsp.mkdir(destDir, { recursive: true });
+  try {
+    new AdmZip(zipPath).extractAllTo(destDir, true);
+  } catch (err) {
+    throw new Error(`Nie udalo sie rozpakowac zipa (${etykieta}): ${err.message}`);
+  }
+  return destDir;
+}
+
+// Rekurencyjne zebranie wszystkich PDF-ow (audyty/schematy nie maja
+// gwarantowanej, jednolitej glebokosci - zip ma zwykle jeden poziom
+// nadrzednego folderu, jak "PV/plik.pdf", wskazana sciezka na dysku moze
+// wskazywac albo na sam lisc, albo na folder nadrzedny). Ograniczenie
+// glebokosci (podobnie do reszty tego narzedzia) chroni przed przypadkowym
+// przeskanowaniem calego dysku, gdyby ktos wskazal zbyt ogolna sciezke.
+const KK_MAX_GLEBOKOSC_SKANU = 4;
+async function zbierzPlikiPdf(rootDir, glebokosc = 0) {
+  if (glebokosc > KK_MAX_GLEBOKOSC_SKANU) return [];
+  let wpisy;
+  try { wpisy = await fsp.readdir(rootDir, { withFileTypes: true }); } catch { return []; }
+  const wyniki = [];
+  for (const wpis of wpisy) {
+    const pelnaSciezka = path.join(rootDir, wpis.name);
+    if (wpis.isDirectory()) {
+      wyniki.push(...await zbierzPlikiPdf(pelnaSciezka, glebokosc + 1));
+    } else if (wpis.isFile() && path.extname(wpis.name).toLowerCase() === '.pdf') {
+      wyniki.push({ nazwa: wpis.name, sciezka: pelnaSciezka, nazwaBezRozszerzenia: wpis.name.slice(0, -4) });
+    }
+  }
+  return wyniki;
+}
+
+// Dopasowanie PLIKU DO ADRESU ponownie uzywa adresPasujeDoFolderu (ten sam
+// tokenowy, tolerancyjny na "ul."/wielkosc liter/diakrytyki mechanizm co przy
+// dopasowaniu folderu klienta) - nazwa pliku (bez ".pdf") jest podstawiana w
+// miejsce "nazwy folderu". Uzywane DWUKROTNIE: dla audytow PV (nazwa pliku =
+// adres + "_PV") i dla dokumentow seryjnych (nazwa pliku = <prefiks><adres>,
+// patrz apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1#Join-PrefixAndAddress)
+// - oba maja identyczna konwencje "nazwa pliku zawiera adres", wiec ten sam
+// mechanizm dopasowania dziala dla obu bez zmian. Zwraca liste trafien -
+// pusta (brak), jednoelementowa (jednoznaczne) albo wieloelementowa
+// (niejednoznaczne - wywolujacy NIGDY nie zgaduje, ktory plik jest wlasciwy).
+function znajdzPlikiPoAdresie(adres, pliki) {
+  return pliki.filter(p => adresPasujeDoFolderu(adres, p.nazwaBezRozszerzenia));
+}
+
+// "Trójfazowe"/"Jednofazowe" (realna wartosc z kolumny "Instalacja 3
+// fazowa") - normalizeAdresDoPorownania juz usuwa polskie znaki, wiec
+// wystarczy szukac rdzenia "troj"/"3" kontra "jedno"/"1". Nieznana/pusta
+// wartosc zwraca null (nie zgadujemy fazy).
+function rozpoznajFaze(value) {
+  const norm = normalizeAdresDoPorownania(value);
+  if (!norm) return null;
+  if (/(^|[^a-z])(troj|3)/.test(norm)) return '3F';
+  if (/(^|[^a-z])(jedno|1)/.test(norm)) return '1F';
+  return null;
+}
+
+// Nazwy plikow schematow: "2,85.pdf" (bez ujednoznacznienia fazy - tylko
+// jeden wariant istnieje dla tej mocy) albo "2,85 3F.pdf"/"2,85 1F.pdf" (dwa
+// warianty tej samej mocy, rozne dla instalacji 1- i 3-fazowej) -
+// zweryfikowane na prawdziwym zipie SCHEMAT (2026-08-19). Pliki
+// niepasujace do wzorca (np. "plot.log", eksportowany log narzedzia, ktore
+// wygenerowalo schematy) sa cicho pomijane - to nie sa schematy.
+function sparsujPlikSchematu(nazwaBezRozszerzenia) {
+  const match = nazwaBezRozszerzenia.trim().match(/^(\d+(?:,\d+)?)(?:\s+(1F|3F))?$/i);
+  if (!match) return null;
+  const moc = Number(match[1].replace(',', '.'));
+  if (!Number.isFinite(moc)) return null;
+  return { moc, faza: match[2] ? match[2].toUpperCase() : null };
+}
+
+function zbudujIndeksSchematow(pliki) {
+  const indeks = [];
+  for (const plik of pliki) {
+    const sparsowany = sparsujPlikSchematu(plik.nazwaBezRozszerzenia);
+    if (sparsowany) indeks.push({ ...plik, ...sparsowany });
+  }
+  return indeks;
+}
+
+// Dopasowanie po mocy z tolerancja na szum zmiennoprzecinkowy (obie wartosci
+// - w Excelu i w nazwie pliku schematu - pochodza z tego samego wyliczenia
+// liczba_modulow x moc_modulu, wiec powinny byc identyczne, nie tylko
+// "blisko"). Jesli dla danej mocy istnieje wiecej niz jeden plik (warianty
+// fazowe), rozstrzyga kolumna fazy z Excela - gdy faza nieznana/kolumny
+// brak, pozostaje niejednoznaczne (nigdy nie zgadujemy).
+const TOLERANCJA_MOCY_KW = 0.001;
+function znajdzSchemat(moc, faza, indeksSchematow) {
+  if (!Number.isFinite(moc)) return [];
+  const trafienia = indeksSchematow.filter(s => Math.abs(s.moc - moc) < TOLERANCJA_MOCY_KW);
+  if (trafienia.length <= 1) return trafienia;
+  if (!faza) return trafienia; // niejednoznaczne, faza nieznana - nie zgadujemy
+  const poFazie = trafienia.filter(s => s.faza === faza);
+  return poFazie.length ? poFazie : trafienia;
+}
+
+// Wspolna logika kopiowania JEDNEGO dodatku (audyt/dokument seryjny/schemat)
+// po tym, jak wywolujacy juz ustalil liste trafien (0/1/wiecej). W
+// przeciwienstwie do kart katalogowych (komplet-albo-nic) kazdy dodatek jest
+// NIEZALEZNY od pozostalych i od kart - brak/niejednoznacznosc jednego
+// dodatku nigdy nie wplywa na inne.
+async function dopasujISkopiujDodatek({ trafienia, folderKlienta, istniejace, dryRun }) {
+  if (trafienia.length === 0) return { status: 'brak' };
+  if (trafienia.length > 1) return { status: 'wieloznaczne', kandydaci: trafienia.map(p => p.nazwa) };
+  const zrodlo = trafienia[0];
+  if (istniejace.has(zrodlo.nazwa.toLowerCase())) return { status: 'pominieto-juz-sa', plik: zrodlo.nazwa };
+  if (dryRun) return { status: 'do-skopiowania', plik: zrodlo.nazwa };
+  try {
+    await fsp.copyFile(zrodlo.sciezka, path.join(folderKlienta, zrodlo.nazwa), fs.constants.COPYFILE_EXCL);
+    return { status: 'skopiowano', plik: zrodlo.nazwa };
+  } catch (err) {
+    return { status: 'blad', plik: zrodlo.nazwa, komunikat: err.message };
+  }
+}
+
+// audytyPliki/dokumentySeryjnePliki/schematyIndeks: null = zrodlo nie zostalo
+// podane dla tego uruchomienia (dodatek w ogole nie pojawia sie w wyniku
+// wiersza); pusta tablica = zrodlo podane, ale nic sie w nim nie znalazlo
+// (kazdy wiersz dostanie ostrzezenie 'brak'). Patrz komentarz przy
+// znajdzPlikiPoAdresie/znajdzSchemat.
+async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki = null, dokumentySeryjnePliki = null, schematyIndeks = null }) {
   const rozpoznany = rozpoznajArkuszSolarow(sheetName);
   const wyniki = [];
   if (!rozpoznany) return wyniki; // arkusz nie dotyczy solarow (np. Pompy, Kotly, adresy)
@@ -453,6 +605,13 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   const colUid = findColumn(header, ['uid']) !== -1
     ? findColumn(header, ['uid'])
     : findColumn(header, ['rodzaj', 'zestaw']);
+  // Tylko dla dopasowania schematow (opcjonalne, nigdy nie blokuje calego
+  // arkusza jak kolumny wyzej) - "biuro" w tresci naglowka odroznia ta
+  // kolumne od podobnie nazwanej "MOC ZESTAWU PO ROZBUDOWIE", ktora tez
+  // zawiera "moc"+"zestaw" (real przypadek: obie kolumny wystepuja w tym
+  // samym arkuszu operacyjnym).
+  const colMoc = findColumn(header, ['moc', 'zestaw', 'biuro']);
+  const colFazowa = findColumn(header, ['fazow']);
 
   const brakujaceKolumny = [];
   if (colLpGmina === -1) brakujaceKolumny.push('LP gminy');
@@ -464,6 +623,13 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   }
   // colRezygnacja moze byc -1 (nie kazdy arkusz ma taka kolumne) - wtedy po
   // prostu nikt nigdy nie ma rezygnacji, co jest bezpiecznym zachowaniem.
+
+  // Brak kolumny mocy NIE blokuje calego arkusza (karty katalogowe i tak sie
+  // dobiora) - jeden, ogolny komunikat zamiast identycznego ostrzezenia przy
+  // kazdym wierszu z osobna.
+  if (schematyIndeks !== null && colMoc === -1) {
+    wyniki.push({ gmina, sheet: sheetName, id: null, adres: null, uid: null, status: 'ostrzezenie', komunikat: `Arkusz "${sheetName}": podano zrodlo schematow, ale nie znaleziono kolumny mocy zestawu (oczekiwano naglowka zawierajacego "moc", "zestaw" i "biuro") - schematy nie zostana dolaczone dla zadnego wiersza.` });
+  }
 
   // FAZA 1 (szybka, synchroniczna): walidacja kazdego wiersza bez zadnych
   // odwolan do dysku. Wiersze, ktore odpadaja tutaj, trafiaja do wynikiByIdx
@@ -544,7 +710,14 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
       continue;
     }
 
-    zadania.push({ idx: i, wiersz, id, adres, uid, opisAdresu, folderNazwa, rozmiar });
+    // Wylacznie do dopasowania schematu - brak/nierozpoznana wartosc NIE jest
+    // bledem tego wiersza (karty i tak sie skopiuja), po prostu schemat
+    // dostanie status "brak" w dodatku.
+    const mocRaw = colMoc !== -1 ? row[colMoc] : null;
+    const moc = typeof mocRaw === 'number' ? mocRaw : parseFloat(String(mocRaw ?? '').replace(',', '.').trim());
+    const faza = colFazowa !== -1 ? rozpoznajFaze(row[colFazowa]) : null;
+
+    zadania.push({ idx: i, wiersz, id, adres, uid, opisAdresu, folderNazwa, rozmiar, moc, faza });
   }
 
   // FAZA 2 (rownolegla, z ograniczeniem KK_CONCURRENCY): listowanie folderu
@@ -552,7 +725,35 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   // dysk sieciowy, wiec robimy wiele adresow naraz zamiast jednego po drugim.
   const semafor = createSemaphore(KK_CONCURRENCY);
   await Promise.all(zadania.map(zadanie => semafor.run(async () => {
-    const { idx, wiersz, id, adres, uid, folderNazwa, rozmiar } = zadanie;
+    const { idx, wiersz, id, adres, uid, folderNazwa, rozmiar, moc, faza } = zadanie;
+
+    // folderKlienta/istniejace nie zaleza od rozmiaru/podfolderu kart, wiec
+    // liczone raz na samej gorze - potrzebne zarowno kartom, jak i kazdemu z
+    // dodatkow (audyt/dokument seryjny/schemat) nizej, niezaleznie od tego,
+    // czy karty w ogole sie skopiuja.
+    const folderKlienta = path.join(projektyDir, folderNazwa);
+    const istniejace = await istniejacePlikiWFolderze(folderKlienta);
+
+    // Dodatki (audyt/dokument seryjny/schemat) sa CALKOWICIE niezalezne od
+    // wyniku kart katalogowych (patrz komentarz przy dopasujISkopiujDodatek) -
+    // dolaczane do KAZDEGO wyniku wiersza ponizej, niezaleznie od tego, ktora
+    // galaz kart (blad/juz-sa/do-skopiowania/skopiowano/blad-kopiowania)
+    // zostanie wybrana.
+    async function zDodatkami(wynikBazowy) {
+      const dodatki = {};
+      if (audytyPliki !== null) {
+        dodatki.audyt = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, audytyPliki), folderKlienta, istniejace, dryRun });
+      }
+      if (dokumentySeryjnePliki !== null) {
+        dodatki.dokumentSeryjny = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, dokumentySeryjnePliki), folderKlienta, istniejace, dryRun });
+      }
+      if (schematyIndeks !== null) {
+        dodatki.schemat = colMoc === -1
+          ? { status: 'brak' }
+          : await dopasujISkopiujDodatek({ trafienia: znajdzSchemat(moc, faza, schematyIndeks), folderKlienta, istniejace, dryRun });
+      }
+      return { ...wynikBazowy, ...dodatki };
+    }
 
     // Nowsza konwencja (podfolder per rozmiar, patrz znajdzPodfolderRozmiaru
     // wyzej) ma pierwszenstwo przed starsza, plaska - jesli podfolder
@@ -565,7 +766,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
       zrodloDir = podfolderRozmiaru;
       const numerowane = await listujKartyNumerowane(podfolderRozmiaru);
       if (!numerowane || !numerowane.length) {
-        wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: podfolder rozmiaru "${path.basename(podfolderRozmiaru)}" nie ma zadnych numerowanych plikow karty (np. "1. ...pdf") dla adresu "${adres || '(brak adresu)'}".` };
+        wynikiByIdx[idx] = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: podfolder rozmiaru "${path.basename(podfolderRozmiaru)}" nie ma zadnych numerowanych plikow karty (np. "1. ...pdf") dla adresu "${adres || '(brak adresu)'}".` });
         return;
       }
       wymaganePliki = numerowane;
@@ -573,13 +774,10 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
       wymaganePliki = [...ZAWSZE_KARTY, nazwaZasobnika(rozmiar)];
     }
 
-    const folderKlienta = path.join(projektyDir, folderNazwa);
-    const istniejace = await istniejacePlikiWFolderze(folderKlienta);
-
     const doSkopiowania = wymaganePliki.filter(nazwa => !istniejace.has(nazwa.toLowerCase()));
 
     if (doSkopiowania.length === 0) {
-      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'pominieto-juz-sa', komunikat: 'Karty katalogowe juz sa w folderze klienta.' };
+      wynikiByIdx[idx] = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'pominieto-juz-sa', komunikat: 'Karty katalogowe juz sa w folderze klienta.' });
       return;
     }
 
@@ -600,12 +798,12 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
       if (!istnieje) brakujaceZrodla.push(nazwaPliku);
     }
     if (brakujaceZrodla.length) {
-      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak plikow zrodlowych: ${brakujaceZrodla.join(', ')} - nie skopiowano ZADNEJ karty dla tego adresu (komplet albo nic).` };
+      wynikiByIdx[idx] = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak plikow zrodlowych: ${brakujaceZrodla.join(', ')} - nie skopiowano ZADNEJ karty dla tego adresu (komplet albo nic).` });
       return;
     }
 
     if (dryRun) {
-      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'do-skopiowania', komunikat: `Pliki: ${doSkopiowania.map(n => n + ' (podglad)').join(', ')}` };
+      wynikiByIdx[idx] = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'do-skopiowania', komunikat: `Pliki: ${doSkopiowania.map(n => n + ' (podglad)').join(', ')}` });
       return;
     }
 
@@ -622,12 +820,12 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
         await fsp.copyFile(path.join(zrodloDir, nazwaPliku), path.join(folderKlienta, nazwaPliku), fs.constants.COPYFILE_EXCL);
         skopiowaneWTejProbie.push(nazwaPliku);
       }
-      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'skopiowano', komunikat: `Pliki: ${doSkopiowania.join(', ')}` };
+      wynikiByIdx[idx] = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'skopiowano', komunikat: `Pliki: ${doSkopiowania.join(', ')}` });
     } catch (err) {
       for (const nazwaPliku of skopiowaneWTejProbie) {
         await fsp.unlink(path.join(folderKlienta, nazwaPliku)).catch(() => {});
       }
-      wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie udalo sie skopiowac kompletu kart (${err.message}) - zaden plik NIE zostal dodany do folderu klienta (komplet albo nic).` };
+      wynikiByIdx[idx] = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie udalo sie skopiowac kompletu kart (${err.message}) - zaden plik NIE zostal dodany do folderu klienta (komplet albo nic).` });
     }
   })));
 
@@ -801,10 +999,43 @@ app.get('/api/browse-folder', (req, res) => {
   }
 });
 
-app.post('/api/run', upload.single('excel'), async (req, res) => {
+// Zrodlo (audyty/schematy/dokumenty seryjne) - zip (wgrany plik) ma
+// pierwszenstwo przed sciezka (jesli oba jakims trafem podano naraz).
+// Zwraca { dir, wyczysc } albo null, jesli zrodlo nie zostalo w ogole podane
+// dla tego uruchomienia - "wyczysc" usuwa rozpakowany zip po zakonczeniu
+// (sciezka wskazana recznie NIGDY nie jest usuwana - to nie nasz plik).
+async function rozstrzygnijZrodloDodatku(req, etykieta, zipPole, sciezkaPole) {
+  const zipFile = req.files?.[zipPole]?.[0];
+  if (zipFile) {
+    const dir = await rozpakujZipDoTemp(zipFile.path, req.jobId, etykieta);
+    return { dir, wyczysc: true };
+  }
+  const sciezka = normalizujTekst(req.body[sciezkaPole]);
+  if (sciezka) {
+    if (!fs.existsSync(sciezka)) throw new Error(`Podana sciezka (${etykieta}) nie istnieje: ${sciezka}`);
+    return { dir: sciezka, wyczysc: false };
+  }
+  return null;
+}
+
+app.post('/api/run', uploadWieloplikowy.fields([
+  { name: 'excel', maxCount: 1 },
+  { name: 'audytyZip', maxCount: 1 },
+  { name: 'schematyZip', maxCount: 1 },
+  { name: 'dokumentySeryjneZip', maxCount: 1 }
+]), async (req, res) => {
   const jobId = crypto.randomUUID();
+  req.jobId = jobId;
+  const doWyczyszczenia = [];
+  const wszystkieWgrane = () => [
+    ...(req.files?.excel || []),
+    ...(req.files?.audytyZip || []),
+    ...(req.files?.schematyZip || []),
+    ...(req.files?.dokumentySeryjneZip || [])
+  ];
   try {
-    if (!req.file) throw new Error('Dodaj plik Excel (.xlsx).');
+    const excelFile = req.files?.excel?.[0];
+    if (!excelFile) throw new Error('Dodaj plik Excel (.xlsx).');
     const rootPath = normalizujTekst(req.body.rootPath);
     if (!rootPath) throw new Error('Podaj sciezke do glownego folderu (np. ...\\Kolektory).');
     if (!fs.existsSync(rootPath)) throw new Error(`Podana sciezka nie istnieje: ${rootPath}`);
@@ -816,10 +1047,35 @@ app.post('/api/run', upload.single('excel'), async (req, res) => {
     // Frontend zawsze wysyla 'typ' po jawnym wyborze rodzaju w UI.
     const typ = normalizujTekst(req.body.typ) === 'pompy' ? 'pompy' : 'solary';
 
+    // Audyty/schematy/dokumenty seryjne dotycza WYLACZNIE solarow (schematy
+    // sa dobierane po mocy zestawu fotowoltaicznego, audyty/dokumenty
+    // seryjne po adresie z arkusza PV) - dla pomp te pola sa po prostu
+    // ignorowane, nawet jesli front-end jakims trafem by je wyslal.
+    let audytyPliki = null;
+    let dokumentySeryjnePliki = null;
+    let schematyIndeks = null;
+    if (typ === 'solary') {
+      const audytyZrodlo = await rozstrzygnijZrodloDodatku(req, 'audyty', 'audytyZip', 'audytyPath');
+      if (audytyZrodlo) {
+        if (audytyZrodlo.wyczysc) doWyczyszczenia.push(audytyZrodlo.dir);
+        audytyPliki = await zbierzPlikiPdf(audytyZrodlo.dir);
+      }
+      const dokSeryjneZrodlo = await rozstrzygnijZrodloDodatku(req, 'dokumenty-seryjne', 'dokumentySeryjneZip', 'dokumentySeryjnePath');
+      if (dokSeryjneZrodlo) {
+        if (dokSeryjneZrodlo.wyczysc) doWyczyszczenia.push(dokSeryjneZrodlo.dir);
+        dokumentySeryjnePliki = await zbierzPlikiPdf(dokSeryjneZrodlo.dir);
+      }
+      const schematyZrodlo = await rozstrzygnijZrodloDodatku(req, 'schematy', 'schematyZip', 'schematyPath');
+      if (schematyZrodlo) {
+        if (schematyZrodlo.wyczysc) doWyczyszczenia.push(schematyZrodlo.dir);
+        schematyIndeks = zbudujIndeksSchematow(await zbierzPlikiPdf(schematyZrodlo.dir));
+      }
+    }
+
     // Uwaga: w tej wersji read-excel-file { getSheets: true } zwraca od razu
     // wszystkie arkusze z danymi (pole 'sheet' = nazwa, 'data' = wiersze),
     // wiec nie trzeba osobno doczytywac kazdego arkusza.
-    const wszystkieArkusze = await readXlsxFile(req.file.path, { getSheets: true });
+    const wszystkieArkusze = await readXlsxFile(excelFile.path, { getSheets: true });
 
     const wynikiWszystkie = [];
     for (const arkusz of wszystkieArkusze) {
@@ -832,7 +1088,7 @@ app.post('/api/run', upload.single('excel'), async (req, res) => {
         const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
         wynikiWszystkie.push(...wynikiPompy);
       } else {
-        const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun });
+        const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, schematyIndeks });
         wynikiWszystkie.push(...wynikiSolary);
       }
     }
@@ -849,7 +1105,12 @@ app.post('/api/run', upload.single('excel'), async (req, res) => {
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
   } finally {
-    if (req.file?.path) fsp.unlink(req.file.path).catch(() => {});
+    // Wgrane pliki (excel + ewentualne zipy) sa tylko robocze - kasowane
+    // zawsze, niezaleznie od sukcesu/bledu. Rozpakowane zipy (doWyczyszczenia)
+    // sprzatane osobno - sciezki wskazane recznie (audytyPath itp.) NIGDY tu
+    // nie trafiaja, bo to nie sa nasze pliki.
+    for (const plik of wszystkieWgrane()) fsp.unlink(plik.path).catch(() => {});
+    for (const dir of doWyczyszczenia) fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -867,11 +1128,19 @@ if (require.main === module) {
 }
 
 module.exports = {
+  app,
   przetworzArkusz,
   przetworzArkuszPomp,
   adresPasujeDoFolderu,
   parseIdFolderu,
   rozpoznajArkuszSolarow,
   parseModelPompy,
-  rozpoznajArkuszPomp
+  rozpoznajArkuszPomp,
+  znajdzPlikiPoAdresie,
+  sparsujPlikSchematu,
+  zbudujIndeksSchematow,
+  znajdzSchemat,
+  rozpoznajFaze,
+  zbierzPlikiPdf,
+  dopasujISkopiujDodatek
 };

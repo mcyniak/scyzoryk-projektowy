@@ -10,6 +10,27 @@ const STATUS_LABELS = {
   'blad': ['Błąd', 'err']
 };
 
+// Statusy dodatkow (audyt/schemat/dokument seryjny) - osobna mapa od
+// STATUS_LABELS (kart katalogowych), bo maja dwa stany bez odpowiednika tam:
+// "brak" (zrodlo podane, ale nic nie pasuje do tego adresu/mocy - normalne,
+// nie kazdy adres ma juz gotowy audyt) i "wieloznaczne" (kilka plikow pasuje
+// naraz - nigdy nie zgadujemy, ktory jest wlasciwy).
+const DODATEK_STATUS_LABELS = {
+  'skopiowano': ['Skopiowano', 'ok'],
+  'do-skopiowania': ['Do skopiowania', 'ok'],
+  'pominieto-juz-sa': ['Już jest', 'skip'],
+  'brak': ['Brak', 'warn'],
+  'wieloznaczne': ['Niejednoznaczne', 'warn'],
+  'blad': ['Błąd', 'err']
+};
+function renderDodatek(dodatek) {
+  if (!dodatek) return ''; // zrodlo nie zostalo podane dla tego uruchomienia
+  const [label, cls] = DODATEK_STATUS_LABELS[dodatek.status] || [dodatek.status, 'skip'];
+  const szczegol = dodatek.plik || (dodatek.kandydaci ? dodatek.kandydaci.join(', ') : '');
+  const title = szczegol ? ` title="${escapeHtml(szczegol)}"` : '';
+  return `<span class="kk-badge ${cls}"${title}>${label}</span>`;
+}
+
 const checkBtn = document.getElementById('checkBtn');
 const runBtn = document.getElementById('runBtn');
 const statusEl = document.getElementById('kkStatus');
@@ -50,6 +71,10 @@ function odswiezOpisyRodzaju() {
   document.getElementById('kkExcelLabel').textContent = copy.excelLabel;
   document.getElementById('kkRootPathLabel').textContent = copy.rootPathLabel;
   document.getElementById('rootPath').placeholder = copy.placeholder;
+  // Audyty/schematy/dokumenty seryjne dotycza wylacznie solarow (schematy sa
+  // dobierane wg mocy zestawu PV, audyty/dok. seryjne wg adresu z arkusza PV) -
+  // patrz server.js#przetworzArkusz, ktore ignoruje te pola dla pomp.
+  document.getElementById('kkDodatkiSection').hidden = aktualnyRodzajKart() !== 'solary';
 }
 
 document.querySelectorAll('input[name="kkMode"]').forEach(el => el.addEventListener('change', odswiezOpisyRodzaju));
@@ -74,6 +99,22 @@ async function runJob(dryRun) {
   formData.append('rootPath', rootPath);
   formData.append('typ', aktualnyRodzajKart());
   formData.append('dryRun', String(dryRun));
+
+  // Zip ma pierwszenstwo przed sciezka (patrz rozstrzygnijZrodloDodatku w
+  // server.js) - wysylamy oba, jesli oba sa wypelnione, backend sam wybiera.
+  // Server.js i tak ignoruje te pola dla trybu "pompy", wiec nie ma potrzeby
+  // warunkowac tego tutaj.
+  const dodatki = [
+    ['audytyZip', 'audytyPathInput', 'audytyPath'],
+    ['schematyZip', 'schematyPathInput', 'schematyPath'],
+    ['dokumentySeryjneZip', 'dokumentySeryjnePathInput', 'dokumentySeryjnePath']
+  ];
+  for (const [zipField, pathInputId, pathField] of dodatki) {
+    const zipInput = document.getElementById(`${zipField}Input`);
+    if (zipInput && zipInput.files.length) formData.append(zipField, zipInput.files[0]);
+    const pathValue = document.getElementById(pathInputId).value.trim();
+    if (pathValue) formData.append(pathField, pathValue);
+  }
 
   checkBtn.disabled = true;
   runBtn.disabled = true;
@@ -102,6 +143,9 @@ async function runJob(dryRun) {
         <td>${w.folder || ''}</td>
         <td><span class="kk-badge ${cls}">${label}</span></td>
         <td>${w.komunikat || ''}</td>
+        <td>${renderDodatek(w.audyt)}</td>
+        <td>${renderDodatek(w.schemat)}</td>
+        <td>${renderDodatek(w.dokumentSeryjny)}</td>
       </tr>`;
     }).join('');
 
@@ -177,6 +221,17 @@ document.getElementById('browseFolderBtn').addEventListener('click', () => {
   browseTargetInput = document.getElementById('rootPath');
   const startPath = browseTargetInput.value.trim();
   openFolderBrowser(startPath || null);
+});
+// Te same "Przegladaj..." dla audytow/schematow/dokumentow seryjnych -
+// data-browse-target zamiast osobnego listenera per pole (3x powtorzony
+// kod), bo mechanizm (jeden globalny browseTargetInput + modal) jest
+// identyczny jak dla rootPath powyzej.
+document.querySelectorAll('.kk-browse-btn[data-browse-target]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    browseTargetInput = document.getElementById(btn.dataset.browseTarget);
+    const startPath = browseTargetInput.value.trim();
+    openFolderBrowser(startPath || null);
+  });
 });
 document.getElementById('folderBrowseClose').addEventListener('click', closeFolderBrowser);
 folderBrowseModal.addEventListener('click', (event) => {

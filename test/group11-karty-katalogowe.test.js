@@ -11,14 +11,23 @@ const path = require('node:path');
 // co test/group3-ocr.test.js requirujacy exceljs z node_modules ocr-audytow).
 const XLSX = require('../apps/drukarka-projekty/node_modules/xlsx');
 const readXlsxFile = require('../apps/karty-katalogowe/node_modules/read-excel-file/node');
+const AdmZip = require('../apps/karty-katalogowe/node_modules/adm-zip');
 const {
+  app: kkApp,
   przetworzArkusz,
   przetworzArkuszPomp,
   adresPasujeDoFolderu,
   parseIdFolderu,
   rozpoznajArkuszSolarow,
   parseModelPompy,
-  rozpoznajArkuszPomp
+  rozpoznajArkuszPomp,
+  znajdzPlikiPoAdresie,
+  sparsujPlikSchematu,
+  zbudujIndeksSchematow,
+  znajdzSchemat,
+  rozpoznajFaze,
+  zbierzPlikiPdf,
+  dopasujISkopiujDodatek
 } = require('../apps/karty-katalogowe/server');
 
 const HEADER = ['LP gminy', 'Adres', 'UID', 'Rezygnacja'];
@@ -595,4 +604,260 @@ test('przetworzArkuszPomp: model z kilkoma wariantami folderu wzoru (np. + Kocio
   assert.equal(wyniki[0].status, 'blad');
   assert.match(wyniki[0].komunikat, /kilka pasujących wariantów/);
   assert.deepEqual(await fsp.readdir(folderKlienta), [], 'nic nie moglo zostac skopiowane przy niejednoznacznym dopasowaniu');
+});
+
+// =====================================================================
+// Audyty PV / dokumenty seryjne (dopasowanie po adresie) i schematy
+// (dopasowanie po mocy) - dolaczane do folderu klienta OBOK kart
+// katalogowych, 2026-08-19. Nazwy plikow w testach wzorowane 1:1 na
+// prawdziwych zipach dostarczonych przez wlasciciela (PV-....zip,
+// SCHEMAT-....zip) - patrz komentarze przy funkcjach w server.js.
+// =====================================================================
+
+test('sparsujPlikSchematu: "liczba,liczba [1F|3F].pdf" (bez rozszerzenia) rozpoznawane, cokolwiek innego (np. log narzedzia) - null', () => {
+  assert.deepEqual(sparsujPlikSchematu('2,85 3F'), { moc: 2.85, faza: '3F' });
+  assert.deepEqual(sparsujPlikSchematu('2,85 1F'), { moc: 2.85, faza: '1F' });
+  assert.deepEqual(sparsujPlikSchematu('11,875'), { moc: 11.875, faza: null });
+  assert.deepEqual(sparsujPlikSchematu('3,8'), { moc: 3.8, faza: null });
+  assert.equal(sparsujPlikSchematu('plot'), null, 'plot.log (bez rozszerzenia .pdf, bo wchodzi juz bez niej) nie jest schematem');
+  assert.equal(sparsujPlikSchematu('rozne rzeczy'), null);
+});
+
+test('rozpoznajFaze: "Trójfazowe"/"Jednofazowe" (prawdziwa wartosc z kolumny) rozpoznawane, nieznana wartosc - null (nie zgadujemy)', () => {
+  assert.equal(rozpoznajFaze('Trójfazowe'), '3F');
+  assert.equal(rozpoznajFaze('Jednofazowe'), '1F');
+  assert.equal(rozpoznajFaze(''), null);
+  assert.equal(rozpoznajFaze(null), null);
+  assert.equal(rozpoznajFaze('cos innego'), null);
+});
+
+test('znajdzSchemat: dopasowanie po mocy z tolerancja, ujednoznacznienie przez faze gdy trzeba, niejednoznaczne gdy faza nieznana', () => {
+  const indeks = zbudujIndeksSchematow([
+    { nazwa: '2,85 1F.pdf', sciezka: 'a', nazwaBezRozszerzenia: '2,85 1F' },
+    { nazwa: '2,85 3F.pdf', sciezka: 'b', nazwaBezRozszerzenia: '2,85 3F' },
+    { nazwa: '3,8.pdf', sciezka: 'c', nazwaBezRozszerzenia: '3,8' },
+    { nazwa: 'plot.pdf', sciezka: 'd', nazwaBezRozszerzenia: 'plot' } // niepasujacy wzorzec - pominiety przez zbudujIndeksSchematow
+  ]);
+  assert.equal(indeks.length, 3, 'plot.pdf nie jest schematem, nie wchodzi do indeksu');
+
+  // Jedna, jednoznaczna moc - faza bez znaczenia.
+  assert.deepEqual(znajdzSchemat(3.8, null, indeks).map(s => s.nazwa), ['3,8.pdf']);
+  // Dwa warianty tej samej mocy - faza z Excela rozstrzyga.
+  assert.deepEqual(znajdzSchemat(2.85, '3F', indeks).map(s => s.nazwa), ['2,85 3F.pdf']);
+  assert.deepEqual(znajdzSchemat(2.85, '1F', indeks).map(s => s.nazwa), ['2,85 1F.pdf']);
+  // Faza nieznana - niejednoznaczne (oba warianty), nigdy nie zgadujemy.
+  assert.equal(znajdzSchemat(2.85, null, indeks).length, 2);
+  // Brak dopasowania mocy.
+  assert.equal(znajdzSchemat(99, null, indeks).length, 0);
+  // Tolerancja na szum zmiennoprzecinkowy (0.1 + 0.2 !== 0.3 w JS).
+  assert.deepEqual(znajdzSchemat(0.1 + 0.2, null, zbudujIndeksSchematow([{ nazwa: '0,3.pdf', sciezka: 'x', nazwaBezRozszerzenia: '0,3' }])).map(s => s.nazwa), ['0,3.pdf']);
+});
+
+test('znajdzPlikiPoAdresie: nazwa pliku audytu/dokumentu seryjnego zawierajaca adres (z "ul.", inna kolejnosc) dalej pasuje do adresu z Excela (bez "ul.")', () => {
+  const pliki = [
+    { nazwa: 'Wierzchlas, ul. Częstochowska 26_PV.pdf', sciezka: 'a', nazwaBezRozszerzenia: 'Wierzchlas, ul. Częstochowska 26_PV' },
+    { nazwa: 'Przycłapy, 11_PV.pdf', sciezka: 'b', nazwaBezRozszerzenia: 'Przycłapy, 11_PV' },
+    { nazwa: 'Krzeczów, ul. Wschodnia 8_PV.pdf', sciezka: 'c', nazwaBezRozszerzenia: 'Krzeczów, ul. Wschodnia 8_PV' }
+  ];
+  // Prawdziwa wartosc kolumny "Adres" (bez "ul.", patrz real dane Wierzchlas).
+  assert.deepEqual(znajdzPlikiPoAdresie('Wierzchlas, Częstochowska 26', pliki).map(p => p.nazwa), ['Wierzchlas, ul. Częstochowska 26_PV.pdf']);
+  assert.deepEqual(znajdzPlikiPoAdresie('Przycłapy 11', pliki).map(p => p.nazwa), ['Przycłapy, 11_PV.pdf']);
+  assert.equal(znajdzPlikiPoAdresie('Zupelnie inny adres 99', pliki).length, 0);
+});
+
+test('zbierzPlikiPdf: rekurencyjnie zbiera .pdf (dowolna glebokosc), ignoruje inne rozszerzenia (np. plot.log)', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-pdf-scan-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(dir, 'a.pdf'), 'x');
+  await fsp.writeFile(path.join(dir, 'plot.log'), 'x');
+  const nested = path.join(dir, 'PV');
+  await fsp.mkdir(nested);
+  await fsp.writeFile(path.join(nested, 'b.pdf'), 'x');
+
+  const pliki = await zbierzPlikiPdf(dir);
+  assert.deepEqual(pliki.map(p => p.nazwa).sort(), ['a.pdf', 'b.pdf']);
+  assert.ok(pliki.every(p => p.nazwaBezRozszerzenia === p.nazwa.slice(0, -4)));
+});
+
+test('dopasujISkopiujDodatek: brak/niejednoznaczne/juz-jest/podglad/kopiowanie', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-dodatek-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const zrodloDir = path.join(dir, 'zrodlo');
+  const folderKlienta = path.join(dir, 'klient');
+  await fsp.mkdir(zrodloDir, { recursive: true });
+  await fsp.mkdir(folderKlienta, { recursive: true });
+  const plikZrodlowy = path.join(zrodloDir, 'audyt.pdf');
+  await fsp.writeFile(plikZrodlowy, 'tresc-audytu');
+
+  assert.deepEqual(await dopasujISkopiujDodatek({ trafienia: [], folderKlienta, istniejace: new Set(), dryRun: false }), { status: 'brak' });
+
+  const wieloznaczne = await dopasujISkopiujDodatek({
+    trafienia: [{ nazwa: 'a.pdf' }, { nazwa: 'b.pdf' }],
+    folderKlienta, istniejace: new Set(), dryRun: false
+  });
+  assert.equal(wieloznaczne.status, 'wieloznaczne');
+  assert.deepEqual(wieloznaczne.kandydaci, ['a.pdf', 'b.pdf']);
+
+  const trafienie = { nazwa: 'audyt.pdf', sciezka: plikZrodlowy };
+  const podglad = await dopasujISkopiujDodatek({ trafienia: [trafienie], folderKlienta, istniejace: new Set(), dryRun: true });
+  assert.deepEqual(podglad, { status: 'do-skopiowania', plik: 'audyt.pdf' });
+  assert.deepEqual(await fsp.readdir(folderKlienta), [], 'dryRun nigdy nie kopiuje');
+
+  const skopiowano = await dopasujISkopiujDodatek({ trafienia: [trafienie], folderKlienta, istniejace: new Set(), dryRun: false });
+  assert.deepEqual(skopiowano, { status: 'skopiowano', plik: 'audyt.pdf' });
+  assert.equal(await fsp.readFile(path.join(folderKlienta, 'audyt.pdf'), 'utf8'), 'tresc-audytu');
+
+  const jużJest = await dopasujISkopiujDodatek({ trafienia: [trafienie], folderKlienta, istniejace: new Set(['audyt.pdf']), dryRun: false });
+  assert.deepEqual(jużJest, { status: 'pominieto-juz-sa', plik: 'audyt.pdf' });
+});
+
+const HEADER_PV = ['LP gminy', 'Adres', 'UID', 'Rezygnacja', 'Moc zestawu uwzględniająca moc modułów (biuro)', 'Instalacja 3 fazowa'];
+async function napiszArkuszPV(sheetName, rows) {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-pv-'));
+  const file = path.join(dir, 'dane.xlsx');
+  const ws = XLSX.utils.aoa_to_sheet([HEADER_PV, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, file);
+  return { file, dir };
+}
+
+test('przetworzArkusz: audyt/dokument seryjny/schemat sa dolaczane NIEZALEZNIE od siebie i od kart - brak jednego nie blokuje reszty (decyzja wlasciciela 2026-08-19)', async (t) => {
+  const { root, projektyDir } = await przygotujRoot({
+    foldery: ['41 - Wierzchlas, Częstochowska 26', '42 - Wierzchlas, Krótka 3'],
+    kartyPliki: WYMAGANE_KARTY
+  });
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const audytyPliki = await zbierzPlikiPdf(await (async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-audyty-'));
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+    await fsp.writeFile(path.join(dir, 'Wierzchlas, ul. Częstochowska 26_PV.pdf'), 'audyt-1');
+    // Zadnego pliku dla adresu "Krótka 3" - musi dac ostrzezenie 'brak', nie blad.
+    return dir;
+  })());
+
+  const schematyDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-schematy-'));
+  t.after(() => fsp.rm(schematyDir, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(schematyDir, '2,85.pdf'), 'schemat-2,85');
+  const schematyIndeks = zbudujIndeksSchematow(await zbierzPlikiPdf(schematyDir));
+
+  const { file, dir: xlsxDir } = await napiszArkuszPV('Solary Zarnow', [
+    [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe'],
+    [42, 'Wierzchlas, Krótka 3', '2/250', '', 4.75, 'Trójfazowe'] // 4,75 nie istnieje w schematyDir -> 'brak'
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({
+    sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false,
+    audytyPliki, dokumentySeryjnePliki: null, schematyIndeks
+  });
+
+  assert.equal(wyniki.length, 2);
+  const [w1, w2] = wyniki;
+
+  // Wiersz 1: karty + audyt + schemat wszystkie sie udaly.
+  assert.equal(w1.status, 'skopiowano');
+  assert.deepEqual(w1.audyt, { status: 'skopiowano', plik: 'Wierzchlas, ul. Częstochowska 26_PV.pdf' });
+  assert.equal(w1.dokumentSeryjny, undefined, 'zrodlo nie podane (null) - pole w ogole nie istnieje w wyniku');
+  assert.deepEqual(w1.schemat, { status: 'skopiowano', plik: '2,85.pdf' });
+  assert.ok(fs.existsSync(path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26', 'Wierzchlas, ul. Częstochowska 26_PV.pdf')));
+  assert.ok(fs.existsSync(path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26', '2,85.pdf')));
+
+  // Wiersz 2: karty nadal sie kopiuja mimo braku audytu i schematu dla tego adresu.
+  assert.equal(w2.status, 'skopiowano', 'brak audytu/schematu NIE blokuje kart (decyzja wlasciciela)');
+  assert.deepEqual(w2.audyt, { status: 'brak' });
+  assert.deepEqual(w2.schemat, { status: 'brak' });
+});
+
+test('przetworzArkusz: schemat z dwoma wariantami fazowymi bez znanej fazy w Excelu -> "wieloznaczne", nigdy nie zgaduje', async (t) => {
+  const { root } = await przygotujRoot({
+    foldery: ['41 - Wierzchlas, Częstochowska 26'],
+    kartyPliki: WYMAGANE_KARTY
+  });
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const schematyDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-schematy-faza-'));
+  t.after(() => fsp.rm(schematyDir, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(schematyDir, '2,85 1F.pdf'), 'x');
+  await fsp.writeFile(path.join(schematyDir, '2,85 3F.pdf'), 'x');
+  const schematyIndeks = zbudujIndeksSchematow(await zbierzPlikiPdf(schematyDir));
+
+  // Arkusz BEZ kolumny fazy w ogole (falszywa nazwa naglowka, kolumna nie zostanie znaleziona).
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-nofaza-'));
+  const file = path.join(dir, 'dane.xlsx');
+  const header = ['LP gminy', 'Adres', 'UID', 'Rezygnacja', 'Moc zestawu uwzględniająca moc modułów (biuro)'];
+  const ws = XLSX.utils.aoa_to_sheet([header, [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85]]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Solary Zarnow');
+  XLSX.writeFile(wb, file);
+  t.after(() => usunPozniej(dir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({
+    sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false,
+    audytyPliki: null, dokumentySeryjnePliki: null, schematyIndeks
+  });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano', 'karty sie kopiuja mimo niejednoznacznego schematu');
+  assert.equal(wyniki[0].schemat.status, 'wieloznaczne');
+  assert.deepEqual(wyniki[0].schemat.kandydaci.sort(), ['2,85 1F.pdf', '2,85 3F.pdf']);
+});
+
+test('POST /api/run: zip z audytami/schematami (wgrany plik, nie sciezka) - rozpakowywany i dolaczany do wyniku', async (t) => {
+  const { root, projektyDir } = await przygotujRoot({
+    foldery: ['41 - Wierzchlas, Częstochowska 26'],
+    kartyPliki: WYMAGANE_KARTY
+  });
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-http-zip-'));
+  t.after(() => fsp.rm(workDir, { recursive: true, force: true }));
+
+  const audytyZip = new AdmZip();
+  audytyZip.addFile('PV/Wierzchlas, ul. Częstochowska 26_PV.pdf', Buffer.from('audyt-tresc'));
+  const audytyZipPath = path.join(workDir, 'audyty.zip');
+  audytyZip.writeZip(audytyZipPath);
+
+  const schematyZip = new AdmZip();
+  schematyZip.addFile('SCHEMAT/2,85.pdf', Buffer.from('schemat-tresc'));
+  schematyZip.addFile('SCHEMAT/plot.log', Buffer.from('log'));
+  const schematyZipPath = path.join(workDir, 'schematy.zip');
+  schematyZip.writeZip(schematyZipPath);
+
+  const { file: excelFile, dir: xlsxDir } = await napiszArkuszPV('Solary Zarnow', [
+    [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const server = kkApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('excel', new Blob([await fsp.readFile(excelFile)]), 'dane.xlsx');
+  form.append('audytyZip', new Blob([await fsp.readFile(audytyZipPath)]), 'audyty.zip');
+  form.append('schematyZip', new Blob([await fsp.readFile(schematyZipPath)]), 'schematy.zip');
+  form.append('rootPath', root);
+  form.append('typ', 'solary');
+  form.append('dryRun', 'false');
+
+  const res = await fetch(`${base}/api/run`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const data = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(data));
+  assert.equal(data.ok, true);
+  assert.equal(data.wyniki.length, 1);
+  assert.equal(data.wyniki[0].status, 'skopiowano');
+  assert.deepEqual(data.wyniki[0].audyt, { status: 'skopiowano', plik: 'Wierzchlas, ul. Częstochowska 26_PV.pdf' });
+  assert.deepEqual(data.wyniki[0].schemat, { status: 'skopiowano', plik: '2,85.pdf' });
+
+  const folderKlienta = path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26');
+  assert.equal(await fsp.readFile(path.join(folderKlienta, 'Wierzchlas, ul. Częstochowska 26_PV.pdf'), 'utf8'), 'audyt-tresc');
+  assert.equal(await fsp.readFile(path.join(folderKlienta, '2,85.pdf'), 'utf8'), 'schemat-tresc');
 });

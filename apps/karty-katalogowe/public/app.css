@@ -9,6 +9,14 @@
 .kk-mode-row { display: flex; gap: var(--space-4); flex-wrap: wrap; }
 .kk-mode-option { display: flex; align-items: center; gap: 8px; font-weight: 500; color: var(--text-primary); cursor: pointer; }
 
+/* Audyty/schematy/dokumenty seryjne - zip ALBO sciezka, wybor per pole.
+   Widoczne tylko w trybie Solary (patrz odswiezOpisyRodzaju w app.js). */
+#kkDodatkiSection[hidden] { display: none; }
+.kk-dodatek-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.kk-dodatek-row input[type=file] { flex: 0 0 auto; max-width: 220px; }
+.kk-dodatek-row .path-row { flex: 1; min-width: 260px; }
+.kk-or { color: var(--text-tertiary); font-weight: 600; font-size: var(--text-sm); }
+
 .kk-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: var(--space-4); }
 .kk-chip { padding: 7px 13px; border-radius: 999px; font-weight: 700; font-size: 12.5px; border: 1px solid var(--border-default); background: var(--bg-surface-muted); color: var(--text-secondary); }
 .kk-chip.ok { background: var(--success-50); color: var(--success-600); border-color: var(--success-100); }

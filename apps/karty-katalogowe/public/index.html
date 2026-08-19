@@ -81,6 +81,43 @@
         </div>
       </div>
 
+      <div id="kkDodatkiSection">
+        <div class="kk-field">
+          <label>Audyty PV (opcjonalnie, dołączane wg adresu)</label>
+          <div class="kk-dodatek-row">
+            <input type="file" id="audytyZipInput" accept=".zip">
+            <span class="kk-or">albo</span>
+            <div class="path-row">
+              <input type="text" id="audytyPathInput" placeholder="Ścieżka do folderu z audytami">
+              <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="audytyPathInput">Przeglądaj...</button>
+            </div>
+          </div>
+        </div>
+        <div class="kk-field">
+          <label>Schematy elektryczne (opcjonalnie, dołączane wg mocy zestawu)</label>
+          <div class="kk-dodatek-row">
+            <input type="file" id="schematyZipInput" accept=".zip">
+            <span class="kk-or">albo</span>
+            <div class="path-row">
+              <input type="text" id="schematyPathInput" placeholder="Ścieżka do folderu ze schematami">
+              <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="schematyPathInput">Przeglądaj...</button>
+            </div>
+          </div>
+        </div>
+        <div class="kk-field">
+          <label>Dokumenty seryjne (opcjonalnie, dołączane wg adresu)</label>
+          <div class="kk-dodatek-row">
+            <input type="file" id="dokumentySeryjneZipInput" accept=".zip">
+            <span class="kk-or">albo</span>
+            <div class="path-row">
+              <input type="text" id="dokumentySeryjnePathInput" placeholder="Ścieżka do folderu z dokumentami seryjnymi">
+              <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="dokumentySeryjnePathInput">Przeglądaj...</button>
+            </div>
+          </div>
+        </div>
+        <p class="kk-hint">Dotyczy wyłącznie solarów. Brak dopasowania dla pojedynczego adresu nie blokuje kopiowania kart katalogowych - trafia tylko do kolumn „Audyt”/„Schemat”/„Dok. seryjny” w wynikach.</p>
+      </div>
+
       <div class="controls">
         <button id="checkBtn" class="btn btn-primary" type="button">Sprawdź tabelę</button>
       </div>
@@ -98,7 +135,7 @@
       <div class="table-wrap">
         <table class="table table-row-hover" id="kkTable">
           <thead>
-            <tr><th>Gmina</th><th>ID</th><th>Adres</th><th>UID</th><th>Folder</th><th>Status</th><th>Szczegóły</th></tr>
+            <tr><th>Gmina</th><th>ID</th><th>Adres</th><th>UID</th><th>Folder</th><th>Status</th><th>Szczegóły</th><th>Audyt</th><th>Schemat</th><th>Dok. seryjny</th></tr>
           </thead>
           <tbody id="kkTableBody"></tbody>
         </table>
