@@ -869,3 +869,87 @@ test('POST /api/run: zip z audytami/schematami/dokumentami seryjnymi (wgrane pli
   assert.equal(await fsp.readFile(path.join(folderKlienta, '2,85.pdf'), 'utf8'), 'schemat-tresc');
   assert.equal(await fsp.readFile(path.join(folderKlienta, 'Wierzchlas, ul. Częstochowska 26_DS.pdf'), 'utf8'), 'dokument-seryjny-tresc');
 });
+
+test('POST /api/run: typ="audyty" jest osobnym trybem (jak Solary/Pompy) - dziala BEZ folderu "karty" (0 kart kopiowanych), status wiersza to wprost status audytu (audyt 2026-08-19: wlasciciel chcial osobnej opcji per dodatek, nie wspolnego formularza z 3 zipami)', async (t) => {
+  // Root CELOWO bez folderu "karty" - dowod, ze tryb "tylko audyty" nie
+  // wymaga w ogole zrodla kart katalogowych.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-audyty-only-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const projektyDir = path.join(root, 'Projekty', 'Zarnow');
+  await fsp.mkdir(path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26'), { recursive: true });
+
+  const workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-http-audyty-only-'));
+  t.after(() => fsp.rm(workDir, { recursive: true, force: true }));
+  const audytyZip = new AdmZip();
+  audytyZip.addFile('PV/Wierzchlas, ul. Częstochowska 26_PV.pdf', Buffer.from('audyt-tresc'));
+  const audytyZipPath = path.join(workDir, 'audyty.zip');
+  audytyZip.writeZip(audytyZipPath);
+
+  const { file: excelFile, dir: xlsxDir } = await napiszArkuszPV('Solary Zarnow', [
+    // UID celowo nierozpoznawalny jako rozmiar zasobnika ("brak" zamiast
+    // 250/300/400) - w trybie "tylko audyty" to NIE moze blokowac wiersza,
+    // bo rozmiar zasobnika dotyczy wylacznie kart katalogowych.
+    [41, 'Wierzchlas, Częstochowska 26', 'brak', '', 2.85, 'Trójfazowe']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const server = kkApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('excel', new Blob([await fsp.readFile(excelFile)]), 'dane.xlsx');
+  form.append('audytyZip', new Blob([await fsp.readFile(audytyZipPath)]), 'audyty.zip');
+  form.append('rootPath', root);
+  form.append('typ', 'audyty');
+  form.append('dryRun', 'false');
+
+  const res = await fetch(`${base}/api/run`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const data = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(data));
+  assert.equal(data.ok, true);
+  assert.equal(data.wyniki.length, 1);
+  assert.equal(data.wyniki[0].status, 'skopiowano', 'status wiersza pochodzi wprost od dodatku, nie od (nieuzywanych tu) kart');
+  assert.deepEqual(data.wyniki[0].audyt, { status: 'skopiowano', plik: 'Wierzchlas, ul. Częstochowska 26_PV.pdf' });
+
+  const folderKlienta = path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26');
+  assert.equal(await fsp.readFile(path.join(folderKlienta, 'Wierzchlas, ul. Częstochowska 26_PV.pdf'), 'utf8'), 'audyt-tresc');
+  // Zero innych plikow w folderze klienta - zadna karta katalogowa nie zostala skopiowana.
+  const wszystkiePliki = await fsp.readdir(folderKlienta);
+  assert.deepEqual(wszystkiePliki, ['Wierzchlas, ul. Częstochowska 26_PV.pdf']);
+});
+
+test('POST /api/run: typ="audyty" bez podania zrodla (ani zip, ani sciezka) zwraca czytelny blad zamiast cichego 0 wynikow', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-audyty-brak-zrodla-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  await fsp.mkdir(path.join(root, 'Projekty', 'Zarnow'), { recursive: true });
+
+  const { file: excelFile, dir: xlsxDir } = await napiszArkuszPV('Solary Zarnow', [
+    [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const server = kkApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('excel', new Blob([await fsp.readFile(excelFile)]), 'dane.xlsx');
+  form.append('rootPath', root);
+  form.append('typ', 'audyty');
+  form.append('dryRun', 'false');
+
+  const res = await fetch(`${base}/api/run`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const data = await res.json();
+  assert.equal(res.status, 400);
+  assert.equal(data.ok, false);
+  assert.match(data.message, /audyty/);
+});

@@ -40,12 +40,12 @@
       <div class="panel hero-main">
         <div class="kicker">Dobór kart katalogowych</div>
         <h1>Karty katalogowe</h1>
-        <p class="lead">Wybierz rodzaj (solary albo pompy powietrzne Varmero), wskaż Excel i folder z projektami — program sam dobierze i skopiuje karty katalogowe do folderów klientów.</p>
+        <p class="lead">Wybierz rodzaj — karty katalogowe (solary/pompy) albo osobne dodanie audytów/schematów/dokumentów seryjnych — wskaż Excel i folder z projektami.</p>
       </div>
       <aside class="panel info-card">
         <h2>Jak działa?</h2>
         <div class="pill-list">
-          <div class="pill">Wybierz rodzaj: solary albo pompy powietrzne Varmero.</div>
+          <div class="pill">Wybierz rodzaj: karty (solary/pompy) albo jeden z dodatków (audyty/schematy/dokumenty seryjne).</div>
           <div class="pill">Wybierz plik Excel i podaj ścieżkę do głównego folderu.</div>
           <div class="pill">Uruchom najpierw podgląd, potem kopiowanie.</div>
         </div>
@@ -61,10 +61,13 @@
       </div>
 
       <div class="kk-field">
-        <label>Rodzaj kart</label>
+        <label>Rodzaj</label>
         <div class="kk-mode-row">
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="solary" id="kkModeSolary" checked> Solary</label>
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="pompy" id="kkModePompy"> Pompy powietrzne Varmero</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="solary" id="kkModeSolary" checked> Solary (karty katalogowe)</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="pompy" id="kkModePompy"> Pompy powietrzne Varmero (karty katalogowe)</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="audyty" id="kkModeAudyty"> Dodaj audyty PV</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="schematy" id="kkModeSchematy"> Dodaj schematy elektryczne</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="dokumenty-seryjne" id="kkModeDokumentySeryjne"> Dodaj dokumenty seryjne</label>
         </div>
       </div>
 
@@ -81,41 +84,43 @@
         </div>
       </div>
 
-      <div id="kkDodatkiSection">
-        <div class="kk-field">
-          <label>Audyty PV (opcjonalnie, dołączane wg adresu)</label>
-          <div class="kk-dodatek-row">
-            <input type="file" id="audytyZipInput" accept=".zip">
-            <span class="kk-or">albo</span>
-            <div class="path-row">
-              <input type="text" id="audytyPathInput" placeholder="Ścieżka do folderu z audytami">
-              <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="audytyPathInput">Przeglądaj...</button>
-            </div>
+      <div id="kkAudytySection" class="kk-field" hidden>
+        <label>Audyty PV (dołączane do folderu klienta wg adresu z arkusza „Solary”)</label>
+        <div class="kk-dodatek-row">
+          <input type="file" id="audytyZipInput" accept=".zip">
+          <span class="kk-or">albo</span>
+          <div class="path-row">
+            <input type="text" id="audytyPathInput" placeholder="Ścieżka do folderu z audytami">
+            <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="audytyPathInput">Przeglądaj...</button>
           </div>
         </div>
-        <div class="kk-field">
-          <label>Schematy elektryczne (opcjonalnie, dołączane wg mocy zestawu)</label>
-          <div class="kk-dodatek-row">
-            <input type="file" id="schematyZipInput" accept=".zip">
-            <span class="kk-or">albo</span>
-            <div class="path-row">
-              <input type="text" id="schematyPathInput" placeholder="Ścieżka do folderu ze schematami">
-              <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="schematyPathInput">Przeglądaj...</button>
-            </div>
+        <p class="kk-hint">Karty katalogowe NIE są w tym trybie w ogóle dobierane/kopiowane - tylko audyty. Brak dopasowania dla adresu daje w wyniku status „Brak”, nie błąd.</p>
+      </div>
+
+      <div id="kkSchematySection" class="kk-field" hidden>
+        <label>Schematy elektryczne (dołączane do folderu klienta wg mocy zestawu z arkusza „Solary”)</label>
+        <div class="kk-dodatek-row">
+          <input type="file" id="schematyZipInput" accept=".zip">
+          <span class="kk-or">albo</span>
+          <div class="path-row">
+            <input type="text" id="schematyPathInput" placeholder="Ścieżka do folderu ze schematami">
+            <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="schematyPathInput">Przeglądaj...</button>
           </div>
         </div>
-        <div class="kk-field">
-          <label>Dokumenty seryjne (opcjonalnie, dołączane wg adresu)</label>
-          <div class="kk-dodatek-row">
-            <input type="file" id="dokumentySeryjneZipInput" accept=".zip">
-            <span class="kk-or">albo</span>
-            <div class="path-row">
-              <input type="text" id="dokumentySeryjnePathInput" placeholder="Ścieżka do folderu z dokumentami seryjnymi">
-              <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="dokumentySeryjnePathInput">Przeglądaj...</button>
-            </div>
+        <p class="kk-hint">Karty katalogowe NIE są w tym trybie w ogóle dobierane/kopiowane - tylko schematy. Brak dopasowania dla mocy daje w wyniku status „Brak”, nie błąd.</p>
+      </div>
+
+      <div id="kkDokumentySeryjneSection" class="kk-field" hidden>
+        <label>Dokumenty seryjne (dołączane do folderu klienta wg adresu z arkusza „Solary”)</label>
+        <div class="kk-dodatek-row">
+          <input type="file" id="dokumentySeryjneZipInput" accept=".zip">
+          <span class="kk-or">albo</span>
+          <div class="path-row">
+            <input type="text" id="dokumentySeryjnePathInput" placeholder="Ścieżka do folderu z dokumentami seryjnymi">
+            <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="dokumentySeryjnePathInput">Przeglądaj...</button>
           </div>
         </div>
-        <p class="kk-hint">Dotyczy wyłącznie solarów. Brak dopasowania dla pojedynczego adresu nie blokuje kopiowania kart katalogowych - trafia tylko do kolumn „Audyt”/„Schemat”/„Dok. seryjny” w wynikach.</p>
+        <p class="kk-hint">Karty katalogowe NIE są w tym trybie w ogóle dobierane/kopiowane - tylko dokumenty seryjne. Brak dopasowania dla adresu daje w wyniku status „Brak”, nie błąd.</p>
       </div>
 
       <div class="controls">

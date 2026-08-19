@@ -561,13 +561,17 @@ async function dopasujISkopiujDodatek({ trafienia, folderKlienta, istniejace, dr
 // wiersza); pusta tablica = zrodlo podane, ale nic sie w nim nie znalazlo
 // (kazdy wiersz dostanie ostrzezenie 'brak'). Patrz komentarz przy
 // znajdzPlikiPoAdresie/znajdzSchemat.
-async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki = null, dokumentySeryjnePliki = null, schematyIndeks = null }) {
+async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki = null, dokumentySeryjnePliki = null, schematyIndeks = null, pominKarty = false }) {
   const rozpoznany = rozpoznajArkuszSolarow(sheetName);
   const wyniki = [];
   if (!rozpoznany) return wyniki; // arkusz nie dotyczy solarow (np. Pompy, Kotly, adresy)
   const { gmina } = rozpoznany;
 
-  const kartyDir = znajdzFolderZrodlowySolarow(rootPath);
+  // pominKarty: tryb "tylko dodatek" (dodaj-audyty/dodaj-schematy/dodaj-dokumenty-seryjne
+  // jako osobna opcja, analogicznie do Solary/Pompy - patrz komentarz przy 'typ'
+  // w /api/run) - karty katalogowe w ogole nie sa dobierane/kopiowane w tym
+  // trybie, wiec folder zrodlowy kart nie musi nawet istniec.
+  const kartyDir = pominKarty ? null : znajdzFolderZrodlowySolarow(rootPath);
   const projektyBazowyDir = path.join(rootPath, 'Projekty');
   // Nowsza konwencja (gmina === '', patrz rozpoznajArkuszSolarow) - jedna
   // inwestycja = jeden rootPath, foldery klientow leza wprost pod Projekty/,
@@ -580,7 +584,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
     return wyniki;
   }
 
-  const kartyIstnieja = fs.existsSync(kartyDir);
+  const kartyIstnieja = pominKarty ? true : fs.existsSync(kartyDir);
   const nazwyFolderowKlientow = await listujFoldery(projektyDir);
 
   if (!kartyIstnieja) {
@@ -708,8 +712,13 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
       continue;
     }
 
+    // Rozmiar zasobnika sluzy WYLACZNIE do doboru kart katalogowych - w
+    // trybie pominKarty (dodaj-tylko-audyty/schematy/dokumenty-seryjne) nie
+    // jest w ogole potrzebny, wiec nierozpoznany format UID nie blokuje
+    // wiersza (audyty/dokumenty seryjne dopasowuja po adresie, schematy po
+    // mocy/fazie - zaden z nich nie czyta rozmiaru zasobnika).
     const rozmiar = parseRozmiarZUid(uid);
-    if (!rozmiar || typeof rozmiar === 'object') {
+    if (!pominKarty && (!rozmiar || typeof rozmiar === 'object')) {
       const nieznany = rozmiar && rozmiar.nieznany ? rozmiar.nieznany : uid;
       wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nierozpoznany rozmiar zasobnika w UID ("${nieznany}") dla adresu "${opisAdresu}". Oczekiwano 250/300/400.` };
       continue;
@@ -758,6 +767,23 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
           : await dopasujISkopiujDodatek({ trafienia: znajdzSchemat(moc, faza, schematyIndeks), folderKlienta, istniejace, dryRun });
       }
       return { ...wynikBazowy, ...dodatki };
+    }
+
+    if (pominKarty) {
+      // Tryb "tylko dodatek": status/komunikat calego wiersza to WPROST status
+      // jedynego dodatku, ktory ten przebieg dostarcza (dokladnie jeden z
+      // audytyPliki/schematyIndeks/dokumentySeryjnePliki jest non-null - patrz
+      // /api/run) - brak osobnego stanu "karty" do zgloszenia w tym trybie.
+      const zDod = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa });
+      const jedynyDodatek = zDod.audyt || zDod.schemat || zDod.dokumentSeryjny || null;
+      wynikiByIdx[idx] = {
+        ...zDod,
+        status: jedynyDodatek ? jedynyDodatek.status : 'blad',
+        komunikat: jedynyDodatek
+          ? (jedynyDodatek.plik || (jedynyDodatek.kandydaci ? `Kilka pasujacych plikow: ${jedynyDodatek.kandydaci.join(', ')}` : ''))
+          : 'Nie podano zrodla dodatku.'
+      };
+      return;
     }
 
     // Nowsza konwencja (podfolder per rozmiar, patrz znajdzPodfolderRozmiaru
@@ -1050,7 +1076,23 @@ app.post('/api/run', uploadWieloplikowy.fields([
     // dla tej samej sciezki bylo realnym bledem znalezionym na Kamiensku
     // (sciezka wpisana dla solarow nigdy nie mogla pasowac do ukladu pomp).
     // Frontend zawsze wysyla 'typ' po jawnym wyborze rodzaju w UI.
-    const typ = normalizujTekst(req.body.typ) === 'pompy' ? 'pompy' : 'solary';
+    //
+    // "audyty"/"schematy"/"dokumenty-seryjne" sa osobnymi trybami - dokladnie
+    // jedna rzecz na raz, tak samo jak Solary/Pompy - a nie jednym wspolnym
+    // formularzem z trzema opcjonalnymi zipami naraz. Zmiana 2026-08-19:
+    // wlasciciel realnie chcial dodawac kazdy dodatek OSOBNO (tak jak wybiera
+    // sie Solary albo Pompy), a wspolny formularz z 3 zipami naraz byl mylacy
+    // i przy okazji ujawnil bug z limitem multera (patrz commit "napraw too
+    // many files"). Backend nadal potrafi obsluzyc wszystkie 3 zipy razem w
+    // trybie 'solary' (przez rozstrzygnijZrodloDodatku ponizej), gdyby kiedys
+    // frontend chcial to zaoferowac - tylko UI juz z tego nie korzysta.
+    const DODATEK_ZRODLA = {
+      audyty: { etykieta: 'audyty', zip: 'audytyZip', sciezka: 'audytyPath' },
+      schematy: { etykieta: 'schematy', zip: 'schematyZip', sciezka: 'schematyPath' },
+      'dokumenty-seryjne': { etykieta: 'dokumenty-seryjne', zip: 'dokumentySeryjneZip', sciezka: 'dokumentySeryjnePath' }
+    };
+    const typRaw = normalizujTekst(req.body.typ);
+    const typ = typRaw === 'pompy' ? 'pompy' : (DODATEK_ZRODLA[typRaw] ? typRaw : 'solary');
 
     // Audyty/schematy/dokumenty seryjne dotycza WYLACZNIE solarow (schematy
     // sa dobierane po mocy zestawu fotowoltaicznego, audyty/dokumenty
@@ -1059,6 +1101,7 @@ app.post('/api/run', uploadWieloplikowy.fields([
     let audytyPliki = null;
     let dokumentySeryjnePliki = null;
     let schematyIndeks = null;
+    let pominKarty = false;
     if (typ === 'solary') {
       const audytyZrodlo = await rozstrzygnijZrodloDodatku(req, 'audyty', 'audytyZip', 'audytyPath');
       if (audytyZrodlo) {
@@ -1075,6 +1118,16 @@ app.post('/api/run', uploadWieloplikowy.fields([
         if (schematyZrodlo.wyczysc) doWyczyszczenia.push(schematyZrodlo.dir);
         schematyIndeks = zbudujIndeksSchematow(await zbierzPlikiPdf(schematyZrodlo.dir));
       }
+    } else if (DODATEK_ZRODLA[typ]) {
+      pominKarty = true;
+      const cfg = DODATEK_ZRODLA[typ];
+      const zrodlo = await rozstrzygnijZrodloDodatku(req, cfg.etykieta, cfg.zip, cfg.sciezka);
+      if (!zrodlo) throw new Error(`Dodaj plik .zip albo podaj sciezke do folderu z: ${cfg.etykieta}.`);
+      if (zrodlo.wyczysc) doWyczyszczenia.push(zrodlo.dir);
+      const pliki = await zbierzPlikiPdf(zrodlo.dir);
+      if (typ === 'audyty') audytyPliki = pliki;
+      else if (typ === 'dokumenty-seryjne') dokumentySeryjnePliki = pliki;
+      else if (typ === 'schematy') schematyIndeks = zbudujIndeksSchematow(pliki);
     }
 
     // Uwaga: w tej wersji read-excel-file { getSheets: true } zwraca od razu
@@ -1093,7 +1146,7 @@ app.post('/api/run', uploadWieloplikowy.fields([
         const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
         wynikiWszystkie.push(...wynikiPompy);
       } else {
-        const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, schematyIndeks });
+        const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, schematyIndeks, pominKarty });
         wynikiWszystkie.push(...wynikiSolary);
       }
     }

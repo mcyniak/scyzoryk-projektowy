@@ -4,6 +4,12 @@ const STATUS_LABELS = {
   'pominieto-juz-sa': ['Już są', 'skip'],
   'pominieto-rezygnacja': ['Rezygnacja', 'skip'],
   'pominieto-brak-uid': ['Brak UID', 'skip'],
+  // "brak"/"wieloznaczne" normalnie wystepuja tylko w kolumnach dodatkow
+  // (DODATEK_STATUS_LABELS ponizej), ale w trybach "tylko dodatek" (Dodaj
+  // audyty/schematy/dokumenty seryjne) staja sie WPROST statusem calego
+  // wiersza (patrz server.js#przetworzArkusz, galaz pominKarty).
+  'brak': ['Brak', 'warn'],
+  'wieloznaczne': ['Niejednoznaczne', 'warn'],
   // Audyt rozdz. 16, P1: kopiowanie jest teraz komplet-albo-nic (patrz
   // server.js#przetworzArkusz FAZA B) - stan "czesciowo" nie moze juz
   // wystapic, usuniety stad.
@@ -58,7 +64,38 @@ const MODE_COPY = {
     excelLabel: 'Plik Excel (.xlsx) z arkuszem „Pompy ciepła”',
     rootPathLabel: 'Ścieżka do głównego folderu INWESTYCJI (zawiera podfolder „PC powietrzne”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\20. Zagórów'
+  },
+  // Te trzy tryby NIE dobieraja/kopiuja kart katalogowych w ogole - kazdy
+  // dodaje TYLKO swoj jeden rodzaj pliku do folderu klienta, wg tego samego
+  // arkusza "Solary" co tryb Solary powyzej (adres/moc zestawu). Osobne
+  // opcje zamiast jednego wspolnego formularza z 3 zipami naraz - wlasciciel
+  // chcial dodawac kazdy dodatek osobno, tak jak wybiera sie Solary/Pompy.
+  audyty: {
+    desc: 'Dodaj audyty PV: dopasowuje pliki z audytami do adresu z arkusza „Solary” i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Solary”',
+    rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+  },
+  schematy: {
+    desc: 'Dodaj schematy elektryczne: dopasowuje pliki schematów do mocy zestawu (i fazy, gdy trzeba) z arkusza „Solary” i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Solary”',
+    rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+  },
+  'dokumenty-seryjne': {
+    desc: 'Dodaj dokumenty seryjne: dopasowuje pliki po adresie z arkusza „Solary” i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Solary”',
+    rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
   }
+};
+
+// Sekcja z polem zip/sciezka pokazywana dla kazdego z 3 trybow "tylko dodatek" -
+// null dla solary/pompy (te tryby nie maja wlasnej sekcji dodatku).
+const DODATEK_SECTION_ID = {
+  audyty: 'kkAudytySection',
+  schematy: 'kkSchematySection',
+  'dokumenty-seryjne': 'kkDokumentySeryjneSection'
 };
 
 function aktualnyRodzajKart() {
@@ -66,15 +103,17 @@ function aktualnyRodzajKart() {
 }
 
 function odswiezOpisyRodzaju() {
-  const copy = MODE_COPY[aktualnyRodzajKart()];
+  const tryb = aktualnyRodzajKart();
+  const copy = MODE_COPY[tryb];
   document.getElementById('kkModeDesc').textContent = copy.desc;
   document.getElementById('kkExcelLabel').textContent = copy.excelLabel;
   document.getElementById('kkRootPathLabel').textContent = copy.rootPathLabel;
   document.getElementById('rootPath').placeholder = copy.placeholder;
-  // Audyty/schematy/dokumenty seryjne dotycza wylacznie solarow (schematy sa
-  // dobierane wg mocy zestawu PV, audyty/dok. seryjne wg adresu z arkusza PV) -
-  // patrz server.js#przetworzArkusz, ktore ignoruje te pola dla pomp.
-  document.getElementById('kkDodatkiSection').hidden = aktualnyRodzajKart() !== 'solary';
+  // Dokladnie jedna z trzech sekcji dodatku widoczna naraz (albo zadna, dla
+  // solary/pompy) - patrz DODATEK_SECTION_ID powyzej.
+  for (const id of Object.values(DODATEK_SECTION_ID)) {
+    document.getElementById(id).hidden = DODATEK_SECTION_ID[tryb] !== id;
+  }
 }
 
 document.querySelectorAll('input[name="kkMode"]').forEach(el => el.addEventListener('change', odswiezOpisyRodzaju));
@@ -94,22 +133,25 @@ async function runJob(dryRun) {
   if (!fileInput.files.length) { statusEl.className = 'err'; statusEl.textContent = 'Wybierz plik Excel.'; return; }
   if (!rootPath) { statusEl.className = 'err'; statusEl.textContent = 'Podaj ścieżkę do głównego folderu.'; return; }
 
+  const tryb = aktualnyRodzajKart();
   const formData = new FormData();
   formData.append('excel', fileInput.files[0]);
   formData.append('rootPath', rootPath);
-  formData.append('typ', aktualnyRodzajKart());
+  formData.append('typ', tryb);
   formData.append('dryRun', String(dryRun));
 
-  // Zip ma pierwszenstwo przed sciezka (patrz rozstrzygnijZrodloDodatku w
-  // server.js) - wysylamy oba, jesli oba sa wypelnione, backend sam wybiera.
-  // Server.js i tak ignoruje te pola dla trybu "pompy", wiec nie ma potrzeby
-  // warunkowac tego tutaj.
-  const dodatki = [
-    ['audytyZip', 'audytyPathInput', 'audytyPath'],
-    ['schematyZip', 'schematyPathInput', 'schematyPath'],
-    ['dokumentySeryjneZip', 'dokumentySeryjnePathInput', 'dokumentySeryjnePath']
-  ];
-  for (const [zipField, pathInputId, pathField] of dodatki) {
+  // Kazdy tryb "tylko dodatek" wysyla WYLACZNIE swoj wlasny zip/sciezke -
+  // nigdy wszystkie trzy naraz (to byl dawny, mylacy uklad, patrz komentarz
+  // przy DODATEK_ZRODLA w server.js). Zip ma pierwszenstwo przed sciezka
+  // (patrz rozstrzygnijZrodloDodatku w server.js) - wysylamy oba, jesli oba
+  // sa wypelnione, backend sam wybiera.
+  const DODATEK_POLA = {
+    audyty: ['audytyZip', 'audytyPathInput', 'audytyPath'],
+    schematy: ['schematyZip', 'schematyPathInput', 'schematyPath'],
+    'dokumenty-seryjne': ['dokumentySeryjneZip', 'dokumentySeryjnePathInput', 'dokumentySeryjnePath']
+  };
+  if (DODATEK_POLA[tryb]) {
+    const [zipField, pathInputId, pathField] = DODATEK_POLA[tryb];
     const zipInput = document.getElementById(`${zipField}Input`);
     if (zipInput && zipInput.files.length) formData.append(zipField, zipInput.files[0]);
     const pathValue = document.getElementById(pathInputId).value.trim();
