@@ -48,7 +48,7 @@ const TABELA_FAMILIES = {
       { label: 'REZYGNACJA', fieldKey: null },
       { label: 'Imię i Nazwisko', fieldKey: 'imieNazwisko' },
       { label: 'Adres', fieldKey: 'adresInstalacji' },
-      { label: 'Numer telefonu', fieldKey: 'telefon' },
+      { label: 'Numer telefonu', fieldKey: 'telefon', aliases: ['Nr telefonu'] },
       { label: 'Obręb', fieldKey: null },
       { label: 'Numer działki', fieldKey: null },
       { label: 'Rodzaj pompy', fieldKey: 'rodzajPompy' },
@@ -59,13 +59,20 @@ const TABELA_FAMILIES = {
       { label: 'Wysokość kotłowni (m)', fieldKey: 'wysokoscKotlowniPC' },
       { label: 'Źródło ciepła', fieldKey: 'zrodloCiepla' },
       { label: 'Demontaż', fieldKey: 'demontaz' },
-      { label: 'Udział ogrzew. grzejnik.', fieldKey: 'udzialGrzejnikowy' },
-      { label: 'Udział ogrzew. podłog.', fieldKey: null, complementOf: 'udzialGrzejnikowy' },
+      { label: 'Udział ogrzew. grzejnik.', fieldKey: 'udzialGrzejnikowy', aliases: ['Udział ogrzew grzejnik'] },
+      { label: 'Udział ogrzew. podłog.', fieldKey: null, complementOf: 'udzialGrzejnikowy', aliases: ['Udział ogrzew podłog'] },
+      { label: 'Liczba mieszkańców', fieldKey: 'liczbaOsob' },
       { label: 'Rok budowy', fieldKey: 'rokBudowy' },
       { label: 'Powierzchnia', fieldKey: 'powierzchnia' },
-      { label: 'Ociepl. fund.', fieldKey: 'izolacjaScianyFundamentowej' },
-      { label: 'Ociepl. ścian', fieldKey: 'ocieplenieScianyZewn' },
-      { label: 'Ociepl. dach/strop', fieldKey: 'izolacjaDachu' },
+      { label: 'Ociepl. fund.', fieldKey: 'izolacjaScianyFundamentowej', aliases: ['Ocieplenie fund.'] },
+      { label: 'Ociepl. ścian', fieldKey: 'ocieplenieScianyZewn', aliases: ['Ocieplenie ścian'] },
+      { label: 'Ociepl. dach/strop', fieldKey: 'izolacjaDachu', aliases: ['Ocieplenie dach/strop'] },
+      // Liczone, nie ekstrahowane wprost: "tak"/"nie" na podstawie tego, czy
+      // dopisek przy zaznaczeniu "Inny" w polu "Zrodlo ciepla" (sekcja 11
+      // formularza, patrz fieldExtraction.js#zrodloCieplaInnyOpis) zawiera
+      // slowo "kolektor" - potwierdzone bezposrednio z wlascicielem
+      // 2026-08-19. Ten sam wzorzec co `complementOf` nizej.
+      { label: 'kolektory', fieldKey: null, deriveFromKeyword: { sourceField: 'zrodloCieplaInnyOpis', keyword: 'kolektor', trueValue: 'tak', falseValue: 'nie' } },
       { label: 'Audyt', fieldKey: null },
       { label: 'Zdjęcia', fieldKey: null },
       { label: 'OZC', fieldKey: null },
@@ -142,6 +149,10 @@ function buildRowValues(family, fields) {
       const raw = fields[col.complementOf]?.value;
       const num = raw === '' || raw == null ? NaN : Number(raw);
       rowValues[col.label] = Number.isFinite(num) ? String(100 - num) : '';
+    } else if (col.deriveFromKeyword) {
+      const { sourceField, keyword, trueValue, falseValue } = col.deriveFromKeyword;
+      const raw = String(fields[sourceField]?.value || '').toLowerCase();
+      rowValues[col.label] = raw.includes(keyword.toLowerCase()) ? trueValue : falseValue;
     } else if (col.fieldKey === null) {
       rowValues[col.label] = '';
     } else {
@@ -155,14 +166,46 @@ function buildRowValues(family, fields) {
 // ekstrakcji/przegladu TYLKO do pol, ktore realnie trafiaja do tabelki adresowej tej
 // rodziny (patrz plan "wybor rodziny przed ekstrakcja", 2026-07-23 - wlasciciel: "np.
 // ladowalismy takie rzeczy jak rodzaj dachu" [pole spoza zakresu tabelki adresowej PC,
-// zbedne przy tym celu]). `complementOf` kolumny nie maja wlasnego fieldKey (liczone,
-// nie ekstrahowane) - pomijane tu, ale ich `complementOf`-owy klucz (np.
-// udzialGrzejnikowy) juz jest w zbiorze jako zwykla kolumna, wiec i tak trafi do
-// przegladu.
+// zbedne przy tym celu]). `complementOf`/`deriveFromKeyword` kolumny nie maja wlasnego
+// fieldKey (liczone, nie ekstrahowane) - pomijane w mapowaniu fieldKey ponizej, ale
+// ich ZRODLOWY klucz (np. udzialGrzejnikowy, zrodloCieplaInnyOpis) jest dodawany
+// osobno, zeby faktycznie trafil do zapytania o ekstrakcje.
 function allowedKeysForFamily(family) {
   const def = TABELA_FAMILIES[family];
   if (!def) return null;
-  return new Set(def.columns.map((c) => c.fieldKey).filter(Boolean));
+  const keys = def.columns.map((c) => c.fieldKey).filter(Boolean);
+  const derivedSourceKeys = def.columns.map((c) => c.deriveFromKeyword?.sourceField).filter(Boolean);
+  return new Set([...keys, ...derivedSourceKeys]);
 }
 
-module.exports = { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily };
+// Normalizuje naglowek kolumny do porownania: male litery, przycinanie,
+// zwijanie wielokrotnych spacji, usuniecie koncowej kropki po skrocie -
+// zeby "Udział ogrzew grzejnik" i "Udział ogrzew. grzejnik." (albo "Nr
+// telefonu" i "Numer telefonu" - patrz aliases w TABELA_FAMILIES) trafily w
+// TA SAMA, jawnie wypisana kolumne. To NIE jest dopasowanie rozmyte/zgadywane -
+// dziala tylko dla wariantow jawnie wpisanych w `label`/`aliases` danej kolumny.
+function normalizeHeader(text) {
+  return String(text || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\.$/, '');
+}
+
+// Dopasowuje pojedynczy naglowek z realnego pliku uzytkownika do definicji
+// kolumny danej rodziny (po `label` LUB dowolnym `aliases`, oba
+// znormalizowane). Zwraca definicje kolumny albo null, jesli nagłowek jest
+// nierozpoznany - taka kolumna zostaje pominieta (nigdy nie zgadywana).
+function matchColumnToFamily(headerText, family) {
+  const def = TABELA_FAMILIES[family];
+  if (!def) return null;
+  const normalized = normalizeHeader(headerText);
+  if (!normalized) return null;
+  for (const col of def.columns) {
+    const candidates = [col.label, ...(col.aliases || [])];
+    if (candidates.some((c) => normalizeHeader(c) === normalized)) return col;
+  }
+  return null;
+}
+
+module.exports = { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily, normalizeHeader, matchColumnToFamily };

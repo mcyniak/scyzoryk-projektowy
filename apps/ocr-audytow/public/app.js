@@ -30,6 +30,21 @@
   const resultList = document.getElementById('resultList');
   const excelResultNote = document.getElementById('excelResultNote');
 
+  const tablePanel = document.getElementById('tablePanel');
+  const tableFamilySelect = document.getElementById('tableFamilySelect');
+  const tableExcelPathInput = document.getElementById('tableExcelPathInput');
+  const inspectTableBtn = document.getElementById('inspectTableBtn');
+  const skipTableBtn = document.getElementById('skipTableBtn');
+  const tableError = document.getElementById('tableError');
+  const tableChecklistWrap = document.getElementById('tableChecklistWrap');
+  const tableChecklistIntro = document.getElementById('tableChecklistIntro');
+  const tableChecklistEl = document.getElementById('tableChecklist');
+  const tableUnrecognizedNote = document.getElementById('tableUnrecognizedNote');
+  const tableContinueBtn = document.getElementById('tableContinueBtn');
+  const familySelectField = document.getElementById('familySelectField');
+  const excelPathField = document.getElementById('excelPathField');
+  const excelStepHint = document.getElementById('excelStepHint');
+
   const ocrLockedPanel = document.getElementById('ocrLockedPanel');
   const ocrLockedTitle = document.getElementById('ocrLockedTitle');
   const ocrHeroSection = document.getElementById('ocrHeroSection');
@@ -56,6 +71,24 @@
   let analysisFiles = []; // [{ fileId, originalName, pageCount, warnings, thumbnails, dividers:Set, labels:Map }]
   // Stan kroku 3 (uzupelnianie niepewnych pol) - odpowiedz z /api/ocr/extract-fields.
   let fieldsFiles = [];
+
+  // --- Krok 0 (opcjonalny): wgraj gotowa tabele adresowa, zamiast zawsze
+  // ciagnac pelny zestaw pol - patrz POST /api/ocr/inspect-table. Dopasowanie
+  // wiersz-audyt <-> wiersz-tabeli idzie po numerze LP (etykieta bloku w
+  // kroku 2 pelni ta role, gdy ten tryb jest aktywny - patrz renderReviewFile).
+  let tableMode = false;
+  let tableExcelPath = '';
+  let tableFamily = '';
+  let selectedFieldKeys = new Set();
+  // Czy uzytkownik juz przeszedl krok 0 (kliknal "Sprawdz tabele"->"Dalej" albo
+  // "Pomiń") - decyduje, ktory panel wraca po odblokowaniu ekranu klucza API.
+  let pastTableStep = false;
+
+  function guessLpFromFilename(name) {
+    const base = String(name || '').replace(/\.pdf$/i, '');
+    const match = base.match(/^\s*(\d+)/);
+    return match ? match[1] : '';
+  }
 
   function renderFileList() {
     if (!selectedFiles.length) {
@@ -142,6 +175,69 @@
     progressBar.style.width = `${percent}%`;
   }
 
+  // --- Krok 0 (opcjonalny): wgraj gotowa tabele ---------------------------
+
+  function renderTableChecklist(fields) {
+    tableChecklistEl.innerHTML = fields.map((f) => {
+      const checked = f.missingCount > 0;
+      const countClass = f.missingCount > 0 ? '' : 'none';
+      const countText = f.missingCount > 0
+        ? `brakuje w ${f.missingCount}/${f.totalRows}`
+        : 'kompletne';
+      return `<div class="field-checklist-row">
+        <label><input type="checkbox" data-key="${escapeHtml(f.fieldKey)}" ${checked ? 'checked' : ''}> ${escapeHtml(f.label)}</label>
+        <span class="missing-count ${countClass}">${countText}</span>
+      </div>`;
+    }).join('');
+  }
+
+  inspectTableBtn.addEventListener('click', async () => {
+    tableError.innerHTML = '';
+    const excelPath = tableExcelPathInput.value.trim();
+    const family = tableFamilySelect.value;
+    if (!excelPath) { tableError.innerHTML = '<div class="error-box">Podaj ścieżkę do pliku Excel.</div>'; return; }
+
+    inspectTableBtn.disabled = true;
+    try {
+      const data = await apiJson('/api/ocr/inspect-table', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+        body: JSON.stringify({ excelPath, family })
+      });
+      tableChecklistIntro.textContent = `Znaleziono ${data.rowCount} ${data.rowCount === 1 ? 'wiersz' : 'wierszy'} w tabeli. Odznacz pola, których nie chcesz teraz szukać - zaznaczone domyślnie to te, których gdzieś brakuje.`;
+      renderTableChecklist(data.fields);
+      tableUnrecognizedNote.textContent = data.unrecognizedHeaders.length
+        ? `Nierozpoznane nagłówki (pominięte, nigdy nie zgadywane): ${data.unrecognizedHeaders.join(', ')}`
+        : '';
+      tableChecklistWrap.hidden = false;
+      tableExcelPath = excelPath;
+      tableFamily = family;
+    } catch (err) {
+      tableChecklistWrap.hidden = true;
+      tableError.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+    } finally {
+      inspectTableBtn.disabled = false;
+    }
+  });
+
+  tableContinueBtn.addEventListener('click', () => {
+    selectedFieldKeys = new Set(
+      [...tableChecklistEl.querySelectorAll('input[type=checkbox]:checked')].map((el) => el.dataset.key)
+    );
+    tableMode = true;
+    pastTableStep = true;
+    tablePanel.hidden = true;
+    ocrUploadPanel.hidden = false;
+    familySelectField.hidden = true;
+  });
+
+  skipTableBtn.addEventListener('click', () => {
+    tableMode = false;
+    pastTableStep = true;
+    tablePanel.hidden = true;
+    ocrUploadPanel.hidden = false;
+  });
+
   // --- Krok 1: wysyłka do analizy ---------------------------------------
 
   form.addEventListener('submit', (e) => {
@@ -206,7 +302,15 @@
       const dividers = new Set();
       (item.blocks || []).forEach((b, i) => {
         if (b.startPage > 0) dividers.add(b.startPage);
-        if ((item.blocks.length || 1) > 1) labels.set(b.startPage, `Adres ${i + 1}`);
+        if (tableMode) {
+          // Tryb "wgraj tabele": etykieta = numer LP. Pliki audytow sa juz
+          // nazwane numerem (potwierdzone realnie) - dla jedynego bloku w
+          // pliku podpowiadamy go od razu; przy wielu blokach w jednym
+          // pliku nie da sie tego rozstrzygnac automatem, zostaje puste.
+          if ((item.blocks.length || 1) === 1) labels.set(b.startPage, guessLpFromFilename(item.originalName));
+        } else if ((item.blocks.length || 1) > 1) {
+          labels.set(b.startPage, `Adres ${i + 1}`);
+        }
       });
       analysisFiles.push({
         fileId: item.fileId,
@@ -264,6 +368,16 @@
 
     const blockRows = blocks.map((b, i) => {
       const range = b.endPage > b.startPage ? `str. ${b.startPage + 1}–${b.endPage + 1}` : `str. ${b.startPage + 1}`;
+      if (tableMode) {
+        // Etykieta = numer LP w tym trybie (dopasowanie wiersza tabeli),
+        // zawsze edytowalna - w odroznieniu od zwyklego trybu ponizej,
+        // gdzie pojedynczy blok w ogole nie ma pola (nie jest potrzebne).
+        const label = f.labels.get(b.startPage) ?? '';
+        return `<div class="block-row">
+          <span class="block-range">${range}</span>
+          <input type="text" class="block-label" data-file="${f.fileId}" data-start="${b.startPage}" placeholder="Numer LP" value="${escapeHtml(label)}">
+        </div>`;
+      }
       if (blocks.length === 1) {
         return `<div class="block-row"><span class="block-range">${range}</span><span class="block-single-note">jeden plik = jeden adres</span></div>`;
       }
@@ -314,17 +428,29 @@
 
   confirmBtn.addEventListener('click', async () => {
     if (!analysisId || !analysisFiles.length) return;
-    confirmBtn.disabled = true;
     errorBox.innerHTML = '';
-    setStatus('Odczytuję dane z formularzy... To może potrwać do kilkudziesięciu sekund na adres.', 70);
 
-    selectedFamily = familySelect.value || '';
-    if (selectedFamily) localStorage.setItem(FAMILY_STORAGE_KEY, selectedFamily);
-    else localStorage.removeItem(FAMILY_STORAGE_KEY);
+    if (tableMode) {
+      // Kazdy blok musi miec numer LP - inaczej cicho zgubilibysmy dane tego
+      // audytu (patrz plan: "czytelny blad zamiast cichego pominiecia").
+      const missingLp = analysisFiles.some((f) => computeBlocks(f).some((b) => !f.labels.get(b.startPage)?.trim()));
+      if (missingLp) {
+        errorBox.innerHTML = '<div class="error-box">Uzupełnij numer LP dla każdego adresu (pole nad listą stron) przed dalszym krokiem.</div>';
+        return;
+      }
+    } else {
+      selectedFamily = familySelect.value || '';
+      if (selectedFamily) localStorage.setItem(FAMILY_STORAGE_KEY, selectedFamily);
+      else localStorage.removeItem(FAMILY_STORAGE_KEY);
+    }
+
+    confirmBtn.disabled = true;
+    setStatus('Odczytuję dane z formularzy... To może potrwać do kilkudziesięciu sekund na adres.', 70);
 
     const payload = {
       analysisId,
-      family: selectedFamily || undefined,
+      family: tableMode ? tableFamily : (selectedFamily || undefined),
+      selectedKeys: tableMode ? [...selectedFieldKeys] : undefined,
       files: analysisFiles.map(f => ({
         fileId: f.fileId,
         blocks: computeBlocks(f).map(b => ({ ...b, label: f.labels.get(b.startPage) || '' }))
@@ -360,13 +486,25 @@
   }
 
   function startFieldReview() {
-    const familyNote = selectedFamily
-      ? `Zawężono do pól rodziny "${FAMILY_LABELS[selectedFamily] || selectedFamily}".`
-      : 'Nie zawężono do konkretnej rodziny - wszystkie pola.';
+    const familyNote = tableMode
+      ? `Zawężono do ${selectedFieldKeys.size} wybranych pól - wynik trafi do: ${tableExcelPath}`
+      : selectedFamily
+        ? `Zawężono do pól rodziny "${FAMILY_LABELS[selectedFamily] || selectedFamily}".`
+        : 'Nie zawężono do konkretnej rodziny - wszystkie pola.';
     familyChosenNote.textContent = familyNote;
     reviewPanel.hidden = true;
     fieldsPanel.hidden = false;
     excelStep.hidden = false;
+    if (tableMode) {
+      excelPathInput.value = tableExcelPath;
+      excelPathField.hidden = true;
+      excelStepHint.textContent = 'Zapis wypełni TYLKO puste komórki w tej samej tabeli - nic już wypełnionego nie zostanie nadpisane.';
+      finalizeBtn.textContent = 'Wypełnij tabelę i pobierz';
+    } else {
+      excelPathField.hidden = false;
+      excelStepHint.textContent = 'Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 3) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru.';
+      finalizeBtn.textContent = 'Zapisz i pobierz';
+    }
     renderFieldsBlocks();
   }
 
@@ -476,14 +614,18 @@
     setStatus('Zapisywanie plików...', 90);
 
     const excelPath = excelPathInput.value.trim();
-    if (excelPath) localStorage.setItem(EXCEL_PATH_STORAGE_KEY, excelPath);
-    else localStorage.removeItem(EXCEL_PATH_STORAGE_KEY);
+    if (!tableMode) {
+      if (excelPath) localStorage.setItem(EXCEL_PATH_STORAGE_KEY, excelPath);
+      else localStorage.removeItem(EXCEL_PATH_STORAGE_KEY);
+    }
 
     const payload = {
       analysisId,
       files: fieldsFiles.map(f => ({ fileId: f.fileId })),
       excelPath: excelPath || undefined,
-      family: selectedFamily || undefined
+      family: tableMode ? tableFamily : (selectedFamily || undefined),
+      mode: tableMode ? 'fill-existing' : undefined,
+      selectedKeys: tableMode ? [...selectedFieldKeys] : undefined
     };
 
     try {
@@ -522,7 +664,15 @@
       resultsPanel.hidden = false;
       renderResults(data.results);
 
-      if (data.excelPath) {
+      if (data.excelPath && data.fillStats) {
+        excelResultNote.hidden = false;
+        const unmatched = data.fillStats.unmatchedLp || [];
+        excelResultNote.textContent = data.excelError
+          ? `Pliki PDF zapisane, ale nie udało się wypełnić tabeli: ${data.excelError}`
+          : `Wypełniono ${data.fillStats.filledCells} pustych komórek w ${data.fillStats.matchedRows} wierszach pliku ${data.excelPath}.`
+            + (unmatched.length ? ` Nie znaleziono w tabeli wiersza dla LP: ${unmatched.join(', ')}.` : '')
+            + (data.excelBackupPath ? ` (kopia poprzedniej wersji: ${data.excelBackupPath})` : '');
+      } else if (data.excelPath) {
         excelResultNote.hidden = false;
         excelResultNote.textContent = data.excelError
           ? `Pliki PDF zapisane, ale nie udało się zapisać Excela: ${data.excelError}`
@@ -575,7 +725,17 @@
   function setOcrLocked(locked) {
     ocrLockedPanel.hidden = !locked;
     ocrHeroSection.hidden = locked;
-    ocrUploadPanel.hidden = locked;
+    // Krok 0 (tabela) dziala bez klucza API (tylko czyta plik), ale chowamy go
+    // razem z reszta przy zablokowanym ekranie - ten sam wzorzec co ocrUploadPanel.
+    // Przy odblokowaniu wraca DOKLADNIE ten krok, na ktorym uzytkownik byl
+    // (pastTableStep pamieta czy juz kliknal "Sprawdz tabele"/"Pomiń").
+    if (locked) {
+      tablePanel.hidden = true;
+      ocrUploadPanel.hidden = true;
+    } else {
+      tablePanel.hidden = pastTableStep;
+      ocrUploadPanel.hidden = !pastTableStep;
+    }
     ocrUnlockCancelBtn.hidden = !locked || !ocrIsConfigured;
     ocrLockedTitle.textContent = ocrIsConfigured
       ? '🔑 Zmień klucz API'

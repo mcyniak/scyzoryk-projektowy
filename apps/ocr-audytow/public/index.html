@@ -77,10 +77,44 @@
       </aside>
     </section>
 
-    <section class="panel" id="ocrUploadPanel">
+    <section class="panel" id="tablePanel">
       <div class="panel-header">
         <div>
-          <h2 class="panel-title"><span class="step-num">1</span>Dodaj pliki PDF</h2>
+          <h2 class="panel-title"><span class="step-num">1</span>Masz już tabelkę adresową? (opcjonalnie)</h2>
+          <p class="panel-desc">Jeśli masz już plik Excela z adresami/numerami LP (np. częściowo uzupełnioną tabelkę adresową), wskaż go tutaj - program sprawdzi, jakich pól rzeczywiście brakuje, i będzie pytał Gemini TYLKO o nie (szybciej, taniej). Na końcu wypełni TEN SAM plik - tylko puste komórki, nic nie nadpisze. Bez tabelki? Pomiń ten krok - dostaniesz nowy plik ze wszystkimi polami jak dotychczas.</p>
+        </div>
+      </div>
+      <div class="option-field">
+        <span class="option-label">Rodzaj protokołu</span>
+        <select id="tableFamilySelect">
+          <option value="pc">Pompy ciepła</option>
+          <option value="solary">Solary</option>
+          <option value="kotly">Kotły</option>
+        </select>
+      </div>
+      <div class="option-field" style="margin-top:18px">
+        <span class="option-label">Ścieżka do Twojej tabelki Excela (.xlsx)</span>
+        <input type="text" id="tableExcelPathInput" placeholder="G:\Dyski współdzielone\...\Biała tabela adresowa.xlsx">
+      </div>
+      <div class="hero-actions">
+        <button type="button" id="inspectTableBtn" class="btn btn-primary">Sprawdź tabelę</button>
+        <button type="button" id="skipTableBtn" class="btn btn-secondary">Pomiń - nie mam gotowej tabeli</button>
+      </div>
+      <div id="tableError"></div>
+      <div id="tableChecklistWrap" hidden>
+        <p class="hint" id="tableChecklistIntro"></p>
+        <div id="tableChecklist" class="field-checklist"></div>
+        <div id="tableUnrecognizedNote" class="hint"></div>
+        <div class="hero-actions">
+          <button type="button" id="tableContinueBtn" class="btn btn-primary">Dalej: wgraj pliki PDF</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="ocrUploadPanel" hidden>
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">2</span>Dodaj pliki PDF</h2>
           <p class="panel-desc">Możesz wgrać kilka plików naraz. Każdy zostanie rozpoznany osobno - jeśli plik zawiera kilka adresów, w następnym kroku sprawdzisz i potwierdzisz podział.</p>
         </div>
       </div>
@@ -113,12 +147,12 @@
     <section class="panel" id="reviewPanel" hidden>
       <div class="panel-header">
         <div>
-          <h2 class="panel-title"><span class="step-num">2</span>Sprawdź podział na adresy</h2>
+          <h2 class="panel-title"><span class="step-num">3</span>Sprawdź podział na adresy</h2>
           <p class="panel-desc">Program zaproponował podział na podstawie powtarzającego się nagłówka protokołu - sprawdź miniatury stron, w razie potrzeby popraw podział (przyciski między stronami) i nazwy adresów.</p>
         </div>
       </div>
       <div id="reviewFiles"></div>
-      <div class="option-field" style="margin-top:18px">
+      <div class="option-field" id="familySelectField" style="margin-top:18px">
         <span class="option-label">Rodzina protokołu - zawęża listę pól do uzupełnienia do tych, które faktycznie trafiają do tabelki adresowej tej rodziny</span>
         <select id="familySelect">
           <option value="">— nie zawężaj (wszystkie pola) —</option>
@@ -136,7 +170,7 @@
     <section class="panel" id="fieldsPanel" hidden>
       <div class="panel-header">
         <div>
-          <h2 class="panel-title"><span class="step-num">3</span>Uzupełnij dane</h2>
+          <h2 class="panel-title"><span class="step-num">4</span>Uzupełnij dane</h2>
           <p class="panel-desc" id="fieldsIntro">Program rozpoznał większość pól automatycznie. Pola oznaczone na bursztynowo wymagają Twojej uwagi - sprawdź je na oryginalnej stronie (miniatury nad tabelką) i wpisz poprawną wartość. Zmiany zapisują się automatycznie.</p>
         </div>
       </div>
@@ -145,11 +179,11 @@
 
       <div id="excelStep" hidden>
         <p class="hint" id="familyChosenNote"></p>
-        <div class="option-field" style="margin-top:18px">
-          <span class="option-label">Ścieżka do tabelki Excela (.xlsx) - stworzy NOWY plik z wierszami wszystkich przetworzonych adresów (nadpisze, jeśli coś już tam jest)</span>
+        <div class="option-field" id="excelPathField" style="margin-top:18px">
+          <span class="option-label" id="excelPathLabel">Ścieżka do tabelki Excela (.xlsx) - stworzy NOWY plik z wierszami wszystkich przetworzonych adresów (nadpisze, jeśli coś już tam jest)</span>
           <input type="text" id="excelPathInput" placeholder="G:\Dyski współdzielone\...\tabela-audytow.xlsx">
         </div>
-        <p class="hint">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 2) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru.</p>
+        <p class="hint" id="excelStepHint">Zostaw puste, jeśli teraz nie chcesz zapisywać do Excela - dostaniesz tylko gotowe PDF-y. Wybór rodziny (krok 3) dopasowuje nagłówki kolumn 1:1 do prawdziwego wzoru (LP, REZYGNACJA i inne kolumny biurowe zostają puste do ręcznego uzupełnienia) - to osobny plik do skopiowania, program nie zapisuje bezpośrednio do prawdziwego wzoru.</p>
         <div class="hero-actions">
           <button type="button" id="finalizeBtn" class="btn btn-primary">Zapisz i pobierz</button>
         </div>
@@ -159,7 +193,7 @@
     <section class="panel" id="resultsPanel" hidden>
       <div class="panel-header">
         <div>
-          <h2 class="panel-title"><span class="step-num">4</span>Gotowe pliki</h2>
+          <h2 class="panel-title"><span class="step-num">5</span>Gotowe pliki</h2>
           <p class="panel-desc">Pobierz podzielone PDF-y - oryginalny plik źródłowy nie został zmieniony.</p>
         </div>
       </div>

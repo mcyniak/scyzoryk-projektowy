@@ -148,7 +148,8 @@ function buildSchemaAndPrompt(fieldDefs) {
     properties[def.key] = { type: 'STRING', nullable: true };
     required.push(def.key);
     const optStr = def.options?.length ? ` (dozwolone wartosci: ${def.options.map((o) => o.label).join(' | ')})` : '';
-    fieldDocs.push(`- ${def.key}: ${def.columnLabel}${optStr}`);
+    const noteStr = def.note ? ` (${def.note})` : '';
+    fieldDocs.push(`- ${def.key}: ${def.columnLabel}${optStr}${noteStr}`);
   }
   const schema = { type: 'OBJECT', properties, required };
   const prompt = EXTRACTION_PROMPT_HEADER + fieldDocs.join('\n');

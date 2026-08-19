@@ -166,6 +166,17 @@ const FIELD_DEFS = [
     ]
   },
   {
+    // Gdy 'zrodloCiepla' = "Inny", dopisany odrecznie tekst dotad NIGDZIE nie
+    // byl przechwytywany (checkbox zwracal tylko wybrana etykiete opcji).
+    // Wlasciciel potrzebuje tej wartosci do wyliczenia kolumny "kolektory" w
+    // tabeli adresowej (patrz tabelaAdresowaColumns.js#deriveFromKeyword) -
+    // np. "Inny: kolektor sloneczny" -> kolektory = "tak".
+    key: 'zrodloCieplaInnyOpis',
+    columnLabel: 'Źródło ciepła - opis "Inny"',
+    kind: 'text',
+    note: 'wypelnij WYLACZNIE jesli pole "zrodloCiepla" ma zaznaczone "Inny" - przepisz dokladnie dopisany obok tekst, w kazdym innym przypadku zwroc null'
+  },
+  {
     key: 'wentylacja',
     columnLabel: 'Wentylacja',
     kind: 'checkbox',

@@ -12,7 +12,7 @@ const { getAppDataDir } = require('../../lib/appPaths');
 const { analyzeDocument, inspectDocument, finalizeSplit } = require('./src/ocrPipeline');
 const { isConfigured: isGeminiConfigured, saveUserApiKey, extractFieldsForBlock } = require('./src/geminiFieldEngine');
 const { COLUMN_ORDER, COLUMN_LABELS, buildFieldsFromExtraction, filterExtractableFields } = require('./src/fieldExtraction');
-const { writeFreshRows, writeFamilyTemplateRows, validatePath: validateExcelPath } = require('./src/excelExport');
+const { writeFreshRows, writeFamilyTemplateRows, readExistingTable, fillExistingTableRows, validatePath: validateExcelPath } = require('./src/excelExport');
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
 const { validateOcrBatchInspections } = require('./src/ocrLimits');
 
@@ -232,6 +232,58 @@ async function cleanupOldAnalyses() {
 }
 setInterval(() => cleanupOldAnalyses().catch(err => console.error('[ocr-analysis-cleanup]', err?.message || err)), 15 * 60 * 1000).unref();
 
+// Krok 0 (opcjonalny, przed wgraniem PDF-ow): wlasciciel juz ma tabelke
+// adresowa (np. "Biala tabela adresowa.xlsx") czesciowo uzupelniona - zamiast
+// zawsze ciagnac z Gemini pelny zestaw ~40 pol, czyta te tabelke i pokazuje,
+// KTORYCH pol (z rodziny wybranej przez uzytkownika) faktycznie brakuje w co
+// najmniej jednym wierszu - to steruje checklista w UI (pre-zaznaczone =
+// brakujace). Sciezka jest podawana wprost (jak `excelPath` przy finalizacji
+// od zawsze) - to lokalne, 127.0.0.1-owe narzedzie na tym samym dysku, wiec
+// nie ma potrzeby uploadu/kopiowania pliku (w odroznieniu od PDF-ow audytow,
+// ktore faktycznie trzeba przekazac serwerowi do przetworzenia).
+app.post('/api/ocr/inspect-table', async (req, res) => {
+  try {
+    const excelPath = String(req.body?.excelPath || '').trim();
+    const family = String(req.body?.family || '').trim();
+    if (!family || !TABELA_FAMILIES[family]) {
+      throw new Error('Wybierz rodzaj protokołu (Pompy ciepła / Solary / Kotły).');
+    }
+    validateExcelPath(excelPath);
+    if (!fs.existsSync(excelPath)) throw new Error(`Nie znaleziono pliku: ${excelPath}`);
+
+    const { rows, columns, unrecognizedHeaders } = await readExistingTable(excelPath, family);
+    const allowedKeys = allowedKeysForFamily(family);
+
+    // Kazde pole checklisty jest ZRODLOWYM kluczem FIELD_DEFS (nie etykieta
+    // kolumny) - kolumny "Udział ogrzew. grzejnik."/"Udział ogrzew. podłog."
+    // dziela jeden klucz (udzialGrzejnikowy), tak samo "kolektory" pokazuje
+    // sie jako jedna pozycja mimo ze jej zrodlem jest zrodloCieplaInnyOpis.
+    const fieldStats = new Map();
+    for (const { def } of columns) {
+      const sourceKey = def.fieldKey || def.complementOf || def.deriveFromKeyword?.sourceField;
+      if (!sourceKey || !allowedKeys.has(sourceKey)) continue;
+      if (!fieldStats.has(sourceKey)) fieldStats.set(sourceKey, { label: def.label, missingCount: 0 });
+    }
+    for (const row of rows) {
+      const missingHere = new Set();
+      for (const { def } of columns) {
+        const sourceKey = def.fieldKey || def.complementOf || def.deriveFromKeyword?.sourceField;
+        if (!sourceKey || !fieldStats.has(sourceKey)) continue;
+        if (!row.values[def.label]) missingHere.add(sourceKey);
+      }
+      for (const key of missingHere) fieldStats.get(key).missingCount += 1;
+    }
+
+    const fields = [...fieldStats.entries()].map(([fieldKey, s]) => ({
+      fieldKey, label: s.label, missingCount: s.missingCount, totalRows: rows.length
+    }));
+
+    res.json({ ok: true, rowCount: rows.length, fields, unrecognizedHeaders, lpValues: rows.map((r) => r.lp) });
+  } catch (error) {
+    res.status(400).json({ ok: false, message: error.message });
+  }
+});
+
 // Krok 1/2: rozpoznaje tekst i - dla plikow, ktore tego wymagaly - proponuje
 // podzial na bloki adresowe + miniatury stron do przegladu. NIC tu jeszcze nie
 // trafia do pobrania - to robi dopiero /api/ocr/finalize po zatwierdzeniu
@@ -345,7 +397,7 @@ app.get('/api/analysis/:analysisId/files/:fileId/page/:pageIndex', (req, res) =>
 // body zadania, zeby wymusic ze tabelka faktycznie jest kompletna (patrz walidacja w
 // /api/ocr/finalize).
 app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
-  const { analysisId, files: requestedFiles, family } = req.body || {};
+  const { analysisId, files: requestedFiles, family, selectedKeys } = req.body || {};
   const analysis = analyses.get(analysisId);
   if (!analysis) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła lub nie istnieje - wgraj pliki ponownie.' });
   if (!Array.isArray(requestedFiles) || !requestedFiles.length) {
@@ -359,7 +411,13 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
   }
   // Zawezenie ekstrakcji/przegladu TYLKO do pol potrzebnych tabelce adresowej wybranej
   // rodziny (na wyrazna prosbe wlasciciela - null/brak wybranej rodziny = pelny zestaw pol).
-  const allowedKeys = family ? allowedKeysForFamily(family) : null;
+  // `selectedKeys` (checklista z /api/ocr/inspect-table) zawezia to DALEJ - zawsze
+  // przecinana z allowedKeysForFamily, zeby nikt nie mogl zazadac klucza spoza rodziny.
+  let allowedKeys = family ? allowedKeysForFamily(family) : null;
+  if (allowedKeys && Array.isArray(selectedKeys)) {
+    const requested = new Set(selectedKeys.map(String));
+    allowedKeys = new Set([...allowedKeys].filter((k) => requested.has(k)));
+  }
   const fieldDefs = filterExtractableFields(allowedKeys);
 
   try {
@@ -515,7 +573,8 @@ function validateBlocks(blocks, pageCount) {
 // jesli dla ktoregos bloku zostaly nierozstrzygniete pola do przegladu,
 // finalizacja jest BLOKOWANA (wymaga tego kompletnosc tabelki, patrz plan).
 app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
-  const { analysisId, files: requestedFiles, excelPath, family, overwriteConfirmed } = req.body || {};
+  const { analysisId, files: requestedFiles, excelPath, family, overwriteConfirmed, mode, selectedKeys } = req.body || {};
+  const fillExisting = mode === 'fill-existing';
   const analysis = analyses.get(analysisId);
   if (!analysis) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła lub nie istnieje - wgraj pliki ponownie.' });
   if (!Array.isArray(requestedFiles) || !requestedFiles.length) {
@@ -528,7 +587,12 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     if (family && !TABELA_FAMILIES[family]) {
       return res.status(400).json({ ok: false, message: 'Nieznana rodzina protokołu.' });
     }
-    if (fs.existsSync(excelPath) && overwriteConfirmed !== true) {
+    if (fillExisting) {
+      // Tryb "wypelnij ta sama tabele" WYMAGA istniejacego pliku (przeciwnie
+      // niz tryb "nowy plik" nizej) - nigdy nie tworzymy tu niczego od zera.
+      if (!family) return res.status(400).json({ ok: false, message: 'Wybierz rodzaj protokołu (Pompy ciepła / Solary / Kotły).' });
+      if (!fs.existsSync(excelPath)) return res.status(400).json({ ok: false, message: `Nie znaleziono pliku: ${excelPath}` });
+    } else if (fs.existsSync(excelPath) && overwriteConfirmed !== true) {
       return res.status(409).json({
         ok: false,
         code: 'EXCEL_ALREADY_EXISTS',
@@ -549,6 +613,9 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     // i zapisywane JEDNYM writeFreshRows PO petli, zamiast po jednym appendRow na blok - patrz
     // komentarz w excelExport.js (nigdy nie doklejac do istniejacego pliku pod ta sciezka).
     const excelRows = [];
+    // Tryb fillExisting: LP (etykieta bloku pelni ta role w tym trybie - patrz
+    // app.js) -> fields, do pozniejszego fillExistingTableRows.
+    const rowsByLp = new Map();
 
     for (const requested of requestedFiles) {
       const fileEntry = analysis.files.get(requested?.fileId);
@@ -584,7 +651,17 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
           const outFileName = path.basename(outPaths[i]);
           const addressLabel = b.label || (blocks.length > 1 ? `Adres ${i + 1}` : fileEntry.originalName);
 
-          if (excelPath) {
+          let excelRow = false;
+          const blockWarnings = warningsForBlock(fileEntry.warnings, b, blocks.length);
+          if (excelPath && fillExisting) {
+            const lp = String(b.label || '').trim();
+            if (!lp) {
+              blockWarnings.push('Brak numeru LP (pole "etykieta" na ekranie podziału) - dane audytu NIE trafiły do tabeli, uzupełnij ręcznie.');
+            } else {
+              rowsByLp.set(lp, b.fields);
+              excelRow = true; // ostateczne dopasowanie do wiersza weryfikuje fillExistingTableRows (unmatchedLp)
+            }
+          } else if (excelPath) {
             if (family) {
               const addressRow = buildRowValues(family, b.fields);
               excelRows.push(addressRow);
@@ -593,6 +670,7 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
               for (const [key, field] of Object.entries(b.fields)) addressRow[key] = field.value || '';
               excelRows.push(addressRow);
             }
+            excelRow = true;
           }
 
           results.push({
@@ -604,8 +682,8 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
             status: fileEntry.status,
             pageRange: [b.startPage + 1, b.endPage + 1],
             pageCount: b.endPage - b.startPage + 1,
-            warnings: warningsForBlock(fileEntry.warnings, b, blocks.length),
-            excelRow: excelPath ? true : false
+            warnings: blockWarnings,
+            excelRow
           });
         });
       } catch (fileErr) {
@@ -620,7 +698,29 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     // writeFreshRows objelo caly zestaw wierszy tej paczki naraz.
     let excelError = null;
     let excelBackupPath = null;
-    if (excelPath && excelRows.length) {
+    let fillStats = null;
+    if (excelPath && fillExisting) {
+      // fillStats jest ZAWSZE ustawiane w tym trybie (nawet gdy rowsByLp jest
+      // puste, np. zaden blok nie mial numeru LP) - frontend rozroznia tryb
+      // po samej OBECNOSCI fillStats, nie po jego zawartosci.
+      if (rowsByLp.size) {
+        try {
+          const familyAllowedKeys = allowedKeysForFamily(family);
+          let allowedKeys = familyAllowedKeys;
+          if (Array.isArray(selectedKeys)) {
+            const requested = new Set(selectedKeys.map(String));
+            allowedKeys = new Set([...familyAllowedKeys].filter((k) => requested.has(k)));
+          }
+          const written = await fillExistingTableRows(excelPath, family, rowsByLp, allowedKeys);
+          excelBackupPath = written.backupPath;
+          fillStats = { matchedRows: written.matchedRows, filledCells: written.filledCells, unmatchedLp: written.unmatchedLp };
+        } catch (err) {
+          excelError = err.message || 'Nie udało się zapisać pliku Excel.';
+        }
+      } else {
+        fillStats = { matchedRows: 0, filledCells: 0, unmatchedLp: [] };
+      }
+    } else if (excelPath && excelRows.length) {
       try {
         if (family) {
           const definition = TABELA_FAMILIES[family];
@@ -646,7 +746,16 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
     // odcinalo to calkowicie (endpoint /api/ocr/save-template dostawal "sesja wygasla").
     // Sesja i tak zniknie sama przez istniejacy TTL (cleanupOldAnalyses, ANALYSIS_TTL_MS
     // = 2h domyslnie) - wystarczajaco duzo czasu, zeby po fakcie zdecydowac o wzorze.
-    res.json({ ok: true, jobId, results, excelPath: excelPath || null, excelBackupPath, excelRowCount: excelRows.length, excelError });
+    res.json({
+      ok: true,
+      jobId,
+      results,
+      excelPath: excelPath || null,
+      excelBackupPath,
+      excelRowCount: excelRows.length,
+      excelError,
+      fillStats
+    });
   } catch (error) {
     res.status(400).json({ ok: false, message: error.message });
   }
