@@ -97,11 +97,44 @@ const upload = multer({
 
 // --- Logika doboru kart katalogowych ---
 
-// Karty, ktore ida ZAWSZE (nazwy plikow zrodlowych w folderze "karty" na dysku)
+// Karty, ktore ida ZAWSZE (nazwy plikow zrodlowych w folderze "karty" na dysku) -
+// starsza, PLASKA konwencja (wszystkie rozmiary w jednym folderze, rozmiar
+// zakodowany w nazwie pliku zasobnika). Zweryfikowana realnie dla Paradyz
+// Żarnów/Zagórów.
 const ZAWSZE_KARTY = ['Grupa pompowa.pdf', 'Kolektor KSG 21GT.pdf'];
 // Zasobnik dobierany wg ostatniej liczby w UID (np. "2/250" -> 250, "2x4/400" -> 400)
 const ROZMIARY_ZASOBNIKA = ['250', '300', '400'];
 function nazwaZasobnika(rozmiar) { return `Zasobnik SGW(S)B ${rozmiar}.pdf`; }
+
+// Nowsza konwencja (zweryfikowana realnie - Kamiensk): karty NIE leza plasko
+// w jednym folderze - kazdy rozmiar zestawu ma WLASNY podfolder pod
+// kartyDir (np. "2.300", "3.400"), a pliki w srodku sa recznie numerowane
+// przez osobe wgrywajaca ("1. Karta katalogowa kolektora słonecznego.pdf",
+// "2. Zasobnik A klasa 300.pdf", "3. Grupa pompowa.pdf") zamiast miec stale
+// nazwy - TRESC nazwy po numerze bywa rozna nawet MIEDZY rozmiarami tej
+// samej inwestycji (np. "2. Zasobnik A klasa 300.pdf" vs "2. Zasobnik 400 A
+// klasa.pdf" - inna kolejnosc slow, nie tylko inna liczba), wiec dopasowanie
+// dziala po SAMYM NUMERZE na poczatku nazwy, nigdy po pelnej tresci.
+//
+// Sprawdzana PRZED plaska konwencja (patrz przetworzArkusz FAZA 2) - jesli
+// podfolder rozmiaru istnieje, ma pierwszenstwo; jesli nie istnieje, kod
+// spada do ZAWSZE_KARTY/nazwaZasobnika jak dotychczas - stara, juz
+// zweryfikowana sciezka dla innych inwestycji zostaje bez zmian.
+async function znajdzPodfolderRozmiaru(kartyDir, rozmiar) {
+  const nazwyFolderow = await listujFoldery(kartyDir);
+  if (!nazwyFolderow) return null;
+  const trafiony = nazwyFolderow.find(nazwa => nazwa.includes(rozmiar));
+  return trafiony ? path.join(kartyDir, trafiony) : null;
+}
+
+async function listujKartyNumerowane(folder) {
+  let wpisy;
+  try { wpisy = await fsp.readdir(folder, { withFileTypes: true }); } catch { return null; }
+  return wpisy
+    .filter(w => w.isFile() && /^\d+\.\s/.test(w.name))
+    .map(w => w.name)
+    .sort((a, b) => a.localeCompare(b, 'pl', { numeric: true }));
+}
 
 // Sprawdzanie kazdego adresu (listowanie folderu klienta na dysku, potem
 // ewentualne kopiowanie) bylo do tej pory SEKWENCYJNE - jeden adres na raz,
@@ -239,19 +272,39 @@ function rozpoznajArkuszPomp(sheetName) {
   return /pomp/i.test(String(sheetName || ''));
 }
 
-// Szuka podfolderu w zrodlowym folderze wzorow pomp, ktorego nazwa to
-// dokladnie model (np. "VPM9012") albo konczy sie na "_<model>" (np.
-// "ZAGOROW_VPM9012") - oba warianty nazewnictwa wystepuja realnie na dysku,
-// w zaleznosci od inwestycji.
-async function znajdzFolderModeluPompy(wzorDir, model) {
+// Wyciaga token "VPM<cyfry>" z nazwy folderu wzoru, ignorujac spacje i
+// wielkosc liter - realne foldery pisza to jako "VARMERO VPM 9008" (ze
+// spacja miedzy VPM a numerem), nie "VPM9008" jak w znormalizowanym modelu
+// z Excela (parseModelPompy), wiec proste porownanie tekstu nigdy by nie
+// trafilo. Zwraca null, jesli w nazwie w ogole nie ma wzorca VPM<cyfry>.
+function wyciagnijTokenModeluPompy(nazwaFolderu) {
+  const match = String(nazwaFolderu || '').toUpperCase().match(/VPM\s*(\d+)/);
+  return match ? `VPM${match[1]}` : null;
+}
+
+// Szuka WSZYSTKICH podfolderow w zrodlowym folderze wzorow pomp, ktorych
+// token modelu (patrz wyzej) pasuje do modelu z Excela - moze byc WIECEJ NIZ
+// JEDEN, bo ten sam model wystepuje czasem w kilku wariantach z dodatkowym
+// zrodlem ciepla ("VARMERO VPM 9008", "VARMERO VPM 9008 + Kocioł gazowy",
+// "... + Kocioł stałopalny (UO)/(UZ)" - zweryfikowane realnie, Kamiensk).
+// Wywolujacy MUSI sam zdecydowac, co zrobic z wiecej niz jednym trafieniem -
+// ta funkcja swiadomie nigdy nie zgaduje, ktory wariant wybrac.
+async function znajdzFolderyModeluPompy(wzorDir, model) {
   const nazwyFolderow = await listujFoldery(wzorDir);
   if (!nazwyFolderow) return null;
-  const modelUpper = model.toUpperCase();
-  const trafiony = nazwyFolderow.find(nazwa => {
-    const nazwaUpper = nazwa.toUpperCase();
-    return nazwaUpper === modelUpper || nazwaUpper.endsWith(`_${modelUpper}`);
-  });
-  return trafiony ? path.join(wzorDir, trafiony) : null;
+  return nazwyFolderow.filter(nazwa => wyciagnijTokenModeluPompy(nazwa) === model);
+}
+
+// Ustala sciezki wzoru/projektow dla pomp - patrz komentarz przy wywolaniu w
+// przetworzArkuszPomp. Zwraca "PC powietrzne" jako domyslny (do komunikatu
+// bledu), jesli ZADEN wariant nie istnieje na dysku.
+function znajdzFolderyPomp(rootPath) {
+  const warianty = ['PC powietrzne', 'PC'];
+  for (const folder of warianty) {
+    const wzorDir = path.join(rootPath, folder, 'wzór');
+    if (fs.existsSync(wzorDir)) return { wzorDir, projektyDir: path.join(rootPath, folder, 'Projekty') };
+  }
+  return { wzorDir: path.join(rootPath, warianty[0], 'wzór'), projektyDir: path.join(rootPath, warianty[0], 'Projekty') };
 }
 
 async function listujFoldery(dirPath) {
@@ -500,7 +553,26 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   const semafor = createSemaphore(KK_CONCURRENCY);
   await Promise.all(zadania.map(zadanie => semafor.run(async () => {
     const { idx, wiersz, id, adres, uid, folderNazwa, rozmiar } = zadanie;
-    const wymaganePliki = [...ZAWSZE_KARTY, nazwaZasobnika(rozmiar)];
+
+    // Nowsza konwencja (podfolder per rozmiar, patrz znajdzPodfolderRozmiaru
+    // wyzej) ma pierwszenstwo przed starsza, plaska - jesli podfolder
+    // rozmiaru istnieje, ZRODLEM jest ON (nie glowny kartyDir), a wymagane
+    // pliki to WSZYSTKIE numerowane pliki w srodku, nie stala lista nazw.
+    let zrodloDir = kartyDir;
+    let wymaganePliki;
+    const podfolderRozmiaru = await znajdzPodfolderRozmiaru(kartyDir, rozmiar);
+    if (podfolderRozmiaru) {
+      zrodloDir = podfolderRozmiaru;
+      const numerowane = await listujKartyNumerowane(podfolderRozmiaru);
+      if (!numerowane || !numerowane.length) {
+        wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: podfolder rozmiaru "${path.basename(podfolderRozmiaru)}" nie ma zadnych numerowanych plikow karty (np. "1. ...pdf") dla adresu "${adres || '(brak adresu)'}".` };
+        return;
+      }
+      wymaganePliki = numerowane;
+    } else {
+      wymaganePliki = [...ZAWSZE_KARTY, nazwaZasobnika(rozmiar)];
+    }
+
     const folderKlienta = path.join(projektyDir, folderNazwa);
     const istniejace = await istniejacePlikiWFolderze(folderKlienta);
 
@@ -524,7 +596,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
     // "uruchamianie sie", mimo ze dzialala.
     const brakujaceZrodla = [];
     for (const nazwaPliku of doSkopiowania) {
-      const istnieje = await fsp.access(path.join(kartyDir, nazwaPliku)).then(() => true).catch(() => false);
+      const istnieje = await fsp.access(path.join(zrodloDir, nazwaPliku)).then(() => true).catch(() => false);
       if (!istnieje) brakujaceZrodla.push(nazwaPliku);
     }
     if (brakujaceZrodla.length) {
@@ -547,7 +619,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
     const skopiowaneWTejProbie = [];
     try {
       for (const nazwaPliku of doSkopiowania) {
-        await fsp.copyFile(path.join(kartyDir, nazwaPliku), path.join(folderKlienta, nazwaPliku), fs.constants.COPYFILE_EXCL);
+        await fsp.copyFile(path.join(zrodloDir, nazwaPliku), path.join(folderKlienta, nazwaPliku), fs.constants.COPYFILE_EXCL);
         skopiowaneWTejProbie.push(nazwaPliku);
       }
       wynikiByIdx[idx] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'skopiowano', komunikat: `Pliki: ${doSkopiowania.join(', ')}` };
@@ -580,8 +652,14 @@ async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun }) {
   const wyniki = [];
   if (!rozpoznajArkuszPomp(sheetName)) return wyniki; // arkusz nie dotyczy pomp (np. Solary, Kotly, adresy)
 
-  const wzorDir = path.join(rootPath, 'PC powietrzne', 'wzór');
-  const projektyDir = path.join(rootPath, 'PC powietrzne', 'Projekty');
+  // Nazewnictwo folderu pomp na poziomie inwestycji ROZNI SIE miedzy
+  // inwestycjami (zweryfikowane realnie): niektore maja "PC powietrzne"
+  // bezposrednio pod inwestycja, inne maja go zagniezdzony w ogolnym "PC"
+  // (Kamiensk: "17. Kamieńsk\PC\wzór", nie "17. Kamieńsk\PC powietrzne\wzór" -
+  // ten sam folder "PC" obejmuje tam WSZYSTKIE pompy, nie tylko powietrzne).
+  // Probujemy "PC powietrzne" jako pierwsze (bardziej opisowa, starsza
+  // konwencja), potem plaskie "PC".
+  const { wzorDir, projektyDir } = znajdzFolderyPomp(rootPath);
 
   const wzorIstnieje = fs.existsSync(wzorDir);
   const nazwyFolderowKlientow = await listujFoldery(projektyDir);
@@ -656,11 +734,23 @@ async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun }) {
   await Promise.all(zadania.map(zadanie => semafor.run(async () => {
     const { idx, wiersz, id, adres, model, folderNazwa } = zadanie;
 
-    const folderModelu = await znajdzFolderModeluPompy(wzorDir, model);
-    if (!folderModelu) {
-      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono folderu wzoru dla modelu "${model}" w ${wzorDir} (szukano podfolderu "${model}" albo konczacego sie na "_${model}").` };
+    const folderyModelu = await znajdzFolderyModeluPompy(wzorDir, model);
+    if (folderyModelu === null) {
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono folderu ${wzorDir}.` };
       return;
     }
+    if (folderyModelu.length === 0) {
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono folderu wzoru dla modelu "${model}" w ${wzorDir}.` };
+      return;
+    }
+    if (folderyModelu.length > 1) {
+      // Nigdy nie zgadujemy, ktory wariant (np. z dodatkowym kotlem) pasuje -
+      // Excel nie mowi, ktory dokladnie, wiec to musi trafic do recznego
+      // sprawdzenia (na wyrazna prosbe wlasciciela, 2026-08-19).
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: model "${model}" ma kilka pasujących wariantów folderu wzoru (${folderyModelu.join(', ')}) - to narzędzie nie rozróżnia dodatkowego źródła ciepła (np. kocioł gazowy/stałopalny), wybierz kartę ręcznie dla adresu "${adres || '(brak adresu)'}".` };
+      return;
+    }
+    const folderModelu = path.join(wzorDir, folderyModelu[0]);
     const zrodlo = path.join(folderModelu, 'Karty katalogowe.pdf');
     const zrodloIstnieje = await fsp.access(zrodlo).then(() => true).catch(() => false);
     if (!zrodloIstnieje) {

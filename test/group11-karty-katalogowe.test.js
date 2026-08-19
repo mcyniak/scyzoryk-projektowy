@@ -426,3 +426,173 @@ test('przetworzArkuszPomp: arkusz "Solary" jest ignorowany (nie dotyczy pomp)', 
 
   assert.deepEqual(wyniki, []);
 });
+
+// =====================================================================
+// Audyt 2026-08-19 (realny test na inwestycji Kamiensk, wlasciciel):
+// 1) Solary - karty NIE leza plasko w jednym folderze, tylko w podfolderach
+//    per rozmiar zestawu ("2.300", "3.400"), a pliki w srodku sa recznie
+//    numerowane ("1. ...", "2. ...", "3. ...") z TRESCIA po numerze rozna
+//    nawet miedzy rozmiarami tej samej inwestycji.
+// 2) Pompy - sciezka wzoru bywa "PC\wzór" zamiast "PC powietrzne\wzór"
+//    (caly folder "PC" obejmuje wtedy wszystkie pompy, nie tylko powietrzne).
+// 3) Pompy - ten sam model VPM moze miec kilka wariantow folderu wzoru z
+//    dodatkowym zrodlem ciepla ("VARMERO VPM 9008 + Kocioł gazowy" itp.) -
+//    narzedzie NIE MOZE zgadywac, ktory wybrac.
+// =====================================================================
+
+test('przetworzArkusz: podfolder rozmiaru z numerowanymi plikami (nowsza konwencja, Kamiensk) - rozna tresc nazwy pliku "2." miedzy rozmiarami dalej dziala', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-solary-podfoldery-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const wzorDir = path.join(root, 'wzór');
+  const folder300 = path.join(wzorDir, '2.300');
+  const folder400 = path.join(wzorDir, '3.400');
+  await fsp.mkdir(folder300, { recursive: true });
+  await fsp.mkdir(folder400, { recursive: true });
+  await fsp.writeFile(path.join(folder300, '1. Karta katalogowa kolektora słonecznego.pdf'), 'x');
+  await fsp.writeFile(path.join(folder300, '2. Zasobnik A klasa 300.pdf'), 'x');
+  await fsp.writeFile(path.join(folder300, '3. Grupa pompowa.pdf'), 'x');
+  // Pliki, ktore NIE sa numerowanymi kartami - nie moga zostac skopiowane.
+  await fsp.writeFile(path.join(folder300, 'Opis techniczny 2.300.pdf'), 'x');
+  await fsp.writeFile(path.join(folder300, 'Symulacja_Kamieńsk_2_300.pdf'), 'x');
+  // "2." w 400 ma INNA kolejnosc slow niz w 300 - to jest sedno testu.
+  await fsp.writeFile(path.join(folder400, '1. Karta katalogowa kolektora słonecznego.pdf'), 'x');
+  await fsp.writeFile(path.join(folder400, '2. Zasobnik 400 A klasa.pdf'), 'x');
+  await fsp.writeFile(path.join(folder400, '3. Grupa pompowa.pdf'), 'x');
+
+  const projektyDir = path.join(root, 'Projekty');
+  const folderKlienta300 = path.join(projektyDir, '2 - Kamiensk, ul. Pierwsza');
+  const folderKlienta400 = path.join(projektyDir, '3 - Kamiensk, ul. Druga');
+  await fsp.mkdir(folderKlienta300, { recursive: true });
+  await fsp.mkdir(folderKlienta400, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary', [
+    [2, 'Kamiensk, ul. Pierwsza', '2/300', ''],
+    [3, 'Kamiensk, ul. Druga', '3/400', '']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 2);
+  assert.ok(wyniki.every((w) => w.status === 'skopiowano'), JSON.stringify(wyniki));
+
+  const skopiowane300 = (await fsp.readdir(folderKlienta300)).sort();
+  assert.deepEqual(skopiowane300, [
+    '1. Karta katalogowa kolektora słonecznego.pdf',
+    '2. Zasobnik A klasa 300.pdf',
+    '3. Grupa pompowa.pdf'
+  ].sort(), 'tylko 3 numerowane karty, bez opisu technicznego/symulacji');
+
+  const skopiowane400 = (await fsp.readdir(folderKlienta400)).sort();
+  assert.deepEqual(skopiowane400, [
+    '1. Karta katalogowa kolektora słonecznego.pdf',
+    '2. Zasobnik 400 A klasa.pdf',
+    '3. Grupa pompowa.pdf'
+  ].sort(), 'rozna tresc nazwy "2." dla innego rozmiaru - dopasowanie po numerze, nie po tresci');
+});
+
+test('przetworzArkusz: bez podfolderu rozmiaru dalej dziala stara, plaska konwencja (zero regresji dla juz zweryfikowanych inwestycji)', async (t) => {
+  const { root, projektyDir } = await przygotujRoot({
+    foldery: ['41 - Zarnow, ul. Spacerowa'],
+    kartyPliki: WYMAGANE_KARTY
+  });
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary Zarnow', [
+    [41, 'ul. Spacerowa 5, Zarnow', '2/250', '']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano');
+  const skopiowane = (await fsp.readdir(path.join(projektyDir, '41 - Zarnow, ul. Spacerowa'))).sort();
+  assert.deepEqual(skopiowane, [...WYMAGANE_KARTY].sort());
+});
+
+test('przetworzArkuszPomp: "PC powietrzne" nie istnieje - spada na "PC\\wzór" (Kamiensk: caly folder PC obejmuje wszystkie pompy)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-pomp-pc-fallback-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const folderModelu = path.join(root, 'PC', 'wzór', 'VARMERO VPM 9008');
+  await fsp.mkdir(folderModelu, { recursive: true });
+  await fsp.writeFile(path.join(folderModelu, 'Karty katalogowe.pdf'), 'x');
+
+  const projektyDir = path.join(root, 'PC', 'Projekty');
+  const folderKlienta = path.join(projektyDir, '17.Wieruszew 3');
+  await fsp.mkdir(folderKlienta, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkuszPomp('Pompy ciepła', [
+    [17, 'Wieruszew 3', 'VPM9008']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano', JSON.stringify(wyniki));
+  assert.deepEqual(await fsp.readdir(folderKlienta), ['Karty katalogowe.pdf']);
+});
+
+test('przetworzArkuszPomp: "VARMERO VPM 9008" (ze spacja) rozpoznawane - dawne dopasowanie po tekscie nigdy by nie trafilo', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-pomp-spacja-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const folderModelu = path.join(root, 'PC powietrzne', 'wzór', 'VARMERO VPM 9012');
+  await fsp.mkdir(folderModelu, { recursive: true });
+  await fsp.writeFile(path.join(folderModelu, 'Karty katalogowe.pdf'), 'x');
+
+  const projektyDir = path.join(root, 'PC powietrzne', 'Projekty');
+  const folderKlienta = path.join(projektyDir, '5.Testowo 1');
+  await fsp.mkdir(folderKlienta, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkuszPomp('Pompy ciepła', [
+    [5, 'Testowo 1', 'VPM9012']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano', JSON.stringify(wyniki));
+});
+
+test('przetworzArkuszPomp: model z kilkoma wariantami folderu wzoru (np. + Kocioł gazowy/stałopalny) - blad zamiast zgadywania', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-pomp-warianty-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const wzorDir = path.join(root, 'PC powietrzne', 'wzór');
+  for (const nazwa of [
+    'VARMERO VPM 9008',
+    'VARMERO VPM 9008 + Kocioł gazowy',
+    'VARMERO VPM 9008 + Kocioł stałopalny (UO)',
+    'VARMERO VPM 9008 + Kocioł stałopalny (UZ)'
+  ]) {
+    const folder = path.join(wzorDir, nazwa);
+    await fsp.mkdir(folder, { recursive: true });
+    await fsp.writeFile(path.join(folder, 'Karty katalogowe.pdf'), 'x');
+  }
+
+  const projektyDir = path.join(root, 'PC powietrzne', 'Projekty');
+  const folderKlienta = path.join(projektyDir, '9.Wielowariantowo 2');
+  await fsp.mkdir(folderKlienta, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkuszPomp('Pompy ciepła', [
+    [9, 'Wielowariantowo 2', 'VPM9008']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'blad');
+  assert.match(wyniki[0].komunikat, /kilka pasujących wariantów/);
+  assert.deepEqual(await fsp.readdir(folderKlienta), [], 'nic nie moglo zostac skopiowane przy niejednoznacznym dopasowaniu');
+});
