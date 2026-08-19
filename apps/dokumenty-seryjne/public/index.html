@@ -136,13 +136,16 @@
       <div class="selection-tools">
         <div class="field">
           <label for="recordSearch">Wybierz adresy do zrobienia</label>
-          <div class="filter-row" style="display:flex; gap:8px; align-items:center;">
-            <select id="filterColumn" title="Filtruj dokladnie po tej kolumnie zamiast szukac wszedzie">
-              <option value="">Szukaj we wszystkich kolumnach</option>
-            </select>
-            <input id="recordSearch" class="search-input" type="search" placeholder="Szukaj po adresie, ID albo beneficjencie...">
+          <div id="filterRowsContainer">
+            <div class="filter-row" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+              <select id="filterColumn" title="Filtruj dokladnie po tej kolumnie zamiast szukac wszedzie">
+                <option value="">Szukaj we wszystkich kolumnach</option>
+              </select>
+              <input id="recordSearch" class="search-input" type="search" placeholder="Szukaj po adresie, ID albo beneficjencie...">
+            </div>
           </div>
-          <div class="small-note" id="recordSearchHint">Zostaw zaznaczone tylko te adresy, dla których chcesz teraz utworzyć PDF. Wybierz kolumnę powyżej, żeby filtrować po dokładnej wartości (kilka wartości oddziel przecinkiem, np. "1,2").</div>
+          <button id="addFilterRowBtn" class="button ghost" type="button" style="margin-bottom:6px">+ Dodaj kolejny warunek</button>
+          <div class="small-note" id="recordSearchHint">Zostaw zaznaczone tylko te adresy, dla których chcesz teraz utworzyć PDF. Wybierz kolumnę, żeby filtrować po dokładnej wartości (kilka wartości oddziel przecinkiem, np. "1,2"). Dodaj kolejny warunek, żeby połączyć kilka kolumn naraz (np. Odbiór Gmina = 1,2 ORAZ Powykonawcze = PB) - wszystkie warunki muszą być spełnione równocześnie.</div>
         </div>
         <div>
           <div id="selectionCounter" class="selection-counter">0 zaznaczonych</div>

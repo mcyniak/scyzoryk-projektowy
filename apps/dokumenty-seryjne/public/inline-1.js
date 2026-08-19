@@ -8,6 +8,7 @@ document.querySelectorAll('[data-main-link]').forEach(link => { link.href = scyz
 const headers = { 'X-Scyzoryk-Request': '1' };
     let currentJob = null;
     let currentWorkbook = null;
+    let currentAllColumns = [];
     let detectedTemplatePower = '';
     let pollTimer = null;
     let lastStatus = null;
@@ -20,7 +21,8 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     function esc(v) { return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 
     function setBusy(isBusy) {
-      ['uploadBtn','generateBtn','selectAllBtn','selectNoneBtn','selectVisibleBtn','selectVisibleNoneBtn','recordSearch','filterColumn','filePrefix'].forEach(id => setDisabled(id, isBusy));
+      ['uploadBtn','generateBtn','selectAllBtn','selectNoneBtn','selectVisibleBtn','selectVisibleNoneBtn','filePrefix','addFilterRowBtn'].forEach(id => setDisabled(id, isBusy));
+      document.querySelectorAll('#filterRowsContainer select, #filterRowsContainer input').forEach(el => { el.disabled = isBusy; });
     }
 
     function setJobPill(text) { $('jobPill').textContent = text; show($('jobPill')); }
@@ -199,21 +201,25 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       $('sheetSelect').innerHTML = (wb.sheetNames || []).map(name => `<option ${name === wb.sheetName ? 'selected' : ''}>${esc(name)}</option>`).join('');
       $('addressColumn').innerHTML = (wb.columns || []).map(col => `<option ${col === suggestedAddressColumn ? 'selected' : ''}>${esc(col)}</option>`).join('');
       updateSheetHint(wb.sheetName);
-      $('recordSearch').value = '';
-      const usefulColumns = ['_record', ...pickColumns(wb.columns || [], suggestedAddressColumn)];
+      const allColumns = wb.columns || [];
+      currentAllColumns = allColumns;
+      const usefulColumns = ['_record', ...pickColumns(allColumns, suggestedAddressColumn)];
       // Filtruj kolumne - dokladne dopasowanie wartosci JEDNEJ kolumny (patrz
       // filterRecords nizej), zamiast tylko przeszukiwania podciagu we
       // wszystkich widocznych kolumnach naraz (np. szukanie "1" latwo trafia
       // przypadkiem w numer telefonu/adresu w INNEJ kolumnie). Realny
       // przypadek: kolumna statusu typu "Odbior Gmina (wypelnia biuro)" z
       // wartosciami 1/2/3 - substring "1" zlapalby tez np. "ul. Szkolna 17".
-      $('filterColumn').innerHTML = '<option value="">Szukaj we wszystkich kolumnach</option>' +
-        usefulColumns.filter(c => c !== '_record').map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
-      $('filterColumn').value = '';
+      // Mozna dodac kilka takich warunkow naraz (polaczone jako I/AND), np.
+      // "Odbior Gmina" = 1,2 ORAZ "Powykonawcze" = PB - patrz addFilterRow.
+      resetFilterRows();
       const head = `<thead><tr><th class="select-col"><input id="checkAllRows" type="checkbox" checked title="Zaznacz / odznacz wszystkie"></th>${usefulColumns.map(c => `<th>${c === '_record' ? 'Nr' : esc(c)}</th>`).join('')}</tr></thead>`;
       const bodyRows = (wb.rows || []).map(row => {
         const searchText = usefulColumns.map(c => row[c]).join(' ');
-        const colsJson = esc(JSON.stringify(Object.fromEntries(usefulColumns.map(c => [c, row[c] == null ? '' : String(row[c])]))));
+        // Zawiera WSZYSTKIE kolumny z Excela, nie tylko te pokazane w tabeli -
+        // zeby dalo sie filtrowac po dowolnej kolumnie (np. "Powykonawcze"),
+        // nawet gdy tabela dla czytelnosci pokazuje tylko wybrany podzbior.
+        const colsJson = esc(JSON.stringify(Object.fromEntries(allColumns.map(c => [c, row[c] == null ? '' : String(row[c])]))));
         return `<tr data-search="${esc(searchText).toLowerCase()}" data-cols="${colsJson}"><td class="select-col"><input class="row-check" type="checkbox" data-record="${row._record}" checked></td>${usefulColumns.map(c => `<td>${esc(row[c])}</td>`).join('')}</tr>`;
       }).join('');
       $('recordsTable').innerHTML = head + `<tbody>${bodyRows}</tbody>`;
@@ -283,28 +289,73 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       return result;
     }
 
+    function columnOptionsHtml(selected) {
+      return '<option value="">Szukaj we wszystkich kolumnach</option>' +
+        currentAllColumns.map(c => `<option value="${esc(c)}"${c === selected ? ' selected' : ''}>${esc(c)}</option>`).join('');
+    }
+
+    function updateFilterRowPlaceholder(row) {
+      const select = row.querySelector('select');
+      const input = row.querySelector('input');
+      if (!select || !input) return;
+      input.placeholder = select.value
+        ? `Dokładna wartość w "${select.value}" (kilka po przecinku, np. 1,2)...`
+        : 'Szukaj po adresie, ID albo beneficjencie...';
+    }
+
+    function addFilterRow() {
+      const row = document.createElement('div');
+      row.className = 'filter-row';
+      row.style.cssText = 'display:flex; gap:8px; align-items:center; margin-bottom:6px;';
+      row.innerHTML = `<select title="Filtruj dokladnie po tej kolumnie zamiast szukac wszedzie">${columnOptionsHtml('')}</select>` +
+        `<input class="search-input" type="search" placeholder="Szukaj po adresie, ID albo beneficjencie...">` +
+        `<button type="button" class="button ghost" title="Usuń ten warunek" style="padding:0 12px">×</button>`;
+      $('filterRowsContainer').appendChild(row);
+      row.querySelector('select').addEventListener('change', () => { updateFilterRowPlaceholder(row); filterRecords(); });
+      row.querySelector('input').addEventListener('input', filterRecords);
+      row.querySelector('button').addEventListener('click', () => { row.remove(); filterRecords(); });
+      return row;
+    }
+
+    function resetFilterRows() {
+      const container = $('filterRowsContainer');
+      [...container.querySelectorAll('.filter-row')].slice(1).forEach(row => row.remove());
+      $('filterColumn').innerHTML = columnOptionsHtml('');
+      $('filterColumn').value = '';
+      $('recordSearch').value = '';
+      updateFilterRowPlaceholder(container.querySelector('.filter-row'));
+    }
+
     function filterRecords() {
-      const q = $('recordSearch').value.trim();
-      const column = $('filterColumn') ? $('filterColumn').value : '';
-      if (column) {
-        // Dokladne dopasowanie WARTOSCI tej jednej kolumny (nie podciag w
-        // dowolnym miejscu) - kilka wartosci oddzielonych przecinkiem dziala
-        // jako "LUB" (np. "1,2" pokazuje wiersze z wartoscia dokladnie "1"
-        // ALBO dokladnie "2" w wybranej kolumnie).
-        const wanted = q.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
-        document.querySelectorAll('#recordsTable tbody tr').forEach(tr => {
-          let cols = {};
-          try { cols = JSON.parse(tr.dataset.cols || '{}'); } catch (_) {}
-          const value = String(cols[column] ?? '').trim().toLowerCase();
-          tr.classList.toggle('is-hidden', wanted.length > 0 && !wanted.includes(value));
-        });
-      } else {
-        const hay = q.toLowerCase();
-        document.querySelectorAll('#recordsTable tbody tr').forEach(tr => {
-          const rowHay = tr.dataset.search || tr.textContent.toLowerCase();
-          tr.classList.toggle('is-hidden', hay && !rowHay.includes(hay));
-        });
-      }
+      // Kazdy wiersz filtra to jeden warunek; wszystkie aktywne (niepuste)
+      // warunki musza byc spelnione naraz (I/AND) - tak dziala polaczenie
+      // np. "Odbior Gmina" = 1,2 ORAZ "Powykonawcze" = PB. W obrebie jednego
+      // warunku kilka wartosci po przecinku dziala jako LUB (dokladne
+      // dopasowanie wartosci komorki, nie podciag).
+      const conditions = [];
+      document.querySelectorAll('#filterRowsContainer .filter-row').forEach(row => {
+        const select = row.querySelector('select');
+        const input = row.querySelector('input');
+        if (!select || !input) return;
+        const q = input.value.trim();
+        if (!q) return;
+        const column = select.value;
+        if (column) {
+          const wanted = q.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+          if (wanted.length) conditions.push({ column, wanted });
+        } else {
+          conditions.push({ text: q.toLowerCase() });
+        }
+      });
+      document.querySelectorAll('#recordsTable tbody tr').forEach(tr => {
+        let cols = {};
+        try { cols = JSON.parse(tr.dataset.cols || '{}'); } catch (_) {}
+        const rowHay = tr.dataset.search || tr.textContent.toLowerCase();
+        const matches = conditions.every(cond => cond.column
+          ? cond.wanted.includes(String(cols[cond.column] ?? '').trim().toLowerCase())
+          : rowHay.includes(cond.text));
+        tr.classList.toggle('is-hidden', !matches);
+      });
       updateSelectedMetric();
     }
 
@@ -389,10 +440,8 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     $('zipLink')?.addEventListener('click', e => { if ($('zipLink').dataset.disabled === '1') e.preventDefault(); });
     $('recordSearch')?.addEventListener('input', filterRecords);
     $('filterColumn')?.addEventListener('change', () => {
-      const column = $('filterColumn').value;
-      $('recordSearch').placeholder = column
-        ? `Dokładna wartość w "${column}" (kilka po przecinku, np. 1,2)...`
-        : 'Szukaj po adresie, ID albo beneficjencie...';
+      updateFilterRowPlaceholder($('filterColumn').closest('.filter-row'));
       filterRecords();
     });
+    $('addFilterRowBtn')?.addEventListener('click', () => addFilterRow());
     $('filePrefix')?.addEventListener('input', updateFileNamePreview);
