@@ -667,6 +667,15 @@ test('znajdzPlikiPoAdresie: nazwa pliku audytu/dokumentu seryjnego zawierajaca a
   assert.equal(znajdzPlikiPoAdresie('Zupelnie inny adres 99', pliki).length, 0);
 });
 
+test('znajdzPlikiPoAdresie: real bug zgloszony przez wlasciciela 2026-08-19 - "Krzeczów Nadwarciańska 1" NIE moze dopasowac plikow z inna ulica/innym numerem tylko dlatego, ze miejscowosc i numer czesciowo sie zgadzaja', () => {
+  const pliki = [
+    { nazwa: 'Krzeczów, ul. Nadwarciańska 15_PV.pdf', sciezka: 'a', nazwaBezRozszerzenia: 'Krzeczów, ul. Nadwarciańska 15_PV' },
+    { nazwa: 'Krzeczów, ul. Nadwarciańska 1_PV.pdf', sciezka: 'b', nazwaBezRozszerzenia: 'Krzeczów, ul. Nadwarciańska 1_PV' },
+    { nazwa: 'Krzeczów, ul. Osiedle Młodzieżowe 1_PV.pdf', sciezka: 'c', nazwaBezRozszerzenia: 'Krzeczów, ul. Osiedle Młodzieżowe 1_PV' }
+  ];
+  assert.deepEqual(znajdzPlikiPoAdresie('Krzeczów Nadwarciańska 1', pliki).map(p => p.nazwa), ['Krzeczów, ul. Nadwarciańska 1_PV.pdf']);
+});
+
 test('zbierzPlikiPdf: rekurencyjnie zbiera .pdf (dowolna glebokosc), ignoruje inne rozszerzenia (np. plot.log)', async (t) => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-pdf-scan-'));
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));

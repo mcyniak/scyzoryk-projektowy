@@ -538,8 +538,15 @@ async function zbierzPlikiPdf(rootDir, glebokosc = 0) {
 // mechanizm dopasowania dziala dla obu bez zmian. Zwraca liste trafien -
 // pusta (brak), jednoelementowa (jednoznaczne) albo wieloelementowa
 // (niejednoznaczne - wywolujacy NIGDY nie zgaduje, ktory plik jest wlasciwy).
+// adresPasujeDoFolderuScisle (nie adresPasujeDoFolderu) - real bug zlapany
+// na prawdziwych danych Wierzchlas 2026-08-19: dla adresu "Krzeczów
+// Nadwarciańska 1" luzniejsza funkcja dopasowywala TRZY rozne pliki naraz -
+// "..._Nadwarciańska 15_PV.pdf" (inny numer domu), "..._Nadwarciańska
+// 1_PV.pdf" (prawidlowy) i "..._Osiedle Młodzieżowe 1_PV.pdf" (calkiem inna
+// ulica, tylko wspolny numer+miejscowosc) - dokladnie ten sam blad co przy
+// dopasujFolderPoAdresie, ta sama naprawa.
 function znajdzPlikiPoAdresie(adres, pliki) {
-  return pliki.filter(p => adresPasujeDoFolderu(adres, p.nazwaBezRozszerzenia));
+  return pliki.filter(p => adresPasujeDoFolderuScisle(adres, p.nazwaBezRozszerzenia));
 }
 
 // "Trójfazowe"/"Jednofazowe" (realna wartosc z kolumny "Instalacja 3
