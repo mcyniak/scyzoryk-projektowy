@@ -414,6 +414,20 @@ function adresPasujeDoFolderu(adres, folderNazwa) {
   return trafioneTokeny.length >= wymagane;
 }
 
+// Dopasowanie folderu klienta WPROST po adresie, bez numeru LP/ID w nazwie
+// folderu - dla trybu "tylko dodatek" (pominKarty), gdzie folder wskazany
+// dla audytow/schematow/dokumentow seryjnych czesto nie ma struktury
+// "Projekty/{id} - adres" wymaganej przez karty katalogowe. Realny przypadek
+// 2026-08-19: eksport plaskich folderow adresowych ("Broników 28",
+// "Jajczaki 11a") bez zadnego numeru ID w nazwie. Nigdy nie zgaduje przy
+// kilku pasujacych naraz - to samo podejscie co reszta tego narzedzia.
+function dopasujFolderPoAdresie(adres, nazwyFolderow) {
+  const trafienia = nazwyFolderow.filter(nazwa => adresPasujeDoFolderu(adres, nazwa));
+  if (trafienia.length === 1) return { folder: trafienia[0] };
+  if (trafienia.length === 0) return { blad: 'brak' };
+  return { blad: 'wieloznaczne', kandydaci: trafienia };
+}
+
 async function istniejacePlikiWFolderze(dirPath) {
   try {
     const entries = await fsp.readdir(dirPath, { withFileTypes: true });
@@ -563,15 +577,17 @@ async function dopasujISkopiujDodatek({ trafienia, folderKlienta, istniejace, dr
 // znajdzPlikiPoAdresie/znajdzSchemat.
 async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki = null, dokumentySeryjnePliki = null, schematyIndeks = null, pominKarty = false, wymuszony = false }) {
   // wymuszony: uzytkownik JAWNIE wybral ten arkusz z listy (patrz /api/sheets
-  // i /api/run w server.js) - pomijamy rozpoznawanie po nazwie ("Solary"/
-  // "Solary <gmina>") calkowicie, bo realne tabele czesto maja arkusz
-  // nazwany inaczej (np. "PV_", zweryfikowane na prawdziwym pliku
-  // Wierzchlas), a wybor z listy jest jednoznaczny sam w sobie. Bez jawnego
-  // wyboru zostaje stare automatyczne dopasowanie po nazwie (wsteczna
-  // zgodnosc API). "gmina: ''" = nowsza, plaska konwencja (foldery klientow
-  // wprost pod Projekty/, bez posredniej warstwy gminy) - takie tez jest
-  // domyslne zachowanie testu tej samej sciezki dla nienazwanych arkuszy.
-  const rozpoznany = wymuszony ? { gmina: '' } : rozpoznajArkuszSolarow(sheetName);
+  // i /api/run w server.js) - NIGDY nie odrzuca arkusza z powodu nazwy (realne
+  // tabele czesto maja arkusz nazwany inaczej niz "Solary", np. "PV_",
+  // zweryfikowane na prawdziwym pliku Wierzchlas). Nazwa jest jednak nadal
+  // OPORTUNISTYCZNIE sprawdzana pod katem konwencji "Solary <gmina>" - jesli
+  // pasuje, gmina wciaz zostaje wyciagnieta z niej (zeby nie zepsuc
+  // inwestycji, ktore realnie uzywaja posredniej warstwy gminy); tylko gdy
+  // nazwa NIE pasuje w ogole, gmina spada na '' (plaska konwencja, foldery
+  // klientow wprost pod Projekty/). Bez jawnego wyboru arkusza zostaje stare,
+  // czysto automatyczne dopasowanie po nazwie (wsteczna zgodnosc API).
+  const rozpoznanyZNazwy = rozpoznajArkuszSolarow(sheetName);
+  const rozpoznany = wymuszony ? (rozpoznanyZNazwy || { gmina: '' }) : rozpoznanyZNazwy;
   const wyniki = [];
   if (!rozpoznany) return wyniki; // arkusz nie dotyczy solarow (np. Pompy, Kotly, adresy)
   const { gmina } = rozpoznany;
@@ -585,7 +601,16 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
   // Nowsza konwencja (gmina === '', patrz rozpoznajArkuszSolarow) - jedna
   // inwestycja = jeden rootPath, foldery klientow leza wprost pod Projekty/,
   // bez posredniej warstwy gminy.
-  const projektyDir = gmina ? path.join(projektyBazowyDir, gmina) : projektyBazowyDir;
+  let projektyDir = gmina ? path.join(projektyBazowyDir, gmina) : projektyBazowyDir;
+  // pominKarty: real przypadek 2026-08-19 - folder wskazany dla samego
+  // dodatku (audyty/schematy/dokumenty seryjne) czesto NIE ma wrappera
+  // "Projekty" w ogole (np. eksport plaskich folderow adresowych wprost pod
+  // rootPath, bez numeru ID w nazwie) - w odroznieniu od kart katalogowych,
+  // ktore zawsze zyja w prawdziwej strukturze inwestycji z "Projekty".
+  // Jesli "Projekty" nie istnieje, uzyj rootPath bezposrednio.
+  if (pominKarty && !fs.existsSync(projektyDir)) {
+    projektyDir = rootPath;
+  }
   // Druga warstwa ochrony obok sanityzacji w rozpoznajArkuszSolarow - nawet
   // gdyby sanityzacja kiedys zawiodla, nie pozwalamy wyjsc poza rootPath/Projekty.
   if (gmina && path.relative(projektyBazowyDir, projektyDir).startsWith('..')) {
@@ -687,38 +712,60 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
       continue;
     }
 
-    if (!id) {
-      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id: row[colLpGmina], adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak poprawnego "LP gminy" dla adresu "${opisAdresu}" - nie mozna dopasowac folderu.` };
-      continue;
-    }
+    // Dopasowanie folderu klienta: pominKarty uzywa WYLACZNIE adresu (real
+    // przypadek - folder dla samego dodatku czesto nie ma numeru LP/ID w
+    // nazwie w ogole, patrz komentarz przy dopasujFolderPoAdresie); poza tym
+    // trybem zostaje istniejace dopasowanie po LP z potwierdzeniem adresem.
+    let folderNazwa;
+    if (pominKarty) {
+      if (!adres) {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres: null, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak adresu w Excelu - nie mozna dopasowac folderu klienta.` };
+        continue;
+      }
+      const dopasowanie = dopasujFolderPoAdresie(adres, nazwyFolderowKlientow);
+      if (dopasowanie.blad === 'brak') {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono folderu klienta pasujacego do adresu "${adres}" w: ${projektyDir}` };
+        continue;
+      }
+      if (dopasowanie.blad === 'wieloznaczne') {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: kilka folderow pasuje do adresu "${adres}" (${dopasowanie.kandydaci.join(', ')}) - wymaga recznego sprawdzenia.` };
+        continue;
+      }
+      folderNazwa = dopasowanie.folder;
+    } else {
+      if (!id) {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id: row[colLpGmina], adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak poprawnego "LP gminy" dla adresu "${opisAdresu}" - nie mozna dopasowac folderu.` };
+        continue;
+      }
 
-    if (duplikaty.has(id)) {
-      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` };
-      continue;
-    }
+      if (duplikaty.has(id)) {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` };
+        continue;
+      }
 
-    const folderNazwa = mapaFolderow.get(id);
-    if (!folderNazwa) {
-      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` };
-      continue;
-    }
+      folderNazwa = mapaFolderow.get(id);
+      if (!folderNazwa) {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` };
+        continue;
+      }
 
-    // Audyt rozdz. 16, P0/P1: pusty adres nie moze polegac wylacznie na LP -
-    // dwie rozne inwestycje moga miec folder zaczynajacy sie od tego samego
-    // numeru (patrz komentarz przy adresPasujeDoFolderu). Osobny, wczesniejszy
-    // blad z jasnym komunikatem zamiast myslacego "nie zawiera adresu"
-    // (ktore sugerowaloby, ze adres byl podany, tylko sie nie zgadzal).
-    if (!adres) {
-      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres: null, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak adresu w Excelu - nie mozna bezpiecznie potwierdzic, ze folder "${folderNazwa}" (dopasowany po samym numerze LP "${id}") faktycznie nalezy do tego wiersza. Uzupelnij adres i sprobuj ponownie.` };
-      continue;
-    }
+      // Audyt rozdz. 16, P0/P1: pusty adres nie moze polegac wylacznie na LP -
+      // dwie rozne inwestycje moga miec folder zaczynajacy sie od tego samego
+      // numeru (patrz komentarz przy adresPasujeDoFolderu). Osobny, wczesniejszy
+      // blad z jasnym komunikatem zamiast myslacego "nie zawiera adresu"
+      // (ktore sugerowaloby, ze adres byl podany, tylko sie nie zgadzal).
+      if (!adres) {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres: null, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak adresu w Excelu - nie mozna bezpiecznie potwierdzic, ze folder "${folderNazwa}" (dopasowany po samym numerze LP "${id}") faktycznie nalezy do tego wiersza. Uzupelnij adres i sprobuj ponownie.` };
+        continue;
+      }
 
-    // Sam numer LP nie wystarcza (patrz komentarz przy adresPasujeDoFolderu) -
-    // potwierdzamy adresem PRZED faza kopiowania (zadania.push nizej), zeby zla
-    // para adres/folder nigdy tam nie dotarla.
-    if (!adresPasujeDoFolderu(adres, folderNazwa)) {
-      wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: znaleziono folder "${folderNazwa}" dla numeru LP "${id}", ale jego nazwa nie zawiera adresu z Excela "${adres}" - mozliwy konflikt numeracji miedzy inwestycjami. Sprawdz recznie.` };
-      continue;
+      // Sam numer LP nie wystarcza (patrz komentarz przy adresPasujeDoFolderu) -
+      // potwierdzamy adresem PRZED faza kopiowania (zadania.push nizej), zeby zla
+      // para adres/folder nigdy tam nie dotarla.
+      if (!adresPasujeDoFolderu(adres, folderNazwa)) {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: znaleziono folder "${folderNazwa}" dla numeru LP "${id}", ale jego nazwa nie zawiera adresu z Excela "${adres}" - mozliwy konflikt numeracji miedzy inwestycjami. Sprawdz recznie.` };
+        continue;
+      }
     }
 
     // Rozmiar zasobnika sluzy WYLACZNIE do doboru kart katalogowych - w
@@ -1247,5 +1294,6 @@ module.exports = {
   znajdzSchemat,
   rozpoznajFaze,
   zbierzPlikiPdf,
-  dopasujISkopiujDodatek
+  dopasujISkopiujDodatek,
+  dopasujFolderPoAdresie
 };

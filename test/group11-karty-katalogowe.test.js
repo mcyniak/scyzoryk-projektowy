@@ -27,7 +27,8 @@ const {
   znajdzSchemat,
   rozpoznajFaze,
   zbierzPlikiPdf,
-  dopasujISkopiujDodatek
+  dopasujISkopiujDodatek,
+  dopasujFolderPoAdresie
 } = require('../apps/karty-katalogowe/server');
 
 const HEADER = ['LP gminy', 'Adres', 'UID', 'Rezygnacja'];
@@ -1054,4 +1055,60 @@ test('POST /api/run: sheetName wskazujacy na nieistniejacy arkusz zwraca czyteln
   assert.equal(res.status, 400);
   assert.equal(data.ok, false);
   assert.match(data.message, /Nie-istnieje/);
+});
+
+test('POST /api/run: typ="audyty" dziala dla folderu BEZ wrappera "Projekty" i BEZ numeru ID w nazwie (realny przypadek zgloszony przez wlasciciela 2026-08-19 - eksport plaskich folderow adresowych "Broników 28" itp. wprost pod rootPath)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-plaski-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  // Foldery adresowe WPROST pod rootPath - zaden "Projekty", zaden numer ID.
+  await fsp.mkdir(path.join(root, 'Broników 28'), { recursive: true });
+  await fsp.mkdir(path.join(root, 'Jajczaki 11a'), { recursive: true });
+
+  const workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-http-plaski-'));
+  t.after(() => fsp.rm(workDir, { recursive: true, force: true }));
+  const audytyZip = new AdmZip();
+  audytyZip.addFile('PV/Broników 28_PV.pdf', Buffer.from('audyt-tresc'));
+  const audytyZipPath = path.join(workDir, 'audyty.zip');
+  audytyZip.writeZip(audytyZipPath);
+
+  const { file: excelFile, dir: xlsxDir } = await napiszArkuszPV('PV_', [
+    [1, 'Broników 28', '2/250', '', 2.85, 'Trójfazowe'],
+    [2, 'Jajczaki 11a', '2/250', '', 2.85, 'Trójfazowe'] // brak audytu dla tego adresu -> 'brak', nie blad
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const server = kkApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('excel', new Blob([await fsp.readFile(excelFile)]), 'dane.xlsx');
+  form.append('audytyZip', new Blob([await fsp.readFile(audytyZipPath)]), 'audyty.zip');
+  form.append('sheetName', 'PV_');
+  form.append('rootPath', root);
+  form.append('typ', 'audyty');
+  form.append('dryRun', 'false');
+
+  const res = await fetch(`${base}/api/run`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const data = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(data));
+  assert.equal(data.ok, true);
+  assert.equal(data.wyniki.length, 2);
+  assert.equal(data.wyniki[0].status, 'skopiowano');
+  assert.equal(data.wyniki[1].status, 'brak');
+
+  assert.equal(await fsp.readFile(path.join(root, 'Broników 28', 'Broników 28_PV.pdf'), 'utf8'), 'audyt-tresc');
+});
+
+test('dopasujFolderPoAdresie: dokladnie jedno trafienie zwraca folder, zero -> "brak", kilka -> "wieloznaczne" (nigdy nie zgaduje)', () => {
+  const foldery = ['Broników 28', 'Jajczaki 11a', 'Jajczaki 1A'];
+  assert.deepEqual(dopasujFolderPoAdresie('Broników 28', foldery), { folder: 'Broników 28' });
+  assert.deepEqual(dopasujFolderPoAdresie('Nieistniejąca 99', foldery), { blad: 'brak' });
+  const wynik = dopasujFolderPoAdresie('Jajczaki', foldery);
+  assert.equal(wynik.blad, 'wieloznaczne');
+  assert.deepEqual(wynik.kandydaci.sort(), ['Jajczaki 11a', 'Jajczaki 1A'].sort());
 });
