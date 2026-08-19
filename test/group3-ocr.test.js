@@ -466,6 +466,32 @@ test('fillExistingTableRows: wypelnia TYLKO puste komorki, nigdy nie nadpisuje j
   assert.equal(rows.find((r) => r.lp === '13').values['Rok budowy'], '2005', 'istniejaca wartosc NIGDY nie moze zostac nadpisana');
 });
 
+test('GET /api/browse-folder: listuje podfoldery I pliki .xlsx (krok 0 "wgraj tabele" korzysta z tego zamiast recznego wpisywania sciezki)', async (t) => {
+  const dir = await makeTempDir();
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  await fsp.mkdir(path.join(dir, 'Podfolder'));
+  await fsp.writeFile(path.join(dir, 'Biała tabela adresowa.xlsx'), 'x');
+  await fsp.writeFile(path.join(dir, 'notatki.txt'), 'x');
+
+  const { app: ocrApp } = require('../apps/ocr-audytow/server');
+  const server = ocrApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/browse-folder?path=${encodeURIComponent(dir)}`);
+  const data = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(data.ok, true);
+  const names = data.entries.map((e) => e.name);
+  assert.ok(names.includes('Podfolder'));
+  assert.ok(names.includes('Biała tabela adresowa.xlsx'));
+  assert.ok(!names.includes('notatki.txt'));
+  assert.equal(data.entries.find((e) => e.name === 'Biała tabela adresowa.xlsx').isFile, true);
+});
+
 test('POST /api/ocr/inspect-table: zwraca liste pol z licznikiem brakow (pre-zaznaczenie checklisty) i nierozpoznane naglowki', async (t) => {
   const dir = await makeTempDir();
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));

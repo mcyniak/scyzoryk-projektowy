@@ -102,7 +102,10 @@
       </div>
       <div class="option-field" style="margin-top:18px">
         <span class="option-label">Ścieżka do Twojej tabelki Excela (.xlsx)</span>
-        <input type="text" id="tableExcelPathInput" placeholder="G:\Dyski współdzielone\...\Biała tabela adresowa.xlsx">
+        <div class="path-row">
+          <input type="text" id="tableExcelPathInput" placeholder="G:\Dyski współdzielone\...\Biała tabela adresowa.xlsx">
+          <button type="button" class="btn btn-secondary" id="browseTableFileBtn">Przeglądaj...</button>
+        </div>
       </div>
       <div class="hero-actions">
         <button type="button" id="inspectTableBtn" class="btn btn-primary">Sprawdź tabelę</button>
@@ -209,6 +212,22 @@
       <div class="result-list" id="resultList"></div>
     </section>
   </main>
+
+  <div class="modal-overlay" id="tableFileBrowseModal" role="dialog" aria-modal="true" aria-labelledby="tableFileBrowseTitle" aria-hidden="true">
+    <div class="modal-box">
+      <div class="modal-head">
+        <strong id="tableFileBrowseTitle">Wybierz plik .xlsx</strong>
+        <button id="tableFileBrowseClose" class="btn btn-icon btn-secondary" type="button" aria-label="Zamknij"><svg class="icon"><use href="/shared/icons.svg#i-x"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <p class="hint" id="tableFileBrowseCurrentPath"></p>
+        <div id="tableFileBrowseList" class="folder-tree"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-secondary" id="tableFileBrowseCancel">Anuluj</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

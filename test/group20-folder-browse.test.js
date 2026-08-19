@@ -75,3 +75,38 @@ test('browseFolder: czytelny blad, gdy sciezka wskazuje na plik, nie folder', as
 
   assert.throws(() => browseFolder(file), /to nie jest folder/i);
 });
+
+// =====================================================================
+// Audyt 2026-08-19 (ocr-audytow, "wgraj gotowa tabele"): rozszerzenie o
+// wybor KONKRETNEGO pliku (nie tylko folderu), na wyrazna prosbe
+// wlasciciela - "brakuje mi tego eksploratora co w innych aplikacjach".
+// =====================================================================
+
+test('browseFolder: bez options.fileExtensions zachowanie DOKLADNIE jak dotad (zero regresji dla istniejacych apek)', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fb-test-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'Folder'));
+  fs.writeFileSync(path.join(dir, 'dane.xlsx'), 'x');
+
+  const result = browseFolder(dir);
+  assert.deepEqual(result.entries.map((e) => e.name), ['Folder']);
+});
+
+test('browseFolder: z options.fileExtensions listuje TEZ pasujace pliki (oznaczone isFile:true), inne rozszerzenia pomijane, wielkosc liter rozszerzenia bez znaczenia', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'fb-test-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'Podfolder'));
+  fs.writeFileSync(path.join(dir, 'aaa-tabela.xlsx'), 'x');
+  fs.writeFileSync(path.join(dir, 'notatki.txt'), 'x');
+  fs.writeFileSync(path.join(dir, 'zzz-TABELA.XLSX'), 'x');
+
+  const result = browseFolder(dir, { fileExtensions: ['.xlsx'] });
+  const names = result.entries.map((e) => e.name);
+  assert.ok(names.includes('Podfolder'));
+  assert.ok(names.includes('aaa-tabela.xlsx'));
+  assert.ok(names.includes('zzz-TABELA.XLSX'));
+  assert.ok(!names.includes('notatki.txt'), 'plik z innym rozszerzeniem nie moze sie pojawic');
+  assert.equal(result.entries.length, 3);
+  assert.equal(result.entries.find((e) => e.name === 'Podfolder').isFile, false);
+  assert.equal(result.entries.find((e) => e.name === 'aaa-tabela.xlsx').isFile, true);
+});

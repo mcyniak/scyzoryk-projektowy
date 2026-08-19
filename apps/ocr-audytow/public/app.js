@@ -41,6 +41,12 @@
   const tableChecklistEl = document.getElementById('tableChecklist');
   const tableUnrecognizedNote = document.getElementById('tableUnrecognizedNote');
   const tableContinueBtn = document.getElementById('tableContinueBtn');
+  const browseTableFileBtn = document.getElementById('browseTableFileBtn');
+  const tableFileBrowseModal = document.getElementById('tableFileBrowseModal');
+  const tableFileBrowseList = document.getElementById('tableFileBrowseList');
+  const tableFileBrowseCurrentPath = document.getElementById('tableFileBrowseCurrentPath');
+  const tableFileBrowseClose = document.getElementById('tableFileBrowseClose');
+  const tableFileBrowseCancel = document.getElementById('tableFileBrowseCancel');
   const familySelectField = document.getElementById('familySelectField');
   const excelPathField = document.getElementById('excelPathField');
   const excelStepHint = document.getElementById('excelStepHint');
@@ -240,6 +246,73 @@
     pastTableStep = true;
     tablePanel.hidden = true;
     ocrUploadPanel.hidden = false;
+  });
+
+  // Przegladarka pliku .xlsx w stronie (zamiast recznego wpisywania sciezki) -
+  // ten sam wzorzec co lib/folderBrowse.js w innych apkach (karty katalogowe
+  // itp.), rozszerzony o klikanie plikow .xlsx (nie tylko nawigacje po
+  // folderach) - patrz GET /api/browse-folder w server.js.
+  function closeTableFileBrowser() {
+    tableFileBrowseModal.classList.remove('open');
+  }
+
+  async function openTableFileBrowser(startPath) {
+    tableFileBrowseModal.classList.add('open');
+    await loadTableFileBrowse(startPath);
+  }
+
+  async function loadTableFileBrowse(targetPath) {
+    tableFileBrowseList.innerHTML = '<div class="folder-row">Wczytuję...</div>';
+    try {
+      const url = targetPath ? `/api/browse-folder?path=${encodeURIComponent(targetPath)}` : '/api/browse-folder';
+      const res = await fetch(url);
+      const json = await res.json().catch(() => null);
+      if (!json || !json.ok) {
+        tableFileBrowseList.innerHTML = `<div class="folder-row">${escapeHtml((json && json.error) || 'Nie udało się wczytać folderów.')}</div>`;
+        return;
+      }
+      tableFileBrowseCurrentPath.textContent = json.path || 'Wybierz dysk';
+
+      const rows = [];
+      if (json.path !== null) {
+        const isDriveRoot = json.parent === null;
+        const upTarget = isDriveRoot ? '' : json.parent;
+        rows.push(`<div class="folder-row clickable up-nav" data-path="${escapeHtml(upTarget)}">${isDriveRoot ? '⬆ Lista dysków' : '⬆ ..'}</div>`);
+      }
+      for (const entry of json.entries) {
+        if (entry.isFile) {
+          rows.push(`<div class="folder-row clickable file-row" data-file-path="${escapeHtml(entry.path)}">📄 ${escapeHtml(entry.name)}</div>`);
+        } else {
+          rows.push(`<div class="folder-row clickable" data-path="${escapeHtml(entry.path)}">📁 ${escapeHtml(entry.name)}</div>`);
+        }
+      }
+      tableFileBrowseList.innerHTML = rows.join('') || '<div class="folder-row">Brak podfolderów ani plików .xlsx.</div>';
+    } catch (error) {
+      tableFileBrowseList.innerHTML = `<div class="folder-row">${escapeHtml(String(error.message || error))}</div>`;
+    }
+  }
+
+  browseTableFileBtn.addEventListener('click', () => {
+    const startPath = tableExcelPathInput.value.trim();
+    openTableFileBrowser(startPath || null);
+  });
+  tableFileBrowseClose.addEventListener('click', closeTableFileBrowser);
+  tableFileBrowseCancel.addEventListener('click', closeTableFileBrowser);
+  tableFileBrowseModal.addEventListener('click', (event) => {
+    if (event.target.id === 'tableFileBrowseModal') closeTableFileBrowser();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && tableFileBrowseModal.classList.contains('open')) closeTableFileBrowser();
+  });
+  tableFileBrowseList.addEventListener('click', (event) => {
+    const fileRow = event.target.closest('[data-file-path]');
+    if (fileRow) {
+      tableExcelPathInput.value = fileRow.dataset.filePath;
+      closeTableFileBrowser();
+      return;
+    }
+    const folderRow = event.target.closest('[data-path]');
+    if (folderRow) loadTableFileBrowse(folderRow.dataset.path);
   });
 
   // --- Krok 1: wysyłka do analizy ---------------------------------------

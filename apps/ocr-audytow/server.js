@@ -15,6 +15,7 @@ const { COLUMN_ORDER, COLUMN_LABELS, buildFieldsFromExtraction, filterExtractabl
 const { writeFreshRows, writeFamilyTemplateRows, readExistingTable, fillExistingTableRows, validatePath: validateExcelPath } = require('./src/excelExport');
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
 const { validateOcrBatchInspections } = require('./src/ocrLimits');
+const { browseFolder } = require('../../lib/folderBrowse');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -67,6 +68,21 @@ app.use(express.json({ limit: '2mb' }));
 app.get('/api/health', async (req, res) => {
   const ocrProvider = getActiveProvider();
   res.json({ ok: true, name: 'ocr-audytow', ocrConfigured: isAiConfigured(), ocrProvider, ocrProviderLabel: PROVIDER_LABELS[ocrProvider] });
+});
+
+// Przegladarka folderow w stronie (przycisk "Przegladaj..." przy polu
+// sciezki do wgrywanej tabeli, krok 0) - patrz lib/folderBrowse.js dla
+// pelnego uzasadnienia (dwie proby prawdziwego natywnego okna Windows
+// zawiodly na zywo na innych apkach). `fileExtensions: ['.xlsx']` - w
+// odroznieniu od innych apek (ktore wybieraja FOLDER), tu uzytkownik
+// wybiera KONKRETNY plik Excela.
+app.get('/api/browse-folder', (req, res) => {
+  try {
+    const result = browseFolder(req.query.path, { fileExtensions: ['.xlsx'] });
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
 });
 
 // Ekran "OCR zablokowany" w public/index.html (pokazywany, gdy /api/health
