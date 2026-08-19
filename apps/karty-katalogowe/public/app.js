@@ -16,31 +16,48 @@ const STATUS_LABELS = {
   'blad': ['Błąd', 'err']
 };
 
-// Statusy dodatkow (audyt/schemat/dokument seryjny) - osobna mapa od
-// STATUS_LABELS (kart katalogowych), bo maja dwa stany bez odpowiednika tam:
-// "brak" (zrodlo podane, ale nic nie pasuje do tego adresu/mocy - normalne,
-// nie kazdy adres ma juz gotowy audyt) i "wieloznaczne" (kilka plikow pasuje
-// naraz - nigdy nie zgadujemy, ktory jest wlasciwy).
-const DODATEK_STATUS_LABELS = {
-  'skopiowano': ['Skopiowano', 'ok'],
-  'do-skopiowania': ['Do skopiowania', 'ok'],
-  'pominieto-juz-sa': ['Już jest', 'skip'],
-  'brak': ['Brak', 'warn'],
-  'wieloznaczne': ['Niejednoznaczne', 'warn'],
-  'blad': ['Błąd', 'err']
-};
-function renderDodatek(dodatek) {
-  if (!dodatek) return ''; // zrodlo nie zostalo podane dla tego uruchomienia
-  const [label, cls] = DODATEK_STATUS_LABELS[dodatek.status] || [dodatek.status, 'skip'];
-  const szczegol = dodatek.plik || (dodatek.kandydaci ? dodatek.kandydaci.join(', ') : '');
-  const title = szczegol ? ` title="${escapeHtml(szczegol)}"` : '';
-  return `<span class="kk-badge ${cls}"${title}>${label}</span>`;
+function renderStatus(w) {
+  const [label, cls] = STATUS_LABELS[w.status] || [w.status, 'skip'];
+  return `<span class="kk-badge ${cls}">${label}</span>`;
 }
+
+// Kolumny wynikow zaleza od trybu - Gmina/ID/UID maja sens WYLACZNIE dla
+// kart katalogowych (solary/pompy), gdzie faktycznie identyfikuja dobor
+// zestawu. Wlasciciel zglosil (2026-08-19), ze te kolumny myla w trybach
+// "tylko dodatek" (Dodaj audyty/schematy/dokumenty seryjne) - tam
+// dopasowanie jest wylacznie po adresie, wiec UID zawsze bylby pusty/
+// nieistotny. Osobna kolumna per-dodatek tez nie jest juz potrzebna w tych
+// trybach - status calego wiersza JEST wprost statusem tego dodatku (patrz
+// server.js#przetworzArkusz, galaz pominKarty), wiec pokazywanie go jeszcze
+// raz w oddzielnej kolumnie byloby tylko duplikatem.
+const KK_KOLUMNY_KARTY = [
+  { naglowek: 'Gmina', komorka: w => w.gmina || '' },
+  { naglowek: 'ID', komorka: w => w.id ?? '' },
+  { naglowek: 'Adres', komorka: w => w.adres || '' },
+  { naglowek: 'UID', komorka: w => w.uid || '' },
+  { naglowek: 'Folder', komorka: w => w.folder || '' },
+  { naglowek: 'Status', komorka: renderStatus },
+  { naglowek: 'Szczegóły', komorka: w => w.komunikat || '' }
+];
+const KK_KOLUMNY_DODATEK = [
+  { naglowek: 'Adres', komorka: w => w.adres || '' },
+  { naglowek: 'Folder', komorka: w => w.folder || '' },
+  { naglowek: 'Status', komorka: renderStatus },
+  { naglowek: 'Szczegóły', komorka: w => w.komunikat || '' }
+];
+const KK_KOLUMNY = {
+  solary: KK_KOLUMNY_KARTY,
+  pompy: KK_KOLUMNY_KARTY,
+  audyty: KK_KOLUMNY_DODATEK,
+  schematy: KK_KOLUMNY_DODATEK,
+  'dokumenty-seryjne': KK_KOLUMNY_DODATEK
+};
 
 const checkBtn = document.getElementById('checkBtn');
 const runBtn = document.getElementById('runBtn');
 const statusEl = document.getElementById('kkStatus');
 const resultsPanel = document.getElementById('kkResultsPanel');
+const tableHead = document.getElementById('kkTableHead');
 const tableBody = document.getElementById('kkTableBody');
 const summaryEl = document.getElementById('kkSummary');
 
@@ -203,21 +220,9 @@ async function runJob(dryRun) {
       return `<div class="kk-chip ${cls}"><strong>${count}</strong> — ${label}</div>`;
     }).join('');
 
-    tableBody.innerHTML = data.wyniki.map(w => {
-      const [label, cls] = STATUS_LABELS[w.status] || [w.status, 'skip'];
-      return `<tr>
-        <td>${w.gmina || ''}</td>
-        <td>${w.id ?? ''}</td>
-        <td>${w.adres || ''}</td>
-        <td>${w.uid || ''}</td>
-        <td>${w.folder || ''}</td>
-        <td><span class="kk-badge ${cls}">${label}</span></td>
-        <td>${w.komunikat || ''}</td>
-        <td>${renderDodatek(w.audyt)}</td>
-        <td>${renderDodatek(w.schemat)}</td>
-        <td>${renderDodatek(w.dokumentSeryjny)}</td>
-      </tr>`;
-    }).join('');
+    const kolumny = KK_KOLUMNY[tryb] || KK_KOLUMNY_DODATEK;
+    tableHead.innerHTML = `<tr>${kolumny.map(k => `<th>${k.naglowek}</th>`).join('')}</tr>`;
+    tableBody.innerHTML = data.wyniki.map(w => `<tr>${kolumny.map(k => `<td>${k.komorka(w)}</td>`).join('')}</tr>`).join('');
 
     resultsPanel.style.display = 'block';
 
