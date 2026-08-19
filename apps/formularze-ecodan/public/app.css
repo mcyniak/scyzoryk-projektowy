@@ -22,8 +22,18 @@ input[type="checkbox"] { width: 20px; margin: 0 9px 0 0; }
 .button:hover, button:not(.btn):hover, a.button-link:hover { background: var(--brand-600); text-decoration: none; }
 button.secondary, .button-link.secondary { background: var(--gray-800); }
 button.secondary:hover, .button-link.secondary:hover { background: var(--gray-900); }
-button.danger { background: var(--gray-0); color: var(--danger-600); border: 1px solid var(--danger-100); }
-button.ghost, .button-link.ghost { background: var(--gray-0); color: var(--text-primary); border: 1px solid var(--border-strong); }
+button.danger { background: var(--bg-surface); color: var(--danger-600); border: 1px solid var(--danger-100); }
+button.danger:hover { background: var(--danger-50); }
+/* button.ghost/.button-link.ghost celowo USUNIETE (audyt 2026-08-19): jedyne
+   3 przyciski tej klasy w tej apce ("Zaznacz/Odznacz wszystkie", "Odśwież
+   listę") mialy na sztywno bialy background (--gray-0, nigdy nie zmienia sie
+   w trybie ciemnym), a WLASNEGO stanu hover nie definiowaly - w trybie
+   ciemnym wygladaly jak zepsute (biale, razace na tle) i dopiero po
+   najechaniu "skakaly" na czerwony hover odziedziczony po ogolnej regule
+   `button:not(.btn):hover` ponizej. Bez tej reguly te przyciski od razu
+   dostaja standardowy, spojny wyglad (czerwone, jak reszta przyciskow w tej
+   apce) z linii `.button, button:not(.btn), a.button-link` wyzej - zero
+   osobnego stylu "ghost" bylo tu w ogole potrzebne. */
 button:disabled { opacity: .55; cursor: not-allowed; }
 
 .notice { padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid var(--danger-100); background: var(--danger-50); color: var(--danger-600); font-size: var(--text-sm); line-height: 1.45; margin-top: var(--space-4); }
