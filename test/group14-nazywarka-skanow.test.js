@@ -160,6 +160,41 @@ test('nazywarka-skanow: konflikt nazwy jest twardym bledem - NIGDY cichym nadpis
   assert.ok(!fs.existsSync(path.join(dir, 'zajete (2).pdf')), 'brak cichego auto-numerowania');
 });
 
+// =====================================================================
+// Audyt 2026-08-19: przyspieszenie ladowania podgladow (skanowane PDF-y
+// bywaja duze) - podglad dostaje teraz Cache-Control pozwalajacy
+// przegladarce go zacache'owac (zamiast "no-store"), zeby prefetch
+// sasiednich plikow w app.js mial jakikolwiek sens. previewToken w URL-u
+// gwarantuje, ze otwarcie NOWEGO folderu nigdy nie odczyta z cache
+// podgladu z folderu POPRZEDNIEGO pod tym samym numerem indeksu.
+// =====================================================================
+
+test('nazywarka-skanow: previewToken jest inny przy kazdym otwarciu folderu, podglad jest cache-owalny (nie "no-store")', async (t) => {
+  const server = app.listen(0, '127.0.0.1');
+  const port = await listen(server);
+  t.after(() => close(server));
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-nazywarka-token-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(dir, 'a.pdf'), '%PDF-a');
+
+  const open1 = await call(port, 'POST', '/api/open-folder', { body: { folderPath: dir } });
+  assert.ok(open1.json.previewToken, 'otwarcie folderu musi wygenerowac token podgladu');
+  const cookie = open1.cookie;
+
+  const preview = await call(port, 'GET', `/api/preview/0?t=${open1.json.previewToken}`, { cookie });
+  assert.equal(preview.status, 200);
+  assert.notEqual(preview.res.headers.get('cache-control'), 'no-store', 'podglad musi byc cache-owalny, zeby prefetch mial sens');
+  assert.match(preview.res.headers.get('cache-control') || '', /max-age/);
+
+  // Ponowne otwarcie TEGO SAMEGO folderu (np. po restarcie pracy) musi dac
+  // INNY token - to on chroni przed pokazaniem starego, zcache'owanego
+  // podgladu spod tego samego URL-a przy nastepnym otwarciu.
+  const open2 = await call(port, 'POST', '/api/open-folder', { body: { folderPath: dir }, cookie });
+  assert.ok(open2.json.previewToken, 'ponowne otwarcie tez musi miec token');
+  assert.notEqual(open2.json.previewToken, open1.json.previewToken, 'kazde otwarcie folderu musi dostac swiezy token');
+});
+
 test('nazywarka-skanow: rozszerzenia nie da sie zmienic, nawet jesli uzytkownik je wpisze', async (t) => {
   const server = app.listen(0, '127.0.0.1');
   const port = await listen(server);

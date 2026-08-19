@@ -3,6 +3,7 @@ const rateLimit = rateLimitLib.rateLimit || rateLimitLib.default || rateLimitLib
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const { setupProcessDiagnostics, applyHttpTimeouts } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
 const { contentDispositionHeader } = require("../../lib/printing");
@@ -48,7 +49,7 @@ app.use("/api", apiLimiter);
 app.use("/shared", express.static(path.join(__dirname, "..", "..", "shared-styles")));
 app.use(express.static(path.join(__dirname, "public")));
 
-app.use(sessionMiddleware(() => ({ folderPath: null, files: [], currentIndex: 0 })));
+app.use(sessionMiddleware(() => ({ folderPath: null, files: [], currentIndex: 0, previewToken: null })));
 
 // Windows-zabronione znaki w nazwie pliku + znaki kontrolne. Kropka NIE jest
 // tu zabroniona (zakaz w CLAUDE.md przeciwko obcinaniu kropek z poprawnych
@@ -116,6 +117,7 @@ function sessionSummary(session) {
     folderPath: session.folderPath,
     total: session.files.length,
     currentIndex: session.currentIndex,
+    previewToken: session.previewToken,
     files: session.files.map((f, i) => ({ index: i, originalName: f.originalName, currentName: f.currentName, renamed: f.renamed }))
   };
 }
@@ -145,6 +147,12 @@ app.post("/api/open-folder", (req, res) => {
   req.session.folderPath = folderPath;
   req.session.files = names.map(name => ({ originalName: name, currentName: name, renamed: false }));
   req.session.currentIndex = 0;
+  // Nowy token przy kazdym otwarciu folderu - podglady nizej dostaja
+  // Cache-Control pozwalajacy przegladarce trzymac je w cache (potrzebne
+  // do prefetchowania sasiednich plikow w app.js), a token w URL-u
+  // gwarantuje, ze cache z POPRZEDNIEGO otwartego folderu nigdy nie
+  // podstawi nieaktualnej tresci pod ten sam numer indeksu.
+  req.session.previewToken = crypto.randomBytes(8).toString("hex");
   res.json({ ok: true, ...sessionSummary(req.session) });
 });
 
@@ -200,7 +208,14 @@ app.get("/api/preview/:index", (req, res) => {
   );
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", contentDispositionHeader("inline", entry.currentName));
-  res.setHeader("Cache-Control", "no-store");
+  // Zawartosc pod danym indeksem w OBECNIE otwartej sesji sie nie zmienia
+  // (rename zmienia tylko nazwe, nie bajty pliku) - "private, immutable"
+  // pozwala przegladarce trzymac podglad w cache (potrzebne, zeby prefetch
+  // sasiednich plikow w app.js cokolwiek dawal). Bezpieczne mimo braku
+  // zaleznosci od "?t=" w zapytaniu, bo URL i tak jest unikalny per otwarcie
+  // folderu (token doklejany przez klienta) - stare cache po prostu nigdy
+  // wiecej nie zostana odpytane, nie trzeba ich unizwazniac.
+  res.setHeader("Cache-Control", "private, max-age=3600, immutable");
   res.sendFile(path.resolve(filePath));
 });
 

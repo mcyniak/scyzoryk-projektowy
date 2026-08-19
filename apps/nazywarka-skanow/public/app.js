@@ -24,13 +24,21 @@ const extLabel = document.getElementById("extLabel");
 const confirmRenameBtn = document.getElementById("confirmRenameBtn");
 const renameError = document.getElementById("renameError");
 
-let state = { folderPath: null, total: 0, currentIndex: 0, files: [] };
+let state = { folderPath: null, total: 0, currentIndex: 0, files: [], previewToken: null };
 let previewZoom = "page-width";
 let currentPdfUrl = "";
 const zoomLevels = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
+// Numery indeksow, dla ktorych zdazylismy juz wystrzelic prefetch w tej
+// sesji - zeby nie wysylac tego samego zadania w kolko przy kazdym
+// przejsciu miedzy sasiednimi plikami.
+const prefetchedIndexes = new Set();
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function previewUrlFor(index) {
+  return `/api/preview/${index}?t=${encodeURIComponent(state.previewToken || "")}`;
 }
 
 function buildPreviewUrl(url) {
@@ -38,6 +46,20 @@ function buildPreviewUrl(url) {
   const cleanUrl = String(url).split("#")[0];
   const zoomValue = previewZoom === "page-width" ? "page-width" : String(previewZoom);
   return `${cleanUrl}#zoom=${encodeURIComponent(zoomValue)}&toolbar=0`;
+}
+
+// Podglad nastepnego (i poprzedniego) pliku jest pobierany w tle, zanim
+// uzytkownik kliknie "dalej" - serwer oznacza te odpowiedzi jako
+// cache'owalne (Cache-Control: private, immutable - patrz server.js), wiec
+// nastepne przejscie zwykle trafia od razu w cache przegladarki zamiast
+// czekac na kolejny odczyt duzego zeskanowanego PDF-a z dysku.
+function prefetchNeighborPreviews() {
+  const candidates = [state.currentIndex + 1, state.currentIndex - 1];
+  for (const idx of candidates) {
+    if (idx < 0 || idx >= state.total || prefetchedIndexes.has(idx)) continue;
+    prefetchedIndexes.add(idx);
+    fetch(previewUrlFor(idx), { headers: { "X-Scyzoryk-Request": "1" } }).catch(() => {});
+  }
 }
 
 function updateZoomLabel() {
@@ -130,7 +152,8 @@ function updateWorkPanel() {
   currentNameLabel.textContent = `Obecna nazwa: ${entry.currentName}`;
   extLabel.textContent = entry.currentName.slice(entry.currentName.lastIndexOf("."));
   newNameInput.value = entry.renamed ? baseNameWithoutExt(entry.currentName) : "";
-  showPdfPreview(`/api/preview/${state.currentIndex}`);
+  showPdfPreview(previewUrlFor(state.currentIndex));
+  prefetchNeighborPreviews();
   newNameInput.focus();
   newNameInput.select();
 
@@ -141,7 +164,12 @@ function updateWorkPanel() {
 }
 
 function applyState(data) {
-  state = { folderPath: data.folderPath, total: data.total, currentIndex: data.currentIndex, files: data.files };
+  const folderChanged = data.folderPath !== state.folderPath;
+  state = { folderPath: data.folderPath, total: data.total, currentIndex: data.currentIndex, files: data.files, previewToken: data.previewToken };
+  // Nowy folder -> nowy token w URL-ach podgladu (patrz server.js), wiec
+  // stare zapamietane numery prefetchu i tak by nigdy wiecej nie trafily -
+  // czyscimy od razu, zeby zbior nie rosl bez konca w dlugiej sesji pracy.
+  if (folderChanged) prefetchedIndexes.clear();
   if (state.total === 0) {
     openPanel.style.display = "none";
     emptyPanel.style.display = "block";
