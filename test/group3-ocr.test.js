@@ -592,6 +592,14 @@ test('GET /api/analysis/:id/files/:fileId/pdf: zwraca oryginalny wgrany PDF (pod
   assert.match(pdfRes.headers.get('content-type') || '', /application\/pdf/);
   const bytes = Buffer.from(await pdfRes.arrayBuffer());
   assert.equal(bytes.subarray(0, 5).toString('latin1'), '%PDF-');
+  // Regresja zlapana na zywej instalacji (2026-08-19): globalny SECURITY_HEADERS
+  // ustawia frame-ancestors 'none' na WSZYSTKICH trasach - to blokowalo
+  // WLASNY podglad w <iframe> (Chrome: "Framing ... violates ... frame-
+  // ancestors 'none'", laczylo sie jak "polaczenie odrzucone"). Ta trasa
+  // musi nadpisywac na 'self', zeby <iframe> na tej samej stronie dzialal.
+  assert.doesNotMatch(pdfRes.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+  assert.match(pdfRes.headers.get('content-security-policy') || '', /frame-ancestors 'self'/);
+  assert.equal(pdfRes.headers.get('x-frame-options'), 'SAMEORIGIN');
 
   const missingRes = await fetch(`${base}/api/analysis/${analysisId}/files/nieistniejacy-plik/pdf`);
   assert.equal(missingRes.status, 404);

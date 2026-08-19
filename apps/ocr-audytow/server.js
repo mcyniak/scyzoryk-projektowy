@@ -16,6 +16,7 @@ const { writeFreshRows, writeFamilyTemplateRows, readExistingTable, fillExisting
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
 const { validateOcrBatchInspections } = require('./src/ocrLimits');
 const { browseFolder } = require('../../lib/folderBrowse');
+const { contentDispositionHeader } = require('../../lib/printing');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -420,6 +421,19 @@ app.get('/api/analysis/:analysisId/files/:fileId/pdf', (req, res) => {
   if (!fileEntry) return res.status(404).send('Nie znaleziono pliku.');
   const filePath = fileEntry.sourcePdfPath;
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('Nie znaleziono pliku.');
+  // Globalny SECURITY_HEADERS wyzej ustawia "frame-ancestors 'none'" (blokuje
+  // KAZDE osadzenie w ramce, nawet z tej samej strony) - to psulo wlasny
+  // podglad w <iframe> (Chrome zglaszal "Framing ... violates ... frame-
+  // ancestors 'none'" i w ogole nie laczyl sie z serwerem). Nadpisanie na
+  // 'self' tylko dla TEJ trasy = ten sam wzorzec co
+  // apps/nazywarka-skanow/server.js#/api/preview/:index.
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; connect-src 'self'; object-src 'self' blob:; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+  );
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', contentDispositionHeader('inline', fileEntry.originalName || 'audyt.pdf'));
   res.sendFile(filePath);
 });
 
