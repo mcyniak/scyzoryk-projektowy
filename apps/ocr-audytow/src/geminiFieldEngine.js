@@ -19,11 +19,15 @@
 // JEDNEGO sekretu zamiast pliku service-account.json + 3 zmiennych):
 //   1. zmienna srodowiskowa GEMINI_API_KEY,
 //   2. plik uzytkownika %LOCALAPPDATA%/Scyzoryk/gemini-api-key.json ({ apiKey }).
-const fs = require('fs/promises');
+//
+// 2026-08-19: prompt/BOUNDARY_PROMPT/pdfSliceToBase64/withTimeout/sleep
+// przeniesione do src/aiEngineShared.js (wspolne z nowym src/openaiFieldEngine.js,
+// patrz src/aiProvider.js) - tu zostaje TYLKO to, co jest specyficzne dla
+// Gemini (adres API, dialekt schematu, parsowanie odpowiedzi).
 const fsSync = require('fs');
 const path = require('path');
 const os = require('os');
-const { PDFDocument } = require('pdf-lib');
+const { pdfSliceToBase64, buildExtractionPrompt, BOUNDARY_PROMPT, withTimeout, sleep } = require('./aiEngineShared');
 
 const USER_CONFIG_PATH = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
@@ -60,16 +64,6 @@ function saveUserApiKey(apiKey) {
   fsSync.writeFileSync(USER_CONFIG_PATH, JSON.stringify({ apiKey: trimmed }, null, 2), 'utf8');
   return { saved: true };
 }
-
-function withTimeout(promise, ms, label) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} - przekroczono limit czasu (${Math.round(ms / 1000)}s)`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 // Retry na 429 (limit zapytan) i 503 (chwilowe przeciazenie) - oba realnie
 // wystapily w testach porownawczych na tej samej garstce plikow, wiec to nie
@@ -116,44 +110,14 @@ function extractJsonText(response) {
   return JSON.parse(text);
 }
 
-async function pdfSliceToBase64(sourcePdfPath, startPage, endPage) {
-  const sourceBytes = await fs.readFile(sourcePdfPath);
-  const sourceDoc = await PDFDocument.load(sourceBytes, { updateMetadata: false });
-  const sliceDoc = await PDFDocument.create();
-  const pageIndexes = Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i);
-  const copied = await sliceDoc.copyPages(sourceDoc, pageIndexes);
-  copied.forEach((p) => sliceDoc.addPage(p));
-  const sliceBytes = await sliceDoc.save();
-  return Buffer.from(sliceBytes).toString('base64');
-}
-
-const EXTRACTION_PROMPT_HEADER = `Jestes systemem transkrypcji formularzy audytu energetycznego (protokol uzgodnien montazowych).
-Odczytuj WYLACZNIE wartosci widoczne w dokumencie (drukowane i odreczne, w tym zaznaczone checkboxy).
-Nie uzupelniaj brakujacych wartosci na podstawie wiedzy ani domyslow.
-Nie poprawiaj wartosci, nawet jesli wygladaja na bledne technicznie.
-Dla pol typu checkbox/wybor zwroc dokladnie jedna z podanych dozwolonych wartosci (lub null jesli nic nie zaznaczono / kilka zaznaczen jednoczesnie w sposob niejednoznaczny).
-Dla pol z materialem i gruboscia zwroc jeden string "material, grubosc" (np. "Styropian, 10cm").
-Jezeli pole nie wystepuje w dokumencie, jest puste lub nieczytelne, zwroc null.
-Zachowuj dokladnie polskie znaki diakrytyczne.
-Rozroznij przecinek dziesietny od cyfry 1. Nie przeliczaj jednostek.
-
-Pola do wypelnienia:
-`;
-
-function buildSchemaAndPrompt(fieldDefs) {
+function buildSchema(fieldDefs) {
   const properties = {};
   const required = [];
-  const fieldDocs = [];
   for (const def of fieldDefs) {
     properties[def.key] = { type: 'STRING', nullable: true };
     required.push(def.key);
-    const optStr = def.options?.length ? ` (dozwolone wartosci: ${def.options.map((o) => o.label).join(' | ')})` : '';
-    const noteStr = def.note ? ` (${def.note})` : '';
-    fieldDocs.push(`- ${def.key}: ${def.columnLabel}${optStr}${noteStr}`);
   }
-  const schema = { type: 'OBJECT', properties, required };
-  const prompt = EXTRACTION_PROMPT_HEADER + fieldDocs.join('\n');
-  return { schema, prompt };
+  return { type: 'OBJECT', properties, required };
 }
 
 // Wyciaga wartosci WSZYSTKICH pol z fieldDefs (juz odfiltrowanych przez
@@ -161,7 +125,8 @@ function buildSchemaAndPrompt(fieldDefs) {
 // = jeden adres). Zwraca plaski obiekt { key: value|null }.
 async function extractFieldsForBlock({ sourcePdfPath, startPage, endPage, fieldDefs }) {
   if (!fieldDefs.length) return {};
-  const { schema, prompt } = buildSchemaAndPrompt(fieldDefs);
+  const schema = buildSchema(fieldDefs);
+  const prompt = buildExtractionPrompt(fieldDefs);
   const base64 = await pdfSliceToBase64(sourcePdfPath, startPage, endPage);
   const body = {
     contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: 'application/pdf', data: base64 } }] }],
@@ -176,11 +141,6 @@ const BOUNDARY_SCHEMA = {
   properties: { blockStartPages: { type: 'ARRAY', items: { type: 'INTEGER' } } },
   required: ['blockStartPages']
 };
-
-const BOUNDARY_PROMPT = `Ten PDF moze zawierac JEDEN lub WIELE oddzielnych formularzy "PROTOKOL UZGODNIEN MONTAZOWYCH" (kazdy zaczyna sie naglowkiem zawierajacym oba fragmenty: "PROTOKOL UZGODNIEN..." oraz "SPORZADZONY DNIA:").
-Znajdz numer KAZDEJ strony (liczac od 0), na ktorej zaczyna sie NOWY taki formularz - czyli strone z tym naglowkiem NA GORZE.
-Strona z samym oswiadczeniem/RODO/podpisem NIE liczy sie jako nowy poczatek.
-Zwroc rosnaco posortowana liste numerow stron w polu blockStartPages. Pierwszy formularz zawsze zaczyna sie od strony 0, wiec 0 zawsze powinno byc w liscie.`;
 
 // Lekkie, tanie wywolanie (maly schemat wyjsciowy) - tylko PROPOZYCJA
 // podzialu na bloki adresowe do zatwierdzenia/poprawienia przez uzytkownika

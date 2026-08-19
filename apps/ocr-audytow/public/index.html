@@ -25,6 +25,7 @@
       </div>
       <div class="app-header-right">
         <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <span class="hint" id="ocrActiveProviderNote" hidden></span>
         <button type="button" id="ocrChangeKeyBtn" class="btn btn-ghost btn-sm" hidden>
           <svg class="icon"><use href="/shared/icons.svg#i-scan"/></svg>
           Zmień klucz API
@@ -44,12 +45,19 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title" id="ocrLockedTitle">🔒 Rozpoznawanie tekstu nie jest jeszcze skonfigurowane</h2>
-          <p class="panel-desc">Wpisz klucz API Google Gemini, żeby odblokować rozpoznawanie tekstu i pisma odręcznego. Robisz to raz na tym komputerze - ustawienie zostaje zapisane osobno od samej aplikacji i przetrwa kolejne aktualizacje Scyzoryka. Chcesz zmienić klucz (np. inne konto)? Wpisz tu po prostu nowy - nadpisze poprzedni.</p>
+          <p class="panel-desc">Wpisz klucz API, żeby odblokować rozpoznawanie tekstu i pisma odręcznego. Robisz to raz na tym komputerze - ustawienie zostaje zapisane osobno od samej aplikacji i przetrwa kolejne aktualizacje Scyzoryka. Chcesz zmienić klucz albo dostawcę? Wybierz go poniżej i wpisz nowy klucz - nadpisze poprzedni, oba klucze mogą leżeć zapisane na dysku niezależnie.</p>
         </div>
       </div>
       <form id="ocrUnlockForm">
         <div class="option-field">
-          <span class="option-label">Klucz API Gemini</span>
+          <span class="option-label">Dostawca</span>
+          <div class="provider-row">
+            <label class="provider-option"><input type="radio" name="ocrProvider" value="gemini" id="ocrProviderGemini" checked> Google Gemini</label>
+            <label class="provider-option"><input type="radio" name="ocrProvider" value="openai" id="ocrProviderOpenai"> OpenAI</label>
+          </div>
+        </div>
+        <div class="option-field" style="margin-top:14px">
+          <span class="option-label" id="ocrApiKeyLabel">Klucz API Gemini</span>
           <input type="password" id="ocrApiKeyInput" placeholder="AIza..." autocomplete="off" required>
         </div>
         <div class="hero-actions">

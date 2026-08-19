@@ -50,8 +50,12 @@
   const ocrHeroSection = document.getElementById('ocrHeroSection');
   const ocrUploadPanel = document.getElementById('ocrUploadPanel');
   const ocrChangeKeyBtn = document.getElementById('ocrChangeKeyBtn');
+  const ocrActiveProviderNote = document.getElementById('ocrActiveProviderNote');
   const ocrUnlockForm = document.getElementById('ocrUnlockForm');
   const ocrApiKeyInput = document.getElementById('ocrApiKeyInput');
+  const ocrApiKeyLabel = document.getElementById('ocrApiKeyLabel');
+  const ocrProviderGemini = document.getElementById('ocrProviderGemini');
+  const ocrProviderOpenai = document.getElementById('ocrProviderOpenai');
   const ocrUnlockBtn = document.getElementById('ocrUnlockBtn');
   const ocrUnlockCancelBtn = document.getElementById('ocrUnlockCancelBtn');
   const ocrUnlockStatus = document.getElementById('ocrUnlockStatus');
@@ -716,11 +720,30 @@
   }
 
   // Zamiast wypiekac klucz w instalatorze, uzytkownik wpisuje klucz API
-  // Gemini RECZNIE RAZ na tym komputerze - ekran ponizej pokazuje sie zamiast
+  // RECZNIE RAZ na tym komputerze - ekran ponizej pokazuje sie zamiast
   // normalnego formularza, dopoki /api/health zglasza ocrConfigured:false.
   // "Zmień klucz API" w naglowku pozwala otworzyc ten sam formularz TAKZE gdy
-  // juz dziala (np. zmiana konta) - nowy klucz nadpisuje poprzedni.
+  // juz dziala (np. zmiana konta/dostawcy) - nowy klucz nadpisuje poprzedni.
+  // 2026-08-19: dwaj dostawcy (Gemini/OpenAI, patrz src/aiProvider.js) -
+  // wybor radiobuttona decyduje, do ktorego pliku klucz trafi i ktory
+  // dostawca staje sie aktywny.
   let ocrIsConfigured = false;
+
+  const PROVIDER_KEY_PLACEHOLDERS = { gemini: 'AIza...', openai: 'sk-...' };
+  const PROVIDER_KEY_LABELS = { gemini: 'Klucz API Gemini', openai: 'Klucz API OpenAI' };
+
+  function selectedProvider() {
+    return ocrProviderOpenai.checked ? 'openai' : 'gemini';
+  }
+
+  function updateApiKeyFieldForProvider() {
+    const provider = selectedProvider();
+    ocrApiKeyLabel.textContent = PROVIDER_KEY_LABELS[provider];
+    ocrApiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider];
+  }
+
+  [ocrProviderGemini, ocrProviderOpenai].forEach((el) => el.addEventListener('change', updateApiKeyFieldForProvider));
+  updateApiKeyFieldForProvider();
 
   function setOcrLocked(locked) {
     ocrLockedPanel.hidden = !locked;
@@ -748,6 +771,10 @@
       const data = await res.json().catch(() => null);
       ocrIsConfigured = Boolean(data?.ok) && data.ocrConfigured === true;
       ocrChangeKeyBtn.hidden = !ocrIsConfigured;
+      if (data?.ocrProvider === 'openai') ocrProviderOpenai.checked = true; else ocrProviderGemini.checked = true;
+      updateApiKeyFieldForProvider();
+      ocrActiveProviderNote.hidden = !ocrIsConfigured;
+      if (ocrIsConfigured) ocrActiveProviderNote.textContent = `Aktywny: ${data.ocrProviderLabel || data.ocrProvider}`;
       if (!ocrIsConfigured) setOcrLocked(true);
     } catch {
       // Brak odpowiedzi z wlasnego /api/health to problem innej natury
@@ -779,10 +806,11 @@
     ocrUnlockStatus.className = '';
     ocrUnlockStatus.textContent = 'Zapisuję...';
     try {
+      const provider = selectedProvider();
       const data = await apiJson('/api/ocr/setup-api-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
-        body: JSON.stringify({ apiKey })
+        body: JSON.stringify({ provider, apiKey })
       });
       if (!data.ok) throw new Error(data.message || 'Nie udało się zapisać klucza API.');
 
@@ -790,8 +818,15 @@
       ocrUnlockStatus.textContent = 'Gotowe. Odblokowuję...';
       ocrIsConfigured = true;
       ocrChangeKeyBtn.hidden = false;
+      ocrActiveProviderNote.hidden = false;
+      ocrActiveProviderNote.textContent = `Aktywny: ${PROVIDER_KEY_LABELS[provider].replace('Klucz API ', '')}`;
       setOcrLocked(false);
       ocrUnlockForm.reset();
+      // reset() cofa tez wybor radiobuttona do stanu domyslnego z HTML (gemini) -
+      // przywracamy faktycznie wybranego dostawcy, zeby ekran "Zmień klucz API"
+      // przy nastepnym otwarciu dalej pokazywal ten, ktory jest teraz aktywny.
+      if (provider === 'openai') ocrProviderOpenai.checked = true; else ocrProviderGemini.checked = true;
+      updateApiKeyFieldForProvider();
     } catch (err) {
       ocrUnlockStatus.className = 'err';
       ocrUnlockStatus.textContent = err.message || 'Nie udało się zapisać klucza API.';

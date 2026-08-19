@@ -7,7 +7,8 @@
 // (kazda strona miala `ocrWords`, patrz git history) - regex na parach slow
 // w bliskim sasiedztwie, zeby odroznic prawdziwy naglowek od przypadkowego
 // wystapienia obu slow w tekscie oswiadczenia/RODO. Zastapione przez
-// src/geminiFieldEngine.js#detectBlockStartPages: Gemini widzi caly PDF na
+// model jezykowy (Gemini albo, od 2026-08-19, OpenAI - patrz
+// src/aiProvider.js#detectBlockStartPages): widzi caly PDF na
 // raz i sam wskazuje strony z naglowkiem - drukowany tekst byl bezblednie
 // odczytywany we WSZYSTKICH testach porownawczych tej migracji (jedyne
 // realne trudnosci dotyczyly pisma odrecznego), wiec to powinno byc
@@ -19,7 +20,7 @@
 // tekst z tych audytow") - wywolujacy (server.js) zawsze pokazuje ekran
 // potwierdzenia z miniaturami stron, a uzytkownik moze poprawic granice
 // przed faktycznym podzialem.
-const { detectBlockStartPages } = require('./geminiFieldEngine');
+const { detectBlockStartPages } = require('./aiProvider');
 
 async function detectBlockBoundaries({ sourcePdfPath, pageCount }) {
   const boundaries = await detectBlockStartPages({ sourcePdfPath, pageCount });

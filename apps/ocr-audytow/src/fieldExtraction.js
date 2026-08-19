@@ -3,17 +3,17 @@
 //
 // Do 2026-08-12 ten plik zawieral tez geometryczne dopasowanie wartosci
 // (Document AI formFields/tabele -> wartosc pola przez wzorce regex per
-// etykieta, patrz git history) - zastapione przez src/geminiFieldEngine.js:
-// Gemini dostaje caly blok dokumentu i TEN SAM schemat pol na raz, sam
-// semantycznie przypisuje wartosci, bez naszej wlasnej logiki 'znajdz
-// etykiete -> zgadnij sasiednia wartosc'. FIELD_DEFS zostaje jedynym
-// zrodlem prawdy o zestawie pol/etykietach/slowniku checkboxow-materialow -
-// uzywane teraz do budowy schematu JSON dla Gemini (patrz
-// geminiFieldEngine.js#buildSchemaAndPrompt) oraz do eksportu Excela
-// (COLUMN_ORDER/COLUMN_LABELS).
+// etykieta, patrz git history) - zastapione przez model jezykowy (Gemini
+// albo, od 2026-08-19, OpenAI - patrz src/aiProvider.js): model dostaje
+// caly blok dokumentu i TEN SAM schemat pol na raz, sam semantycznie
+// przypisuje wartosci, bez naszej wlasnej logiki 'znajdz etykiete -> zgadnij
+// sasiednia wartosc'. FIELD_DEFS zostaje jedynym zrodlem prawdy o zestawie
+// pol/etykietach/slowniku checkboxow-materialow - uzywane do budowy promptu
+// (src/aiEngineShared.js#buildExtractionPrompt, wspolny dla obu silnikow)
+// oraz do eksportu Excela (COLUMN_ORDER/COLUMN_LABELS).
 //
 // kind: 'text' | 'checkbox' | 'titleDerived' | 'material' | 'manual'.
-// 'manual' (obecnie tylko 'demontaz') NIGDY nie jest wysylane do Gemini -
+// 'manual' (obecnie tylko 'demontaz') NIGDY nie jest wysylane do modelu -
 // zawsze trafia do recznego przegladu, tak jak wczesniej.
 const FIELD_DEFS = [
   {

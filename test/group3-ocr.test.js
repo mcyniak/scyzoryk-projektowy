@@ -239,6 +239,87 @@ test('geminiFieldEngine: saveUserApiKey odrzuca pusty klucz', async (t) => {
 });
 
 // =====================================================================
+// Audyt 2026-08-19: drugi silnik (OpenAI, obok Gemini) - klucz Gemini
+// wpadal w darmowy limit ("Quota exceeded... free_tier_requests, limit: 20")
+// przy realnych paczkach, firma ma za to praktycznie nielimitowany dostep
+// do API OpenAI. src/aiEngineShared.js trzyma WSPOLNY tekst promptu (zeby
+// nie rozjechal sie miedzy silnikami), src/aiProvider.js przelacza aktywnego
+// dostawce.
+// =====================================================================
+
+test('aiEngineShared: buildExtractionPrompt daje IDENTYCZNY tekst niezaleznie od tego, ktory silnik go wywoluje', () => {
+  const { buildExtractionPrompt } = require('../apps/ocr-audytow/src/aiEngineShared');
+  const fieldDefs = [
+    { key: 'rokBudowy', columnLabel: 'Rok budowy budynku' },
+    { key: 'zrodloCiepla', columnLabel: 'Źródło ciepła', options: [{ label: 'Inny' }] }
+  ];
+  const promptA = buildExtractionPrompt(fieldDefs);
+  const promptB = buildExtractionPrompt(fieldDefs);
+  assert.equal(promptA, promptB);
+  assert.match(promptA, /rokBudowy: Rok budowy budynku/);
+  assert.match(promptA, /zrodloCiepla: Źródło ciepła \(dozwolone wartosci: Inny\)/);
+});
+
+test('openaiFieldEngine: isConfigured czyta klucz z pliku uzytkownika (%LOCALAPPDATA%/Scyzoryk/openai-api-key.json), saveUserApiKey odrzuca pusty klucz', async (t) => {
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousEnvKey = process.env.OPENAI_API_KEY;
+  const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-openai-cfg-'));
+  process.env.LOCALAPPDATA = localAppData;
+  delete process.env.OPENAI_API_KEY;
+  const enginePath = require.resolve('../apps/ocr-audytow/src/openaiFieldEngine');
+  delete require.cache[enginePath];
+  t.after(() => {
+    process.env.LOCALAPPDATA = previousLocalAppData;
+    if (previousEnvKey !== undefined) process.env.OPENAI_API_KEY = previousEnvKey; else delete process.env.OPENAI_API_KEY;
+    delete require.cache[enginePath];
+    return fsp.rm(localAppData, { recursive: true, force: true });
+  });
+
+  const { isConfigured, saveUserApiKey } = require(enginePath);
+  assert.equal(isConfigured(), false);
+  assert.throws(() => saveUserApiKey(''), /Podaj klucz/);
+  saveUserApiKey('sk-test-abc123');
+  assert.equal(isConfigured(), true);
+});
+
+test('aiProvider: domyslny dostawca to gemini bez zapisanej preferencji, saveUserApiKey przelacza aktywnego, isConfigured deleguje poprawnie', async (t) => {
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const previousGeminiKey = process.env.GEMINI_API_KEY;
+  const previousOpenAiKey = process.env.OPENAI_API_KEY;
+  const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-aiprovider-'));
+  process.env.LOCALAPPDATA = localAppData;
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  const modulePaths = [
+    '../apps/ocr-audytow/src/aiProvider',
+    '../apps/ocr-audytow/src/geminiFieldEngine',
+    '../apps/ocr-audytow/src/openaiFieldEngine'
+  ].map((p) => require.resolve(p));
+  for (const p of modulePaths) delete require.cache[p];
+  t.after(() => {
+    process.env.LOCALAPPDATA = previousLocalAppData;
+    if (previousGeminiKey !== undefined) process.env.GEMINI_API_KEY = previousGeminiKey; else delete process.env.GEMINI_API_KEY;
+    if (previousOpenAiKey !== undefined) process.env.OPENAI_API_KEY = previousOpenAiKey; else delete process.env.OPENAI_API_KEY;
+    for (const p of modulePaths) delete require.cache[p];
+    return fsp.rm(localAppData, { recursive: true, force: true });
+  });
+
+  const aiProvider = require(modulePaths[0]);
+  assert.equal(aiProvider.getActiveProvider(), 'gemini', 'brak pliku preferencji -> domyslnie gemini (kompatybilnosc wsteczna)');
+  assert.equal(aiProvider.isConfigured(), false);
+
+  aiProvider.saveUserApiKey('gemini', 'test-klucz-gemini');
+  assert.equal(aiProvider.getActiveProvider(), 'gemini');
+  assert.equal(aiProvider.isConfigured(), true);
+
+  aiProvider.saveUserApiKey('openai', 'sk-test-openai');
+  assert.equal(aiProvider.getActiveProvider(), 'openai', 'zapisanie klucza OpenAI musi przelaczyc aktywnego dostawce');
+  assert.equal(aiProvider.isConfigured(), true, 'gemini nadal ma zapisany klucz, ale isConfigured pyta TYLKO aktywnego (openai)');
+
+  assert.throws(() => aiProvider.saveUserApiKey('nieznany', 'x'), /Nieznany dostawca/);
+});
+
+// =====================================================================
 // eksport rodzinny (src/tabelaAdresowaColumns.js, src/excelExport.js) -
 // niezalezne od silnika ekstrakcji, bez zmian.
 // =====================================================================
@@ -435,22 +516,38 @@ test('klient zapisuje reczne poprawki pol przez wspolna walidacje odpowiedzi (ap
 // pliku service-account.json + 3 zmiennych Document AI).
 // =====================================================================
 
-test('POST /api/ocr/setup-api-key: poprawny klucz odblokowuje OCR, /api/health od razu widzi zmiane', async (t) => {
+const AI_MODULE_PATHS = [
+  '../apps/ocr-audytow/server',
+  '../apps/ocr-audytow/src/aiProvider',
+  '../apps/ocr-audytow/src/geminiFieldEngine',
+  '../apps/ocr-audytow/src/openaiFieldEngine'
+].map((p) => require.resolve(p));
+
+function clearAiModuleCache() {
+  for (const p of AI_MODULE_PATHS) delete require.cache[p];
+}
+
+test('POST /api/ocr/setup-api-key: poprawny klucz odblokowuje OCR, /api/health od razu widzi zmiane, drugi dostawca poprawnie przelacza aktywnego', async (t) => {
   const previousLocalAppData = process.env.LOCALAPPDATA;
   const previousEnvKey = process.env.GEMINI_API_KEY;
+  const previousOpenAiEnvKey = process.env.OPENAI_API_KEY;
   const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ocr-http-'));
   process.env.LOCALAPPDATA = localAppData;
   delete process.env.GEMINI_API_KEY;
-  // geminiFieldEngine.js oblicza USER_CONFIG_PATH RAZ, jako stala modulu, przy
-  // pierwszym require() - trzeba wyczyscic cache, zeby swiezy require()
-  // faktycznie przeliczyl sciezke z NOWYM process.env.LOCALAPPDATA.
-  delete require.cache[require.resolve('../apps/ocr-audytow/server')];
-  delete require.cache[require.resolve('../apps/ocr-audytow/src/geminiFieldEngine')];
+  delete process.env.OPENAI_API_KEY;
+  // Kazdy z tych modulow oblicza sciezke pliku konfiguracji RAZ, jako stala
+  // modulu, przy pierwszym require() (i aiProvider.js#getActiveProvider
+  // trzyma referencje do JUZ zaladowanych silnikow) - trzeba wyczyscic cache
+  // WSZYSTKICH naraz, zeby swiezy require() faktycznie przeliczyl sciezki z
+  // NOWYM process.env.LOCALAPPDATA (audyt 2026-08-19: brak czyszczenia
+  // aiProvider.js po dodaniu drugiego dostawcy dawal falszywe "juz
+  // skonfigurowane" z poprzedniego testu w tym samym pliku).
+  clearAiModuleCache();
   t.after(() => {
     process.env.LOCALAPPDATA = previousLocalAppData;
     if (previousEnvKey !== undefined) process.env.GEMINI_API_KEY = previousEnvKey; else delete process.env.GEMINI_API_KEY;
-    delete require.cache[require.resolve('../apps/ocr-audytow/server')];
-    delete require.cache[require.resolve('../apps/ocr-audytow/src/geminiFieldEngine')];
+    if (previousOpenAiEnvKey !== undefined) process.env.OPENAI_API_KEY = previousOpenAiEnvKey; else delete process.env.OPENAI_API_KEY;
+    clearAiModuleCache();
     return fsp.rm(localAppData, { recursive: true, force: true });
   });
 
@@ -465,6 +562,7 @@ test('POST /api/ocr/setup-api-key: poprawny klucz odblokowuje OCR, /api/health o
 
   const before = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
   assert.equal(before.ocrConfigured, false);
+  assert.equal(before.ocrProvider, 'gemini', 'domyslny dostawca bez zapisanej preferencji');
 
   const res = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-api-key`, {
     method: 'POST',
@@ -474,9 +572,27 @@ test('POST /api/ocr/setup-api-key: poprawny klucz odblokowuje OCR, /api/health o
   const data = await res.json();
   assert.equal(res.status, 200);
   assert.equal(data.ok, true);
+  assert.equal(data.provider, 'gemini', 'brak jawnego provider w body - domyslnie gemini');
 
   const after = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
   assert.equal(after.ocrConfigured, true, 'juz uruchomiony proces musi widziec nowa konfiguracje bez restartu (czytana z dysku przy kazdym wywolaniu)');
+  assert.equal(after.ocrProvider, 'gemini');
+
+  // Zapisanie klucza OpenAI PRZELACZA aktywnego dostawce - health musi to
+  // widziec natychmiast, mimo ze klucz Gemini z poprzedniego kroku nadal
+  // lezy na dysku (obydwa klucze wspoluistnieja niezaleznie).
+  const openaiRes = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-api-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ provider: 'openai', apiKey: 'sk-test-xyz' })
+  });
+  const openaiData = await openaiRes.json();
+  assert.equal(openaiData.ok, true);
+  assert.equal(openaiData.provider, 'openai');
+
+  const afterOpenAi = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
+  assert.equal(afterOpenAi.ocrProvider, 'openai', 'zapisanie klucza OpenAI musi przelaczyc aktywnego dostawce');
+  assert.equal(afterOpenAi.ocrConfigured, true);
 });
 
 test('POST /api/ocr/setup-api-key: bez naglowka X-Scyzoryk-Request dostaje 403 (ta sama ochrona co reszta mutujacych tras)', async (t) => {

@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
 const { getAppDataDir } = require('../../lib/appPaths');
 const { analyzeDocument, inspectDocument, finalizeSplit } = require('./src/ocrPipeline');
-const { isConfigured: isGeminiConfigured, saveUserApiKey, extractFieldsForBlock } = require('./src/geminiFieldEngine');
+const { isConfigured: isAiConfigured, saveUserApiKey, extractFieldsForBlock, getActiveProvider, PROVIDER_LABELS } = require('./src/aiProvider');
 const { COLUMN_ORDER, COLUMN_LABELS, buildFieldsFromExtraction, filterExtractableFields } = require('./src/fieldExtraction');
 const { writeFreshRows, writeFamilyTemplateRows, readExistingTable, fillExistingTableRows, validatePath: validateExcelPath } = require('./src/excelExport');
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
@@ -65,19 +65,23 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', async (req, res) => {
-  res.json({ ok: true, name: 'ocr-audytow', ocrConfigured: isGeminiConfigured() });
+  const ocrProvider = getActiveProvider();
+  res.json({ ok: true, name: 'ocr-audytow', ocrConfigured: isAiConfigured(), ocrProvider, ocrProviderLabel: PROVIDER_LABELS[ocrProvider] });
 });
 
 // Ekran "OCR zablokowany" w public/index.html (pokazywany, gdy /api/health
-// zwraca ocrConfigured:false) pozwala uzytkownikowi wpisac klucz API Gemini
-// RECZNIE - patrz saveUserApiKey w src/geminiFieldEngine.js (trwaly katalog
-// %LOCALAPPDATA%\Scyzoryk, przezywa aktualizacje). Dużo prostsza konfiguracja
-// niz dawny Document AI (jeden sekret zamiast pliku service-account.json + 3
-// zmiennych srodowiskowych).
+// zwraca ocrConfigured:false) pozwala uzytkownikowi wpisac klucz API RECZNIE -
+// patrz saveUserApiKey w src/aiProvider.js (trwaly katalog %LOCALAPPDATA%\Scyzoryk,
+// przezywa aktualizacje). Dużo prostsza konfiguracja niz dawny Document AI (jeden
+// sekret zamiast pliku service-account.json + 3 zmiennych srodowiskowych).
+// 2026-08-19: dwaj dostawcy (Gemini/OpenAI) zamiast jednego - `provider` w body
+// wybiera KTORY klucz zapisac, a zapisanie klucza automatycznie ustawia tego
+// dostawce jako aktywnego (patrz aiProvider.js#saveUserApiKey).
 app.post('/api/ocr/setup-api-key', (req, res) => {
   try {
-    const saved = saveUserApiKey(req.body?.apiKey);
-    res.json({ ok: true, ...saved });
+    const provider = req.body?.provider === 'openai' ? 'openai' : 'gemini';
+    const saved = saveUserApiKey(provider, req.body?.apiKey);
+    res.json({ ok: true, provider, ...saved });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Nie udało się zapisać klucza API.' });
   }
@@ -288,7 +292,7 @@ app.post('/api/ocr/inspect-table', async (req, res) => {
 // podzial na bloki adresowe + miniatury stron do przegladu. NIC tu jeszcze nie
 // trafia do pobrania - to robi dopiero /api/ocr/finalize po zatwierdzeniu
 // (ewentualnie recznie poprawionego) podzialu przez uzytkownika.
-// Uwaga: celowo NIE ma tu gornego "if (!isGeminiConfigured()) return 500" blokujacego caly
+// Uwaga: celowo NIE ma tu gornego "if (!isAiConfigured()) return 500" blokujacego caly
 // batch - analiza (rozpoznanie liczby stron + propozycja podzialu na adresy) dziala bez
 // klucza API; klucz jest potrzebny dopiero w /api/ocr/extract-fields. Gorna blokada
 // odrzucalaby caly upload, zanim uzytkownik w ogole zobaczyl ekran podzialu.
@@ -391,7 +395,7 @@ app.get('/api/analysis/:analysisId/files/:fileId/page/:pageIndex', (req, res) =>
 });
 
 // Krok 3: dla kazdego ZATWIERDZONEGO bloku pyta Gemini o wartosci wszystkich pol na raz
-// (patrz src/geminiFieldEngine.js) i buduje wynik z needsReview wg deterministycznej
+// (patrz src/aiProvider.js) i buduje wynik z needsReview wg deterministycznej
 // reguly (patrz src/fieldExtraction.js#toFieldResult). Wynik zapisywany w sesji analizy
 // (fileEntry.resolvedBlocks) - finalize pozniej korzysta z TYCH danych, nie z surowego
 // body zadania, zeby wymusic ze tabelka faktycznie jest kompletna (patrz walidacja w
@@ -406,7 +410,7 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
   if (family && !TABELA_FAMILIES[family]) {
     return res.status(400).json({ ok: false, message: 'Nieznana rodzina protokołu.' });
   }
-  if (!isGeminiConfigured()) {
+  if (!isAiConfigured()) {
     return res.status(400).json({ ok: false, message: 'Brak skonfigurowanego klucza API Gemini. Ustaw go w ustawieniach narzędzia.' });
   }
   // Zawezenie ekstrakcji/przegladu TYLKO do pol potrzebnych tabelce adresowej wybranej
