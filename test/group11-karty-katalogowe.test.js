@@ -806,7 +806,7 @@ test('przetworzArkusz: schemat z dwoma wariantami fazowymi bez znanej fazy w Exc
   assert.deepEqual(wyniki[0].schemat.kandydaci.sort(), ['2,85 1F.pdf', '2,85 3F.pdf']);
 });
 
-test('POST /api/run: zip z audytami/schematami (wgrany plik, nie sciezka) - rozpakowywany i dolaczany do wyniku', async (t) => {
+test('POST /api/run: zip z audytami/schematami/dokumentami seryjnymi (wgrane pliki, nie sciezki) - rozpakowywane i dolaczane do wyniku, bez "too many files" (audyt 2026-08-19: files:3 w multerze zostal w tyle, gdy dolozono dokumentySeryjneZip jako 4. pole)', async (t) => {
   const { root, projektyDir } = await przygotujRoot({
     foldery: ['41 - Wierzchlas, Częstochowska 26'],
     kartyPliki: WYMAGANE_KARTY
@@ -827,6 +827,11 @@ test('POST /api/run: zip z audytami/schematami (wgrany plik, nie sciezka) - rozp
   const schematyZipPath = path.join(workDir, 'schematy.zip');
   schematyZip.writeZip(schematyZipPath);
 
+  const dokumentySeryjneZip = new AdmZip();
+  dokumentySeryjneZip.addFile('DS/Wierzchlas, ul. Częstochowska 26_DS.pdf', Buffer.from('dokument-seryjny-tresc'));
+  const dokumentySeryjneZipPath = path.join(workDir, 'dokumenty-seryjne.zip');
+  dokumentySeryjneZip.writeZip(dokumentySeryjneZipPath);
+
   const { file: excelFile, dir: xlsxDir } = await napiszArkuszPV('Solary Zarnow', [
     [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe']
   ]);
@@ -844,6 +849,7 @@ test('POST /api/run: zip z audytami/schematami (wgrany plik, nie sciezka) - rozp
   form.append('excel', new Blob([await fsp.readFile(excelFile)]), 'dane.xlsx');
   form.append('audytyZip', new Blob([await fsp.readFile(audytyZipPath)]), 'audyty.zip');
   form.append('schematyZip', new Blob([await fsp.readFile(schematyZipPath)]), 'schematy.zip');
+  form.append('dokumentySeryjneZip', new Blob([await fsp.readFile(dokumentySeryjneZipPath)]), 'dokumenty-seryjne.zip');
   form.append('rootPath', root);
   form.append('typ', 'solary');
   form.append('dryRun', 'false');
@@ -856,8 +862,10 @@ test('POST /api/run: zip z audytami/schematami (wgrany plik, nie sciezka) - rozp
   assert.equal(data.wyniki[0].status, 'skopiowano');
   assert.deepEqual(data.wyniki[0].audyt, { status: 'skopiowano', plik: 'Wierzchlas, ul. Częstochowska 26_PV.pdf' });
   assert.deepEqual(data.wyniki[0].schemat, { status: 'skopiowano', plik: '2,85.pdf' });
+  assert.deepEqual(data.wyniki[0].dokumentSeryjny, { status: 'skopiowano', plik: 'Wierzchlas, ul. Częstochowska 26_DS.pdf' });
 
   const folderKlienta = path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26');
   assert.equal(await fsp.readFile(path.join(folderKlienta, 'Wierzchlas, ul. Częstochowska 26_PV.pdf'), 'utf8'), 'audyt-tresc');
   assert.equal(await fsp.readFile(path.join(folderKlienta, '2,85.pdf'), 'utf8'), 'schemat-tresc');
+  assert.equal(await fsp.readFile(path.join(folderKlienta, 'Wierzchlas, ul. Częstochowska 26_DS.pdf'), 'utf8'), 'dokument-seryjny-tresc');
 });

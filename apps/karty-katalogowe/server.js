@@ -86,24 +86,29 @@ const storage = multer.diskStorage({
   }
 });
 
-// Trzy niezalezne pola pliku w jednym requescie: "excel" (zawsze wymagany),
-// oraz opcjonalne "audytyZip"/"schematyZip" - alternatywa dla wpisania
-// sciezki do folderu na dysku (audytyPath/schematyPath), bo audyty/schematy
-// czesto leza na dysku Google innego dzialu, do ktorego nie ma stalej,
-// zmapowanej sciezki (patrz komentarz przy rozpakujZipDoTemp nizej).
+// Cztery niezalezne pola pliku w jednym requescie: "excel" (zawsze wymagany),
+// oraz opcjonalne "audytyZip"/"schematyZip"/"dokumentySeryjneZip" - alternatywa
+// dla wpisania sciezki do folderu na dysku (audytyPath/schematyPath/
+// dokumentySeryjnePath), bo audyty/schematy czesto leza na dysku Google
+// innego dzialu, do ktorego nie ma stalej, zmapowanej sciezki (patrz
+// komentarz przy rozpakujZipDoTemp nizej).
 const MAX_ZIP_MB = Number(process.env.KK_MAX_ZIP_MB || 500);
 const uploadWieloplikowy = multer({
   storage,
-  limits: { fileSize: Math.max(MAX_FILE_MB, MAX_ZIP_MB) * 1024 * 1024, files: 3 },
+  // 4 mozliwe pola naraz: excel + audytyZip + schematyZip + dokumentySeryjneZip
+  // (limit files musi nadazac za liczba pol w .fields() ponizej - bylo 3,
+  // zanim dolozono dokumentySeryjneZip, co realnie wywalalo "too many files"
+  // przy wgrywaniu wszystkich trzech dodatkow naraz).
+  limits: { fileSize: Math.max(MAX_FILE_MB, MAX_ZIP_MB) * 1024 * 1024, files: 4 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(decodeOriginalName(file.originalname || '')).toLowerCase();
     if (file.fieldname === 'excel') {
       if (ext === '.xlsx') return cb(null, true);
       return cb(new Error('Wybierz plik Excel .xlsx.'));
     }
-    if (file.fieldname === 'audytyZip' || file.fieldname === 'schematyZip') {
+    if (file.fieldname === 'audytyZip' || file.fieldname === 'schematyZip' || file.fieldname === 'dokumentySeryjneZip') {
       if (ext === '.zip') return cb(null, true);
-      return cb(new Error('Audyty/schematy przyjmowane sa wylacznie jako plik .zip.'));
+      return cb(new Error('Audyty/schematy/dokumenty seryjne przyjmowane sa wylacznie jako plik .zip.'));
     }
     return cb(new Error('Nieoczekiwane pole pliku.'));
   }
