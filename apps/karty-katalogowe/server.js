@@ -414,6 +414,48 @@ function adresPasujeDoFolderu(adres, folderNazwa) {
   return trafioneTokeny.length >= wymagane;
 }
 
+// Czy folderTokeny zawiera token numeru domu/dzialki rownowazny numAdresu -
+// dokladne trafienie ALBO ten sam numer z doklejona litera (np. "5" pasuje
+// do "5a", ale NIE do "56" - reszta po numerze musi byc czysto literowa).
+function numerDomuPasuje(numAdresu, folderTokeny) {
+  return folderTokeny.some(ft => {
+    if (ft === numAdresu) return true;
+    if (!ft.startsWith(numAdresu)) return false;
+    return /^[a-z]+$/.test(ft.slice(numAdresu.length));
+  });
+}
+
+// Dopasowanie SCISLE po adresie - w odroznieniu od adresPasujeDoFolderu
+// (ktora tylko POTWIERDZA folder juz jednoznacznie znaleziony po numerze
+// LP, wiec tolerancja na sam tekst ulicy/miejscowosci bez numeru jest tam
+// bezpieczna), tutaj adres jest JEDYNYM sygnalem - bez tej sciezlosci wiele
+// roznych adresow na tej samej ulicy falszywie trafialoby w ten sam folder
+// (real bug zlapany na prawdziwych danych Wierzchlas: "Kraszkowice
+// Kasztanowa 12/30/55..." wszystkie dopasowywaly sie do jedynego folderu
+// "Kraszkowice Kasztanowa 55", bo 2 wspolne tokeny tekstowe wystarczaly do
+// progu, a numer domu nigdy nie musial sie zgadzac). Numer domu/dzialki w
+// adresie (jesli jest) MUSI wystapic w nazwie folderu; nazwa
+// ulicy/miejscowosci nadal wymagana co najmniej jednym trafionym tokenem.
+function adresPasujeDoFolderuScisle(adres, folderNazwa) {
+  const tokeny = tokenyAdresu(adres);
+  if (!tokeny.length) return false;
+  const folderTokeny = tokenyAdresu(folderNazwa);
+
+  const numeryczne = tokeny.filter(t => /^\d/.test(t));
+  const tekstowe = tokeny.filter(t => !/^\d/.test(t));
+
+  if (numeryczne.length > 0 && !numeryczne.some(n => numerDomuPasuje(n, folderTokeny))) return false;
+  // WSZYSTKIE tokeny tekstowe musza sie zgadzac, nie tylko jeden - real bug
+  // zlapany na tych samych danych PO naprawie numeru domu: "Krzeczów
+  // Słoneczna 7" dalej falszywie trafialo w folder "Krzeczów Ogrodowa 7",
+  // bo sam token miejscowosci ("krzeczow") wystarczal, mimo ze ulica sie
+  // nie zgadzala. Przy typowym adresie (miejscowosc+ulica+numer) to jest
+  // jedyny sposob, zeby odroznic rozne ulice w tej samej miejscowosci.
+  if (tekstowe.length > 0 && !tekstowe.every(t => folderTokeny.includes(t))) return false;
+
+  return true;
+}
+
 // Dopasowanie folderu klienta WPROST po adresie, bez numeru LP/ID w nazwie
 // folderu - dla trybu "tylko dodatek" (pominKarty), gdzie folder wskazany
 // dla audytow/schematow/dokumentow seryjnych czesto nie ma struktury
@@ -422,7 +464,7 @@ function adresPasujeDoFolderu(adres, folderNazwa) {
 // "Jajczaki 11a") bez zadnego numeru ID w nazwie. Nigdy nie zgaduje przy
 // kilku pasujacych naraz - to samo podejscie co reszta tego narzedzia.
 function dopasujFolderPoAdresie(adres, nazwyFolderow) {
-  const trafienia = nazwyFolderow.filter(nazwa => adresPasujeDoFolderu(adres, nazwa));
+  const trafienia = nazwyFolderow.filter(nazwa => adresPasujeDoFolderuScisle(adres, nazwa));
   if (trafienia.length === 1) return { folder: trafienia[0] };
   if (trafienia.length === 0) return { blad: 'brak' };
   return { blad: 'wieloznaczne', kandydaci: trafienia };
@@ -657,7 +699,14 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
   const colFazowa = findColumn(header, ['fazow']);
 
   const brakujaceKolumny = [];
-  if (colLpGmina === -1) brakujaceKolumny.push('LP gminy');
+  // "LP gminy" sluzy WYLACZNIE do dopasowania folderu klienta po numerze -
+  // w trybie pominKarty folder jest dopasowywany wprost po adresie
+  // (dopasujFolderPoAdresie), wiec ta kolumna jest tam calkowicie zbedna.
+  // Real przypadek 2026-08-19 (Wierzchlas, arkusz "PV_"): kolumna nazywa sie
+  // po prostu "LP" (bez "gminy" w nazwie), wiec i tak nigdy by nie zostala
+  // rozpoznana przez findColumn(['lp','gmin']) - bez tej ulgi caly arkusz
+  // bylby odrzucony mimo ze adres/UID sa obecne i wystarczajace.
+  if (!pominKarty && colLpGmina === -1) brakujaceKolumny.push('LP gminy');
   if (colAdres === -1) brakujaceKolumny.push('adres');
   if (colUid === -1) brakujaceKolumny.push('UID (lub "Rodzaj zestawu")');
   if (brakujaceKolumny.length) {
@@ -1295,5 +1344,6 @@ module.exports = {
   rozpoznajFaze,
   zbierzPlikiPdf,
   dopasujISkopiujDodatek,
-  dopasujFolderPoAdresie
+  dopasujFolderPoAdresie,
+  adresPasujeDoFolderuScisle
 };

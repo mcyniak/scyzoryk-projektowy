@@ -28,7 +28,8 @@ const {
   rozpoznajFaze,
   zbierzPlikiPdf,
   dopasujISkopiujDodatek,
-  dopasujFolderPoAdresie
+  dopasujFolderPoAdresie,
+  adresPasujeDoFolderuScisle
 } = require('../apps/karty-katalogowe/server');
 
 const HEADER = ['LP gminy', 'Adres', 'UID', 'Rezygnacja'];
@@ -1111,4 +1112,76 @@ test('dopasujFolderPoAdresie: dokladnie jedno trafienie zwraca folder, zero -> "
   const wynik = dopasujFolderPoAdresie('Jajczaki', foldery);
   assert.equal(wynik.blad, 'wieloznaczne');
   assert.deepEqual(wynik.kandydaci.sort(), ['Jajczaki 11a', 'Jajczaki 1A'].sort());
+});
+
+test('adresPasujeDoFolderuScisle: real bug na danych Wierzchlas 2026-08-19 - rozne ulice/miejscowosci z tym samym numerem domu NIE moga sie mylnie dopasowac', () => {
+  // Pierwsza naprawa (wymagaj numeru domu) NIE wystarczala - "Krzeczów
+  // Słoneczna 7" dalej falszywie trafialo w "Krzeczów Ogrodowa 7", bo sam
+  // token miejscowosci "krzeczow" wystarczal do progu. Druga naprawa:
+  // WSZYSTKIE tokeny tekstowe (nie tylko jeden) musza sie zgadzac.
+  assert.equal(adresPasujeDoFolderuScisle('Krzeczów Słoneczna 7', 'Krzeczów Ogrodowa 7'), false, 'ta sama miejscowosc i numer, inna ulica');
+  assert.equal(adresPasujeDoFolderuScisle('Wierzchlas Wieluńska 25', 'Krzeczów Wieluńska 25'), false, 'ta sama ulica i numer, inna miejscowosc');
+  assert.equal(adresPasujeDoFolderuScisle('Toporów Szkolna 17', 'Łaszew Szkolna 17'), false, 'inna miejscowosc, ta sama ulica i numer');
+  // Ale prawdziwe dopasowania (wszystkie tokeny sie zgadzaja) nadal dzialaja,
+  // wliczajac tolerancje na litere doklejona do numeru domu (real przypadek:
+  // "Topolowa 5" w arkuszu, "Topolowa 5A" jako nazwa folderu na dysku).
+  assert.equal(adresPasujeDoFolderuScisle('Krzeczów Ogrodowa 7', 'Krzeczów Ogrodowa 7'), true);
+  assert.equal(adresPasujeDoFolderuScisle('Łaszew, Topolowa 5', 'Łaszew Topolowa 5A'), true);
+  assert.equal(adresPasujeDoFolderuScisle('Jajczaki 11a', 'Jajczaki 11a'), true);
+  // Numer domu MUSI sie zgadzac, gdy jest obecny w adresie - sam numer "5"
+  // nie moze dopasowac "56" (inny dom, nie litera doklejona do "5").
+  assert.equal(adresPasujeDoFolderuScisle('Łaszew Topolowa 5', 'Łaszew Topolowa 56'), false);
+});
+
+test('przetworzArkusz: kolumna "LP gminy" jest WYMAGANA normalnie, ale NIE w trybie pominKarty (real przypadek Wierzchlas - prawdziwy arkusz PV_ ma kolumne nazwana po prostu "LP", bez "gminy")', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-bez-lp-gminy-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  // Folder klienta pod "Projekty" (nie wprost pod root) - dziala dla obu
+  // wariantow ponizej: pominKarty=true znajduje "Projekty" bezposrednio
+  // (fallback na plaska konwencje nawet nie jest tu potrzebny), a
+  // pominKarty=false (karty) i tak odpadnie wczesniej na braku kolumny
+  // "LP gminy", zanim w ogole dojdzie do listowania folderu.
+  await fsp.mkdir(path.join(root, 'Projekty', 'Broników 28'), { recursive: true });
+  // Karty istnieja tylko po to, zeby druga czesc testu (pominKarty: false)
+  // dotarla do sprawdzenia kolumn, a nie odpadla wczesniej na braku "karty".
+  const kartyDir = path.join(root, 'karty');
+  await fsp.mkdir(kartyDir, { recursive: true });
+  for (const nazwa of WYMAGANE_KARTY) await fsp.writeFile(path.join(kartyDir, nazwa), 'tresc');
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-bez-lp-gminy-'));
+  t.after(() => usunPozniej(dir));
+  const file = path.join(dir, 'dane.xlsx');
+  // Naglowek celowo ma "LP" (nie "LP gminy") - realna nazwa kolumny w
+  // arkuszu PV_ z prawdziwego pliku Wierzchlas.
+  const header = ['LP', 'Adres', 'UID', 'Rezygnacja'];
+  const ws = XLSX.utils.aoa_to_sheet([header, [1, 'Broników 28', '2/250', '']]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'PV_');
+  XLSX.writeFile(wb, file);
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+
+  const audytyPliki = await zbierzPlikiPdf(await (async () => {
+    const audytyDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-audyty-bez-lp-'));
+    t.after(() => fsp.rm(audytyDir, { recursive: true, force: true }));
+    await fsp.writeFile(path.join(audytyDir, 'Broników 28_PV.pdf'), 'audyt-tresc');
+    return audytyDir;
+  })());
+
+  const wynikiPominKarty = await przetworzArkusz({
+    sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false,
+    audytyPliki, dokumentySeryjnePliki: null, schematyIndeks: null,
+    pominKarty: true, wymuszony: true
+  });
+  assert.equal(wynikiPominKarty.length, 1);
+  assert.equal(wynikiPominKarty[0].status, 'skopiowano', 'brak "LP gminy" NIE blokuje trybu pominKarty - dopasowanie jest po adresie');
+
+  const wynikiKarty = await przetworzArkusz({
+    sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false,
+    audytyPliki: null, dokumentySeryjnePliki: null, schematyIndeks: null,
+    pominKarty: false, wymuszony: true
+  });
+  assert.equal(wynikiKarty.length, 1);
+  assert.equal(wynikiKarty[0].status, 'blad');
+  assert.match(wynikiKarty[0].komunikat, /LP gminy/, 'poza trybem pominKarty "LP gminy" pozostaje wymagana - kart nie da sie dobrac bez numeru');
 });
