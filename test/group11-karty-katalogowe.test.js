@@ -1185,3 +1185,48 @@ test('przetworzArkusz: kolumna "LP gminy" jest WYMAGANA normalnie, ale NIE w try
   assert.equal(wynikiKarty[0].status, 'blad');
   assert.match(wynikiKarty[0].komunikat, /LP gminy/, 'poza trybem pominKarty "LP gminy" pozostaje wymagana - kart nie da sie dobrac bez numeru');
 });
+
+test('przetworzArkusz: kolumna/wartosc UID jest WYMAGANA normalnie, ale NIE w trybie pominKarty (real przypadek Wierzchlas - jeden wspolny arkusz z wieloma rodzajami wpisow, UID wypelniony TYLKO dla wierszy solarnych)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-bez-uid-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  await fsp.mkdir(path.join(root, 'Projekty', 'Broników 28'), { recursive: true });
+  const kartyDir = path.join(root, 'karty');
+  await fsp.mkdir(kartyDir, { recursive: true });
+  for (const nazwa of WYMAGANE_KARTY) await fsp.writeFile(path.join(kartyDir, nazwa), 'tresc');
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-bez-uid-'));
+  t.after(() => usunPozniej(dir));
+  const file = path.join(dir, 'dane.xlsx');
+  // Wiersz BEZ zadnej wartosci UID (pusty string) - real przypadek: wpis
+  // niesolarny w tym samym, wspolnym arkuszu co wpisy solarne.
+  const header = ['LP gminy', 'Adres', 'UID', 'Rezygnacja'];
+  const ws = XLSX.utils.aoa_to_sheet([header, [1, 'Broników 28', '', '']]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'PV_');
+  XLSX.writeFile(wb, file);
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+
+  const audytyPliki = await zbierzPlikiPdf(await (async () => {
+    const audytyDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-audyty-bez-uid-'));
+    t.after(() => fsp.rm(audytyDir, { recursive: true, force: true }));
+    await fsp.writeFile(path.join(audytyDir, 'Broników 28_PV.pdf'), 'audyt-tresc');
+    return audytyDir;
+  })());
+
+  const wynikiPominKarty = await przetworzArkusz({
+    sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false,
+    audytyPliki, dokumentySeryjnePliki: null, schematyIndeks: null,
+    pominKarty: true, wymuszony: true
+  });
+  assert.equal(wynikiPominKarty.length, 1);
+  assert.equal(wynikiPominKarty[0].status, 'skopiowano', 'brak UID NIE blokuje trybu pominKarty - dopasowanie jest po adresie, UID dotyczy tylko doboru kart');
+
+  const wynikiKarty = await przetworzArkusz({
+    sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false,
+    audytyPliki: null, dokumentySeryjnePliki: null, schematyIndeks: null,
+    pominKarty: false, wymuszony: true
+  });
+  assert.equal(wynikiKarty.length, 1);
+  assert.equal(wynikiKarty[0].status, 'pominieto-brak-uid', 'poza trybem pominKarty brak UID nadal pomija wiersz jak dotychczas (zero regresji)');
+});

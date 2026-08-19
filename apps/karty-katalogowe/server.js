@@ -708,7 +708,14 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
   // bylby odrzucony mimo ze adres/UID sa obecne i wystarczajace.
   if (!pominKarty && colLpGmina === -1) brakujaceKolumny.push('LP gminy');
   if (colAdres === -1) brakujaceKolumny.push('adres');
-  if (colUid === -1) brakujaceKolumny.push('UID (lub "Rodzaj zestawu")');
+  // UID identyfikuje zestaw SOLARNY (rozmiar zasobnika itp.) - w trybie
+  // pominKarty nie jest w ogole uzywany (dopasowanie jest po adresie), a
+  // real tabele (Wierzchlas) maja jeden wspolny arkusz dla wielu rodzajow
+  // wpisow, gdzie UID jest wypelniony TYLKO dla wierszy solarnych - bez tej
+  // ulgi caly arkusz odpadalby na braku kolumny/wartosci, mimo ze adres w
+  // zupelnosci wystarcza do dopasowania audytow/schematow/dokumentow
+  // seryjnych.
+  if (!pominKarty && colUid === -1) brakujaceKolumny.push('UID (lub "Rodzaj zestawu")');
   if (brakujaceKolumny.length) {
     wyniki.push({ gmina, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono kolumn: ${brakujaceKolumny.join(', ')}. Sprawdz naglowki w pierwszym wierszu arkusza.` });
     return wyniki;
@@ -753,7 +760,11 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
       continue;
     }
 
-    if (!uid) {
+    // UID dotyczy WYLACZNIE doboru zestawu solarnego (kart katalogowych) -
+    // w trybie pominKarty adres sam w sobie wystarcza do dopasowania, wiec
+    // pusty UID (real przypadek: wiersze niesolarne w tym samym, wspolnym
+    // arkuszu) nie moze juz pomijac wiersza.
+    if (!pominKarty && !uid) {
       // NIE pomijamy cicho - moze to byc adres ktory faktycznie nie dotyczy
       // solarow (normalne), ale rownie dobrze ktos mogl zapomniec wpisac UID -
       // uzytkownik ma to zobaczyc w raporcie, nie musiec zgadywac.
