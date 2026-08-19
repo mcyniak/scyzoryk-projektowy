@@ -123,7 +123,6 @@
       <!-- Pola techniczne wymagane przez skrypt formularza. Nie sa widoczne dla uzytkownika. -->
       <div class="hidden" aria-hidden="true">
         <select id="addressColumn"></select>
-        <button id="selectVisibleBtn" type="button">Zaznacz widoczne</button>
         <label><input id="visibleWord" type="checkbox"> Widoczny Word</label>
         <label><input id="debugMode" type="checkbox"> Tryb debug</label>
         <details id="settingsBox"></details>
@@ -137,14 +136,20 @@
       <div class="selection-tools">
         <div class="field">
           <label for="recordSearch">Wybierz adresy do zrobienia</label>
-          <input id="recordSearch" class="search-input" type="search" placeholder="Szukaj po adresie, ID albo beneficjencie...">
-          <div class="small-note">Zostaw zaznaczone tylko te adresy, dla których chcesz teraz utworzyć PDF.</div>
+          <div class="filter-row" style="display:flex; gap:8px; align-items:center;">
+            <select id="filterColumn" title="Filtruj dokladnie po tej kolumnie zamiast szukac wszedzie">
+              <option value="">Szukaj we wszystkich kolumnach</option>
+            </select>
+            <input id="recordSearch" class="search-input" type="search" placeholder="Szukaj po adresie, ID albo beneficjencie...">
+          </div>
+          <div class="small-note" id="recordSearchHint">Zostaw zaznaczone tylko te adresy, dla których chcesz teraz utworzyć PDF. Wybierz kolumnę powyżej, żeby filtrować po dokładnej wartości (kilka wartości oddziel przecinkiem, np. "1,2").</div>
         </div>
         <div>
           <div id="selectionCounter" class="selection-counter">0 zaznaczonych</div>
           <div class="selection-buttons" style="margin-top:8px">
             <button id="selectAllBtn" class="button ghost" type="button">Zaznacz wszystkie</button>
             <button id="selectNoneBtn" class="button ghost" type="button">Odznacz wszystkie</button>
+            <button id="selectVisibleBtn" class="button ghost" type="button">Zaznacz tylko widoczne (po filtrze)</button>
           </div>
         </div>
       </div>

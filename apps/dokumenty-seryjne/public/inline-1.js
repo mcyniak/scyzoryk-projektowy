@@ -20,7 +20,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     function esc(v) { return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 
     function setBusy(isBusy) {
-      ['uploadBtn','generateBtn','selectAllBtn','selectNoneBtn','selectVisibleBtn','selectVisibleNoneBtn','recordSearch','filePrefix'].forEach(id => setDisabled(id, isBusy));
+      ['uploadBtn','generateBtn','selectAllBtn','selectNoneBtn','selectVisibleBtn','selectVisibleNoneBtn','recordSearch','filterColumn','filePrefix'].forEach(id => setDisabled(id, isBusy));
     }
 
     function setJobPill(text) { $('jobPill').textContent = text; show($('jobPill')); }
@@ -201,10 +201,20 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       updateSheetHint(wb.sheetName);
       $('recordSearch').value = '';
       const usefulColumns = ['_record', ...pickColumns(wb.columns || [], suggestedAddressColumn)];
+      // Filtruj kolumne - dokladne dopasowanie wartosci JEDNEJ kolumny (patrz
+      // filterRecords nizej), zamiast tylko przeszukiwania podciagu we
+      // wszystkich widocznych kolumnach naraz (np. szukanie "1" latwo trafia
+      // przypadkiem w numer telefonu/adresu w INNEJ kolumnie). Realny
+      // przypadek: kolumna statusu typu "Odbior Gmina (wypelnia biuro)" z
+      // wartosciami 1/2/3 - substring "1" zlapalby tez np. "ul. Szkolna 17".
+      $('filterColumn').innerHTML = '<option value="">Szukaj we wszystkich kolumnach</option>' +
+        usefulColumns.filter(c => c !== '_record').map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+      $('filterColumn').value = '';
       const head = `<thead><tr><th class="select-col"><input id="checkAllRows" type="checkbox" checked title="Zaznacz / odznacz wszystkie"></th>${usefulColumns.map(c => `<th>${c === '_record' ? 'Nr' : esc(c)}</th>`).join('')}</tr></thead>`;
       const bodyRows = (wb.rows || []).map(row => {
         const searchText = usefulColumns.map(c => row[c]).join(' ');
-        return `<tr data-search="${esc(searchText).toLowerCase()}"><td class="select-col"><input class="row-check" type="checkbox" data-record="${row._record}" checked></td>${usefulColumns.map(c => `<td>${esc(row[c])}</td>`).join('')}</tr>`;
+        const colsJson = esc(JSON.stringify(Object.fromEntries(usefulColumns.map(c => [c, row[c] == null ? '' : String(row[c])]))));
+        return `<tr data-search="${esc(searchText).toLowerCase()}" data-cols="${colsJson}"><td class="select-col"><input class="row-check" type="checkbox" data-record="${row._record}" checked></td>${usefulColumns.map(c => `<td>${esc(row[c])}</td>`).join('')}</tr>`;
       }).join('');
       $('recordsTable').innerHTML = head + `<tbody>${bodyRows}</tbody>`;
       $('checkAllRows').onchange = e => { document.querySelectorAll('.row-check').forEach(ch => ch.checked = e.target.checked); updateSelectedMetric(); };
@@ -274,11 +284,27 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     }
 
     function filterRecords() {
-      const q = $('recordSearch').value.trim().toLowerCase();
-      document.querySelectorAll('#recordsTable tbody tr').forEach(tr => {
-        const hay = tr.dataset.search || tr.textContent.toLowerCase();
-        tr.classList.toggle('is-hidden', q && !hay.includes(q));
-      });
+      const q = $('recordSearch').value.trim();
+      const column = $('filterColumn') ? $('filterColumn').value : '';
+      if (column) {
+        // Dokladne dopasowanie WARTOSCI tej jednej kolumny (nie podciag w
+        // dowolnym miejscu) - kilka wartosci oddzielonych przecinkiem dziala
+        // jako "LUB" (np. "1,2" pokazuje wiersze z wartoscia dokladnie "1"
+        // ALBO dokladnie "2" w wybranej kolumnie).
+        const wanted = q.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+        document.querySelectorAll('#recordsTable tbody tr').forEach(tr => {
+          let cols = {};
+          try { cols = JSON.parse(tr.dataset.cols || '{}'); } catch (_) {}
+          const value = String(cols[column] ?? '').trim().toLowerCase();
+          tr.classList.toggle('is-hidden', wanted.length > 0 && !wanted.includes(value));
+        });
+      } else {
+        const hay = q.toLowerCase();
+        document.querySelectorAll('#recordsTable tbody tr').forEach(tr => {
+          const rowHay = tr.dataset.search || tr.textContent.toLowerCase();
+          tr.classList.toggle('is-hidden', hay && !rowHay.includes(hay));
+        });
+      }
       updateSelectedMetric();
     }
 
@@ -362,4 +388,11 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     $('selectVisibleNoneBtn')?.addEventListener('click', () => setVisibleRowsChecked(false));
     $('zipLink')?.addEventListener('click', e => { if ($('zipLink').dataset.disabled === '1') e.preventDefault(); });
     $('recordSearch')?.addEventListener('input', filterRecords);
+    $('filterColumn')?.addEventListener('change', () => {
+      const column = $('filterColumn').value;
+      $('recordSearch').placeholder = column
+        ? `Dokładna wartość w "${column}" (kilka po przecinku, np. 1,2)...`
+        : 'Szukaj po adresie, ID albo beneficjencie...';
+      filterRecords();
+    });
     $('filePrefix')?.addEventListener('input', updateFileNamePreview);
