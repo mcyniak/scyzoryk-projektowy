@@ -393,12 +393,18 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   const colLpGmina = findColumn(header, ['lp', 'gmin']);
   const colRezygnacja = findColumn(header, ['rezygnacj']);
   const colAdres = findColumn(header, ['adres'], ['kod', 'email', 'e mail']);
-  const colUid = findColumn(header, ['uid']);
+  // Kolumna identyfikujaca zestaw bywa nazwana "UID" w starszych arkuszach,
+  // ale w realnych danych (Kamiensk) to "Rodzaj zestawu" - obie nazwy
+  // wskazuja na ta sama role (id/opis zestawu solarnego przypisanego do
+  // adresu), wiec akceptujemy dowolna z nich.
+  const colUid = findColumn(header, ['uid']) !== -1
+    ? findColumn(header, ['uid'])
+    : findColumn(header, ['rodzaj', 'zestaw']);
 
   const brakujaceKolumny = [];
   if (colLpGmina === -1) brakujaceKolumny.push('LP gminy');
   if (colAdres === -1) brakujaceKolumny.push('adres');
-  if (colUid === -1) brakujaceKolumny.push('UID');
+  if (colUid === -1) brakujaceKolumny.push('UID (lub "Rodzaj zestawu")');
   if (brakujaceKolumny.length) {
     wyniki.push({ gmina, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono kolumn: ${brakujaceKolumny.join(', ')}. Sprawdz naglowki w pierwszym wierszu arkusza.` });
     return wyniki;
@@ -713,6 +719,12 @@ app.post('/api/run', upload.single('excel'), async (req, res) => {
     if (!rootPath) throw new Error('Podaj sciezke do glownego folderu (np. ...\\Kolektory).');
     if (!fs.existsSync(rootPath)) throw new Error(`Podana sciezka nie istnieje: ${rootPath}`);
     const dryRun = String(req.body.dryRun || '').toLowerCase() === 'true';
+    // Solary i pompy powietrzne maja rozna interpretacje "rootPath" (patrz
+    // przetworzArkusz vs przetworzArkuszPomp) - jednoczesne odpalanie obu
+    // dla tej samej sciezki bylo realnym bledem znalezionym na Kamiensku
+    // (sciezka wpisana dla solarow nigdy nie mogla pasowac do ukladu pomp).
+    // Frontend zawsze wysyla 'typ' po jawnym wyborze rodzaju w UI.
+    const typ = normalizujTekst(req.body.typ) === 'pompy' ? 'pompy' : 'solary';
 
     // Uwaga: w tej wersji read-excel-file { getSheets: true } zwraca od razu
     // wszystkie arkusze z danymi (pole 'sheet' = nazwa, 'data' = wiersze),
@@ -724,12 +736,15 @@ app.post('/api/run', upload.single('excel'), async (req, res) => {
       const sheetName = arkusz.sheet;
       const rows = arkusz.data;
       // Kazda funkcja sama rozpoznaje, czy dany arkusz jej dotyczy (i cicho
-      // nic nie zwraca, jesli nie) - np. arkusz "Kotly"/"obreby" nie pasuje
-      // do zadnej z nich.
-      const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun });
-      wynikiWszystkie.push(...wynikiSolary);
-      const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
-      wynikiWszystkie.push(...wynikiPompy);
+      // nic nie zwraca, jesli nie) - np. arkusz "Kotly"/"obreby" nie pasuje.
+      // Uruchamiamy WYLACZNIE funkcje pasujaca do wybranego rodzaju.
+      if (typ === 'pompy') {
+        const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
+        wynikiWszystkie.push(...wynikiPompy);
+      } else {
+        const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun });
+        wynikiWszystkie.push(...wynikiSolary);
+      }
     }
 
     const podsumowanie = wynikiWszystkie.reduce((acc, w) => {
@@ -738,7 +753,7 @@ app.post('/api/run', upload.single('excel'), async (req, res) => {
     }, {});
 
     const logPath = path.join(LOGS_DIR, `dobor-kart-${jobId}.json`);
-    writeJsonFileNoBom(logPath, { jobId, createdAt: new Date().toISOString(), rootPath, dryRun, podsumowanie, wyniki: wynikiWszystkie });
+    writeJsonFileNoBom(logPath, { jobId, createdAt: new Date().toISOString(), rootPath, typ, dryRun, podsumowanie, wyniki: wynikiWszystkie });
 
     res.json({ ok: true, jobId, dryRun, podsumowanie, wyniki: wynikiWszystkie });
   } catch (error) {

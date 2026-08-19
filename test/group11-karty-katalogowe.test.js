@@ -271,6 +271,42 @@ test('przetworzArkusz: folder zrodlowy nazwany "wzór" dziala tak samo jak "kart
 });
 
 // =====================================================================
+// Audyt 2026-08-19 (real bug, Kamiensk): realny arkusz "Solary" ma kolumne
+// identyfikujaca zestaw nazwana "Rodzaj zestawu", nie "UID" - findColumn(['uid'])
+// nigdy tego nie znajdowal, wiec caly arkusz konczyl sie "nie znaleziono kolumn: UID."
+// =====================================================================
+
+test('przetworzArkusz: kolumna "Rodzaj zestawu" (zamiast "UID") jest rozpoznawana jako identyfikator zestawu', async (t) => {
+  const { root, projektyDir } = await przygotujRoot({
+    foldery: ['41 - Zarnow, ul. Spacerowa'],
+    kartyPliki: WYMAGANE_KARTY
+  });
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-rodzaj-'));
+  const file = path.join(dir, 'dane.xlsx');
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['LP gminy', 'Adres', 'Rodzaj zestawu', 'Rezygnacja'],
+    [41, 'ul. Spacerowa 5, Zarnow', '2/250', '']
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Solary Zarnow');
+  XLSX.writeFile(wb, file);
+  t.after(() => usunPozniej(dir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano');
+  assert.equal(wyniki[0].uid, '2/250');
+
+  const folderKlienta = path.join(projektyDir, '41 - Zarnow, ul. Spacerowa');
+  const skopiowane = (await fsp.readdir(folderKlienta)).sort();
+  assert.deepEqual(skopiowane, [...WYMAGANE_KARTY].sort());
+});
+
+// =====================================================================
 // Karty katalogowe dla pomp powietrznych Varmero (nowa funkcja, 2026-08-18) -
 // arkusz "Pompy ciepła", kolumna "Model pompy" (VPM<cyfry> - inne wartosci
 // jak "Basic 270l"/CWU albo puste komorki sa pomijane cicho), zrodlo

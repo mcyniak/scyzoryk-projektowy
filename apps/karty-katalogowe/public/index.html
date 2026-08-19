@@ -40,13 +40,13 @@
       <div class="panel hero-main">
         <div class="kicker">Dobór kart katalogowych</div>
         <h1>Karty katalogowe</h1>
-        <p class="lead">Wskaż Excel z arkuszami „Solary {gmina}” i folder z projektami — program sam dobierze i skopiuje karty katalogowe (grupa pompowa, kolektor, zasobnik) do folderów klientów na podstawie kolumny UID.</p>
+        <p class="lead">Wybierz rodzaj (solary albo pompy powietrzne Varmero), wskaż Excel i folder z projektami — program sam dobierze i skopiuje karty katalogowe do folderów klientów.</p>
       </div>
       <aside class="panel info-card">
         <h2>Jak działa?</h2>
         <div class="pill-list">
-          <div class="pill">Wybierz plik Excel.</div>
-          <div class="pill">Podaj ścieżkę do folderu Kolektory.</div>
+          <div class="pill">Wybierz rodzaj: solary albo pompy powietrzne Varmero.</div>
+          <div class="pill">Wybierz plik Excel i podaj ścieżkę do głównego folderu.</div>
           <div class="pill">Uruchom najpierw podgląd, potem kopiowanie.</div>
         </div>
       </aside>
@@ -56,17 +56,25 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title">Ustawienia</h2>
-          <p class="panel-desc">Program sam znajdzie w środku folder „karty” (źródłowe PDF-y) oraz „Projekty\{gmina}\{id} - adres”.</p>
+          <p class="panel-desc" id="kkModeDesc">Solary: program sam znajdzie w środku folder „karty” albo „wzór” (źródłowe PDF-y) oraz „Projekty\{gmina}\{id} - adres” (bez gminy, jeśli arkusz nazywa się po prostu „Solary”). Arkusz w Excelu: „Solary” (z albo bez nazwy gminy).</p>
         </div>
       </div>
 
       <div class="kk-field">
-        <label for="excelFile">Plik Excel (.xlsx) z arkuszami „Solary {gmina}”</label>
+        <label>Rodzaj kart</label>
+        <div class="kk-mode-row">
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="solary" id="kkModeSolary" checked> Solary</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="pompy" id="kkModePompy"> Pompy powietrzne Varmero</label>
+        </div>
+      </div>
+
+      <div class="kk-field">
+        <label for="excelFile" id="kkExcelLabel">Plik Excel (.xlsx) z arkuszem „Solary”</label>
         <input type="file" id="excelFile" accept=".xlsx">
       </div>
 
       <div class="kk-field">
-        <label for="rootPath">Ścieżka do głównego folderu (zawiera podfoldery „karty” i „Projekty”)</label>
+        <label for="rootPath" id="kkRootPathLabel">Ścieżka do głównego folderu (zawiera „karty”/„wzór” i „Projekty”)</label>
         <div class="path-row">
           <input type="text" id="rootPath" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\6. Paradyż Żarnów\Kolektory">
           <button type="button" class="btn btn-secondary" id="browseFolderBtn">Przeglądaj...</button>
@@ -83,7 +91,7 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title">Wyniki</h2>
-          <p class="panel-desc">Lista przetworzonych wierszy z arkuszy Solary.</p>
+          <p class="panel-desc">Lista przetworzonych wierszy z wybranego rodzaju kart.</p>
         </div>
       </div>
       <div class="kk-summary" id="kkSummary"></div>

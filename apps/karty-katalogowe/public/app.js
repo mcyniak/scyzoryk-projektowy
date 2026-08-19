@@ -17,6 +17,44 @@ const resultsPanel = document.getElementById('kkResultsPanel');
 const tableBody = document.getElementById('kkTableBody');
 const summaryEl = document.getElementById('kkSummary');
 
+// Solary i pompy powietrzne Varmero maja INNA sciezke glownego folderu
+// wzgledem tego samego "rootPath" (solary: folder z "karty"/"wzor" wprost w
+// srodku, np. "...\Kolektory"; pompy: folder INWESTYCJI zawierajacy
+// podfolder "PC powietrzne") - realny blad zlapany przez uzytkownika: bez
+// jawnego wyboru rodzaju program probowal jednoczesnie doklejac "PC
+// powietrzne" DO sciezki juz wskazujacej na "Kolektory", co nigdy nie moglo
+// dzialac. Jawny wybor usuwa te niejednoznacznosc calkowicie - backend
+// przetwarza WYLACZNIE arkusze pasujace do wybranego rodzaju.
+const MODE_COPY = {
+  solary: {
+    desc: 'Solary: program sam znajdzie w środku folder „karty” albo „wzór” (źródłowe PDF-y) oraz „Projekty\\{gmina}\\{id} - adres” (bez gminy, jeśli arkusz nazywa się po prostu „Solary”). Arkusz w Excelu: „Solary” (z albo bez nazwy gminy).',
+    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Solary”',
+    rootPathLabel: 'Ścieżka do głównego folderu (zawiera „karty”/„wzór” i „Projekty”)',
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+  },
+  pompy: {
+    desc: 'Pompy powietrzne Varmero: program sam znajdzie „PC powietrzne\\wzór\\{model}\\Karty katalogowe.pdf” oraz „PC powietrzne\\Projekty\\{id} - adres”. Arkusz w Excelu: „Pompy ciepła”, kolumna „Model pompy”.',
+    excelLabel: 'Plik Excel (.xlsx) z arkuszem „Pompy ciepła”',
+    rootPathLabel: 'Ścieżka do głównego folderu INWESTYCJI (zawiera podfolder „PC powietrzne”)',
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\20. Zagórów'
+  }
+};
+
+function aktualnyRodzajKart() {
+  return document.querySelector('input[name="kkMode"]:checked').value;
+}
+
+function odswiezOpisyRodzaju() {
+  const copy = MODE_COPY[aktualnyRodzajKart()];
+  document.getElementById('kkModeDesc').textContent = copy.desc;
+  document.getElementById('kkExcelLabel').textContent = copy.excelLabel;
+  document.getElementById('kkRootPathLabel').textContent = copy.rootPathLabel;
+  document.getElementById('rootPath').placeholder = copy.placeholder;
+}
+
+document.querySelectorAll('input[name="kkMode"]').forEach(el => el.addEventListener('change', odswiezOpisyRodzaju));
+odswiezOpisyRodzaju();
+
 // Dwa kroki zamiast checkboxa "tylko podglad": "Sprawdz tabele" zawsze
 // najpierw analizuje bez kopiowania (dryRun=true); dopiero po tym pojawia
 // sie "Uruchom dobor kart", ktory robi prawdziwe kopiowanie (dryRun=false)
@@ -34,6 +72,7 @@ async function runJob(dryRun) {
   const formData = new FormData();
   formData.append('excel', fileInput.files[0]);
   formData.append('rootPath', rootPath);
+  formData.append('typ', aktualnyRodzajKart());
   formData.append('dryRun', String(dryRun));
 
   checkBtn.disabled = true;
