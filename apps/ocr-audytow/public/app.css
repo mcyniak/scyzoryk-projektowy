@@ -104,11 +104,11 @@
 .field-table td { padding: 7px 4px; vertical-align: middle; }
 .field-col-label { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); width: 42%; }
 .field-col-value { width: 58%; }
-.field-table input { width: 100%; border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 7px 10px; font: inherit; font-size: 13px; background: transparent; }
-.field-table input:focus-visible { outline: none; border-color: var(--info-500); box-shadow: var(--shadow-focus); }
+.field-table input, .field-table select { width: 100%; border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 7px 10px; font: inherit; font-size: 13px; background: transparent; color: inherit; }
+.field-table input:focus-visible, .field-table select:focus-visible { outline: none; border-color: var(--info-500); box-shadow: var(--shadow-focus); }
 .field-table tr.needs-review { background: var(--warning-50); }
 .field-table tr.needs-review .field-col-label { color: var(--warning-600); font-weight: 700; }
-.field-table tr.needs-review input { border-color: var(--warning-500); }
+.field-table tr.needs-review input, .field-table tr.needs-review select { border-color: var(--warning-500); }
 
 @media (max-width: 640px) {
   .field-table td { display: block; width: 100%; padding: 4px 0; }

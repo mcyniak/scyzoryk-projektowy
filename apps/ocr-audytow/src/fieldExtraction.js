@@ -155,6 +155,9 @@ const FIELD_DEFS = [
         label: 'Kocioł na gaz/olej – dwufunkcyjny'
       },
       {
+        label: 'Kocioł z wbudowanym zasobnikiem cwu'
+      },
+      {
         label: 'Podgrzewacz elektryczny/gazowy'
       },
       {
@@ -603,6 +606,15 @@ const COLUMN_ORDER = ['adres', ...FIELD_DEFS.map((f) => f.key)];
 const COLUMN_LABELS = { adres: 'Adres' };
 for (const f of FIELD_DEFS) COLUMN_LABELS[f.key] = f.columnLabel;
 
+// Etykiety opcji per pole (checkbox/titleDerived/material) - ekran przegladu
+// (public/app.js) renderuje te pola jako <select>, nie wolne pole tekstowe,
+// zeby uzytkownik nie mogl wpisac wartosci spoza dozwolonej listy (i tak
+// zostalaby oflagowana needsReview przez toFieldResult ponizej).
+const COLUMN_OPTIONS = {};
+for (const f of FIELD_DEFS) {
+  if (f.options && f.options.length) COLUMN_OPTIONS[f.key] = f.options.map((o) => o.label);
+}
+
 // --- Walidacja/needsReview: zastepuje dawny confidence z dopasowania
 // geometrycznego. Gemini nie daje wiarygodnego per-pola confidence (liczba
 // wygenerowana przez model nie jest skalibrowanym prawdopodobienstwem -
@@ -665,4 +677,4 @@ function resolvedFieldResult(value) {
   return { value: value || '', confidence: null, pageIndex: null, needsReview: false, resolved: true };
 }
 
-module.exports = { FIELD_DEFS, COLUMN_ORDER, COLUMN_LABELS, buildFieldsFromExtraction, filterExtractableFields, toFieldResult, resolvedFieldResult };
+module.exports = { FIELD_DEFS, COLUMN_ORDER, COLUMN_LABELS, COLUMN_OPTIONS, buildFieldsFromExtraction, filterExtractableFields, toFieldResult, resolvedFieldResult };

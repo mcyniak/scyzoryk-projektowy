@@ -561,8 +561,12 @@
 
   // --- Krok 3b: tabela pól, edycja niepewnych ----------------------------
 
+  // Pola ukryte (patrz CONDITIONAL_FIELDS - np. "opis Inny", gdy Zrodlo
+  // ciepla nie jest ustawione na "Inny") sie nie licza - inaczej odznaka
+  // "X do sprawdzenia" wskazywalaby na pole, ktorego nie da sie nawet
+  // zobaczyc na ekranie.
   function countNeedsReview(block) {
-    return Object.values(block.fields).filter(f => f.needsReview).length;
+    return Object.entries(block.fields).filter(([key, f]) => f.needsReview && !fieldRowHidden(block, key)).length;
   }
 
   function startFieldReview() {
@@ -708,6 +712,37 @@
     }
   });
 
+  // Pola z zamknietym slownikiem (field.options, patrz
+  // src/fieldExtraction.js#COLUMN_OPTIONS) sa renderowane jako <select>, nie
+  // wolne pole tekstowe - wartosc spoza listy i tak zostalaby oflagowana
+  // needsReview (patrz toFieldResult), wiec dropdown od razu wymusza
+  // poprawna wartosc zamiast literowek. "Źródło ciepła - opis Inny" jest
+  // widoczne TYLKO gdy "Źródło ciepła" ma zaznaczone "Inny".
+  const CONDITIONAL_FIELDS = { zrodloCieplaInnyOpis: { whenKey: 'zrodloCiepla', equalsValue: 'Inny' } };
+
+  function fieldRowHidden(block, key) {
+    const rule = CONDITIONAL_FIELDS[key];
+    if (!rule) return false;
+    return block.fields[rule.whenKey]?.value !== rule.equalsValue;
+  }
+
+  function renderFieldValueControl(fileId, block, key, field) {
+    const common = `data-file="${fileId}" data-block="${block.blockIndex}" data-key="${key}"`;
+    if (field.options && field.options.length) {
+      const known = field.options.includes(field.value);
+      const optionsHtml = [
+        '<option value=""></option>',
+        ...field.options.map((label) => `<option value="${escapeHtml(label)}" ${field.value === label ? 'selected' : ''}>${escapeHtml(label)}</option>`),
+        // Wartosc spoza listy (np. halucynacja modelu) NIE znika z ekranu -
+        // zostaje jako dodatkowa opcja, zeby bylo widac co faktycznie
+        // rozpoznano zamiast cichego resetu do pustego pola.
+        field.value && !known ? `<option value="${escapeHtml(field.value)}" selected>${escapeHtml(field.value)} (nierozpoznane)</option>` : ''
+      ].join('');
+      return `<select ${common}>${optionsHtml}</select>`;
+    }
+    return `<input type="text" ${common} value="${escapeHtml(field.value || '')}" autocomplete="off">`;
+  }
+
   function renderFieldsBlocks() {
     const parts = [];
     for (const file of fieldsFiles) {
@@ -715,11 +750,9 @@
         const remaining = countNeedsReview(block);
         const nameLine = block.label ? `${file.originalName} — ${block.label}` : file.originalName;
         const rows = Object.entries(block.fields).map(([key, field]) => `
-          <tr class="${field.needsReview ? 'needs-review' : ''}">
+          <tr class="${field.needsReview ? 'needs-review' : ''}" data-row-key="${key}" ${fieldRowHidden(block, key) ? 'hidden' : ''}>
             <td class="field-col-label">${escapeHtml(field.columnLabel)}</td>
-            <td class="field-col-value">
-              <input type="text" data-file="${file.fileId}" data-block="${block.blockIndex}" data-key="${key}" value="${escapeHtml(field.value || '')}" autocomplete="off">
-            </td>
+            <td class="field-col-value">${renderFieldValueControl(file.fileId, block, key, field)}</td>
           </tr>
         `).join('');
         const blockWarnings = (file.warnings || []).filter(w => w.includes(block.label || `adres ${block.blockIndex + 1}`));
@@ -779,14 +812,14 @@
       // renderze zamiast nadpisac wartoscia sprzed edycji - bez tego caly
       // fokus (i to, co ktos wlasnie pisal) znikal po kazdym zapisie.
       const active = document.activeElement;
-      const liveEdit = (active && active.matches?.('input[data-key]') && fieldsBlocksEl.contains(active))
+      const liveEdit = (active && active.matches?.('input[data-key], select[data-key]') && fieldsBlocksEl.contains(active))
         ? { file: active.dataset.file, block: active.dataset.block, key: active.dataset.key, value: active.value, selStart: active.selectionStart, selEnd: active.selectionEnd }
         : null;
 
       renderFieldsBlocks();
 
       if (liveEdit) {
-        const el = fieldsBlocksEl.querySelector(`input[data-file="${liveEdit.file}"][data-block="${liveEdit.block}"][data-key="${liveEdit.key}"]`);
+        const el = fieldsBlocksEl.querySelector(`[data-file="${liveEdit.file}"][data-block="${liveEdit.block}"][data-key="${liveEdit.key}"]`);
         if (el) {
           el.value = liveEdit.value;
           el.focus();
@@ -806,21 +839,38 @@
     if (input) saveFieldValue(input);
   }, true);
 
+  // <select> pola (Zrodlo ciepla i inne z zamknietym slownikiem) zapisuja
+  // sie od razu przy wyborze (change), nie przy blur - i aktualizuja
+  // widocznosc pol zaleznych (patrz CONDITIONAL_FIELDS) NATYCHMIAST, bez
+  // czekania na zapis w tle, zeby ukryte pole nie "mrugalo".
+  fieldsBlocksEl.addEventListener('change', (e) => {
+    const select = e.target.closest('select[data-key]');
+    if (!select) return;
+    const table = select.closest('table');
+    for (const [depKey, rule] of Object.entries(CONDITIONAL_FIELDS)) {
+      if (rule.whenKey !== select.dataset.key) continue;
+      const row = table?.querySelector(`tr[data-row-key="${depKey}"]`);
+      if (row) row.hidden = select.value !== rule.equalsValue;
+    }
+    saveFieldValue(select);
+  });
+
   // Enter = przejdz do nastepnego pola (jak Tab), nie tylko "zapisz i zgub
-  // fokus". Kolejnosc pol = kolejnosc <input> w DOM (czyli kolejnosc
-  // renderowania blokow/wierszy). next.focus() nizej sam wywoluje blur na
-  // biezacym polu (zapis w tle), a przywrocenie fokusu po ewentualnym
-  // renderze obsluguje saveFieldValue powyzej.
+  // fokus". Kolejnosc pol = kolejnosc <input>/<select> w DOM (czyli kolejnosc
+  // renderowania blokow/wierszy), pomijajac ukryte wiersze (CONDITIONAL_FIELDS).
+  // next.focus() nizej sam wywoluje blur na biezacym polu (zapis w tle), a
+  // przywrocenie fokusu po ewentualnym renderze obsluguje saveFieldValue powyzej.
   fieldsBlocksEl.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
-    const input = e.target.closest('input[data-key]');
+    const input = e.target.closest('input[data-key], select[data-key]');
     if (!input) return;
     e.preventDefault();
-    const allInputs = Array.from(fieldsBlocksEl.querySelectorAll('input[data-key]'));
+    const allInputs = Array.from(fieldsBlocksEl.querySelectorAll('input[data-key], select[data-key]'))
+      .filter((el) => !el.closest('tr[hidden]'));
     const next = allInputs[allInputs.indexOf(input) + 1];
     if (next) {
       next.focus();
-      next.select();
+      if (typeof next.select === 'function') next.select();
     } else {
       input.blur();
     }

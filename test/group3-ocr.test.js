@@ -711,6 +711,65 @@ test('POST /api/ocr/setup-api-key: poprawny klucz odblokowuje OCR, /api/health o
   assert.equal(afterManual.ocrConfigured, true, '"manual" jest zawsze skonfigurowany');
 });
 
+// Ekran "Uzupelnij dane" renderuje pola z zamknietym slownikiem (np. Zrodlo
+// ciepla) jako <select>, nie wolny tekst - frontend potrzebuje wiec listy
+// opcji w kazdym polu odpowiedzi /api/ocr/extract-fields (patrz
+// src/fieldExtraction.js#COLUMN_OPTIONS i public/app.js#renderFieldValueControl).
+// Provider "manual" (bez AI, bez klucza) trzyma test szybkim i hermetycznym.
+test('POST /api/ocr/extract-fields: kazde pole z zamknietym slownikiem (np. Zrodlo ciepla) dostaje liste "options" do renderowania <select>', async (t) => {
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ocr-http-'));
+  process.env.LOCALAPPDATA = localAppData;
+  clearAiModuleCache();
+  t.after(() => {
+    process.env.LOCALAPPDATA = previousLocalAppData;
+    clearAiModuleCache();
+    return fsp.rm(localAppData, { recursive: true, force: true });
+  });
+
+  const dir = await makeTempDir();
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const sourcePdfPath = path.join(dir, 'audyt.pdf');
+  await createPdf(sourcePdfPath, 1);
+
+  const { app: ocrApp } = require('../apps/ocr-audytow/server');
+  const server = ocrApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  await fetch(`${base}/api/ocr/setup-api-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ provider: 'manual' })
+  });
+
+  const form = new FormData();
+  form.append('files', new Blob([await fsp.readFile(sourcePdfPath)], { type: 'application/pdf' }), 'audyt.pdf');
+  const analyzeData = await (await fetch(`${base}/api/ocr/analyze`, {
+    method: 'POST',
+    headers: { 'X-Scyzoryk-Request': '1' },
+    body: form
+  })).json();
+  const { analysisId, results } = analyzeData;
+  const fileId = results[0].fileId;
+
+  const extractRes = await fetch(`${base}/api/ocr/extract-fields`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ analysisId, files: [{ fileId }] })
+  });
+  const extractData = await extractRes.json();
+  assert.equal(extractRes.status, 200, JSON.stringify(extractData));
+  const fields = extractData.results[0].blocks[0].fields;
+  assert.ok(fields.zrodloCiepla.options.includes('Kocioł z wbudowanym zasobnikiem cwu'));
+  assert.ok(fields.zrodloCiepla.options.includes('Inny'));
+  assert.equal(fields.zrodloCieplaInnyOpis.options, null, 'pole wolnego tekstu nie ma listy opcji');
+});
+
 test('POST /api/ocr/setup-api-key: bez naglowka X-Scyzoryk-Request dostaje 403 (ta sama ochrona co reszta mutujacych tras)', async (t) => {
   const { app: ocrApp } = require('../apps/ocr-audytow/server');
   const server = ocrApp.listen(0, '127.0.0.1');

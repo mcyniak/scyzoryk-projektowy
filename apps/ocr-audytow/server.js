@@ -11,7 +11,7 @@ const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require(
 const { getAppDataDir } = require('../../lib/appPaths');
 const { analyzeDocument, inspectDocument, finalizeSplit } = require('./src/ocrPipeline');
 const { isConfigured: isAiConfigured, saveUserApiKey, extractFieldsForBlock, getActiveProvider, PROVIDER_LABELS } = require('./src/aiProvider');
-const { COLUMN_ORDER, COLUMN_LABELS, buildFieldsFromExtraction, filterExtractableFields } = require('./src/fieldExtraction');
+const { COLUMN_ORDER, COLUMN_LABELS, COLUMN_OPTIONS, buildFieldsFromExtraction, filterExtractableFields } = require('./src/fieldExtraction');
 const { writeFreshRows, writeFamilyTemplateRows, readExistingTable, fillExistingTableRows, validatePath: validateExcelPath } = require('./src/excelExport');
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
 const { validateOcrBatchInspections } = require('./src/ocrLimits');
@@ -506,7 +506,8 @@ app.post('/api/ocr/extract-fields', heavyJobLimiter, async (req, res) => {
               needsReview: f.needsReview,
               resolved: f.resolved,
               pageIndex: f.pageIndex,
-              columnLabel: COLUMN_LABELS[key] || key
+              columnLabel: COLUMN_LABELS[key] || key,
+              options: COLUMN_OPTIONS[key] || null
             }]))
           }))
         });
