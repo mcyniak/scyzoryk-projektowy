@@ -30,6 +30,7 @@ const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
 const { getAppDataDir } = require('../../lib/appPaths');
 const { detectMailMergeSheetBinding, getDocxModifiedTime } = require('./src/mailMergeSheetBinding');
+const AdmZip = require('adm-zip');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -344,12 +345,62 @@ function detectPowerFromText(text) {
   return m ? `${Number(m[1])}kW` : '';
 }
 
-function pickDefaultSheet(sheetNames, templateName = '') {
+function decodeXmlEntities(text) {
+  return String(text || '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+}
+
+// Realny przypadek (Wierzchlas PV, 2026-08-19): eksport z Google Sheets
+// zostawia w pliku techniczne, UKRYTE arkusze o losowych, wygenerowanych
+// nazwach (np. "xkozOZODPeJDCoWaw7hO", "Hjbrrmhj59UDQUVPRwRx") - a kolejnosc,
+// w jakiej read-excel-file zwraca arkusze, NIE ma NIC wspolnego z kolejnoscia
+// widocznych zakladek w samym Excelu (na tym pliku zwrocilo je w kolejnosci
+// wrecz ODWROTNEJ do deklaracji w xl/workbook.xml - PV_, pierwsza prawdziwa
+// zakladka, wypadla dopiero na 3. miejscu, ZA obydwoma technicznymi
+// arkuszami). Jedyne wiarygodne zrodlo "ktora zakladka jest pierwsza i
+// widoczna dla czlowieka" to kolejnosc <sheet> w samym xl/workbook.xml (ten
+// sam wzorzec AdmZip co detectMailMergeSheetBinding w
+// src/mailMergeSheetBinding.js, tylko dla .xlsx zamiast .docx) - CZYTAMY
+// STAMTAD wprost, zamiast filtrowac zawodna kolejnosc z read-excel-file.
+function getSheetOrderFromWorkbookXml(filePath) {
+  try {
+    const zip = new AdmZip(filePath);
+    const entry = zip.getEntry('xl/workbook.xml');
+    if (!entry) return null;
+    const xml = zip.readAsText(entry, 'utf8');
+    const sheetTagRe = /<sheet\b[^>]*\/>/g;
+    const wynik = [];
+    let m;
+    while ((m = sheetTagRe.exec(xml))) {
+      const tag = m[0];
+      const nameMatch = tag.match(/name="([^"]*)"/);
+      if (!nameMatch) continue;
+      wynik.push({ name: decodeXmlEntities(nameMatch[1]), hidden: /state="hidden"/.test(tag) });
+    }
+    return wynik.length ? wynik : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function pickDefaultSheet(sheetNames, templateName = '', sheetOrderFromXml = null) {
   const wanted = detectPowerFromText(templateName);
   if (wanted) {
     const found = sheetNames.find(name => String(name).toLowerCase() === wanted.toLowerCase());
     if (found) return found;
   }
+  if (sheetOrderFromXml) {
+    const znanaNazwa = new Set(sheetNames);
+    const pierwszyWidoczny = sheetOrderFromXml.find(s => !s.hidden && znanaNazwa.has(s.name));
+    if (pierwszyWidoczny) return pierwszyWidoczny.name;
+    // Wszystkie ukryte (albo xml nie zawieral zadnej znanej nazwy) - lepiej
+    // wziac cokolwiek z prawdziwej listy zakladek niz nic.
+    const pierwszyZnany = sheetOrderFromXml.find(s => znanaNazwa.has(s.name));
+    if (pierwszyZnany) return pierwszyZnany.name;
+  }
+  // xl/workbook.xml nie dalo sie odczytac - jedyny dostepny fallback to
+  // dotychczasowe (zawodne, ale lepsze niz nic) zachowanie sprzed tej poprawki.
   return sheetNames[0];
 }
 
@@ -491,7 +542,18 @@ function deriveMailMergeKind(originalName, sheetName) {
 // - grupujemy po "typie" (deriveMailMergeKind), warianty to MOC/arkusz
 // (sheetName z samego powiazania, nie zgadywany). Ci co nie maja takiego
 // powiazania - to zwykle kopie robocze, pomijamy je calkowicie.
-function groupMailMergeTemplates(templateInfos) {
+// defaultSheet: gdy szablon NIE ma prawdziwego powiazania Worda (nie przeszedl
+// przez "Wybierz odbiorcow"), dawniej byl calkowicie POMIJANY (skipped) - co
+// dla POJEDYNCZEGO szablonu (real przypadek: Wierzchlas PV, szablon zrobiony
+// recznie/przez ChatGPT bez uzycia Mailings w Wordzie) dawalo mylacy blad
+// "zaden plik nie jest prawdziwym dokumentem korespondencji seryjnej", mimo
+// ze arkusz do uzycia jest jednoznaczny (ten sam, ktory i tak zostal juz
+// wybrany/domyslny dla calego uploadu - patrz defaultSheet w /api/upload).
+// Powiazanie Worda ma sens jako WYMOG tylko wtedy, gdy trzeba ROZSTRZYGNAC
+// MIEDZY kilkoma arkuszami dla roznych wariantow mocy w jednej paczce
+// szablonow - bez niego kazdy szablon bez wlasnego powiazania dostaje po
+// prostu defaultSheet jako swoj wariant.
+function groupMailMergeTemplates(templateInfos, defaultSheet = null) {
   const groups = new Map();
   const ambiguous = [];
   const skipped = [];
@@ -501,14 +563,15 @@ function groupMailMergeTemplates(templateInfos) {
       continue;
     }
     const binding = detectMailMergeSheetBinding(t.path);
-    if (!binding || !binding.sheetName) {
-      skipped.push({ file: t.originalName, reason: 'brak prawdziwego powiazania korespondencji seryjnej z arkuszem Excela' });
+    const sheetName = (binding && binding.sheetName) || defaultSheet;
+    if (!sheetName) {
+      skipped.push({ file: t.originalName, reason: 'brak prawdziwego powiazania korespondencji seryjnej z arkuszem Excela i brak domyslnego arkusza do ktorego mozna by go przypisac' });
       continue;
     }
-    const kind = deriveMailMergeKind(t.originalName, binding.sheetName);
+    const kind = deriveMailMergeKind(t.originalName, sheetName);
     if (!groups.has(kind)) groups.set(kind, { name: kind, variants: {} });
     const g = groups.get(kind);
-    const existing = g.variants[binding.sheetName];
+    const existing = g.variants[sheetName];
     if (existing) {
       // Realny przypadek (Slesin PC Grunt): dwa pliki z prawdziwym powiazaniem
       // do tej samej mocy/arkusza to zwykle starsza kopia zostawiona w folderze
@@ -523,11 +586,11 @@ function groupMailMergeTemplates(templateInfos) {
       const newIsNewer = newTime != null && (existingTime == null || newTime > existingTime);
       const kept = newIsNewer ? t : existing;
       const skippedOne = newIsNewer ? existing : t;
-      g.variants[binding.sheetName] = kept;
+      g.variants[sheetName] = kept;
       ambiguous.push({
         kind,
-        sheetName: binding.sheetName,
-        relFolder: `${kind} (${binding.sheetName})`,
+        sheetName,
+        relFolder: `${kind} (${sheetName})`,
         files: [existing.originalName, t.originalName],
         resolved: true,
         keptFile: kept.originalName,
@@ -535,7 +598,7 @@ function groupMailMergeTemplates(templateInfos) {
       });
       continue;
     }
-    g.variants[binding.sheetName] = t;
+    g.variants[sheetName] = t;
   }
   // hasVariants zawsze false w tym co idzie do frontendu - wybor "wariantu"
   // (mocy) juz jest dokonany przez wybor arkusza Excela (sheetSelect), nie
@@ -549,16 +612,28 @@ function groupMailMergeTemplates(templateInfos) {
 // - zamiast po cichu zgadywac dowolne kolumny, wymagamy zeby te
 // najwazniejsze (uzywane przez sama aplikacje do nazywania plikow/folderow,
 // nie tylko do wypelniania MERGEFIELD) na pewno istnialy, dokladnym
-// dopasowaniem (bez diakrytykow/wielkosci liter), zeby "Numer telefonu" nie
-// zaliczylo sie przypadkiem jako "Numer".
-const REQUIRED_REFERENCE_COLUMNS = ['ID', 'Adres', 'Beneficjent'];
+// dopasowaniem (bez diakrytykow/wielkosci liter) do JEDNEJ z kilku znanych,
+// realnie wystepujacych nazw - zeby "Numer telefonu" nie zaliczylo sie
+// przypadkiem jako "Numer", ale zeby rowniez inaczej nazwane, ale
+// rownowazne tabele (np. PV_ z Wierzchlasu: "UID"/"LP" zamiast "ID",
+// "Imię i Nazwisko" zamiast "Beneficjent") przechodzily bez zmiany naglowka
+// w Excelu. Te same synonimy juz gdzie indziej uznane za rownowazne w tym
+// repo - patrz $script:LabelFieldCandidates['uczestnik_projektu'] w
+// scripts/mailmerge-to-pdf.ps1 dla "Imie i Nazwisko"/"Beneficjent".
+const REQUIRED_REFERENCE_COLUMNS = [
+  { label: 'ID', candidates: ['ID', 'UID', 'LP'] },
+  { label: 'Adres', candidates: ['Adres'] },
+  { label: 'Beneficjent', candidates: ['Beneficjent', 'Imię i Nazwisko', 'Imie i Nazwisko', 'Inwestor'] }
+];
 function findExactColumn(columns, name) {
   const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '').trim();
   const target = norm(name);
   return (columns || []).find(c => norm(c) === target) || null;
 }
 function validateReferenceColumns(columns) {
-  return REQUIRED_REFERENCE_COLUMNS.filter(name => !findExactColumn(columns, name));
+  return REQUIRED_REFERENCE_COLUMNS
+    .filter(req => !req.candidates.some(candidate => findExactColumn(columns, candidate)))
+    .map(req => req.label);
 }
 
 // Dla kazdej zaznaczonej "logicznej" pozycji buduje liste konkretnych zadan
@@ -990,7 +1065,8 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     const boundSheetName = boundSheet
       ? sheetNames.find(name => String(name).toLowerCase() === String(boundSheet.sheetName).toLowerCase())
       : null;
-    const defaultSheet = boundSheetName || pickDefaultSheet(sheetNames, templateInfos[0].originalName);
+    const sheetOrderFromXml = getSheetOrderFromWorkbookXml(excel.path);
+    const defaultSheet = boundSheetName || pickDefaultSheet(sheetNames, templateInfos[0].originalName, sheetOrderFromXml);
     const workbook = await parseWorkbook(excel.path, defaultSheet);
 
     // Tabela musi "wygladac jak wzorcowa" - patrz mem:conventions / komentarz
@@ -1008,7 +1084,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     const outDir = path.join(OUTPUT_DIR, jobId);
     await fsp.mkdir(outDir, { recursive: true });
 
-    const { groups: templateGroups, ambiguous: ambiguousTemplates, skipped: skippedTemplates } = groupMailMergeTemplates(templateInfos);
+    const { groups: templateGroups, ambiguous: ambiguousTemplates, skipped: skippedTemplates } = groupMailMergeTemplates(templateInfos, defaultSheet);
     if (!templateGroups.length) {
       return res.status(400).json({
         ok: false,
@@ -1305,4 +1381,7 @@ if (require.main === module) {
   applyHttpTimeouts(server, 'SERYJNE');
 }
 
-module.exports = { app, jobs, getJob };
+module.exports = {
+  app, jobs, getJob,
+  pickDefaultSheet, getSheetOrderFromWorkbookXml, validateReferenceColumns, groupMailMergeTemplates
+};

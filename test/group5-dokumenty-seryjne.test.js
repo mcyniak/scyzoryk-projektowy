@@ -102,3 +102,114 @@ test('frontend pobiera wszystkie strony rekordów przed renderowaniem', async ()
   assert.match(source, /offset < Number\(workbook\.totalRows/);
   assert.match(source, /const limit = 500/);
 });
+
+// =====================================================================
+// Realny przypadek (Wierzchlas PV, 2026-08-19): eksport z Google Sheets
+// zostawia w pliku ukryte, technicznie nazwane arkusze (np. losowy ID) -
+// read-excel-file zwracalo je w kolejnosci NIEZALEZNEJ od widocznych zakladek
+// w samym Excelu (na prawdziwym pliku zwrocilo ukryty arkusz jako PIERWSZY,
+// mimo ze byl OSTATNI w deklaracji xl/workbook.xml, a widoczna pierwsza
+// zakladka "PV_" byla trzecia w tej kolejnosci). Upload wybieral wiec
+// techniczny arkusz jako domyslny zamiast prawdziwej tabeli danych.
+// =====================================================================
+{
+  const os = require('node:os');
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'node_modules', 'xlsx'));
+  const AdmZip = require(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'node_modules', 'adm-zip'));
+  const { pickDefaultSheet, getSheetOrderFromWorkbookXml, validateReferenceColumns, groupMailMergeTemplates } = require('../apps/dokumenty-seryjne/server');
+
+  async function makeTempDir() {
+    return fsp.mkdtemp(path.join(os.tmpdir(), 'ds-hidden-sheet-'));
+  }
+
+  test('getSheetOrderFromWorkbookXml/pickDefaultSheet: arkusz UKRYTY w xl/workbook.xml nigdy nie jest wybierany jako domyslny, nawet gdyby byl pierwszy w kolejnosci nazw', async (t) => {
+    const dir = await makeTempDir();
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['x']]), 'losowyIdTechniczny');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['y']]), 'PV_');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['z']]), 'umowa');
+    wb.Workbook = { Sheets: [{ Hidden: 1 }, { Hidden: 0 }, { Hidden: 0 }] };
+    const xlsxPath = path.join(dir, 'dane.xlsx');
+    XLSX.writeFile(wb, xlsxPath);
+
+    const order = getSheetOrderFromWorkbookXml(xlsxPath);
+    assert.deepEqual(order, [
+      { name: 'losowyIdTechniczny', hidden: true },
+      { name: 'PV_', hidden: false },
+      { name: 'umowa', hidden: false }
+    ]);
+
+    // sheetNames w KOLEJNOSCI ODWROTNEJ nadmyslnie symuluje read-excel-file
+    // (kolejnosc niezalezna od xl/workbook.xml, real przypadek zweryfikowany
+    // na prawdziwym pliku Wierzchlas) - mimo to musi wybrac "PV_", nie
+    // pierwszy element tej (zawodnej) listy ani ukryty arkusz.
+    const sheetNamesFromReadExcelFile = ['umowa', 'PV_', 'losowyIdTechniczny'];
+    assert.equal(pickDefaultSheet(sheetNamesFromReadExcelFile, 'jakis_szablon.docx', order), 'PV_');
+
+    // Bez zadnej informacji o mocy w nazwie szablonu i bez xml (np. plik
+    // nieczytelny) - fallback na stara logike (pierwszy element listy).
+    assert.equal(pickDefaultSheet(sheetNamesFromReadExcelFile, 'jakis_szablon.docx', null), 'umowa');
+  });
+
+  test('validateReferenceColumns: akceptuje synonimy realnie wystepujace w innych tabelach (UID/LP zamiast ID, Imię i Nazwisko zamiast Beneficjent) - real przypadek PV_ z Wierzchlasu', () => {
+    const pvColumns = ['UID', 'LP', 'Adres', 'Imię i Nazwisko', 'Nr telefonu'];
+    assert.deepEqual(validateReferenceColumns(pvColumns), []);
+
+    // Tabela, ktora faktycznie nie ma zadnej z tych kolumn (np. przypadkowo
+    // wgrany zupelnie inny arkusz) - dalej musi byc odrzucona.
+    assert.deepEqual(validateReferenceColumns(['Numer telefonu', 'Kod pocztowy']), ['ID', 'Adres', 'Beneficjent']);
+  });
+
+  function buildMinimalDocx(destPath, { withMailMerge = false } = {}) {
+    const zip = new AdmZip();
+    zip.addFile('[Content_Types].xml', Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>'));
+    zip.addFile('_rels/.rels', Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'));
+    zip.addFile('word/document.xml', Buffer.from('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>test</w:t></w:r></w:p></w:body></w:document>'));
+    const settings = withMailMerge
+      ? '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:dataType w:val="native"/><w:connectString w:val="Provider=...;Data Source=C:\\dane.xlsx;"/><w:query w:val="SELECT * FROM `PV_$`"/><w:table w:val="\'PV_$\'"/></w:mailMerge></w:settings>'
+      : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>';
+    zip.addFile('word/settings.xml', Buffer.from(settings));
+    zip.writeZip(destPath);
+  }
+
+  test('groupMailMergeTemplates: szablon BEZ prawdziwego powiazania Worda ("Wybierz odbiorców") dostaje defaultSheet zamiast bycia pominietym - real przypadek: szablon zrobiony recznie/przez ChatGPT bez uzycia Mailings w Wordzie', async (t) => {
+    const dir = await makeTempDir();
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+    const docxPath = path.join(dir, 'Wzorzec_bez_bindowania.docx');
+    buildMinimalDocx(docxPath, { withMailMerge: false });
+
+    const { groups, skipped } = groupMailMergeTemplates(
+      [{ path: docxPath, originalName: 'Wzorzec_bez_bindowania.docx' }],
+      'PV_'
+    );
+    assert.deepEqual(skipped, []);
+    assert.equal(groups.length, 1);
+    assert.deepEqual(groups[0].variants, { PV_: { path: docxPath, originalName: 'Wzorzec_bez_bindowania.docx' } });
+  });
+
+  test('groupMailMergeTemplates: bez defaultSheet I bez powiazania Worda - nadal pomijany (zero regresji dla starego zachowania/prawdziwie nieznanego przypadku)', async (t) => {
+    const dir = await makeTempDir();
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+    const docxPath = path.join(dir, 'Nieznany.docx');
+    buildMinimalDocx(docxPath, { withMailMerge: false });
+
+    const { groups, skipped } = groupMailMergeTemplates([{ path: docxPath, originalName: 'Nieznany.docx' }], null);
+    assert.equal(groups.length, 0);
+    assert.equal(skipped.length, 1);
+    assert.match(skipped[0].reason, /brak prawdziwego powiazania/);
+  });
+
+  test('groupMailMergeTemplates: szablon Z prawdziwym powiazaniem Worda dalej dziala jak dotychczas (zero regresji, np. Slesin)', async (t) => {
+    const dir = await makeTempDir();
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+    const docxPath = path.join(dir, 'Slesin_8kW.docx');
+    buildMinimalDocx(docxPath, { withMailMerge: true });
+
+    const { groups, skipped } = groupMailMergeTemplates([{ path: docxPath, originalName: 'Slesin_8kW.docx' }], 'jakis_inny_arkusz');
+    assert.deepEqual(skipped, []);
+    assert.equal(groups.length, 1);
+    assert.ok(groups[0].variants['PV_'], 'powiazanie z docx ma pierwszenstwo przed defaultSheet');
+  });
+}

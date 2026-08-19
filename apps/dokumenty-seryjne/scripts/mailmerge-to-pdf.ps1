@@ -400,6 +400,15 @@ $script:LabelFieldCandidates = @{
   'obreb_ewid_nr'     = @('Numer obrebu','Obreb','Nr obrebu')
   'nr_obrebu'         = @('Numer obrebu','Obreb','Nr obrebu')
   'gmina'             = @('Gmina')
+  # Wierzchlas PV (2026-08-19): "Adres obiektu:" - miejsce montazu instalacji,
+  # ta sama kolumna co ogolne "adres_inwestycji" powyzej, tylko z inna etykieta
+  # w tym konkretnym szablonie.
+  'adres_obiektu'     = @('Adres inwestycji','Adres')
+  # "modu_ow" (nie "modulow") bo prawdziwy naglowek to "moduA3w" - "l" tu NIE
+  # rozklada sie w NFD (patrz komentarz o dzialce powyzej), wiec Normalize-Name
+  # zamienia je na "_", nie na zwykle "l". Obie pisownie na wszelki wypadek,
+  # plus surowa "Moc PV z gminy" jako fallback, gdyby biurowa kolumna byla pusta.
+  'moc_projektowanej_instalacji' = @('Moc zestawu uwzgledniajaca moc modu_ow (biuro)','Moc zestawu uwzgledniajaca moc modulow (biuro)','Moc PV z gminy')
 }
 $wdNoHighlight = 0
 
