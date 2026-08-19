@@ -183,9 +183,19 @@ function parseRozmiarZUid(uidRaw) {
   return najblizszyWiekszy ? String(najblizszyWiekszy) : { nieznany: rozmiar };
 }
 
-// Rozpoznaje nazwe gminy z nazwy arkusza, np. "Solary Paradyż" -> "Paradyż"
-function gminaZNazwyArkusza(sheetName) {
-  const match = String(sheetName || '').match(/^\s*Solary\s+(.+?)\s*$/i);
+// Rozpoznaje arkusz solarow po nazwie zakladki - "Solary <gmina>" (starsza
+// konwencja, jeden rootPath obsluguje wiele gmin naraz, karty trafiaja pod
+// Projekty/<gmina>/) albo samo "Solary" (nowsza konwencja, jedna inwestycja =
+// jeden rootPath, bez warstwy gminy - real przypadek: Kamiensk, gdzie
+// zakladka to dokladnie "Solary" i przez to stara wersja tej funkcji zwracala
+// null dla KAZDEGO arkusza, a caly plik pokazywal 0 dopasowan bez zadnego
+// bledu). Zwraca { gmina: string } (gmina moze byc pustym stringiem dla
+// nowszej konwencji) albo null, gdy arkusz w ogole nie dotyczy solarow
+// (Pompy, Kotly, adresy, obreby itp.).
+function rozpoznajArkuszSolarow(sheetName) {
+  const name = String(sheetName || '').trim();
+  if (/^solary$/i.test(name)) return { gmina: '' };
+  const match = name.match(/^solary\s+(.+)$/i);
   if (!match) return null;
   // Nazwa arkusza XLSX jest danymi od klienta i trafia bezposrednio do
   // sciezki na dysku (patrz przetworzArkusz -> projektyDir). Bez sanityzacji
@@ -193,7 +203,55 @@ function gminaZNazwyArkusza(sheetName) {
   // folder Projekty. sanitize-filename usuwa / \ oraz zamienia samo ".."
   // na pusty string, wiec taki arkusz zostanie po prostu potraktowany jak
   // "nie dotyczy solarow" zamiast wyjsc poza dozwolony katalog.
-  return safeName(match[1], '') || null;
+  const gmina = safeName(match[1].trim(), '');
+  return gmina ? { gmina } : null;
+}
+
+// Zrodlowy folder z kartami solarow - starsza konwencja nazywa go "karty",
+// nowsza "wzór" (ten sam folder co uzywany przez dokumenty seryjne dla
+// innych typow dokumentow - real przypadek, uzytkownik potwierdzil ze obie
+// nazwy wystepuja w praktyce). Sprawdzamy "karty" jako pierwsze (stara,
+// nadal najczestsza konwencja), potem "wzór".
+function znajdzFolderZrodlowySolarow(rootPath) {
+  const karty = path.join(rootPath, 'karty');
+  if (fs.existsSync(karty)) return karty;
+  const wzor = path.join(rootPath, 'wzór');
+  if (fs.existsSync(wzor)) return wzor;
+  return karty; // zaden nie istnieje - komunikat bledu nizej i tak pokaze ta sciezke
+}
+
+// Pompy powietrzne Varmero maja model zapisany w kolumnie "Model pompy" jako
+// "VPM<cyfry>" (wartosc WYLICZONA formula w arkuszu - read-excel-file czyta
+// gotowy wynik, nie sama formule, wiec to dziala bez dodatkowej obslugi).
+// Inne wartosci (np. "Basic 270l" - pompa CWU, nie powietrzna) albo puste
+// komorki (brak dobranej pompy dla tego adresu) sa pomijane CICHO, bez
+// bledu - to normalne, nie kazdy wiersz/inwestycja ma pompy Varmero (np.
+// inwestycje na myEcodan zamiast Varmero po prostu nigdy nie maja pasujacej
+// wartosci w tej kolumnie).
+function parseModelPompy(value) {
+  const match = normalizujTekst(value).match(/^VPM\d+/i);
+  return match ? match[0].toUpperCase() : null;
+}
+
+// Rozpoznaje arkusz pomp ciepla po nazwie zakladki (np. "Pompy ciepła") - ten
+// sam wzorzec (dopasowanie po rdzeniu "pomp") co apps/formularze-varmero/src/excel.js#chooseSheet.
+function rozpoznajArkuszPomp(sheetName) {
+  return /pomp/i.test(String(sheetName || ''));
+}
+
+// Szuka podfolderu w zrodlowym folderze wzorow pomp, ktorego nazwa to
+// dokladnie model (np. "VPM9012") albo konczy sie na "_<model>" (np.
+// "ZAGOROW_VPM9012") - oba warianty nazewnictwa wystepuja realnie na dysku,
+// w zaleznosci od inwestycji.
+async function znajdzFolderModeluPompy(wzorDir, model) {
+  const nazwyFolderow = await listujFoldery(wzorDir);
+  if (!nazwyFolderow) return null;
+  const modelUpper = model.toUpperCase();
+  const trafiony = nazwyFolderow.find(nazwa => {
+    const nazwaUpper = nazwa.toUpperCase();
+    return nazwaUpper === modelUpper || nazwaUpper.endsWith(`_${modelUpper}`);
+  });
+  return trafiony ? path.join(wzorDir, trafiony) : null;
 }
 
 async function listujFoldery(dirPath) {
@@ -294,16 +352,20 @@ async function istniejacePlikiWFolderze(dirPath) {
 }
 
 async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
-  const gmina = gminaZNazwyArkusza(sheetName);
+  const rozpoznany = rozpoznajArkuszSolarow(sheetName);
   const wyniki = [];
-  if (!gmina) return wyniki; // arkusz nie dotyczy solarow (np. Pompy, Kotly, adresy)
+  if (!rozpoznany) return wyniki; // arkusz nie dotyczy solarow (np. Pompy, Kotly, adresy)
+  const { gmina } = rozpoznany;
 
-  const kartyDir = path.join(rootPath, 'karty');
+  const kartyDir = znajdzFolderZrodlowySolarow(rootPath);
   const projektyBazowyDir = path.join(rootPath, 'Projekty');
-  const projektyDir = path.join(projektyBazowyDir, gmina);
-  // Druga warstwa ochrony obok sanityzacji w gminaZNazwyArkusza - nawet gdyby
-  // sanityzacja kiedys zawiodla, nie pozwalamy wyjsc poza rootPath/Projekty.
-  if (path.relative(projektyBazowyDir, projektyDir).startsWith('..')) {
+  // Nowsza konwencja (gmina === '', patrz rozpoznajArkuszSolarow) - jedna
+  // inwestycja = jeden rootPath, foldery klientow leza wprost pod Projekty/,
+  // bez posredniej warstwy gminy.
+  const projektyDir = gmina ? path.join(projektyBazowyDir, gmina) : projektyBazowyDir;
+  // Druga warstwa ochrony obok sanityzacji w rozpoznajArkuszSolarow - nawet
+  // gdyby sanityzacja kiedys zawiodla, nie pozwalamy wyjsc poza rootPath/Projekty.
+  if (gmina && path.relative(projektyBazowyDir, projektyDir).startsWith('..')) {
     wyniki.push({ gmina, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": niepoprawna nazwa gminy z arkusza - pominieto.` });
     return wyniki;
   }
@@ -501,6 +563,132 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun }) {
   return wyniki;
 }
 
+// Analogiczne do przetworzArkusz, ale dla pomp powietrznych Varmero - inny
+// arkusz ("Pompy ciepła"), inna kolumna rozpoznawcza ("Model pompy" zamiast
+// UID), inny uklad folderow na dysku (PC powietrzne/wzór + PC powietrzne/Projekty
+// zamiast karty + Projekty/<gmina>), i tylko JEDEN plik do skopiowania
+// ("Karty katalogowe.pdf") zamiast zestawu zaleznego od rozmiaru zasobnika.
+// Dopasowanie folderu klienta (LP + potwierdzenie adresem) jest identyczne -
+// ta sama zbudujMapeFolderow/adresPasujeDoFolderu co dla solarow.
+async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun }) {
+  const wyniki = [];
+  if (!rozpoznajArkuszPomp(sheetName)) return wyniki; // arkusz nie dotyczy pomp (np. Solary, Kotly, adresy)
+
+  const wzorDir = path.join(rootPath, 'PC powietrzne', 'wzór');
+  const projektyDir = path.join(rootPath, 'PC powietrzne', 'Projekty');
+
+  const wzorIstnieje = fs.existsSync(wzorDir);
+  const nazwyFolderowKlientow = await listujFoldery(projektyDir);
+
+  if (!wzorIstnieje) {
+    wyniki.push({ gmina: null, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono folderu ze wzorami kart pomp: ${wzorDir}` });
+    return wyniki;
+  }
+  if (nazwyFolderowKlientow === null) {
+    wyniki.push({ gmina: null, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono folderu projektow: ${projektyDir}` });
+    return wyniki;
+  }
+
+  const { mapa: mapaFolderow, duplikaty } = zbudujMapeFolderow(nazwyFolderowKlientow);
+
+  const header = rows[0] || [];
+  const colLpGmina = findColumn(header, ['lp', 'gmin']);
+  const colAdres = findColumn(header, ['adres'], ['kod', 'email', 'e mail']);
+  const colModelPompy = findColumn(header, ['model', 'pomp']);
+
+  const brakujaceKolumny = [];
+  if (colLpGmina === -1) brakujaceKolumny.push('LP gminy');
+  if (colAdres === -1) brakujaceKolumny.push('adres');
+  if (colModelPompy === -1) brakujaceKolumny.push('Model pompy');
+  if (brakujaceKolumny.length) {
+    wyniki.push({ gmina: null, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono kolumn: ${brakujaceKolumny.join(', ')}. Sprawdz naglowki w pierwszym wierszu arkusza.` });
+    return wyniki;
+  }
+
+  const wynikiByIdx = new Array(rows.length).fill(null);
+  const zadania = [];
+
+  for (let i = 1; i < rows.length; i += 1) {
+    const wiersz = i + 1;
+    const row = rows[i];
+    if (!row || row.every(v => v === null || v === undefined || v === '')) continue;
+
+    const model = parseModelPompy(row[colModelPompy]);
+    if (!model) continue; // brak pompy powietrznej Varmero w tym wierszu (np. CWU/Basic albo inny dostawca) - normalne, pomijamy cicho
+
+    const id = parseIdFolderu(row[colLpGmina]);
+    const adres = normalizujTekst(row[colAdres]);
+    const opisAdresu = adres || '(brak adresu)';
+
+    if (!id) {
+      wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id: row[colLpGmina], adres, model, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak poprawnego "LP gminy" dla adresu "${opisAdresu}" - nie mozna dopasowac folderu.` };
+      continue;
+    }
+    if (duplikaty.has(id)) {
+      wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` };
+      continue;
+    }
+
+    const folderNazwa = mapaFolderow.get(id);
+    if (!folderNazwa) {
+      wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` };
+      continue;
+    }
+    if (!adres) {
+      wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id, adres: null, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak adresu w Excelu - nie mozna bezpiecznie potwierdzic, ze folder "${folderNazwa}" (dopasowany po samym numerze LP "${id}") faktycznie nalezy do tego wiersza. Uzupelnij adres i sprobuj ponownie.` };
+      continue;
+    }
+    if (!adresPasujeDoFolderu(adres, folderNazwa)) {
+      wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: znaleziono folder "${folderNazwa}" dla numeru LP "${id}", ale jego nazwa nie zawiera adresu z Excela "${adres}" - mozliwy konflikt numeracji miedzy inwestycjami. Sprawdz recznie.` };
+      continue;
+    }
+
+    zadania.push({ idx: i, wiersz, id, adres, model, folderNazwa });
+  }
+
+  const semafor = createSemaphore(KK_CONCURRENCY);
+  await Promise.all(zadania.map(zadanie => semafor.run(async () => {
+    const { idx, wiersz, id, adres, model, folderNazwa } = zadanie;
+
+    const folderModelu = await znajdzFolderModeluPompy(wzorDir, model);
+    if (!folderModelu) {
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono folderu wzoru dla modelu "${model}" w ${wzorDir} (szukano podfolderu "${model}" albo konczacego sie na "_${model}").` };
+      return;
+    }
+    const zrodlo = path.join(folderModelu, 'Karty katalogowe.pdf');
+    const zrodloIstnieje = await fsp.access(zrodlo).then(() => true).catch(() => false);
+    if (!zrodloIstnieje) {
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak pliku "Karty katalogowe.pdf" w ${folderModelu}.` };
+      return;
+    }
+
+    const folderKlienta = path.join(projektyDir, folderNazwa);
+    const istniejace = await istniejacePlikiWFolderze(folderKlienta);
+    if (istniejace.has('karty katalogowe.pdf')) {
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'pominieto-juz-sa', komunikat: 'Karta katalogowa juz jest w folderze klienta.' };
+      return;
+    }
+
+    if (dryRun) {
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'do-skopiowania', komunikat: `Plik: Karty katalogowe.pdf (${model}, podglad)` };
+      return;
+    }
+
+    try {
+      await fsp.copyFile(zrodlo, path.join(folderKlienta, 'Karty katalogowe.pdf'), fs.constants.COPYFILE_EXCL);
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'skopiowano', komunikat: `Plik: Karty katalogowe.pdf (${model})` };
+    } catch (err) {
+      wynikiByIdx[idx] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie udalo sie skopiowac karty (${err.message}).` };
+    }
+  })));
+
+  for (const wynik of wynikiByIdx) {
+    if (wynik) wyniki.push(wynik);
+  }
+
+  return wyniki;
+}
+
 // --- Endpointy ---
 
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'karty-katalogowe' }));
@@ -535,10 +723,13 @@ app.post('/api/run', upload.single('excel'), async (req, res) => {
     for (const arkusz of wszystkieArkusze) {
       const sheetName = arkusz.sheet;
       const rows = arkusz.data;
-      const gmina = gminaZNazwyArkusza(sheetName);
-      if (!gmina) continue; // pomijamy arkusze Pompy / Kotly / adresy itp.
-      const wynikiArkusza = await przetworzArkusz({ sheetName, rows, rootPath, dryRun });
-      wynikiWszystkie.push(...wynikiArkusza);
+      // Kazda funkcja sama rozpoznaje, czy dany arkusz jej dotyczy (i cicho
+      // nic nie zwraca, jesli nie) - np. arkusz "Kotly"/"obreby" nie pasuje
+      // do zadnej z nich.
+      const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun });
+      wynikiWszystkie.push(...wynikiSolary);
+      const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
+      wynikiWszystkie.push(...wynikiPompy);
     }
 
     const podsumowanie = wynikiWszystkie.reduce((acc, w) => {
@@ -570,4 +761,12 @@ if (require.main === module) {
   applyHttpTimeouts(server, 'KK');
 }
 
-module.exports = { przetworzArkusz, adresPasujeDoFolderu, parseIdFolderu };
+module.exports = {
+  przetworzArkusz,
+  przetworzArkuszPomp,
+  adresPasujeDoFolderu,
+  parseIdFolderu,
+  rozpoznajArkuszSolarow,
+  parseModelPompy,
+  rozpoznajArkuszPomp
+};

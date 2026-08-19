@@ -11,7 +11,15 @@ const path = require('node:path');
 // co test/group3-ocr.test.js requirujacy exceljs z node_modules ocr-audytow).
 const XLSX = require('../apps/drukarka-projekty/node_modules/xlsx');
 const readXlsxFile = require('../apps/karty-katalogowe/node_modules/read-excel-file/node');
-const { przetworzArkusz, adresPasujeDoFolderu, parseIdFolderu } = require('../apps/karty-katalogowe/server');
+const {
+  przetworzArkusz,
+  przetworzArkuszPomp,
+  adresPasujeDoFolderu,
+  parseIdFolderu,
+  rozpoznajArkuszSolarow,
+  parseModelPompy,
+  rozpoznajArkuszPomp
+} = require('../apps/karty-katalogowe/server');
 
 const HEADER = ['LP gminy', 'Adres', 'UID', 'Rezygnacja'];
 
@@ -188,4 +196,197 @@ test('przetworzArkusz: brak JEDNEJ karty zrodlowej blokuje CALY komplet - zero c
   // Zaden z DWOCH istniejacych zrodel tez nie zostal skopiowany - komplet albo nic.
   const folderKlienta = path.join(projektyDir, '41 - Zarnow, ul. Spacerowa');
   assert.deepEqual(await fsp.readdir(folderKlienta), []);
+});
+
+// =====================================================================
+// Audyt 2026-08-18 (real bug, zlapany przez wlasciciela na inwestycji
+// Kamiensk): zakladka arkusza nazwana dokladnie "Solary" (bez nazwy gminy)
+// pokazywala 0 dopasowan bez zadnego bledu - gminaZNazwyArkusza (teraz
+// rozpoznajArkuszSolarow) wymagala "Solary <gmina>". Ta sekcja pokrywa
+// zarowno rozpoznawanie nazwy zakladki, jak i pelny przebieg bez warstwy
+// gminy w strukturze folderow.
+// =====================================================================
+
+test('rozpoznajArkuszSolarow: "Solary" (bez gminy) i "Solary <gmina>" oba rozpoznawane, inne zakladki - nie', () => {
+  assert.deepEqual(rozpoznajArkuszSolarow('Solary'), { gmina: '' });
+  assert.deepEqual(rozpoznajArkuszSolarow('  solary  '), { gmina: '' }); // wielkosc liter/spacje bez znaczenia
+  assert.deepEqual(rozpoznajArkuszSolarow('Solary Zarnow'), { gmina: 'Zarnow' });
+  assert.equal(rozpoznajArkuszSolarow('Pompy ciepła'), null);
+  assert.equal(rozpoznajArkuszSolarow('Kotły'), null);
+  assert.equal(rozpoznajArkuszSolarow('obręby'), null);
+});
+
+test('przetworzArkusz: zakladka "Solary" bez nazwy gminy - foldery klientow wprost pod Projekty/, bez posredniej warstwy gminy', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-bare-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const kartyDir = path.join(root, 'karty');
+  await fsp.mkdir(kartyDir, { recursive: true });
+  for (const nazwa of WYMAGANE_KARTY) await fsp.writeFile(path.join(kartyDir, nazwa), 'tresc');
+
+  // BRAK warstwy gminy - folder klienta wprost pod Projekty/.
+  const projektyDir = path.join(root, 'Projekty');
+  const folderKlienta = path.join(projektyDir, '41 - Kamiensk, ul. Sucharskiego 8');
+  await fsp.mkdir(folderKlienta, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary', [
+    [41, 'Kamieńsk, ul. Sucharskiego 8', '2/250', '']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano');
+  const skopiowane = (await fsp.readdir(folderKlienta)).sort();
+  assert.deepEqual(skopiowane, [...WYMAGANE_KARTY].sort());
+});
+
+test('przetworzArkusz: folder zrodlowy nazwany "wzór" dziala tak samo jak "karty", gdy "karty" nie istnieje', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-wzor-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  // Celowo "wzór", NIE "karty".
+  const wzorDir = path.join(root, 'wzór');
+  await fsp.mkdir(wzorDir, { recursive: true });
+  for (const nazwa of WYMAGANE_KARTY) await fsp.writeFile(path.join(wzorDir, nazwa), 'tresc');
+
+  const projektyDir = path.join(root, 'Projekty', 'Zarnow');
+  const folderKlienta = path.join(projektyDir, '41 - Zarnow, ul. Spacerowa');
+  await fsp.mkdir(folderKlienta, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary Zarnow', [
+    [41, 'ul. Spacerowa 5, Zarnow', '2/250', '']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano');
+  const skopiowane = (await fsp.readdir(folderKlienta)).sort();
+  assert.deepEqual(skopiowane, [...WYMAGANE_KARTY].sort());
+});
+
+// =====================================================================
+// Karty katalogowe dla pomp powietrznych Varmero (nowa funkcja, 2026-08-18) -
+// arkusz "Pompy ciepła", kolumna "Model pompy" (VPM<cyfry> - inne wartosci
+// jak "Basic 270l"/CWU albo puste komorki sa pomijane cicho), zrodlo
+// PC powietrzne/wzór/<MODEL albo INWESTYCJA_MODEL>/Karty katalogowe.pdf.
+// =====================================================================
+
+const HEADER_POMPY = ['LP gminy', 'Adres', 'Model pompy'];
+
+async function napiszArkuszPomp(sheetName, rows) {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-pomp-'));
+  const file = path.join(dir, 'dane.xlsx');
+  const ws = XLSX.utils.aoa_to_sheet([HEADER_POMPY, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName);
+  XLSX.writeFile(wb, file);
+  return { file, dir };
+}
+
+test('parseModelPompy: rozpoznaje VPM<cyfry> (dowolna wielkosc liter), odrzuca inne modele i puste wartosci', () => {
+  assert.equal(parseModelPompy('VPM9012'), 'VPM9012');
+  assert.equal(parseModelPompy('vpm9008'), 'VPM9008');
+  assert.equal(parseModelPompy('  VPM9020  '), 'VPM9020');
+  assert.equal(parseModelPompy('Basic 270l'), null); // pompa CWU, nie powietrzna Varmero
+  assert.equal(parseModelPompy(''), null);
+  assert.equal(parseModelPompy(null), null);
+});
+
+test('rozpoznajArkuszPomp: dopasowuje po rdzeniu "pomp" (wielkosc liter bez znaczenia), inne zakladki - nie', () => {
+  assert.equal(rozpoznajArkuszPomp('Pompy ciepła'), true);
+  assert.equal(rozpoznajArkuszPomp('POMPY'), true);
+  assert.equal(rozpoznajArkuszPomp('Solary'), false);
+  assert.equal(rozpoznajArkuszPomp('Kotły'), false);
+});
+
+test('przetworzArkuszPomp: dopasowanie po samej nazwie modelu (podfolder "VPM9012")', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-pomp-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const folderModelu = path.join(root, 'PC powietrzne', 'wzór', 'VPM9012');
+  await fsp.mkdir(folderModelu, { recursive: true });
+  await fsp.writeFile(path.join(folderModelu, 'Karty katalogowe.pdf'), 'tresc');
+
+  const projektyDir = path.join(root, 'PC powietrzne', 'Projekty');
+  const folderKlienta = path.join(projektyDir, '17.Wieruszew 3');
+  await fsp.mkdir(folderKlienta, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkuszPomp('Pompy ciepła', [
+    [17, 'Wieruszew 3', 'VPM9012']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano');
+  assert.equal(wyniki[0].model, 'VPM9012');
+  assert.deepEqual(await fsp.readdir(folderKlienta), ['Karty katalogowe.pdf']);
+});
+
+test('przetworzArkuszPomp: dopasowanie po sufiksie nazwy podfolderu ("ZAGOROW_VPM9008")', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-pomp-sufiks-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const folderModelu = path.join(root, 'PC powietrzne', 'wzór', 'ZAGOROW_VPM9008');
+  await fsp.mkdir(folderModelu, { recursive: true });
+  await fsp.writeFile(path.join(folderModelu, 'Karty katalogowe.pdf'), 'tresc');
+
+  const projektyDir = path.join(root, 'PC powietrzne', 'Projekty');
+  const folderKlienta = path.join(projektyDir, '18.Daninów 6');
+  await fsp.mkdir(folderKlienta, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkuszPomp('Pompy ciepła', [
+    [18, 'Daninów 6', 'VPM9008']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'skopiowano');
+  assert.deepEqual(await fsp.readdir(folderKlienta), ['Karty katalogowe.pdf']);
+});
+
+test('przetworzArkuszPomp: wiersze bez pompy powietrznej Varmero (CWU/"Basic", puste) sa pomijane cicho - zero wynikow, zero bledow', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-pomp-brak-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  // Folder wzorow/projektow musi istniec (inaczej dostalibysmy inny, wczesniejszy
+  // blad "nie znaleziono folderu ze wzorami") - test sprawdza, ze wiersze BEZ
+  // pompy Varmero (rozpoznanej po "Model pompy") nigdy nie docieraja do zadnego
+  // dopasowania, nie ze caly arkusz jest niepoprawny.
+  await fsp.mkdir(path.join(root, 'PC powietrzne', 'wzór'), { recursive: true });
+  await fsp.mkdir(path.join(root, 'PC powietrzne', 'Projekty'), { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkuszPomp('Pompy ciepła', [
+    [1, 'Adres 1', 'Basic 270l'],
+    [2, 'Adres 2', '']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.deepEqual(wyniki, []);
+});
+
+test('przetworzArkuszPomp: arkusz "Solary" jest ignorowany (nie dotyczy pomp)', async (t) => {
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary Zarnow', [
+    [41, 'ul. Spacerowa 5, Zarnow', '2/250', '']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: os.tmpdir(), dryRun: false });
+
+  assert.deepEqual(wyniki, []);
 });
