@@ -555,6 +555,48 @@ test('POST /api/ocr/inspect-table: zwraca liste pol z licznikiem brakow (pre-zaz
   assert.ok(data.unrecognizedHeaders.includes('Miejscowość'));
 });
 
+// Podglad na ekranie uzupelniania pol pokazuje ORYGINALNY wgrany PDF w
+// <iframe> (natywna przegladarka PDF, #page=/#zoom=) zamiast wycietego
+// obrazka strony - zeby dzialalo zaznaczanie/kopiowanie tekstu jak w
+// nazywarce-skanow. Ten test przechodzi przez PRAWDZIWY upload
+// (/api/ocr/analyze), zeby miec realny analysisId/fileId z sourcePdfPath.
+test('GET /api/analysis/:id/files/:fileId/pdf: zwraca oryginalny wgrany PDF (podglad w iframe), 404 dla nieznanego id', async (t) => {
+  const dir = await makeTempDir();
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const sourcePdfPath = path.join(dir, 'audyt.pdf');
+  await createPdf(sourcePdfPath, 2);
+
+  const { app: ocrApp } = require('../apps/ocr-audytow/server');
+  const server = ocrApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('files', new Blob([await fsp.readFile(sourcePdfPath)], { type: 'application/pdf' }), 'audyt.pdf');
+  const analyzeRes = await fetch(`${base}/api/ocr/analyze`, {
+    method: 'POST',
+    headers: { 'X-Scyzoryk-Request': '1' },
+    body: form
+  });
+  const analyzeData = await analyzeRes.json();
+  assert.equal(analyzeRes.status, 200, JSON.stringify(analyzeData));
+  const { analysisId, results } = analyzeData;
+  const fileId = results[0].fileId;
+
+  const pdfRes = await fetch(`${base}/api/analysis/${analysisId}/files/${fileId}/pdf`);
+  assert.equal(pdfRes.status, 200);
+  assert.match(pdfRes.headers.get('content-type') || '', /application\/pdf/);
+  const bytes = Buffer.from(await pdfRes.arrayBuffer());
+  assert.equal(bytes.subarray(0, 5).toString('latin1'), '%PDF-');
+
+  const missingRes = await fetch(`${base}/api/analysis/${analysisId}/files/nieistniejacy-plik/pdf`);
+  assert.equal(missingRes.status, 404);
+});
+
 // =====================================================================
 // Frontend (public/app.js) - sprawdza uzycie wspolnego apiJson() (z
 // obsluga bledow/kodow) zamiast surowego fetch() dla mutujacych zadan,

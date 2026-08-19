@@ -604,23 +604,21 @@
     return previewZoom === 'fit' ? 'Dopasuj' : `${previewZoom}%`;
   }
 
-  function previewImgWidthStyle() {
-    return previewZoom === 'fit' ? '100%' : `${previewZoom}%`;
-  }
-
   function findBlock(fileId, blockIndex) {
     const file = fieldsFiles.find((f) => f.fileId === fileId);
     return file?.blocks?.find((b) => b.blockIndex === Number(blockIndex)) || null;
   }
 
-  // Nie kazda strona ma wyciagniety obraz (np. strona bez rozpoznanego
-  // XObject-u - patrz src/pdfImageExtractor.js) - stary widok miniatur po
-  // prostu POMIJAL taka strone (`if (!thumb?.available) continue`), tu
-  // pokazujemy jawny placeholder zamiast zepsutego <img>.
-  function pageImageAvailable(fileId, pageIndex) {
-    const analysisFile = analysisFiles.find((f) => f.fileId === fileId);
-    const thumb = analysisFile?.thumbnails.find((t) => t.pageIndex === pageIndex);
-    return Boolean(thumb?.available);
+  // Podglad = ORYGINALNY wgrany PDF (nie wyciety obrazek strony), pokazany
+  // przez <iframe> na natywna przegladarke PDF (jak w nazywarce-skanow) -
+  // #page=/#zoom= to standardowe parametry otwierania PDF, rozumiane przez
+  // wbudowana przegladarke Chrome/Edge. Daje "za darmo" zaznaczanie/
+  // kopiowanie tekstu (o ile skan juz ma warstwe tekstu) oraz natywne
+  // przewijanie/przeciaganie i skalowanie przegladarki - bez wlasnej
+  // implementacji zoom/pan na obrazku.
+  function pdfPreviewUrl(fileId, pageIndex, zoom) {
+    const zoomValue = zoom === 'fit' ? 'page-width' : String(zoom);
+    return `/api/analysis/${analysisId}/files/${fileId}/pdf#page=${pageIndex + 1}&zoom=${encodeURIComponent(zoomValue)}&toolbar=0`;
   }
 
   function renderPreviewPane(fileId, block) {
@@ -640,11 +638,7 @@
             <button type="button" class="btn btn-icon" data-action="zoom-in" title="Powiększ"><svg class="icon"><use href="/shared/icons.svg#i-zoom-in"/></svg></button>
             <button type="button" class="btn btn-icon" data-action="zoom-fit" title="Dopasuj do szerokości"><svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg></button>
           </div>
-          <div class="doc-viewer-stage">${
-            pageImageAvailable(fileId, block.previewPage)
-              ? `<img data-preview-img src="/api/analysis/${analysisId}/files/${fileId}/page/${block.previewPage}" alt="Strona ${block.previewPage + 1}" style="width:${previewImgWidthStyle()}">`
-              : `<div class="preview-unavailable" data-preview-img>Brak podglądu tej strony</div>`
-          }</div>
+          <div class="doc-viewer-stage"><iframe data-preview-frame src="${pdfPreviewUrl(fileId, block.previewPage, previewZoom)}" title="Strona ${block.previewPage + 1}"></iframe></div>
         </div>
       </div>
     `;
@@ -657,9 +651,7 @@
   // calej listy.
   function updatePreviewPaneDom(paneEl, fileId, block) {
     const stage = paneEl.querySelector('.doc-viewer-stage');
-    stage.innerHTML = pageImageAvailable(fileId, block.previewPage)
-      ? `<img data-preview-img src="/api/analysis/${analysisId}/files/${fileId}/page/${block.previewPage}" alt="Strona ${block.previewPage + 1}" style="width:${previewImgWidthStyle()}">`
-      : `<div class="preview-unavailable" data-preview-img>Brak podglądu tej strony</div>`;
+    stage.innerHTML = `<iframe data-preview-frame src="${pdfPreviewUrl(fileId, block.previewPage, previewZoom)}" title="Strona ${block.previewPage + 1}"></iframe>`;
     const pageCount = block.endPage - block.startPage + 1;
     const pageNoInBlock = block.previewPage - block.startPage + 1;
     paneEl.querySelector('[data-page-label]').textContent = `Str. ${pageNoInBlock}/${pageCount}`;
@@ -778,7 +770,29 @@
       field.value = value.trim().slice(0, 300);
       field.needsReview = false;
       field.resolved = true;
+
+      // Enter przenosi fokus na kolejne pole NATYCHMIAST (nizej), zanim ten
+      // zapis w tle sie zakonczy - uzytkownik moze wiec juz pisac w nowym
+      // polu, gdy renderFieldsBlocks() nizej nadejdzie i zniszczy/odtworzy
+      // WSZYSTKIE <input>. Zapamietaj biezaca, jeszcze niezapisana tresc
+      // aktualnie aktywnego pola (i pozycje kursora), zeby przywrocic ja po
+      // renderze zamiast nadpisac wartoscia sprzed edycji - bez tego caly
+      // fokus (i to, co ktos wlasnie pisal) znikal po kazdym zapisie.
+      const active = document.activeElement;
+      const liveEdit = (active && active.matches?.('input[data-key]') && fieldsBlocksEl.contains(active))
+        ? { file: active.dataset.file, block: active.dataset.block, key: active.dataset.key, value: active.value, selStart: active.selectionStart, selEnd: active.selectionEnd }
+        : null;
+
       renderFieldsBlocks();
+
+      if (liveEdit) {
+        const el = fieldsBlocksEl.querySelector(`input[data-file="${liveEdit.file}"][data-block="${liveEdit.block}"][data-key="${liveEdit.key}"]`);
+        if (el) {
+          el.value = liveEdit.value;
+          el.focus();
+          try { el.setSelectionRange(liveEdit.selStart, liveEdit.selEnd); } catch (_) {}
+        }
+      }
     } catch (err) {
       errorBox.innerHTML = `<div class="error-box">Nie udało się zapisać pola: ${escapeHtml(err.message)}</div>`;
     } finally {
@@ -792,12 +806,24 @@
     if (input) saveFieldValue(input);
   }, true);
 
+  // Enter = przejdz do nastepnego pola (jak Tab), nie tylko "zapisz i zgub
+  // fokus". Kolejnosc pol = kolejnosc <input> w DOM (czyli kolejnosc
+  // renderowania blokow/wierszy). next.focus() nizej sam wywoluje blur na
+  // biezacym polu (zapis w tle), a przywrocenie fokusu po ewentualnym
+  // renderze obsluguje saveFieldValue powyzej.
   fieldsBlocksEl.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
     const input = e.target.closest('input[data-key]');
     if (!input) return;
     e.preventDefault();
-    input.blur();
+    const allInputs = Array.from(fieldsBlocksEl.querySelectorAll('input[data-key]'));
+    const next = allInputs[allInputs.indexOf(input) + 1];
+    if (next) {
+      next.focus();
+      next.select();
+    } else {
+      input.blur();
+    }
   });
 
   // --- Krok 3c: ścieżka do Excela + finalizacja ---------------------------

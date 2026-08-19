@@ -411,6 +411,18 @@ app.get('/api/analysis/:analysisId/files/:fileId/page/:pageIndex', (req, res) =>
   res.sendFile(filePath);
 });
 
+// Caly, oryginalnie wgrany PDF (nie wyciety obraz jednej strony) - podglad na
+// ekranie uzupelniania pol pokazuje go w <iframe> (natywna przegladarka PDF
+// przez #page=/#zoom=, patrz public/app.js), zamiast statycznego obrazka -
+// jesli skan ma juz warstwe tekstu, daje zaznaczanie/kopiowanie za darmo.
+app.get('/api/analysis/:analysisId/files/:fileId/pdf', (req, res) => {
+  const fileEntry = analyses.get(req.params.analysisId)?.files.get(req.params.fileId);
+  if (!fileEntry) return res.status(404).send('Nie znaleziono pliku.');
+  const filePath = fileEntry.sourcePdfPath;
+  if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('Nie znaleziono pliku.');
+  res.sendFile(filePath);
+});
+
 // Krok 3: dla kazdego ZATWIERDZONEGO bloku pyta Gemini o wartosci wszystkich pol na raz
 // (patrz src/aiProvider.js) i buduje wynik z needsReview wg deterministycznej
 // reguly (patrz src/fieldExtraction.js#toFieldResult). Wynik zapisywany w sesji analizy
