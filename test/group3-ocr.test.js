@@ -319,6 +319,38 @@ test('aiProvider: domyslny dostawca to gemini bez zapisanej preferencji, saveUse
   assert.throws(() => aiProvider.saveUserApiKey('nieznany', 'x'), /Nieznany dostawca/);
 });
 
+test('aiProvider: dostawca "manual" nie wymaga klucza - zawsze isConfigured, extractFieldsForBlock/detectBlockStartPages zwracaja puste wyniki bez zadnego fetch()', async (t) => {
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-aiprovider-manual-'));
+  process.env.LOCALAPPDATA = localAppData;
+  const modulePaths = [
+    '../apps/ocr-audytow/src/aiProvider',
+    '../apps/ocr-audytow/src/geminiFieldEngine',
+    '../apps/ocr-audytow/src/openaiFieldEngine'
+  ].map((p) => require.resolve(p));
+  for (const p of modulePaths) delete require.cache[p];
+  t.after(() => {
+    process.env.LOCALAPPDATA = previousLocalAppData;
+    for (const p of modulePaths) delete require.cache[p];
+    return fsp.rm(localAppData, { recursive: true, force: true });
+  });
+
+  const aiProvider = require(modulePaths[0]);
+  assert.equal(aiProvider.isConfigured(), false, 'domyslny gemini bez klucza - dalej niekonfigurowany');
+
+  // saveUserApiKey('manual', ...) NIE wymaga apiKey (w odroznieniu od gemini/openai) -
+  // wywolanie bez drugiego argumentu wcale nie moze rzucic.
+  aiProvider.saveUserApiKey('manual');
+  assert.equal(aiProvider.getActiveProvider(), 'manual');
+  assert.equal(aiProvider.isConfigured(), true, '"manual" jest zawsze skonfigurowany - nie potrzebuje klucza');
+
+  const fields = await aiProvider.extractFieldsForBlock({ sourcePdfPath: 'nieistniejacy.pdf', startPage: 0, endPage: 0, fieldDefs: [{ key: 'x', columnLabel: 'X' }] });
+  assert.deepEqual(fields, {}, 'brak wywolania modelu - pusty wynik, kazde pole i tak trafi do needsReview przez buildFieldsFromExtraction');
+
+  const pages = await aiProvider.detectBlockStartPages({ sourcePdfPath: 'nieistniejacy.pdf', pageCount: 5 });
+  assert.deepEqual(pages, [0], 'jeden blok = caly plik, bez proby automatycznego podzialu');
+});
+
 // =====================================================================
 // eksport rodzinny (src/tabelaAdresowaColumns.js, src/excelExport.js) -
 // niezalezne od silnika ekstrakcji, bez zmian.
@@ -619,6 +651,22 @@ test('POST /api/ocr/setup-api-key: poprawny klucz odblokowuje OCR, /api/health o
   const afterOpenAi = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
   assert.equal(afterOpenAi.ocrProvider, 'openai', 'zapisanie klucza OpenAI musi przelaczyc aktywnego dostawce');
   assert.equal(afterOpenAi.ocrConfigured, true);
+
+  // "manual" (bez AI) - jedyny dostawca, ktory dziala BEZ apiKey w body -
+  // dzis wymagaloby to klucza dla gemini/openai.
+  const manualRes = await fetch(`http://127.0.0.1:${port}/api/ocr/setup-api-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ provider: 'manual' })
+  });
+  const manualData = await manualRes.json();
+  assert.equal(manualRes.status, 200);
+  assert.equal(manualData.ok, true, 'provider "manual" nie wymaga apiKey w body');
+  assert.equal(manualData.provider, 'manual');
+
+  const afterManual = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json();
+  assert.equal(afterManual.ocrProvider, 'manual');
+  assert.equal(afterManual.ocrConfigured, true, '"manual" jest zawsze skonfigurowany');
 });
 
 test('POST /api/ocr/setup-api-key: bez naglowka X-Scyzoryk-Request dostaje 403 (ta sama ochrona co reszta mutujacych tras)', async (t) => {

@@ -59,9 +59,12 @@
   const ocrActiveProviderNote = document.getElementById('ocrActiveProviderNote');
   const ocrUnlockForm = document.getElementById('ocrUnlockForm');
   const ocrApiKeyInput = document.getElementById('ocrApiKeyInput');
+  const ocrApiKeyField = document.getElementById('ocrApiKeyField');
   const ocrApiKeyLabel = document.getElementById('ocrApiKeyLabel');
+  const ocrManualHint = document.getElementById('ocrManualHint');
   const ocrProviderGemini = document.getElementById('ocrProviderGemini');
   const ocrProviderOpenai = document.getElementById('ocrProviderOpenai');
+  const ocrProviderManual = document.getElementById('ocrProviderManual');
   const ocrUnlockBtn = document.getElementById('ocrUnlockBtn');
   const ocrUnlockCancelBtn = document.getElementById('ocrUnlockCancelBtn');
   const ocrUnlockStatus = document.getElementById('ocrUnlockStatus');
@@ -569,6 +572,9 @@
         ? `Zawężono do pól rodziny "${FAMILY_LABELS[selectedFamily] || selectedFamily}".`
         : 'Nie zawężono do konkretnej rodziny - wszystkie pola.';
     familyChosenNote.textContent = familyNote;
+    fieldsIntro.textContent = activeOcrProvider === 'manual'
+      ? 'Żadne pole nie zostało rozpoznane automatycznie (tryb ręczny) - odczytaj wartości z podglądu obok i wpisz je samodzielnie.'
+      : 'Program rozpoznał większość pól automatycznie. Pola oznaczone na bursztynowo wymagają Twojej uwagi - sprawdź je na podglądzie obok i wpisz poprawną wartość. Zmiany zapisują się automatycznie.';
     reviewPanel.hidden = true;
     fieldsPanel.hidden = false;
     excelStep.hidden = false;
@@ -585,18 +591,130 @@
     renderFieldsBlocks();
   }
 
-  function thumbsForBlock(fileId, startPage, endPage) {
-    const analysisFile = analysisFiles.find(f => f.fileId === fileId);
-    if (!analysisFile) return '';
-    const thumbByPage = new Map(analysisFile.thumbnails.map(t => [t.pageIndex, t]));
-    const cells = [];
-    for (let p = startPage; p <= endPage; p++) {
-      const thumb = thumbByPage.get(p);
-      if (!thumb?.available) continue;
-      cells.push(`<a href="/api/analysis/${analysisId}/files/${fileId}/page/${p}" target="_blank" rel="noopener" class="field-thumb-link" title="Zobacz stronę ${p + 1} w pełnym rozmiarze"><img src="${thumb.url}" alt="Strona ${p + 1}" loading="lazy"><span class="page-no">${p + 1}</span></a>`);
-    }
-    return cells.length ? `<div class="field-block-thumbs">${cells.join('')}</div>` : '';
+  // --- Duzy, wbudowany podglad strony (zamiast miniatur + linku w nowej
+  // karcie) - wzorowany na apps/nazywarka-skanow, ale zoom robi CSS na
+  // <img> (nie #zoom= na <iframe>, bo strony tutaj to gotowe JPG/JP2, nie
+  // PDF - patrz uzasadnienie w planie/commit message). Jeden globalny
+  // poziom zoomu; aktualna strona trzymana PER BLOK (block.previewPage),
+  // zeby przegladanie jednego adresu nie ruszalo podgladu innych.
+  const PREVIEW_ZOOM_LEVELS = [50, 75, 90, 100, 125, 150, 175, 200, 250, 300];
+  let previewZoom = 'fit';
+
+  function previewZoomLabel() {
+    return previewZoom === 'fit' ? 'Dopasuj' : `${previewZoom}%`;
   }
+
+  function previewImgWidthStyle() {
+    return previewZoom === 'fit' ? '100%' : `${previewZoom}%`;
+  }
+
+  function findBlock(fileId, blockIndex) {
+    const file = fieldsFiles.find((f) => f.fileId === fileId);
+    return file?.blocks?.find((b) => b.blockIndex === Number(blockIndex)) || null;
+  }
+
+  // Nie kazda strona ma wyciagniety obraz (np. strona bez rozpoznanego
+  // XObject-u - patrz src/pdfImageExtractor.js) - stary widok miniatur po
+  // prostu POMIJAL taka strone (`if (!thumb?.available) continue`), tu
+  // pokazujemy jawny placeholder zamiast zepsutego <img>.
+  function pageImageAvailable(fileId, pageIndex) {
+    const analysisFile = analysisFiles.find((f) => f.fileId === fileId);
+    const thumb = analysisFile?.thumbnails.find((t) => t.pageIndex === pageIndex);
+    return Boolean(thumb?.available);
+  }
+
+  function renderPreviewPane(fileId, block) {
+    if (block.previewPage == null) block.previewPage = block.startPage;
+    const pageCount = block.endPage - block.startPage + 1;
+    const pageNoInBlock = block.previewPage - block.startPage + 1;
+    return `
+      <div class="field-preview" data-file="${fileId}" data-block="${block.blockIndex}">
+        <div class="doc-viewer">
+          <div class="doc-viewer-toolbar">
+            <button type="button" class="btn btn-icon" data-action="prev" ${block.previewPage <= block.startPage ? 'disabled' : ''} title="Poprzednia strona"><svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg></button>
+            <span class="zoom-label" data-page-label>Str. ${pageNoInBlock}/${pageCount}</span>
+            <button type="button" class="btn btn-icon" data-action="next" ${block.previewPage >= block.endPage ? 'disabled' : ''} title="Następna strona"><svg class="icon"><use href="/shared/icons.svg#i-chevron-right"/></svg></button>
+            <span style="flex:1"></span>
+            <button type="button" class="btn btn-icon" data-action="zoom-out" title="Pomniejsz"><svg class="icon"><use href="/shared/icons.svg#i-zoom-out"/></svg></button>
+            <span class="zoom-label" data-zoom-label>${previewZoomLabel()}</span>
+            <button type="button" class="btn btn-icon" data-action="zoom-in" title="Powiększ"><svg class="icon"><use href="/shared/icons.svg#i-zoom-in"/></svg></button>
+            <button type="button" class="btn btn-icon" data-action="zoom-fit" title="Dopasuj do szerokości"><svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg></button>
+          </div>
+          <div class="doc-viewer-stage">${
+            pageImageAvailable(fileId, block.previewPage)
+              ? `<img data-preview-img src="/api/analysis/${analysisId}/files/${fileId}/page/${block.previewPage}" alt="Strona ${block.previewPage + 1}" style="width:${previewImgWidthStyle()}">`
+              : `<div class="preview-unavailable" data-preview-img>Brak podglądu tej strony</div>`
+          }</div>
+        </div>
+      </div>
+    `;
+  }
+
+  // Aktualizuje TYLKO podglad danego bloku bezposrednio przez DOM (bez
+  // wywolania renderFieldsBlocks) - inaczej klikniecie strzalki/zoomu
+  // resetowaloby scroll i fokus w tabeli pol obok, dokladnie tak jak
+  // saveFieldValue nizej aktualizuje pojedyncze pole bez przeladowania
+  // calej listy.
+  function updatePreviewPaneDom(paneEl, fileId, block) {
+    const stage = paneEl.querySelector('.doc-viewer-stage');
+    stage.innerHTML = pageImageAvailable(fileId, block.previewPage)
+      ? `<img data-preview-img src="/api/analysis/${analysisId}/files/${fileId}/page/${block.previewPage}" alt="Strona ${block.previewPage + 1}" style="width:${previewImgWidthStyle()}">`
+      : `<div class="preview-unavailable" data-preview-img>Brak podglądu tej strony</div>`;
+    const pageCount = block.endPage - block.startPage + 1;
+    const pageNoInBlock = block.previewPage - block.startPage + 1;
+    paneEl.querySelector('[data-page-label]').textContent = `Str. ${pageNoInBlock}/${pageCount}`;
+    paneEl.querySelector('[data-zoom-label]').textContent = previewZoomLabel();
+    const prevBtn = paneEl.querySelector('[data-action="prev"]');
+    const nextBtn = paneEl.querySelector('[data-action="next"]');
+    prevBtn.disabled = block.previewPage <= block.startPage;
+    nextBtn.disabled = block.previewPage >= block.endPage;
+  }
+
+  fieldsBlocksEl.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const paneEl = btn.closest('.field-preview');
+    const fileId = paneEl.dataset.file;
+    const block = findBlock(fileId, paneEl.dataset.block);
+    if (!block) return;
+
+    switch (btn.dataset.action) {
+      case 'prev':
+        block.previewPage = Math.max(block.startPage, block.previewPage - 1);
+        break;
+      case 'next':
+        block.previewPage = Math.min(block.endPage, block.previewPage + 1);
+        break;
+      case 'zoom-out': {
+        if (previewZoom === 'fit') { previewZoom = 100; break; }
+        const i = PREVIEW_ZOOM_LEVELS.findIndex((x) => x >= previewZoom);
+        previewZoom = PREVIEW_ZOOM_LEVELS[i <= 0 ? 0 : i - 1];
+        break;
+      }
+      case 'zoom-in': {
+        if (previewZoom === 'fit') { previewZoom = 125; break; }
+        const i = PREVIEW_ZOOM_LEVELS.findIndex((x) => x > previewZoom);
+        previewZoom = i === -1 ? PREVIEW_ZOOM_LEVELS[PREVIEW_ZOOM_LEVELS.length - 1] : PREVIEW_ZOOM_LEVELS[i];
+        break;
+      }
+      case 'zoom-fit':
+        previewZoom = 'fit';
+        break;
+      default:
+        return;
+    }
+    // Zoom jest globalny (jeden poziom dla wszystkich bloków na ekranie) -
+    // przy zmianie zoomu odswiez KAZDY widoczny podglad, nie tylko ten
+    // klikniety; zmiana strony dotyczy tylko bloku, w ktorym kliknieto.
+    if (btn.dataset.action.startsWith('zoom')) {
+      fieldsBlocksEl.querySelectorAll('.field-preview').forEach((pane) => {
+        const b = findBlock(pane.dataset.file, pane.dataset.block);
+        if (b) updatePreviewPaneDom(pane, pane.dataset.file, b);
+      });
+    } else {
+      updatePreviewPaneDom(paneEl, fileId, block);
+    }
+  });
 
   function renderFieldsBlocks() {
     const parts = [];
@@ -621,8 +739,10 @@
               <span class="badge ${remaining ? 'warn' : 'ok'}">${remaining ? `${remaining} do sprawdzenia` : 'wszystko rozpoznane'}</span>
             </div>
             ${warningsHtml}
-            ${thumbsForBlock(file.fileId, block.startPage, block.endPage)}
-            <table class="field-table"><tbody>${rows}</tbody></table>
+            <div class="field-block-body">
+              ${renderPreviewPane(file.fileId, block)}
+              <table class="field-table"><tbody>${rows}</tbody></table>
+            </div>
           </div>
         `);
       }
@@ -631,9 +751,7 @@
   }
 
   function findBlockFields(fileId, blockIndex) {
-    const file = fieldsFiles.find(f => f.fileId === fileId);
-    const block = file?.blocks?.find(b => b.blockIndex === Number(blockIndex));
-    return block?.fields || null;
+    return findBlock(fileId, blockIndex)?.fields || null;
   }
 
   // Zapisuje reczna poprawke jednego pola na serwerze (patrz POST
@@ -801,22 +919,43 @@
   // wybor radiobuttona decyduje, do ktorego pliku klucz trafi i ktory
   // dostawca staje sie aktywny.
   let ocrIsConfigured = false;
+  // Odczytywane w checkOcrConfigured() - uzywane m.in. przez startFieldReview
+  // do podmiany tekstu wprowadzenia na ekranie "Uzupelnij dane" w trybie
+  // recznym (bez AI).
+  let activeOcrProvider = 'gemini';
 
   const PROVIDER_KEY_PLACEHOLDERS = { gemini: 'AIza...', openai: 'sk-...' };
   const PROVIDER_KEY_LABELS = { gemini: 'Klucz API Gemini', openai: 'Klucz API OpenAI' };
+  const PROVIDER_DISPLAY_NAMES = { gemini: 'Google Gemini', openai: 'OpenAI', manual: 'Ręcznie (bez AI)' };
 
   function selectedProvider() {
+    if (ocrProviderManual.checked) return 'manual';
     return ocrProviderOpenai.checked ? 'openai' : 'gemini';
   }
 
+  // Tryb 'manual' nie potrzebuje zadnego klucza - chowa cale pole (i zdejmuje
+  // `required`, inaczej formularz nigdy by sie nie dalo wyslac) i pokazuje
+  // krotkie wyjasnienie zamiast niego.
   function updateApiKeyFieldForProvider() {
     const provider = selectedProvider();
-    ocrApiKeyLabel.textContent = PROVIDER_KEY_LABELS[provider];
-    ocrApiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider];
+    const isManual = provider === 'manual';
+    ocrApiKeyField.hidden = isManual;
+    ocrApiKeyInput.required = !isManual;
+    ocrManualHint.hidden = !isManual;
+    if (!isManual) {
+      ocrApiKeyLabel.textContent = PROVIDER_KEY_LABELS[provider];
+      ocrApiKeyInput.placeholder = PROVIDER_KEY_PLACEHOLDERS[provider];
+    }
   }
 
-  [ocrProviderGemini, ocrProviderOpenai].forEach((el) => el.addEventListener('change', updateApiKeyFieldForProvider));
+  [ocrProviderGemini, ocrProviderOpenai, ocrProviderManual].forEach((el) => el.addEventListener('change', updateApiKeyFieldForProvider));
   updateApiKeyFieldForProvider();
+
+  function setProviderRadio(provider) {
+    if (provider === 'openai') ocrProviderOpenai.checked = true;
+    else if (provider === 'manual') ocrProviderManual.checked = true;
+    else ocrProviderGemini.checked = true;
+  }
 
   function setOcrLocked(locked) {
     ocrLockedPanel.hidden = !locked;
@@ -843,8 +982,9 @@
       const res = await fetch('/api/health');
       const data = await res.json().catch(() => null);
       ocrIsConfigured = Boolean(data?.ok) && data.ocrConfigured === true;
+      if (data?.ocrProvider) activeOcrProvider = data.ocrProvider;
       ocrChangeKeyBtn.hidden = !ocrIsConfigured;
-      if (data?.ocrProvider === 'openai') ocrProviderOpenai.checked = true; else ocrProviderGemini.checked = true;
+      setProviderRadio(data?.ocrProvider);
       updateApiKeyFieldForProvider();
       ocrActiveProviderNote.hidden = !ocrIsConfigured;
       if (ocrIsConfigured) ocrActiveProviderNote.textContent = `Aktywny: ${data.ocrProviderLabel || data.ocrProvider}`;
@@ -872,14 +1012,14 @@
 
   ocrUnlockForm.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const provider = selectedProvider();
     const apiKey = ocrApiKeyInput.value.trim();
-    if (!apiKey) return;
+    if (provider !== 'manual' && !apiKey) return; // tryb reczny nie potrzebuje klucza
 
     ocrUnlockBtn.disabled = true;
     ocrUnlockStatus.className = '';
     ocrUnlockStatus.textContent = 'Zapisuję...';
     try {
-      const provider = selectedProvider();
       const data = await apiJson('/api/ocr/setup-api-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
@@ -890,15 +1030,16 @@
       ocrUnlockStatus.className = 'ok';
       ocrUnlockStatus.textContent = 'Gotowe. Odblokowuję...';
       ocrIsConfigured = true;
+      activeOcrProvider = provider;
       ocrChangeKeyBtn.hidden = false;
       ocrActiveProviderNote.hidden = false;
-      ocrActiveProviderNote.textContent = `Aktywny: ${PROVIDER_KEY_LABELS[provider].replace('Klucz API ', '')}`;
+      ocrActiveProviderNote.textContent = `Aktywny: ${PROVIDER_DISPLAY_NAMES[provider]}`;
       setOcrLocked(false);
       ocrUnlockForm.reset();
       // reset() cofa tez wybor radiobuttona do stanu domyslnego z HTML (gemini) -
       // przywracamy faktycznie wybranego dostawcy, zeby ekran "Zmień klucz API"
       // przy nastepnym otwarciu dalej pokazywal ten, ktory jest teraz aktywny.
-      if (provider === 'openai') ocrProviderOpenai.checked = true; else ocrProviderGemini.checked = true;
+      setProviderRadio(provider);
       updateApiKeyFieldForProvider();
     } catch (err) {
       ocrUnlockStatus.className = 'err';

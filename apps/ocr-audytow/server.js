@@ -95,7 +95,8 @@ app.get('/api/browse-folder', (req, res) => {
 // dostawce jako aktywnego (patrz aiProvider.js#saveUserApiKey).
 app.post('/api/ocr/setup-api-key', (req, res) => {
   try {
-    const provider = req.body?.provider === 'openai' ? 'openai' : 'gemini';
+    const requestedProvider = req.body?.provider;
+    const provider = requestedProvider === 'openai' || requestedProvider === 'manual' ? requestedProvider : 'gemini';
     const saved = saveUserApiKey(provider, req.body?.apiKey);
     res.json({ ok: true, provider, ...saved });
   } catch (err) {

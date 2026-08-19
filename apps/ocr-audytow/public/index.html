@@ -54,12 +54,14 @@
           <div class="provider-row">
             <label class="provider-option"><input type="radio" name="ocrProvider" value="gemini" id="ocrProviderGemini" checked> Google Gemini</label>
             <label class="provider-option"><input type="radio" name="ocrProvider" value="openai" id="ocrProviderOpenai"> OpenAI</label>
+            <label class="provider-option"><input type="radio" name="ocrProvider" value="manual" id="ocrProviderManual"> Ręcznie (bez AI)</label>
           </div>
         </div>
-        <div class="option-field" style="margin-top:14px">
+        <div class="option-field" id="ocrApiKeyField" style="margin-top:14px">
           <span class="option-label" id="ocrApiKeyLabel">Klucz API Gemini</span>
           <input type="password" id="ocrApiKeyInput" placeholder="AIza..." autocomplete="off" required>
         </div>
+        <p class="hint" id="ocrManualHint" hidden>Bez klucza - żadne pole nie zostanie rozpoznane automatycznie, wszystko wpisujesz sam z podglądu strony w kroku "Uzupełnij dane".</p>
         <div class="hero-actions">
           <button type="submit" id="ocrUnlockBtn" class="btn btn-primary">Zapisz i odblokuj</button>
           <button type="button" id="ocrUnlockCancelBtn" class="btn btn-secondary" hidden>Anuluj</button>
