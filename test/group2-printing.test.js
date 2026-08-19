@@ -319,6 +319,21 @@ test('lib/printing/ghostscript: wendorowany runtime jest kompletny i ma dolaczon
   assert.match(copying, /GNU AFFERO GENERAL PUBLIC LICENSE/);
 });
 
+// convertDocxBatchToPdf zostalo wyciagniete z apps/drukarka-projekty/server.js
+// do lib/printing.js (2026-08-19), zeby apps/drukarka mogla tez zaoferowac
+// wlasna opcje "Zapisz jako PDF" bez trzymania drugiej, driftujacej kopii
+// konwersji DOCX->PDF (patrz analogiczny test w
+// test/group13-drukarka-projekty-powykonawcza.test.js, ktory sprawdza ze
+// drukarka-projekty faktycznie deleguje do TEJ funkcji, nie wlasnej kopii).
+test('lib/printing: convertDocxBatchToPdf istnieje, uzywa skryptu z lib/printing/, i nie-detached spawn (bezpieczny wobec bledu Windows/Node: detached:true zawsze zglasza kod wyjscia 0)', () => {
+  assert.equal(typeof printing.convertDocxBatchToPdf, 'function');
+  assert.ok(fs.existsSync(printing.DOCX_TO_PDF_SCRIPT), 'lib/printing/docx-to-pdf.ps1 powinien istniec');
+  const src = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'printing.js'), 'utf8');
+  const spawnMatch = src.match(/spawn\('powershell\.exe'[\s\S]{0,400}\}\);/);
+  assert.ok(spawnMatch, 'nie znaleziono wywolania powershell.exe dla docx-to-pdf w lib/printing.js');
+  assert.doesNotMatch(spawnMatch[0], /detached:\s*true/);
+});
+
 // Audyt rozdz. 10/11, P0: scalanie sasiadujacych PDF-ow przy druku
 // dwustronnym nie moze pozwolic, zeby pierwsza strona kolejnego dokumentu
 // wyladowala na odwrocie ostatniej strony poprzedniego.
@@ -400,5 +415,70 @@ test('lib/printing/ghostscript: wendorowany runtime jest kompletny i ma dolaczon
     await mergePdfs([a, b], out);
     const merged = await PDFDocument.load(await fs.promises.readFile(out));
     assert.equal(merged.getPageCount(), 6);
+  });
+
+  // "Zapisz jako PDF" (2026-08-19) - druga sciezka /api/print, printerName ===
+  // sentinel "__SAVE_AS_PDF__", ktora NIGDY nie dotyka fizycznej drukarki
+  // (patrz analogiczny test dla apps/drukarka-projekty). Sprawdza pelny
+  // przeplyw: upload -> print(sentinel) -> status.savedFolder -> plik na
+  // dysku - nie tylko ze kod istnieje, ale ze faktycznie dziala.
+  test('drukarka: "Zapisz jako PDF" (printerName __SAVE_AS_PDF__) laczy sasiadujace PDF-y i zapisuje TRWALE pliki bez dotykania fizycznej drukarki', async (t) => {
+    const dir = await makeTempDir();
+    t.after(() => fs.promises.rm(dir, { recursive: true, force: true }));
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'scyzoryk-drukarka-data-'));
+    const previousDataRoot = process.env.SCYZORYK_DATA_ROOT;
+    process.env.SCYZORYK_DATA_ROOT = dataRoot;
+    t.after(() => {
+      if (previousDataRoot === undefined) delete process.env.SCYZORYK_DATA_ROOT;
+      else process.env.SCYZORYK_DATA_ROOT = previousDataRoot;
+      fs.rmSync(dataRoot, { recursive: true, force: true });
+    });
+
+    delete require.cache[require.resolve('../apps/drukarka/server.js')];
+    const { app } = require('../apps/drukarka/server.js');
+    const server = app.listen(0, '127.0.0.1');
+    const port = await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.once('listening', () => resolve(server.address().port));
+    });
+    t.after(() => new Promise(resolve => server.close(resolve)));
+    const base = `http://127.0.0.1:${port}`;
+
+    const a = path.join(dir, 'a.pdf');
+    const b = path.join(dir, 'b.pdf');
+    await createPdf(a, 2);
+    await createPdf(b, 3);
+
+    const form = new FormData();
+    form.append('files', new Blob([await fs.promises.readFile(a)], { type: 'application/pdf' }), 'a.pdf');
+    form.append('files', new Blob([await fs.promises.readFile(b)], { type: 'application/pdf' }), 'b.pdf');
+    const uploadRes = await fetch(`${base}/api/upload`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+    const uploadData = await uploadRes.json();
+    assert.equal(uploadRes.status, 200, JSON.stringify(uploadData));
+
+    const printRes = await fetch(`${base}/api/print`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+      body: JSON.stringify({ printerName: '__SAVE_AS_PDF__', mergeFiles: true, order: uploadData.queue.map(x => x.id) })
+    });
+    assert.equal(printRes.status, 200);
+
+    let status = {};
+    for (let i = 0; i < 50; i++) {
+      status = await (await fetch(`${base}/api/status`)).json();
+      if (!status.printing && (status.done || status.error)) break;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    assert.equal(status.error, null, JSON.stringify(status));
+    assert.equal(status.done, true);
+    assert.ok(status.savedFolder, 'savedFolder powinien byc ustawiony po udanym zapisie');
+
+    const savedFiles = await fs.promises.readdir(status.savedFolder);
+    assert.equal(savedFiles.length, 1, 'dwa sasiadujace PDF-y z mergeFiles:true musza dac JEDEN plik wyjsciowy, tak jak przy druku');
+    const merged = await PDFDocument.load(await fs.promises.readFile(path.join(status.savedFolder, savedFiles[0])));
+    assert.equal(merged.getPageCount(), 5);
+
+    const queueAfter = await (await fetch(`${base}/api/status`)).json();
+    assert.equal(queueAfter.printing, false, 'kolejka i stan drukowania musza byc wyczyszczone po zapisie, tak samo jak po druku');
   });
 }

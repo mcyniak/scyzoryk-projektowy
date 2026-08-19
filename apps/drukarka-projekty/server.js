@@ -506,7 +506,6 @@ if (!fs.existsSync(MERGED_DIR)) fs.mkdirSync(MERGED_DIR, { recursive: true });
 // wyzej sprawdza oba katalogi).
 const POWYKONAWCZA_DIR = path.join(DATA_DIR, "powykonawcza");
 if (!fs.existsSync(POWYKONAWCZA_DIR)) fs.mkdirSync(POWYKONAWCZA_DIR, { recursive: true });
-const DOCX_TO_PDF_SCRIPT = path.join(__dirname, "scripts", "docx-to-pdf.ps1");
 // Docelowe, TRWALE pliki wyjsciowe "Zapisz jako PDF" - w przeciwienstwie do
 // MERGED_DIR/POWYKONAWCZA_DIR NIE wchodzi do scheduleCleanup ponizej, bo to
 // nie jest katalog roboczy tylko to, co uzytkownik faktycznie chcial dostac.
@@ -638,51 +637,16 @@ function powykonawczaOpFilePath(opDir, idx, originalFullPath, forceExt) {
   return path.join(opDir, `${idx}_${nameNoExt}${ext}`);
 }
 
-// Konwertuje paczke plikow DOCX do PDF przez jedna sesje Word COM
-// (scripts/docx-to-pdf.ps1) - identyczny, sprawdzony wzorzec nie-detached
-// spawn co apps/wnioski-powykonawcze/server.js:runConvertScript (bezpieczny
-// wobec bledu Windows/Node opisanego w lib/updateService.js: detached:true zawsze
-// zglasza kod wyjscia 0 niezaleznie od rzeczywistego wyniku - tu w ogole nie
-// uzywamy detached, wiec problem nie dotyczy tego wywolania).
-async function convertDocxBatchToPdf(opDir, files) {
-  if (!files.length) return [];
-  const stamp = `${process.pid}_${Date.now()}`;
-  const inputJson = path.join(opDir, `docx-to-pdf-in-${stamp}.json`);
-  const outputJson = path.join(opDir, `docx-to-pdf-out-${stamp}.json`);
-  writeJsonFileNoBom(inputJson, { files });
-  // Ponizej domyslnego HTTP requestTimeout serwera (10 min, lib/hardening.js)
-  // - inaczej zerwanie polaczenia przez serwer wygladaloby jak zawieszenie,
-  // zamiast czytelnego bledu "Przekroczono limit czasu..." nizej.
-  const timeoutMs = Number(process.env.DRUKARKA_PROJEKTY_DOCX_TIMEOUT_MS || 5 * 60 * 1000);
-  try {
-    await new Promise((resolve, reject) => {
-      const child = spawn("powershell.exe", [
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", DOCX_TO_PDF_SCRIPT,
-        "-InputJson", inputJson, "-OutputJson", outputJson
-      ], { cwd: __dirname, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-      let stderr = "";
-      child.stderr.on("data", chunk => { stderr += chunk.toString("utf8"); });
-      const timer = setTimeout(() => {
-        try { child.kill(); } catch (_) {}
-        reject(new Error(`Przekroczono limit czasu konwersji DOCX->PDF (${Math.round(timeoutMs / 60000)} min).`));
-      }, timeoutMs);
-      timer.unref();
-      child.on("error", err => { clearTimeout(timer); reject(err); });
-      child.on("close", code => {
-        clearTimeout(timer);
-        if (code === 0 || fs.existsSync(outputJson)) return resolve();
-        reject(new Error(stderr.trim() || `PowerShell (docx-to-pdf) zakonczyl sie kodem ${code}.`));
-      });
-    });
-    const output = readJsonFileNoBom(outputJson);
-    if (!output || output.ok !== true || !Array.isArray(output.results)) {
-      throw new Error((output && output.error) || "Konwersja DOCX->PDF nie zwrocila wynikow.");
-    }
-    return output.results;
-  } finally {
-    try { fs.rmSync(inputJson, { force: true }); } catch (_) {}
-    try { fs.rmSync(outputJson, { force: true }); } catch (_) {}
-  }
+// Konwersja DOCX->PDF przez Word COM wyciagnieta do lib/printing.js
+// (2026-08-19, apps/drukarka dostalo wlasna opcje "Zapisz jako PDF" i
+// potrzebowalo tej samej logiki - patrz convertDocxBatchToPdf tam).
+// Ponizej domyslnego HTTP requestTimeout serwera (10 min, lib/hardening.js)
+// - inaczej zerwanie polaczenia przez serwer wygladaloby jak zawieszenie,
+// zamiast czytelnego bledu "Przekroczono limit czasu..." z lib/printing.js.
+function convertDocxBatchToPdf(opDir, files) {
+  return printService.convertDocxBatchToPdf(opDir, files, {
+    timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_DOCX_TIMEOUT_MS || 5 * 60 * 1000)
+  });
 }
 
 // Audyt v1.0.8 P1/P2: przygotowanie paczki "dokumentacja powykonawcza" jest

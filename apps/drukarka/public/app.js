@@ -426,6 +426,11 @@ async function pollStatus() {
     clearInterval(statusTimer);
     statusTimer = null;
 
+    if (s.savedFolder) {
+      statusText.textContent = "✅ Zapisano pliki PDF. Otwieram folder...";
+      fetch("/api/open-saved-pdf-folder", { method: "POST", headers: { "X-Scyzoryk-Request": "1" } }).catch(() => {});
+    }
+
     await loadQueue();
     hidePdfPreview();
     setPrintingUi(false);
@@ -476,7 +481,9 @@ printBtn.addEventListener("click", async () => {
   await saveOrder();
 
   const options = getPrintOptions();
-  const confirmText = `Wysłać do druku ${queue.length} plików, ${options.copies} kopii?`;
+  const confirmText = isSaveAsPdfMode()
+    ? `Zapisać ${queue.length} plików jako PDF (bez drukowania)?`
+    : `Wysłać do druku ${queue.length} plików, ${options.copies} kopii?`;
   if (!confirm(confirmText)) return;
 
   const res = await fetch("/api/print", {
@@ -583,14 +590,43 @@ if (!sideModeInput.value || sideModeInput.value === "one-sided") sideModeInput.v
 updateJobSummary();
 
 loadQueue();
+
+// Ten sam sentinel co server.js (SAVE_AS_PDF_SENTINEL) - nigdy nie trafia do
+// prawdziwej listy drukarek, wiec dopisywany tu, po stronie klienta, zawsze
+// (nawet gdy listPrinters() nie znajdzie zadnej fizycznej drukarki).
+const SAVE_AS_PDF_OPTION = `<option value="__SAVE_AS_PDF__">💾 Zapisz jako PDF (bez drukowania)</option>`;
+
 async function loadPrinters() {
   try {
     const res = await fetch("/api/printers", { headers: { "X-Scyzoryk-Request": "1" } });
     const data = await res.json();
     const printers = data.printers || [];
     if (printerSelectInput && printers.length) {
-      printerSelectInput.innerHTML = printers.map(p => `<option value="${escapeHtml(p.name)}"${p.isDefault ? " selected" : ""}>${escapeHtml(p.name)}${p.isDefault ? " (domyślna)" : ""}</option>`).join("");
+      printerSelectInput.innerHTML = printers.map(p => `<option value="${escapeHtml(p.name)}"${p.isDefault ? " selected" : ""}>${escapeHtml(p.name)}${p.isDefault ? " (domyślna)" : ""}</option>`).join("") + SAVE_AS_PDF_OPTION;
+    } else if (printerSelectInput) {
+      printerSelectInput.innerHTML += SAVE_AS_PDF_OPTION;
     }
-  } catch (e) {}
+  } catch (e) {
+    if (printerSelectInput) printerSelectInput.innerHTML += SAVE_AS_PDF_OPTION;
+  }
+  updatePrintModeUi();
 }
 loadPrinters();
+
+// Kopie/strony/tryb kopiowania nie maja znaczenia przy zapisie do PDF (nie ma
+// fizycznej drukarki ani duplexu) - ukrywamy je, zeby nie sugerowac, ze
+// cokolwiek robia w tym trybie. "Łącz sąsiadujące PDF-y" zostaje aktywne -
+// dziala identycznie w obu trybach (patrz buildSaveAsPdfOutputs w server.js).
+function isSaveAsPdfMode() {
+  return !!printerSelectInput && printerSelectInput.value === "__SAVE_AS_PDF__";
+}
+function updatePrintModeUi() {
+  const saveMode = isSaveAsPdfMode();
+  [delayInput, copiesInput, sideModeInput, copyModeInput].forEach(input => {
+    const field = input && input.closest(".option-field");
+    if (field) field.hidden = saveMode;
+  });
+  printBtn.textContent = saveMode ? "Zapisz jako PDF" : "Drukuj";
+  updateJobSummary();
+}
+if (printerSelectInput) printerSelectInput.addEventListener("change", updatePrintModeUi);

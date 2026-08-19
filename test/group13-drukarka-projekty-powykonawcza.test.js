@@ -259,10 +259,14 @@ test('drukarka-projekty: checkbox "dokumentacja powykonawcza" jest osobny od /ap
   const leaseIndex = printRouteMatch[0].indexOf('withPrintLease(');
   assert.ok(prepareIndex >= 0 && leaseIndex >= 0 && prepareIndex < leaseIndex, 'prepareStampedQueue musi wystapic PRZED withPrintLease w /api/print');
 
-  // Konwersja DOCX->PDF musi uzywac nie-detached spawn (bezpieczny wobec
-  // bledu Windows/Node: detached:true zawsze zglasza kod wyjscia 0).
-  assert.match(serverSource, /DOCX_TO_PDF_SCRIPT/);
-  assert.doesNotMatch(serverSource, /DOCX_TO_PDF_SCRIPT[\s\S]{0,400}detached:\s*true/);
+  // Konwersja DOCX->PDF (przeniesiona do lib/printing.js#convertDocxBatchToPdf
+  // 2026-08-19, zeby apps/drukarka tez moglo z niej skorzystac - patrz
+  // group2-printing.test.js) musi uzywac nie-detached spawn (bezpieczny wobec
+  // bledu Windows/Node: detached:true zawsze zglasza kod wyjscia 0). Tu tylko
+  // sprawdzamy, ze drukarka-projekty faktycznie deleguje do wspolnej funkcji,
+  // a nie trzyma wlasnej, driftujacej kopii.
+  assert.match(serverSource, /printService\.convertDocxBatchToPdf/);
+  assert.doesNotMatch(serverSource, /"powershell\.exe"[\s\S]{0,400}detached:\s*true/);
 });
 
 test('drukarka-projekty: "wariant - sprawdź ręcznie" NIE jest jednoczesnie SETTLED (rozstrzygniete) i wylaczone z druku (audyt rozdz. 11, P0/P1)', async () => {

@@ -4,6 +4,8 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
+const { spawn } = require("child_process");
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
 const printService = require("../../lib/printing");
@@ -22,8 +24,17 @@ const MAX_QUEUE = Number(process.env.DRUKARKA_MAX_QUEUE || 200);
 const DATA_DIR = path.join(APP_DATA_ROOT, "data");
 const UPLOAD_DIR = path.join(APP_DATA_ROOT, "uploads");
 const MERGED_DIR = path.join(DATA_DIR, "merged");
-for (const dir of [DATA_DIR, UPLOAD_DIR, MERGED_DIR]) if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-scheduleCleanup([UPLOAD_DIR, MERGED_DIR], 24 * 60 * 60 * 1000, 60 * 60 * 1000);
+// "Zapisz jako PDF" (patrz /api/print, printerName === SAVE_AS_PDF_SENTINEL) -
+// ten sam wzorzec co apps/drukarka-projekty/server.js: SAVE_AS_PDF_TMP_DIR to
+// robocze pliki konwersji DOCX->PDF (sprzatane przez scheduleCleanup jak
+// MERGED_DIR), SAVE_AS_PDF_OUTPUT_DIR to TRWALE wyniki, ktore uzytkownik
+// faktycznie chcial dostac - nie wchodzi do scheduleCleanup.
+const SAVE_AS_PDF_TMP_DIR = path.join(DATA_DIR, "zapis-pdf-tmp");
+const SAVE_AS_PDF_OUTPUT_DIR = path.join(DATA_DIR, "zapisane-pdf");
+for (const dir of [DATA_DIR, UPLOAD_DIR, MERGED_DIR, SAVE_AS_PDF_TMP_DIR, SAVE_AS_PDF_OUTPUT_DIR]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+scheduleCleanup([UPLOAD_DIR, MERGED_DIR, SAVE_AS_PDF_TMP_DIR], 24 * 60 * 60 * 1000, 60 * 60 * 1000);
 
 const SECURITY_HEADERS = {
   "X-Content-Type-Options": "nosniff",
@@ -64,6 +75,11 @@ app.use('/api', apiLimiter);
 
 app.use('/shared', express.static(path.join(__dirname, '..', '..', 'shared-styles')));
 app.use(express.static(path.join(__dirname, "public")));
+
+// "Zapisz jako PDF" (patrz /api/print) - ten sam sentinel co
+// apps/drukarka-projekty/server.js: nigdy nie trafia do prawdziwej listy
+// drukarek (lib/printing.js), front-end dopisuje go recznie do <select>.
+const SAVE_AS_PDF_SENTINEL = "__SAVE_AS_PDF__";
 
 let queue = [];
 let printing = false;
@@ -189,6 +205,99 @@ function cleanupFiles(items) {
     } catch {}
   }
 }
+
+function sanitizeForFileName(name, maxLen) {
+  const safe = String(name || "").replace(/[<>:"/\\|?*]/g, "_").trim();
+  return safe.slice(0, maxLen || 80) || "plik";
+}
+
+function uniqueOutputPath(dir, baseName) {
+  const safe = sanitizeForFileName(baseName, 120);
+  let candidate = path.join(dir, `${safe}.pdf`);
+  for (let n = 2; fs.existsSync(candidate); n++) {
+    candidate = path.join(dir, `${safe} (${n}).pdf`);
+  }
+  return candidate;
+}
+
+function clearSaveAsPdfOutputDir() {
+  try {
+    fs.rmSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true, force: true });
+  } catch (_) {}
+  fs.mkdirSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true });
+}
+
+// "Zapisz jako PDF" - to, co WYSLALOBY sie do drukarki (konwersja DOC/DOCX,
+// potem to samo laczenie sasiadujacych PDF-ow co buildMergedPrintItems przy
+// wlaczonym "Łącz sąsiadujące PDF-y"), tylko zamiast wyslania do drukarki
+// kazdy wynikowy plik ladowany jest TRWALE na dysk. W przeciwienstwie do
+// apps/drukarka-projekty (gdzie kazdy "adres" to jedna grupa->jeden plik),
+// apps/drukarka nie ma pojecia grup - kazda pozycja w kolejce jest wlasna
+// grupa, chyba ze mergeFiles polaczy ja z sasiadami (dokladnie jak przy druku).
+async function buildSaveAsPdfOutputs(items, mergeFiles, onProgress) {
+  const opDir = path.join(SAVE_AS_PDF_TMP_DIR, `${Date.now()}_${crypto.randomBytes(4).toString("hex")}`);
+  fs.mkdirSync(opDir, { recursive: true });
+  try {
+    const docxJobs = items
+      .filter(it => it.ext !== ".pdf")
+      .map(it => ({
+        item: it,
+        inputPath: it.path,
+        outputPath: path.join(opDir, `${crypto.randomBytes(4).toString("hex")}_${sanitizeForFileName(it.originalName, 60)}.pdf`)
+      }));
+
+    // items (mutowalne kopie ponizej) - konwersja podmienia path/ext na
+    // wlasnej kopii kazdego elementu, NIGDY na oryginalnym obiekcie z `queue`
+    // (ktory moze byc czytany/logowany rownolegle, zanim funkcja zakonczy).
+    let converted = items.map(it => ({ ...it }));
+    if (docxJobs.length) {
+      const results = await printService.convertDocxBatchToPdf(opDir, docxJobs.map(j => ({ inputPath: j.inputPath, outputPath: j.outputPath })));
+      const byInput = new Map(results.map(r => [r.input, r]));
+      const errors = [];
+      const byOriginalPath = new Map(docxJobs.map(j => [j.item.path, j]));
+      converted = converted.map(it => {
+        const job = byOriginalPath.get(it.path);
+        if (!job) return it;
+        const result = byInput.get(job.inputPath);
+        if (result && result.ok && fs.existsSync(job.outputPath)) {
+          return { ...it, path: job.outputPath, ext: ".pdf" };
+        }
+        errors.push({ label: it.originalName, message: (result && result.error) || "Konwersja DOCX->PDF nie powiodla sie." });
+        return it;
+      });
+      if (errors.length) {
+        const details = errors.map(e => `- ${e.label}: ${e.message}`).join("\n");
+        throw new Error(`Nie udalo sie przekonwertowac wszystkich plikow DOC/DOCX do PDF.\n${details}`);
+      }
+    }
+
+    const outputItems = mergeFiles
+      ? await buildMergedPrintItems(converted)
+      : converted;
+
+    const outputs = [];
+    for (let i = 0; i < outputItems.length; i++) {
+      const item = outputItems[i];
+      if (typeof onProgress === "function") onProgress(i, outputItems.length, item.originalName);
+      const outPath = uniqueOutputPath(SAVE_AS_PDF_OUTPUT_DIR, path.basename(item.originalName || "plik", path.extname(item.originalName || "")));
+      fs.copyFileSync(item.path, outPath);
+      outputs.push({ label: item.originalName, path: outPath });
+    }
+    if (typeof onProgress === "function") onProgress(outputItems.length, outputItems.length, "");
+    return { ok: true, outputs };
+  } finally {
+    try { fs.rmSync(opDir, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// Otwiera WYLACZNIE staly, wewnetrzny katalog wyjsciowy "Zapisz jako PDF"
+// (SAVE_AS_PDF_OUTPUT_DIR jest stala, nigdy sciezka od klienta) - explorer.exe
+// bez powloki/interpretera posrednika, ten sam wzorzec co
+// apps/drukarka-projekty/server.js.
+app.post("/api/open-saved-pdf-folder", (req, res) => {
+  spawn("explorer.exe", [SAVE_AS_PDF_OUTPUT_DIR], { detached: true, stdio: "ignore" }).unref();
+  res.json({ ok: true });
+});
 
 app.post("/api/upload", heavyJobLimiter, (req, res, next) => {
   if (printing) {
@@ -369,6 +478,48 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
     return res.status(400).json({ ok: false, message: "Brak plikow" });
   }
 
+  // "Zapisz jako PDF" nigdy nie dotyka fizycznej drukarki ani withPrintLease
+  // (ten muteks arbitruje dostep do drukarki - zapis na dysk nie ma z tym nic
+  // wspolnego) - osobna, prostsza sciezka, ten sam wzorzec co
+  // apps/drukarka-projekty/server.js.
+  if (printerName === SAVE_AS_PDF_SENTINEL) {
+    printing = true;
+    const itemsToSave = [...queue];
+    status = {
+      printing: true,
+      message: "Start zapisywania do PDF...",
+      current: 0,
+      total: itemsToSave.length,
+      percent: 0,
+      done: false,
+      error: null,
+      savedFolder: null
+    };
+    res.json({ ok: true });
+    try {
+      clearSaveAsPdfOutputDir();
+      const result = await buildSaveAsPdfOutputs(itemsToSave, mergeFiles, (i, total, label) => {
+        status.current = i;
+        status.total = total;
+        status.percent = total ? Math.round((i / total) * 100) : 0;
+        status.message = label ? `Zapisuje ${i + 1}/${total}: ${label}` : `Zapisano ${i}/${total}.`;
+      });
+      status.message = `✅ Zapisano ${result.outputs.length} plik(ow) PDF do ${SAVE_AS_PDF_OUTPUT_DIR}`;
+      status.percent = 100;
+      status.done = true;
+      status.savedFolder = SAVE_AS_PDF_OUTPUT_DIR;
+    } catch (err) {
+      status.error = String(err.message || err);
+      status.message = "❌ Blad zapisu PDF: " + status.error;
+    } finally {
+      cleanupFiles(itemsToSave);
+      queue = [];
+      printing = false;
+      status.printing = false;
+    }
+    return;
+  }
+
   try {
     await withPrintLease({ app: "drukarka", sessionId: req.sessionID || null, printerName }, async () => {
       printing = true;
@@ -494,10 +645,21 @@ app.use((err, req, res, next) => {
   res.status(400).json({ ok: false, message });
 });
 
-const server = app.listen(PORT, HOST, () => {
-  console.log("");
-  console.log("Drukarka Web dziala tylko lokalnie:");
-  console.log(`http://${HOST}:${PORT}`);
-  console.log("");
-});
-applyHttpTimeouts(server, "DRUKARKA");
+// require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany
+// bezposrednio (node server.js / root supervisor) - ten sam wzorzec co
+// apps/drukarka-projekty/server.js i apps/ocr-audytow/server.js. Brak tej
+// ochrony przy zwyklym require() (np. w testach) probowal zbindowac PORT
+// (domyslnie 3000) na maszynie, na ktorej ten sam port juz zajmuje prawdziwy,
+// dzialajacy panel - nieobsluzony event 'error' (EADDRINUSE) na serwerze bez
+// wlasnego handlera bledu wywala caly proces Node.
+if (require.main === module) {
+  const server = app.listen(PORT, HOST, () => {
+    console.log("");
+    console.log("Drukarka Web dziala tylko lokalnie:");
+    console.log(`http://${HOST}:${PORT}`);
+    console.log("");
+  });
+  applyHttpTimeouts(server, "DRUKARKA");
+}
+
+module.exports = { app };
