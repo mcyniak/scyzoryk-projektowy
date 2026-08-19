@@ -752,7 +752,7 @@
         const rows = Object.entries(block.fields).map(([key, field]) => `
           <tr class="${field.needsReview ? 'needs-review' : ''}" data-row-key="${key}" ${fieldRowHidden(block, key) ? 'hidden' : ''}>
             <td class="field-col-label">${escapeHtml(field.columnLabel)}</td>
-            <td class="field-col-value">${renderFieldValueControl(file.fileId, block, key, field)}</td>
+            <td class="field-col-value${field.options && field.options.length ? ' has-select' : ''}">${renderFieldValueControl(file.fileId, block, key, field)}</td>
           </tr>
         `).join('');
         const blockWarnings = (file.warnings || []).filter(w => w.includes(block.label || `adres ${block.blockIndex + 1}`));

@@ -103,9 +103,22 @@
 .field-table tr:first-child { border-top: 0; }
 .field-table td { padding: 7px 4px; vertical-align: middle; }
 .field-col-label { font-size: 12.5px; font-weight: 600; color: var(--text-secondary); width: 42%; }
-.field-col-value { width: 58%; }
+.field-col-value { width: 58%; position: relative; }
 .field-table input, .field-table select { width: 100%; border: 1px solid var(--border-default); border-radius: var(--radius-sm); padding: 7px 10px; font: inherit; font-size: 13px; background: transparent; color: inherit; }
 .field-table input:focus-visible, .field-table select:focus-visible { outline: none; border-color: var(--info-500); box-shadow: var(--shadow-focus); }
+/* select dziedziczyl input-owy "background: transparent", ale bez
+   appearance:none renderowal sie z natywnym OS-owym wygladem przegladarki
+   (wlasna strzalka/tlo), ktory nie pasowal do plaskiego wiersza tabelki -
+   "nieostylowana" lista. Wlasna strzalka = ten sam wzorzec co
+   shared-styles/components.css#.select-wrap::after, tylko oparty o
+   .field-col-value (bez dodatkowego <div> - tu kazda komorka i tak ma
+   dokladnie jedno pole). */
+.field-table select { appearance: none; -webkit-appearance: none; background: var(--bg-surface); padding-right: 30px; cursor: pointer; }
+.field-col-value.has-select::after {
+  content: ""; position: absolute; right: 12px; top: 50%; width: 8px; height: 8px;
+  border-right: 2px solid var(--text-tertiary); border-bottom: 2px solid var(--text-tertiary);
+  transform: translateY(-70%) rotate(45deg); pointer-events: none;
+}
 .field-table tr.needs-review { background: var(--warning-50); }
 .field-table tr.needs-review .field-col-label { color: var(--warning-600); font-weight: 700; }
 .field-table tr.needs-review input, .field-table tr.needs-review select { border-color: var(--warning-500); }
