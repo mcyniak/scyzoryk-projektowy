@@ -6,20 +6,15 @@ name: Zbuduj instalator deweloperski
 # Sluzy do testow technicznych, a nie do przekazywania pracownikom. Gotowy
 # instalator dla uzytkownika koncowego buduje osobny workflow
 # build-ready-installer.yml.
-
+#
+# Wylacznie workflow_dispatch (audyt 2026-08-20) - automatyczny push-trigger
+# na kazda zmiane apps/**/public/**/... na main byl niepotrzebny (wlasciciel
+# go nigdy nie uzywal, tylko przeszkadzal odpalajac sie rownolegle z prawdziwa
+# praca/releasem) i sam sobie zaprzeczal z build-ready-installer.yml (ten
+# drugi workflow tez commituje do main w trakcie swojego przebiegu, co
+# potrafilo dodatkowo wyzwolic ten workflow w trakcie release'u).
 on:
   workflow_dispatch: {}
-  push:
-    branches: [main]
-    paths:
-      - 'apps/**'
-      - 'public/**'
-      - 'lib/**'
-      - 'server.js'
-      - 'package.json'
-      - 'scripts/**'
-      - 'installer/**'
-      - '.github/workflows/build-internal-installer.yml'
 
 permissions:
   contents: read

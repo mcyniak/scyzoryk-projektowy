@@ -278,11 +278,14 @@ new app, copy this rather than inventing a new one:
   origin). Nie twórz osobnego długożyjącego brancha "roboczego" bez wyraźnej potrzeby — pracuj na `main`
   (albo krótkotrwałym branchu feature/fix, jeśli akurat jest taki zwyczaj), żeby uniknąć tego samego
   rozjazdu ponownie.
-- Trzy workflowy instalatora w `.github/workflows/`, wszystkie triggerowane z `main` (nie z żadnego
-  innego brancha — jeśli kiedyś znowu praca przeniesie się na osobny branch, PAMIĘTAJ zaktualizować
-  triggery `branches:` w tych plikach, inaczej po cichu przestaną się odpalać):
-  - `build-internal-installer.yml` ("Zbuduj instalator deweloperski") — push na `main` dotykający kodu
-    aplikacji, buduje instalator bez sekretów, do testów technicznych.
+- Trzy workflowy instalatora w `.github/workflows/`. Dwa z nich mają automatyczny trigger na push do
+  `main` (nie z żadnego innego brancha — jeśli kiedyś znowu praca przeniesie się na osobny branch,
+  PAMIĘTAJ zaktualizować triggery `branches:` w tych plikach, inaczej po cichu przestaną się odpalać):
+  - `build-internal-installer.yml` ("Zbuduj instalator deweloperski") — **wyłącznie `workflow_dispatch`**
+    (audyt 2026-08-20 — automatyczny push-trigger na `main` był niepotrzebny, właściciel go nigdy nie
+    używał, tylko przeszkadzał odpalając się równolegle z prawdziwą pracą/releasem, w tym w trakcie
+    releasu, bo `build-ready-installer.yml` sam commituje do `main` w trakcie swojego przebiegu). Buduje
+    instalator bez sekretów, do testów technicznych — odpalaj ręcznie, tylko kiedy faktycznie potrzebny.
   - `build-ready-installer.yml` ("Zbuduj gotowy instalator Windows") — dwa joby na świeżych maszynach
     Windows (build+test+zrzuty ekranu+finalny build, potem świeża instalacja finalnego EXE i pełna
     weryfikacja). Triggerowany `workflow_dispatch` albo pushem zmieniającym `.github/run-ready-installer`
