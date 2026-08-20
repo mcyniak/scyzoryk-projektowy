@@ -441,6 +441,122 @@ test('przetworzArkuszPomp: arkusz "Solary" jest ignorowany (nie dotyczy pomp)', 
   assert.deepEqual(wyniki, []);
 });
 
+test('przetworzArkuszPomp: tryb pominKarty (dodatki audyty/dokumenty-seryjne/dobory na arkuszu Pomp, Faza 0, audyt 2026-08-20) - audyty/dokumenty seryjne dzialaja dla grunt I powietrzna, dobory WYLACZNIE dla powietrzna', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-pomp-dodatek-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const projektyDir = path.join(root, 'PC powietrzne', 'Projekty');
+  const folderPowietrzna = path.join(projektyDir, '17.Wieruszew 3');
+  const folderGrunt = path.join(projektyDir, '18.Wieruszew 5');
+  await fsp.mkdir(folderPowietrzna, { recursive: true });
+  await fsp.mkdir(folderGrunt, { recursive: true });
+
+  const audytyDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-pomp-audyty-'));
+  t.after(() => fsp.rm(audytyDir, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(audytyDir, 'Wieruszew 3_PV.pdf'), 'audyt-powietrzna');
+  await fsp.writeFile(path.join(audytyDir, 'Wieruszew 5_PV.pdf'), 'audyt-grunt');
+  const audytyPliki = await zbierzPlikiPdf(audytyDir);
+
+  const doboryDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-pomp-dobory-'));
+  t.after(() => fsp.rm(doboryDir, { recursive: true, force: true }));
+  // Tylko powietrzna ma plik doboru - dokladnie tak dziala to w praniu, bo
+  // Varmero/myEcodan nigdy nie generuja doboru dla adresu z pompa gruntowa.
+  await fsp.writeFile(path.join(doboryDir, 'Dob_001 - Jan Kowalski - Wieruszew 3.pdf'), 'dobor-powietrzna');
+  const doboryPliki = await zbierzPlikiPdf(doboryDir);
+
+  // "Rodzaj pompy" jako 4. kolumna - "Model pompy" swiadomie PUSTY dla wiersza
+  // gruntowego (grunt nie ma modelu Varmero VPM, wiec w trybie karty ten
+  // wiersz w ogole nie zostalby przetworzony - w trybie dodatku MUSI zostac
+  // przetworzony mimo braku modelu).
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-pomp-dodatek-'));
+  const file = path.join(dir, 'dane.xlsx');
+  const header = ['LP gminy', 'Adres', 'Model pompy', 'Rodzaj pompy'];
+  const ws = XLSX.utils.aoa_to_sheet([
+    header,
+    [17, 'Wieruszew 3', 'VPM9012', 'Powietrze-woda'],
+    [18, 'Wieruszew 5', '', 'Gruntowa']
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Pompy ciepła');
+  XLSX.writeFile(wb, file);
+  t.after(() => usunPozniej(dir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkuszPomp({
+    sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false,
+    audytyPliki, dokumentySeryjnePliki: null, doboryPliki, pominKarty: true
+  });
+
+  assert.equal(wyniki.length, 2);
+  const powietrzna = wyniki.find(w => w.adres === 'Wieruszew 3');
+  const grunt = wyniki.find(w => w.adres === 'Wieruszew 5');
+  assert.ok(powietrzna && grunt, 'oba wiersze (grunt i powietrzna) musza zostac przetworzone w trybie dodatku, mimo ze grunt nie ma modelu Varmero');
+
+  assert.deepEqual(powietrzna.audyt, { status: 'skopiowano', plik: 'Wieruszew 3_PV.pdf' });
+  assert.deepEqual(powietrzna.dobor, { status: 'skopiowano', plik: 'Dob_001 - Jan Kowalski - Wieruszew 3.pdf' });
+  assert.ok(fs.existsSync(path.join(folderPowietrzna, 'Wieruszew 3_PV.pdf')));
+  assert.ok(fs.existsSync(path.join(folderPowietrzna, 'Dob_001 - Jan Kowalski - Wieruszew 3.pdf')));
+
+  assert.deepEqual(grunt.audyt, { status: 'skopiowano', plik: 'Wieruszew 5_PV.pdf' });
+  assert.equal(grunt.dobor, undefined, 'dobor NIE jest w ogole sprawdzany dla pompy gruntowej (tak jakby zrodlo doborow nie zostalo podane), mimo ze faktycznie zostalo podane dla calego arkusza');
+  assert.ok(fs.existsSync(path.join(folderGrunt, 'Wieruszew 5_PV.pdf')));
+});
+
+test('POST /api/run: typ="audyty" bez jawnego sheetName dziala NA OBU arkuszach naraz (Solary I Pompy) w tym samym wgranym pliku, bez duplikatow (Faza 0, audyt 2026-08-20)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-audyty-oba-arkusze-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const projektySolary = path.join(root, 'Projekty', 'Zarnow');
+  await fsp.mkdir(path.join(projektySolary, '41 - Wierzchlas, Częstochowska 26'), { recursive: true });
+  const projektyPompy = path.join(root, 'PC powietrzne', 'Projekty');
+  await fsp.mkdir(path.join(projektyPompy, '17.Wieruszew 3'), { recursive: true });
+
+  const workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-http-audyty-oba-'));
+  t.after(() => fsp.rm(workDir, { recursive: true, force: true }));
+  const audytyZip = new AdmZip();
+  audytyZip.addFile('PV/Wierzchlas, ul. Częstochowska 26_PV.pdf', Buffer.from('audyt-solary'));
+  audytyZip.addFile('PV/Wieruszew 3_PV.pdf', Buffer.from('audyt-pompy'));
+  const audytyZipPath = path.join(workDir, 'audyty.zip');
+  audytyZip.writeZip(audytyZipPath);
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-oba-arkusze-'));
+  const file = path.join(dir, 'dane.xlsx');
+  const wsSolary = XLSX.utils.aoa_to_sheet([HEADER_PV, [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe']]);
+  const wsPompy = XLSX.utils.aoa_to_sheet([['LP gminy', 'Adres', 'Model pompy'], [17, 'Wieruszew 3', 'VPM9012']]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, wsSolary, 'Solary Zarnow');
+  XLSX.utils.book_append_sheet(wb, wsPompy, 'Pompy ciepła');
+  XLSX.writeFile(wb, file);
+  t.after(() => usunPozniej(dir));
+
+  const server = kkApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  const form = new FormData();
+  form.append('excel', new Blob([await fsp.readFile(file)]), 'dane.xlsx');
+  form.append('audytyZip', new Blob([await fsp.readFile(audytyZipPath)]), 'audyty.zip');
+  form.append('rootPath', root);
+  form.append('typ', 'audyty');
+  form.append('dryRun', 'false');
+  // Celowo BEZ sheetName - petla po wszystkich arkuszach (patrz dodatekDlaObuArkuszy w server.js).
+
+  const res = await fetch(`${base}/api/run`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const data = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(data));
+  assert.equal(data.ok, true);
+  assert.equal(data.wyniki.length, 2, 'dokladnie jeden wynik na kazdy arkusz - zero duplikatow');
+  const solary = data.wyniki.find(w => w.adres === 'Wierzchlas, Częstochowska 26');
+  const pompy = data.wyniki.find(w => w.adres === 'Wieruszew 3');
+  assert.deepEqual(solary.audyt, { status: 'skopiowano', plik: 'Wierzchlas, ul. Częstochowska 26_PV.pdf' });
+  assert.deepEqual(pompy.audyt, { status: 'skopiowano', plik: 'Wieruszew 3_PV.pdf' });
+  assert.ok(fs.existsSync(path.join(projektySolary, '41 - Wierzchlas, Częstochowska 26', 'Wierzchlas, ul. Częstochowska 26_PV.pdf')));
+  assert.ok(fs.existsSync(path.join(projektyPompy, '17.Wieruszew 3', 'Wieruszew 3_PV.pdf')));
+});
+
 // =====================================================================
 // Audyt 2026-08-19 (realny test na inwestycji Kamiensk, wlasciciel):
 // 1) Solary - karty NIE leza plasko w jednym folderze, tylko w podfolderach

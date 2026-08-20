@@ -14,6 +14,7 @@ const { getAppDataDir } = require('../../lib/appPaths');
 const { isAffirmativeFlag } = require('../../lib/businessFlags');
 const { browseFolder } = require('../../lib/folderBrowse');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
+const { isAirSourcePump } = require('../../lib/pumpSourceType');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -607,6 +608,27 @@ async function dopasujISkopiujDodatek({ trafienia, folderKlienta, istniejace, dr
   }
 }
 
+// Dodatki dopasowywane WYLACZNIE po adresie (audyt/dokument seryjny/dobor) -
+// w odroznieniu od schematow (dopasowanie po mocy zestawu, wylacznie Solary)
+// te trzy nie zaleza w ogole od ksztaltu arkusza, wiec sa wspoldzielone
+// miedzy przetworzArkusz (Solary) i przetworzArkuszPomp (Pompy) - audyt
+// 2026-08-20, rozszerzenie dodatkow o Pompy (Faza 0 planu "Pipeline
+// inwestycji"). "Dodaj schematy elektryczne" swiadomie NIE jest tu wlaczone -
+// wlasciciel: to nie dotyczy dzialu, ktory uzywa Pomp, zostaje Solary-only.
+async function dopasujDodatkiAdresowe({ adres, folderKlienta, istniejace, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki }) {
+  const dodatki = {};
+  if (audytyPliki !== null) {
+    dodatki.audyt = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, audytyPliki), folderKlienta, istniejace, dryRun });
+  }
+  if (dokumentySeryjnePliki !== null) {
+    dodatki.dokumentSeryjny = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, dokumentySeryjnePliki), folderKlienta, istniejace, dryRun });
+  }
+  if (doboryPliki !== null) {
+    dodatki.dobor = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, doboryPliki), folderKlienta, istniejace, dryRun });
+  }
+  return dodatki;
+}
+
 // audytyPliki/dokumentySeryjnePliki/doboryPliki/schematyIndeks: null = zrodlo
 // nie zostalo podane dla tego uruchomienia (dodatek w ogole nie pojawia sie w
 // wyniku wiersza); pusta tablica = zrodlo podane, ale nic sie w nim nie
@@ -865,16 +887,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
     // galaz kart (blad/juz-sa/do-skopiowania/skopiowano/blad-kopiowania)
     // zostanie wybrana.
     async function zDodatkami(wynikBazowy) {
-      const dodatki = {};
-      if (audytyPliki !== null) {
-        dodatki.audyt = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, audytyPliki), folderKlienta, istniejace, dryRun });
-      }
-      if (dokumentySeryjnePliki !== null) {
-        dodatki.dokumentSeryjny = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, dokumentySeryjnePliki), folderKlienta, istniejace, dryRun });
-      }
-      if (doboryPliki !== null) {
-        dodatki.dobor = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, doboryPliki), folderKlienta, istniejace, dryRun });
-      }
+      const dodatki = await dopasujDodatkiAdresowe({ adres, folderKlienta, istniejace, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki });
       if (schematyIndeks !== null) {
         dodatki.schemat = colMoc === -1
           ? { status: 'brak' }
@@ -992,11 +1005,20 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
 // ("Karty katalogowe.pdf") zamiast zestawu zaleznego od rozmiaru zasobnika.
 // Dopasowanie folderu klienta (LP + potwierdzenie adresem) jest identyczne -
 // ta sama zbudujMapeFolderow/adresPasujeDoFolderu co dla solarow.
-async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszony = false }) {
+async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszony = false, audytyPliki = null, dokumentySeryjnePliki = null, doboryPliki = null, pominKarty = false }) {
   const wyniki = [];
   // wymuszony: patrz komentarz przy przetworzArkusz - jawny wybor arkusza z
   // listy pomija rozpoznawanie po nazwie ("Pompy ciepła" itp.) calkowicie.
   if (!wymuszony && !rozpoznajArkuszPomp(sheetName)) return wyniki; // arkusz nie dotyczy pomp (np. Solary, Kotly, adresy)
+
+  // pominKarty (Faza 0 planu "Pipeline inwestycji", audyt 2026-08-20): tryb
+  // "tylko dodatek" na arkuszu Pomp - audyty/dokumenty seryjne dotycza OBU
+  // podkategorii (grunt i powietrzna, patrz kolumna "Rodzaj pompy" nizej),
+  // dobory WYLACZNIE powietrznych (Varmero/myEcodan nie robia doboru dla
+  // pomp gruntowych). W tym trybie karty katalogowe w ogole nie sa dobierane,
+  // wiec folder wzorow (wzorDir) nie musi istniec, a wiersz nie musi miec
+  // rozpoznanego modelu Varmero (parseModelPompy) - dopasowanie dodatku jest
+  // wylacznie po adresie, nigdy po modelu pompy.
 
   // Nazewnictwo folderu pomp na poziomie inwestycji ROZNI SIE miedzy
   // inwestycjami (zweryfikowane realnie): niektore maja "PC powietrzne"
@@ -1007,7 +1029,7 @@ async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszon
   // konwencja), potem plaskie "PC".
   const { wzorDir, projektyDir } = znajdzFolderyPomp(rootPath);
 
-  const wzorIstnieje = fs.existsSync(wzorDir);
+  const wzorIstnieje = pominKarty || fs.existsSync(wzorDir);
   const nazwyFolderowKlientow = await listujFoldery(projektyDir);
 
   if (!wzorIstnieje) {
@@ -1025,11 +1047,15 @@ async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszon
   const colLpGmina = findColumn(header, ['lp', 'gmin']);
   const colAdres = findColumn(header, ['adres'], ['kod', 'email', 'e mail']);
   const colModelPompy = findColumn(header, ['model', 'pomp']);
+  // Tylko do filtrowania dodatku "dobory" (patrz nizej) - jesli kolumny nie
+  // ma, NIE blokujemy calego arkusza (dodatki audyty/dokumenty-seryjne dzialaja
+  // bez niej), po prostu dobory nie beda filtrowane po grunt/powietrzna.
+  const colRodzajPompy = findColumn(header, ['rodzaj', 'pomp']);
 
   const brakujaceKolumny = [];
   if (colLpGmina === -1) brakujaceKolumny.push('LP gminy');
   if (colAdres === -1) brakujaceKolumny.push('adres');
-  if (colModelPompy === -1) brakujaceKolumny.push('Model pompy');
+  if (!pominKarty && colModelPompy === -1) brakujaceKolumny.push('Model pompy');
   if (brakujaceKolumny.length) {
     wyniki.push({ gmina: null, sheet: sheetName, id: null, adres: null, uid: null, status: 'blad', komunikat: `Arkusz "${sheetName}": nie znaleziono kolumn: ${brakujaceKolumny.join(', ')}. Sprawdz naglowki w pierwszym wierszu arkusza.` });
     return wyniki;
@@ -1043,12 +1069,16 @@ async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszon
     const row = rows[i];
     if (!row || row.every(v => v === null || v === undefined || v === '')) continue;
 
-    const model = parseModelPompy(row[colModelPompy]);
-    if (!model) continue; // brak pompy powietrznej Varmero w tym wierszu (np. CWU/Basic albo inny dostawca) - normalne, pomijamy cicho
+    let model = null;
+    if (!pominKarty) {
+      model = parseModelPompy(row[colModelPompy]);
+      if (!model) continue; // brak pompy powietrznej Varmero w tym wierszu (np. CWU/Basic albo inny dostawca) - normalne, pomijamy cicho
+    }
 
     const id = parseIdFolderu(row[colLpGmina]);
     const adres = normalizujTekst(row[colAdres]);
     const opisAdresu = adres || '(brak adresu)';
+    const rodzajPompyRaw = colRodzajPompy !== -1 ? row[colRodzajPompy] : null;
 
     if (!id) {
       wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id: row[colLpGmina], adres, model, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak poprawnego "LP gminy" dla adresu "${opisAdresu}" - nie mozna dopasowac folderu.` };
@@ -1073,12 +1103,34 @@ async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszon
       continue;
     }
 
-    zadania.push({ idx: i, wiersz, id, adres, model, folderNazwa });
+    zadania.push({ idx: i, wiersz, id, adres, model, folderNazwa, rodzajPompyRaw });
   }
 
   const semafor = createSemaphore(KK_CONCURRENCY);
   await Promise.all(zadania.map(zadanie => semafor.run(async () => {
-    const { idx, wiersz, id, adres, model, folderNazwa } = zadanie;
+    const { idx, wiersz, id, adres, model, folderNazwa, rodzajPompyRaw } = zadanie;
+
+    if (pominKarty) {
+      const folderKlienta = path.join(projektyDir, folderNazwa);
+      const istniejace = await istniejacePlikiWFolderze(folderKlienta);
+      // Dobor Varmero/myEcodan nie dotyczy pomp gruntowych - jesli kolumna
+      // "Rodzaj pompy" jednoznacznie mowi "grunt", nie sprawdzamy w ogole
+      // doborow dla tego wiersza (zeby nie pokazac mylacego "brak" tam, gdzie
+      // dobor nigdy nie mial powstac). Brak kolumny = nie filtrujemy (patrz
+      // komentarz przy colRodzajPompy wyzej).
+      const doboryDlaWiersza = (colRodzajPompy === -1 || isAirSourcePump(rodzajPompyRaw)) ? doboryPliki : null;
+      const dodatki = await dopasujDodatkiAdresowe({ adres, folderKlienta, istniejace, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki: doboryDlaWiersza });
+      const jedynyDodatek = dodatki.audyt || dodatki.dokumentSeryjny || dodatki.dobor || null;
+      wynikiByIdx[idx] = {
+        gmina: null, sheet: sheetName, wiersz, id, adres, folder: folderNazwa,
+        ...dodatki,
+        status: jedynyDodatek ? jedynyDodatek.status : 'blad',
+        komunikat: jedynyDodatek
+          ? (jedynyDodatek.plik || (jedynyDodatek.kandydaci ? `Kilka pasujacych plikow: ${jedynyDodatek.kandydaci.join(', ')}` : ''))
+          : 'Nie podano zrodla dodatku.'
+      };
+      return;
+    }
 
     const folderyModelu = await znajdzFolderyModeluPompy(wzorDir, model);
     if (folderyModelu === null) {
@@ -1229,13 +1281,24 @@ app.post('/api/run', uploadWieloplikowy.fields([
       'dokumenty-seryjne': { etykieta: 'dokumenty-seryjne', zip: 'dokumentySeryjneZip', sciezka: 'dokumentySeryjnePath' },
       dobory: { etykieta: 'dobory', zip: 'doboryZip', sciezka: 'doboryPath' }
     };
+    // Faza 0 planu "Pipeline inwestycji" (audyt 2026-08-20): audyty/dokumenty
+    // seryjne/dobory dzialaja teraz TAKZE na arkuszu Pomp (patrz
+    // przetworzArkuszPomp, tryb pominKarty), zeby Dobor Varmero/myEcodan
+    // (ktory z definicji dotyczy WYLACZNIE pomp powietrznych) mial gdzie
+    // wyladowac. "schematy" swiadomie NIE - wlasciciel: "to nie od tego
+    // dzialu jest", zostaje Solary-only.
+    const DODATEK_TYPY_ROZSZERZONE_O_POMPY = new Set(['audyty', 'dokumenty-seryjne', 'dobory']);
     const typRaw = normalizujTekst(req.body.typ);
     const typ = typRaw === 'pompy' ? 'pompy' : (DODATEK_ZRODLA[typRaw] ? typRaw : 'solary');
 
-    // Audyty/schematy/dokumenty seryjne/dobory dotycza WYLACZNIE solarow
-    // (schematy sa dobierane po mocy zestawu fotowoltaicznego, pozostale
-    // dodatki po adresie z arkusza PV) - dla pomp te pola sa po prostu
-    // ignorowane, nawet jesli front-end jakims trafem by je wyslal.
+    // W trybie typ==='solary' (pelny run, wszystkie dodatki na raz) te pola sa
+    // czytane WYLACZNIE dla arkusza Solary - schematy (moc zestawu
+    // fotowoltaicznego) i tak maja sens tylko tam. Audyty/dokumenty
+    // seryjne/dobory w tym trybie tez ida tylko do przetworzArkusz (arkusz
+    // Solary) - dla arkusza Pomp w tym samym pelnym runie te pola sa po
+    // prostu ignorowane (przetworzArkuszPomp w trybie karty nie przyjmuje ich
+    // wcale). Dodatek na Pompach dziala WYLACZNIE jako osobny tryb
+    // "tylko dodatek" (patrz DODATEK_TYPY_ROZSZERZONE_O_POMPY nizej, Faza 0).
     let audytyPliki = null;
     let dokumentySeryjnePliki = null;
     let doboryPliki = null;
@@ -1289,11 +1352,21 @@ app.post('/api/run', uploadWieloplikowy.fields([
     // zgodnosc API, gdyby ktos wywolywal /api/run bez kroku wyboru arkusza.
     const sheetNameWybrany = normalizujTekst(req.body.sheetName);
     const wynikiWszystkie = [];
+    // Dodatki audyty/dokumenty-seryjne/dobory (Faza 0) dzialaja i dla Solary,
+    // i dla Pomp - w przeciwienstwie do "pompy"/"solary" (rozlaczne tryby
+    // kart) dodatek moze dotyczyc obu naraz w tej samej wgranej tabeli.
+    const dodatekDlaObuArkuszy = pominKarty && DODATEK_TYPY_ROZSZERZONE_O_POMPY.has(typ);
+
     if (sheetNameWybrany) {
       const arkusz = wszystkieArkusze.find(a => a.sheet === sheetNameWybrany);
       if (!arkusz) throw new Error(`Nie znaleziono arkusza "${sheetNameWybrany}" w wgranym pliku Excel.`);
       if (typ === 'pompy') {
         wynikiWszystkie.push(...await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath, dryRun, wymuszony: true }));
+      } else if (dodatekDlaObuArkuszy && rozpoznajArkuszPomp(arkusz.sheet)) {
+        // Jawnie wybrany arkusz nazwany jak Pompy (np. "Pompy ciepła") -
+        // dodatek dla Pomp, nie dla Solary (patrz komentarz przy
+        // DODATEK_TYPY_ROZSZERZONE_O_POMPY).
+        wynikiWszystkie.push(...await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki, pominKarty, wymuszony: true }));
       } else {
         wynikiWszystkie.push(...await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki, schematyIndeks, pominKarty, wymuszony: true }));
       }
@@ -1303,13 +1376,16 @@ app.post('/api/run', uploadWieloplikowy.fields([
         const rows = arkusz.data;
         // Kazda funkcja sama rozpoznaje, czy dany arkusz jej dotyczy (i cicho
         // nic nie zwraca, jesli nie) - np. arkusz "Kotly"/"obreby" nie pasuje.
-        // Uruchamiamy WYLACZNIE funkcje pasujaca do wybranego rodzaju.
         if (typ === 'pompy') {
-          const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
-          wynikiWszystkie.push(...wynikiPompy);
+          wynikiWszystkie.push(...await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun }));
+        } else if (dodatekDlaObuArkuszy) {
+          // Dodatek dziala na OBU arkuszach naraz - kazda funkcja cicho
+          // zwraca pusto, jesli dany arkusz jej nie dotyczy, wiec wywolanie
+          // obu tutaj jest bezpieczne i nigdy nie duplikuje wynikow.
+          wynikiWszystkie.push(...await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki, schematyIndeks, pominKarty }));
+          wynikiWszystkie.push(...await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki, pominKarty }));
         } else {
-          const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki, schematyIndeks, pominKarty });
-          wynikiWszystkie.push(...wynikiSolary);
+          wynikiWszystkie.push(...await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki, schematyIndeks, pominKarty }));
         }
       }
     }
