@@ -8,6 +8,11 @@
   <img alt="Platforma Windows" src="https://img.shields.io/badge/platforma-Windows-0078D4?logo=windows&logoColor=white">
   <img alt="Działanie lokalne" src="https://img.shields.io/badge/działanie-lokalne-2E8B57">
   <img alt="Status projektu" src="https://img.shields.io/badge/status-aktywny%20rozwój-F59E0B">
+  <a href="../../releases/latest"><img alt="Najnowsze wydanie" src="https://img.shields.io/github/v/release/mcyniak/scyzoryk-projektowy?label=najnowsze%20wydanie&color=2E8B57"></a>
+</p>
+
+<p align="center">
+  <img alt="Panel główny Scyzoryka Projektowego" src="public/instrukcja-images/01-panel.png" width="820">
 </p>
 
 ---
