@@ -60,7 +60,18 @@ test('workflow wykonuje jeden kontrolowany przebieg z dwoma jobami i publikuje d
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /\.github\/run-ready-installer/);
   assert.doesNotMatch(workflow, /branches: \[main\][\s\S]*- 'public\/\*\*'/);
-  assert.doesNotMatch(workflow, /git push|gh workflow run|\[instruction-screenshots\]/);
+  assert.doesNotMatch(workflow, /gh workflow run|\[instruction-screenshots\]/);
+  // Audyt workflow 2026-08-20: swiezo zlapane zrzuty ekranu istnialy tylko w
+  // efemerycznym workspace runnera i nigdy nie trafialy do gita - kazdy, kto
+  // oglada instrukcje poza swiezo zbudowanym instalatorem, widzial stare
+  // zrzuty. Job musi je teraz commitowac i pushowac z powrotem do repo (stad
+  // "contents: write" tylko dla tego joba, nie dla calego workflow).
+  assert.match(workflow, /prepare_final:[\s\S]*?permissions:\s*\n\s*contents: write/);
+  const copyScreenshotsIdx = workflow.indexOf('name: Wstaw aktualne zrzuty do instrukcji');
+  const commitScreenshotsIdx = workflow.indexOf('name: Zapisz swieze zrzuty ekranu z powrotem do repozytorium');
+  assert.ok(commitScreenshotsIdx > copyScreenshotsIdx, 'Commitowanie zrzutow musi nastapic PO ich skopiowaniu do public/instrukcja-images.');
+  assert.match(workflow, /git add public\/instrukcja-images/);
+  assert.match(workflow, /git push/);
 
   assert.match(workflow, /prepare_final:/);
   assert.match(workflow, /verify_final:/);

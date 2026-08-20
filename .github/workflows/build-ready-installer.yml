@@ -29,6 +29,14 @@ jobs:
     name: 1. Zbuduj, przetestuj i przygotuj finalny instalator
     runs-on: windows-latest
     timeout-minutes: 120
+    # Nadpisuje workflow-owe "contents: read" - ten job zapisuje swiezo
+    # zlapane zrzuty ekranu instrukcji z powrotem do repo (patrz krok
+    # "Zapisz swieze zrzuty ekranu..." nizej). Bez tego zrzuty zyly tylko w
+    # efemerycznym workspace runnera i nigdy nie trafialy do gita - kazdy,
+    # kto oglada instrukcje poza swiezo zbudowanym instalatorem (np. w
+    # przegladarce z repo), widzial stare zrzuty (audyt workflow 2026-08-20).
+    permissions:
+      contents: write
     steps:
       - name: Pobierz kod repozytorium
         uses: actions/checkout@v4
@@ -111,6 +119,22 @@ jobs:
 
           if (-not (Test-Path 'public\instrukcja.html')) { throw 'Brakuje public\instrukcja.html.' }
           Get-ChildItem $target -Filter '*.png' | Format-Table Name, Length
+
+      - name: Zapisz swieze zrzuty ekranu z powrotem do repozytorium
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/instrukcja-images
+          $status = git status --porcelain -- public/instrukcja-images
+          if ($status) {
+            git commit -m "Odswiez zrzuty ekranu instrukcji (automatycznie, build-ready-installer)"
+            git push
+            Write-Host "Zapisano nowe zrzuty ekranu do repozytorium."
+          } else {
+            Write-Host "Zrzuty ekranu bez zmian - nic do zapisania."
+          }
 
       - name: Zbuduj finalny instalator z aktualnymi zrzutami
         shell: pwsh
