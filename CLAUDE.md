@@ -14,8 +14,11 @@ links to each child's own port.
 
 ## Commands
 
-Run from the repo root (PowerShell). There is no build step and no automated test suite (JS = CommonJS or
-ESM per-app, no bundler, no jest/mocha).
+Run from the repo root (PowerShell). There is no build step (JS = CommonJS or ESM per-app, no bundler).
+There **is** a real automated test suite — do not assume otherwise: 21+ groups under `test/group*.test.js`
+(plain Node `node:test`, no jest/mocha) auto-discovered and run by `scripts/run-regression-tests.js`, plus
+`drukarka-projekty`'s own pinned fixture suite and a Pester suite for the print engine (all three run
+together by `npm run test:regressions`, see below).
 
 - `npm start` / `node server.js` — start the panel (port 3000) and all child apps. On startup it
   auto-detects missing `node_modules` in each `apps/*` and runs the installer for you (skip with
@@ -24,10 +27,18 @@ ESM per-app, no bundler, no jest/mocha).
   `apps/*` (uses `npm ci` when a clean lockfile exists, else `npm install`; always forces the public npm
   registry, since some machines have a broken internal registry configured). Also installs the Playwright
   Chromium browser for `formularze-ecodan`.
-- `npm run check` / `node scripts/check-project.js` — the closest thing to a lint/test step: walks the
-  whole repo (skipping `node_modules`, `uploads`, `output`, `tmp`, `data`, `logs`, `bin`, `obj`) and runs `node --check`
-  on every `.js` file and a PowerShell parser check on every `.ps1` file. Run this after editing any JS or
-  PS1 file.
+- `npm run check` / `node scripts/check-project.js` — syntax-only pass: walks the whole repo (skipping
+  `node_modules`, `uploads`, `output`, `tmp`, `data`, `logs`, `bin`, `obj`) and runs `node --check` on
+  every `.js` file and a PowerShell parser check on every `.ps1` file. Catches syntax errors, **not**
+  logic/behavior bugs — always follow it with `npm run test:regressions` before considering a change done,
+  don't treat `check` alone as sufficient verification.
+- `npm run test:regressions` / `node scripts/run-regression-tests.js` — the real test suite: auto-discovers
+  and runs every `test/group*.test.js` file (no manual list to maintain — adding `test/group22-foo.test.js`
+  is picked up automatically), then `drukarka-projekty`'s pinned fixture suite and the print-engine Pester
+  suite. Run this before every commit/push, and always after touching `apps/drukarka-projekty/src/folderMatch.js`
+  (see the pinned-fixture note below) or any shared file under `lib/`. Individual groups are also runnable
+  directly, e.g. `npm run test:group11` (see `package.json` for the full list) or
+  `node --test test/group11-karty-katalogowe.test.js`, for a faster loop while iterating on one area.
 - `npm run security-smoke` / `node scripts/security-smoke-test.js` — smoke-tests a **running** instance:
   hits each child app's health endpoint and verifies that a mutating POST without the
   `X-Scyzoryk-Request` header is rejected with 403. Requires `node server.js` already running.
@@ -255,9 +266,43 @@ new app, copy this rather than inventing a new one:
 - `.npmrc` forces `registry=https://registry.npmjs.org/` — some target machines have a broken/internal
   registry configured globally, so don't remove this.
 - Don't leave manual `*.bak-przed-*` backup files or stray runtime artifacts (`server.pid`,
-  `server_*.log`) checked into app directories — there's no git here, so these accumulate as dead
-  weight instead of being reversible via history. Delete them when found; nothing in the codebase reads
-  them (`check-project.js` only picks up files ending in exactly `.js`/`.ps1`).
+  `server_*.log`) checked into app directories — this repo IS tracked in git, so prefer relying on
+  history for reversibility instead of hand-kept backup copies. Delete stray ones when found; nothing in
+  the codebase reads them (`check-project.js` only picks up files ending in exactly `.js`/`.ps1`).
+
+## Git, CI i release
+
+- **`main` to jedyny długowieczny branch** (od 2026-08-20 — wcześniej realny rozwój szedł na
+  `ui-redesign-v1`, a `main` był miesiącami nieaktualny; ta rozbieżność została naprawiona, historia
+  `ui-redesign-v1` została scalona do `main` force-pushem, a sam branch `ui-redesign-v1` usunięty z
+  origin). Nie twórz osobnego długożyjącego brancha "roboczego" bez wyraźnej potrzeby — pracuj na `main`
+  (albo krótkotrwałym branchu feature/fix, jeśli akurat jest taki zwyczaj), żeby uniknąć tego samego
+  rozjazdu ponownie.
+- Trzy workflowy instalatora w `.github/workflows/`, wszystkie triggerowane z `main` (nie z żadnego
+  innego brancha — jeśli kiedyś znowu praca przeniesie się na osobny branch, PAMIĘTAJ zaktualizować
+  triggery `branches:` w tych plikach, inaczej po cichu przestaną się odpalać):
+  - `build-internal-installer.yml` ("Zbuduj instalator deweloperski") — push na `main` dotykający kodu
+    aplikacji, buduje instalator bez sekretów, do testów technicznych.
+  - `build-ready-installer.yml` ("Zbuduj gotowy instalator Windows") — dwa joby na świeżych maszynach
+    Windows (build+test+zrzuty ekranu+finalny build, potem świeża instalacja finalnego EXE i pełna
+    weryfikacja). Triggerowany `workflow_dispatch` albo pushem zmieniającym `.github/run-ready-installer`
+    (celowy "ręczny przycisk jako commit"). Job `prepare_final` ma `contents: write` i commituje świeżo
+    złapane zrzuty ekranu z powrotem do `public/instrukcja-images/` — bez tego repo miałoby na stałe
+    nieaktualne zrzuty, bo wcześniej żyły tylko w efemerycznym workspace runnera.
+  - `release-public-installer.yml` ("Opublikuj publiczny instalator") — jedyny mechanizm realnego
+    wydania: tag `vMAJOR.MINOR.PATCH` (SemVer, patrz `lib/updateVersion.js`) → pełne testy → build →
+    świeża instalacja → GitHub Release. To jest źródło, z którego `lib/updateService.js` sprawdza
+    aktualizacje (`GET /repos/{repo}/releases/latest`) — triggerowany tagiem, nie branchem, więc zmiana
+    brancha domyślnego go nie dotyczy.
+- **Force-push do brancha z push-triggered workflow potrafi ominąć filtry `paths:`** — GitHub nie umie
+  policzyć diffu względem starej historii po force-pushie i w takim wypadku odpala workflow mimo że
+  żadna z wymienionych ścieżek faktycznie się nie zmieniła (zaobserwowane na żywo 2026-08-20: force-push
+  scalający `ui-redesign-v1` do `main` odpalił też `build-ready-installer.yml`, mimo że `.github/run-ready-installer`
+  w ogóle nie było w tym commicie). Zwykły (nie-force) push liczy diff poprawnie.
+- **Nigdy nie uruchamiaj żadnego workflow GitHub Actions (`gh workflow run`, ani żadnego pusha, o którym
+  wiesz, że sam coś odpali) bez wyraźnego potwierdzenia użytkownika** — to dotyczy też release'u
+  (tagowania i pushowania taga). Jeśli push do brancha z push-triggered workflow jest nieunikniony,
+  jawnie uprzedź, że coś się może samo odpalić, zanim to zrobisz.
 
 ## graphify
 
