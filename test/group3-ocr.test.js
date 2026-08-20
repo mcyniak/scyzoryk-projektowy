@@ -778,6 +778,111 @@ test('POST /api/ocr/extract-fields: kazde pole z zamknietym slownikiem (np. Zrod
   assert.equal(fields.zrodloCieplaInnyOpis.options, null, 'pole wolnego tekstu nie ma listy opcji');
 });
 
+// Real bug zgloszony na zywo 2026-08-20: uzytkownik uzupelnil WSZYSTKIE
+// widoczne pola dla kilku plikow, a mimo to kazdy z nich dostawal blad
+// "Ten plik ma jeszcze nieuzupełnione pola" przy probie pobrania. Przyczyna:
+// server.js#/api/ocr/finalize sprawdzal needsReview na WSZYSTKICH polach z
+// bloku, wlacznie z "zrodloCieplaInnyOpis" - ktore w UI jest ukryte (i wiec
+// fizycznie niemozliwe do uzupelnienia) zawsze, gdy "zrodloCiepla" != "Inny".
+async function setupOcrManualFlow(t, pageCount = 1) {
+  const previousLocalAppData = process.env.LOCALAPPDATA;
+  const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ocr-http-'));
+  process.env.LOCALAPPDATA = localAppData;
+  clearAiModuleCache();
+  t.after(() => {
+    process.env.LOCALAPPDATA = previousLocalAppData;
+    clearAiModuleCache();
+    return fsp.rm(localAppData, { recursive: true, force: true });
+  });
+
+  const dir = await makeTempDir();
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const sourcePdfPath = path.join(dir, 'audyt.pdf');
+  await createPdf(sourcePdfPath, pageCount);
+
+  const { app: ocrApp } = require('../apps/ocr-audytow/server');
+  const server = ocrApp.listen(0, '127.0.0.1');
+  const port = await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.once('listening', () => resolve(server.address().port));
+  });
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${port}`;
+
+  await fetch(`${base}/api/ocr/setup-api-key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ provider: 'manual' })
+  });
+
+  const form = new FormData();
+  form.append('files', new Blob([await fsp.readFile(sourcePdfPath)], { type: 'application/pdf' }), 'audyt.pdf');
+  const analyzeData = await (await fetch(`${base}/api/ocr/analyze`, {
+    method: 'POST',
+    headers: { 'X-Scyzoryk-Request': '1' },
+    body: form
+  })).json();
+  const { analysisId, results } = analyzeData;
+  const fileId = results[0].fileId;
+
+  await fetch(`${base}/api/ocr/extract-fields`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ analysisId, files: [{ fileId }] })
+  });
+
+  return { base, dir, analysisId, fileId };
+}
+
+// Uzupelnia KAZDE pole z FIELD_DEFS oprocz tych podanych w `pomin` - zwraca
+// wartosc dla "zrodloCiepla" jawnie parametryzowana (`zrodloCieplaWartosc`),
+// bo od niej zalezy widocznosc "zrodloCieplaInnyOpis" w UI.
+async function uzupelnijWszystkiePolaOprocz(base, analysisId, fileId, pomin, zrodloCieplaWartosc) {
+  const { FIELD_DEFS } = require('../apps/ocr-audytow/src/fieldExtraction');
+  for (const def of FIELD_DEFS) {
+    if (pomin.has(def.key)) continue;
+    const value = def.key === 'zrodloCiepla' ? zrodloCieplaWartosc : (def.options?.[0]?.label || 'wartosc-testowa');
+    await fetch(`${base}/api/ocr/resolve-field`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+      body: JSON.stringify({ analysisId, fileId, blockIndex: 0, fieldKey: def.key, value })
+    });
+  }
+}
+
+test('POST /api/ocr/finalize: "zrodloCieplaInnyOpis" NIE blokuje pobrania, gdy jego warunek (zrodloCiepla="Inny") nie jest spelniony - mimo ze pole samo w sobie nigdy nie zostalo uzupelnione', async (t) => {
+  const { base, dir, analysisId, fileId } = await setupOcrManualFlow(t);
+  await uzupelnijWszystkiePolaOprocz(base, analysisId, fileId, new Set(['zrodloCieplaInnyOpis']), 'Kocioł na biomasę');
+
+  const excelPath = path.join(dir, 'wynik.xlsx');
+  const finalizeRes = await fetch(`${base}/api/ocr/finalize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ analysisId, files: [{ fileId }], excelPath })
+  });
+  const finalizeData = await finalizeRes.json();
+  assert.equal(finalizeRes.status, 200, JSON.stringify(finalizeData));
+  assert.equal(finalizeData.results.length, 1);
+  assert.equal(finalizeData.results[0].ok, true, JSON.stringify(finalizeData.results[0]));
+});
+
+test('POST /api/ocr/finalize: "zrodloCieplaInnyOpis" NADAL blokuje pobranie, gdy jego warunek JEST spelniony (zrodloCiepla="Inny") a pole zostalo nieuzupelnione - zero regresji dla prawdziwie brakujacych danych', async (t) => {
+  const { base, dir, analysisId, fileId } = await setupOcrManualFlow(t);
+  await uzupelnijWszystkiePolaOprocz(base, analysisId, fileId, new Set(['zrodloCieplaInnyOpis']), 'Inny');
+
+  const excelPath = path.join(dir, 'wynik.xlsx');
+  const finalizeRes = await fetch(`${base}/api/ocr/finalize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+    body: JSON.stringify({ analysisId, files: [{ fileId }], excelPath })
+  });
+  const finalizeData = await finalizeRes.json();
+  assert.equal(finalizeRes.status, 200, JSON.stringify(finalizeData));
+  assert.equal(finalizeData.results.length, 1);
+  assert.equal(finalizeData.results[0].ok, false);
+  assert.match(finalizeData.results[0].error, /nieuzupełnione pola/);
+});
+
 test('POST /api/ocr/setup-api-key: bez naglowka X-Scyzoryk-Request dostaje 403 (ta sama ochrona co reszta mutujacych tras)', async (t) => {
   const { app: ocrApp } = require('../apps/ocr-audytow/server');
   const server = ocrApp.listen(0, '127.0.0.1');

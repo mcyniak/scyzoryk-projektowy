@@ -804,27 +804,25 @@
       field.needsReview = false;
       field.resolved = true;
 
-      // Enter przenosi fokus na kolejne pole NATYCHMIAST (nizej), zanim ten
-      // zapis w tle sie zakonczy - uzytkownik moze wiec juz pisac w nowym
-      // polu, gdy renderFieldsBlocks() nizej nadejdzie i zniszczy/odtworzy
-      // WSZYSTKIE <input>. Zapamietaj biezaca, jeszcze niezapisana tresc
-      // aktualnie aktywnego pola (i pozycje kursora), zeby przywrocic ja po
-      // renderze zamiast nadpisac wartoscia sprzed edycji - bez tego caly
-      // fokus (i to, co ktos wlasnie pisal) znikal po kazdym zapisie.
-      const active = document.activeElement;
-      const liveEdit = (active && active.matches?.('input[data-key], select[data-key]') && fieldsBlocksEl.contains(active))
-        ? { file: active.dataset.file, block: active.dataset.block, key: active.dataset.key, value: active.value, selStart: active.selectionStart, selEnd: active.selectionEnd }
-        : null;
-
-      renderFieldsBlocks();
-
-      if (liveEdit) {
-        const el = fieldsBlocksEl.querySelector(`[data-file="${liveEdit.file}"][data-block="${liveEdit.block}"][data-key="${liveEdit.key}"]`);
-        if (el) {
-          el.value = liveEdit.value;
-          el.focus();
-          try { el.setSelectionRange(liveEdit.selStart, liveEdit.selEnd); } catch (_) {}
-        }
+      // Punktowa aktualizacja TYLKO dotknietego wiersza i naglowka jego
+      // bloku - NIE pelny renderFieldsBlocks(). Pelny render niszczyl i
+      // odtwarzal WSZYSTKIE bloki na ekranie (wlacznie z kazdym podgladem
+      // PDF innych adresow/plikow) po KAZDYM zapisanym polu, wiec przy Enter
+      // wszystkie podglady bezsensownie "mrugaly"/resetowaly zoom i strone -
+      // zgloszone przez wlasciciela na zywo. Skoro <input>/<select> teraz
+      // NIE jest niszczony, nie trzeba tez juz recznie zapamietywac/
+      // przywracac fokusu i zaznaczenia (byla to lata tylko po to, zeby
+      // przetrwac pelny re-render).
+      const row = input.closest('tr[data-row-key]');
+      if (row) row.classList.remove('needs-review');
+      const blockEl = input.closest('.field-block');
+      const block = findBlock(fileId, blockIndex);
+      const badge = blockEl?.querySelector('.field-block-head .badge');
+      if (badge && block) {
+        const remaining = countNeedsReview(block);
+        badge.textContent = remaining ? `${remaining} do sprawdzenia` : 'wszystko rozpoznane';
+        badge.classList.toggle('warn', Boolean(remaining));
+        badge.classList.toggle('ok', !remaining);
       }
     } catch (err) {
       errorBox.innerHTML = `<div class="error-box">Nie udało się zapisać pola: ${escapeHtml(err.message)}</div>`;

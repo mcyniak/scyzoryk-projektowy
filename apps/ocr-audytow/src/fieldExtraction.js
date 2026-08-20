@@ -177,7 +177,16 @@ const FIELD_DEFS = [
     key: 'zrodloCieplaInnyOpis',
     columnLabel: 'Źródło ciepła - opis "Inny"',
     kind: 'text',
-    note: 'wypelnij WYLACZNIE jesli pole "zrodloCiepla" ma zaznaczone "Inny" - przepisz dokladnie dopisany obok tekst, w kazdym innym przypadku zwroc null'
+    note: 'wypelnij WYLACZNIE jesli pole "zrodloCiepla" ma zaznaczone "Inny" - przepisz dokladnie dopisany obok tekst, w kazdym innym przypadku zwroc null',
+    // dependsOn: to samo zrodlo prawdy, ktorego uzywa zarowno frontend
+    // (CONDITIONAL_FIELDS w app.js - chowa ten wiersz, gdy warunek nie jest
+    // spelniony) jak i backend (isFieldApplicable ponizej, uzywane w
+    // server.js przy finalizacji) - real bug 2026-08-19: bez tego backend
+    // NIC nie wiedzial o warunkowosci tego pola i blokowal pobranie KAZDEGO
+    // pliku (needsReview zawsze true dla ukrytego pola, ktorego uzytkownik
+    // fizycznie nie moze uzupelnic, bo nigdy go nie widzi), nawet gdy
+    // uzytkownik uzupelnil kompletnie wszystkie widoczne pola.
+    dependsOn: { key: 'zrodloCiepla', equals: 'Inny' }
   },
   {
     key: 'wentylacja',
@@ -677,4 +686,18 @@ function resolvedFieldResult(value) {
   return { value: value || '', confidence: null, pageIndex: null, needsReview: false, resolved: true };
 }
 
-module.exports = { FIELD_DEFS, COLUMN_ORDER, COLUMN_LABELS, COLUMN_OPTIONS, buildFieldsFromExtraction, filterExtractableFields, toFieldResult, resolvedFieldResult };
+// Czy pole faktycznie DOTYCZY tego bloku - pola z "dependsOn" (patrz
+// zrodloCieplaInnyOpis w FIELD_DEFS) sa nieistotne, gdy warunkowa wartosc
+// nie jest spelniona (np. "zrodloCiepla" != "Inny"). Uzywane przy
+// finalizacji (server.js) do wykluczenia takich pol z bramki "czy wszystko
+// uzupelnione" - bez tego pole, ktorego uzytkownik NIGDY nie widzi (bo
+// odpowiadajacy mu wiersz jest ukryty w UI, patrz CONDITIONAL_FIELDS w
+// app.js), zostawaloby needsReview:true na zawsze i blokowaloby pobranie
+// KAZDEGO pliku, niezaleznie od tego, ile pol uzytkownik faktycznie uzupelnil.
+function isFieldApplicable(fields, key) {
+  const def = FIELD_DEFS.find((d) => d.key === key);
+  if (!def || !def.dependsOn) return true;
+  return fields?.[def.dependsOn.key]?.value === def.dependsOn.equals;
+}
+
+module.exports = { FIELD_DEFS, COLUMN_ORDER, COLUMN_LABELS, COLUMN_OPTIONS, buildFieldsFromExtraction, filterExtractableFields, toFieldResult, resolvedFieldResult, isFieldApplicable };

@@ -11,7 +11,7 @@ const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require(
 const { getAppDataDir } = require('../../lib/appPaths');
 const { analyzeDocument, inspectDocument, finalizeSplit } = require('./src/ocrPipeline');
 const { isConfigured: isAiConfigured, saveUserApiKey, extractFieldsForBlock, getActiveProvider, PROVIDER_LABELS } = require('./src/aiProvider');
-const { COLUMN_ORDER, COLUMN_LABELS, COLUMN_OPTIONS, buildFieldsFromExtraction, filterExtractableFields } = require('./src/fieldExtraction');
+const { COLUMN_ORDER, COLUMN_LABELS, COLUMN_OPTIONS, buildFieldsFromExtraction, filterExtractableFields, isFieldApplicable } = require('./src/fieldExtraction');
 const { writeFreshRows, writeFamilyTemplateRows, readExistingTable, fillExistingTableRows, validatePath: validateExcelPath } = require('./src/excelExport');
 const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src/tabelaAdresowaColumns');
 const { validateOcrBatchInspections } = require('./src/ocrLimits');
@@ -676,7 +676,13 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
         continue;
       }
 
-      const unresolved = excelPath && fileEntry.resolvedBlocks.some((b) => Object.values(b.fields).some((f) => f.needsReview || !f.resolved));
+      // isFieldApplicable wyklucza pola warunkowe (np. "zrodloCieplaInnyOpis"),
+      // ktorych warunek nie jest spelniony - uzytkownik nigdy nie widzi takiego
+      // wiersza w UI (patrz CONDITIONAL_FIELDS w app.js), wiec needsReview:true
+      // zostawaloby tam na zawsze i blokowaloby pobranie kazdego pliku (real bug
+      // zgloszony na zywo 2026-08-19, patrz komentarz przy isFieldApplicable).
+      const unresolved = excelPath && fileEntry.resolvedBlocks.some((b) =>
+        Object.entries(b.fields).some(([key, f]) => isFieldApplicable(b.fields, key) && (f.needsReview || !f.resolved)));
       if (unresolved) {
         results.push({ ok: false, originalName: fileEntry.originalName, error: 'Ten plik ma jeszcze nieuzupełnione pola - dokończ "Uzupełnij dane" przed pobraniem.' });
         continue;
