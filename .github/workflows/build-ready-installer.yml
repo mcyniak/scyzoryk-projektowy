@@ -128,13 +128,32 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add public/instrukcja-images
           $status = git status --porcelain -- public/instrukcja-images
-          if ($status) {
-            git commit -m "Odswiez zrzuty ekranu instrukcji (automatycznie, build-ready-installer)"
-            git push
-            Write-Host "Zapisano nowe zrzuty ekranu do repozytorium."
-          } else {
+          if (-not $status) {
             Write-Host "Zrzuty ekranu bez zmian - nic do zapisania."
+            exit 0
           }
+          git commit -m "Odswiez zrzuty ekranu instrukcji (automatycznie, build-ready-installer)"
+          if ($LASTEXITCODE -ne 0) { throw "git commit nie powiodl sie (kod $LASTEXITCODE)." }
+
+          # git push moze zostac odrzucony, jesli main przesunal sie do przodu w
+          # trakcie dlugiego builda (realny przypadek 2026-08-20) - kilka prob z
+          # fetch+rebase zamiast jednorazowego pusha bez obslugi bledu (poprzednia
+          # wersja tego kroku milczaco "udawala" sukces mimo odrzuconego pusha,
+          # bo $ErrorActionPreference='Stop' NIE zatrzymuje sie na niezerowym
+          # kodzie wyjscia zewnetrznego polecenia - trzeba sprawdzac $LASTEXITCODE
+          # jawnie po kazdym wywolaniu git).
+          $pushed = $false
+          for ($i = 1; $i -le 5; $i++) {
+            git push
+            if ($LASTEXITCODE -eq 0) { $pushed = $true; break }
+            Write-Host "git push odrzucony (proba $i/5) - pobieram najnowszy main i probuje ponownie..."
+            git fetch origin main
+            if ($LASTEXITCODE -ne 0) { throw "git fetch nie powiodl sie (kod $LASTEXITCODE)." }
+            git rebase origin/main
+            if ($LASTEXITCODE -ne 0) { throw "git rebase nie powiodl sie (prawdopodobny konflikt, kod $LASTEXITCODE) - wymaga recznej interwencji." }
+          }
+          if (-not $pushed) { throw "Nie udalo sie zapisac zrzutow ekranu po 5 probach." }
+          Write-Host "Zapisano nowe zrzuty ekranu do repozytorium."
 
       - name: Zbuduj finalny instalator z aktualnymi zrzutami
         shell: pwsh
