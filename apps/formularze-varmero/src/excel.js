@@ -1,16 +1,15 @@
 // Czytnik tabeli adresowej - wzorowany na
 // apps/formularze-ecodan/src/excel.js (fuzzy dopasowanie naglowkow po
 // nazwanych wariantach, liczniki pominietych wierszy per przyczyna). Uzywa
-// `xlsx`, nie `read-excel-file` jak Ecodan - ten sam pakiet, ktorego uzywaja
-// juz inne apki w repo czytajace dokladnie ten format tabeli adresowej
-// (drukarka-projekty, ocr-audytow).
+// `read-excel-file` (jak Ecodan/karty-katalogowe/dokumenty-seryjne), nie
+// `xlsx` - audyt 2026-08-20, patrz komentarz przy readTabelaAdresowa nizej.
 //
 // Potwierdzone na dwoch realnych plikach (Kamiensk, Zagorow): naglowki
 // bywaja rozne miedzy inwestycjami (np. "OZC" kontra brak tej kolumny w
 // ogole, "Ogrzewanie grzejnikowe/podlogowe" jako osobne kolumny procentowe) -
 // stad dopasowanie po liscie akceptowanych wariantow nazwy, nie po sztywnej
 // pozycji/nazwie.
-import XLSX from 'xlsx';
+import readXlsxFile from 'read-excel-file/node';
 import { calculate } from './rules.js';
 
 // UWAGA: polskie "ł"/"Ł" NIE rozkladaja sie pod NFD tak jak
@@ -91,9 +90,9 @@ function findHeaderRowIndex(rows) {
   return 0;
 }
 
-function chooseSheet(workbook) {
-  const preferred = workbook.SheetNames.find(name => /pomp/i.test(name));
-  return preferred || workbook.SheetNames[0];
+function chooseSheet(sheetNames) {
+  const preferred = sheetNames.find(name => /pomp/i.test(name));
+  return preferred || sheetNames[0];
 }
 
 // Zwraca { sheetName, records: [{rowNumber, lp, input, calculated}], skipped: {...}, headers }.
@@ -108,11 +107,11 @@ function chooseSheet(workbook) {
 // przy kazdej nowej inwestycji, podczas gdy strefe/wojewodztwo i tak trzeba
 // znac raz, na cala paczke - prostszy i bardziej niezawodny jest zwykly
 // input, ten sam wzorzec co reszta parametrow batcha.
-export function readTabelaAdresowa(filePath, { gminaName, postalCode, zone, wojewodztwo } = {}) {
-  const workbook = XLSX.readFile(filePath);
-  const sheetName = chooseSheet(workbook);
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+export async function readTabelaAdresowa(filePath, { gminaName, postalCode, zone, wojewodztwo } = {}) {
+  const wszystkieArkusze = await readXlsxFile(filePath, { getSheets: true });
+  const sheetNames = wszystkieArkusze.map(arkusz => arkusz.sheet);
+  const sheetName = chooseSheet(sheetNames);
+  const rows = wszystkieArkusze.find(arkusz => arkusz.sheet === sheetName).data;
   const headerRowIndex = findHeaderRowIndex(rows);
   const headerRow = rows[headerRowIndex];
   const headerIndex = buildHeaderIndex(headerRow);
@@ -151,7 +150,14 @@ export function readTabelaAdresowa(filePath, { gminaName, postalCode, zone, woje
     // numer wiersza zamiast prawdziwego LP, co pokazywalo uzytkownikowi w
     // podgladzie (inline-1.js) numer niezgodny z tym, co naprawde jest w Excelu.
     // Ten sam wzorzec co juz naprawiony w formularze-ecodan/src/excel.js.
-    const lpRaw = getCell(row, headerIndex, 'lp');
+    // read-excel-file zwraca null dla pustej-ale-obecnej komorki (xlsx zwracal
+    // '' przez defval) - normalizujemy null->'' TU, zeby rozroznienie
+    // "kolumna nieobecna" (undefined, z getCell) kontra "kolumna obecna, ale
+    // ta komorka pusta" ('') zostalo dokladnie takie samo jak przed migracja
+    // (audyt 2026-08-20). Bez tego String(null) dawaloby literalne "null"
+    // zamiast pustego stringa.
+    const lpRawObj = getCell(row, headerIndex, 'lp');
+    const lpRaw = lpRawObj === null ? '' : lpRawObj;
     if (lpRaw !== undefined && String(lpRaw).trim() === '') { skipped.missingLp += 1; continue; }
     const lp = lpRaw !== undefined ? String(lpRaw).trim() : String(rowNumber);
     if (seenLp.has(lp)) { skipped.duplicateLp += 1; continue; }
@@ -190,7 +196,7 @@ export function readTabelaAdresowa(filePath, { gminaName, postalCode, zone, woje
 
   return {
     sheetName,
-    sheetNames: workbook.SheetNames,
+    sheetNames,
     totalRows: rows.length - headerRowIndex - 1,
     records,
     skipped,

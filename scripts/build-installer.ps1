@@ -30,10 +30,17 @@
 #
 # Uzycie:
 #   powershell -File scripts\build-installer.ps1
-#   powershell -File scripts\build-installer.ps1 -NodeVersion 20.18.1 -Version 1.2.3
+#   powershell -File scripts\build-installer.ps1 -NodeVersion 24.19.0 -Version 1.2.3
+#
+# Audyt 2026-08-20: Node 20.x jest EOL (marzec 2026) - runtime bundlowany do
+# instalatora przestal dostawac lataki bezpieczenstwa. Podbite do 24.19.0
+# (aktualny LTS w dniu audytu). Przy kolejnych podbiciach: sprawdzic biezacy
+# LTS na https://nodejs.org/dist/index.json (pole "lts" niepuste = aktywny LTS)
+# i faktyczna dostepnosc paczki win-x64 pod tym adresem PRZED zmiana tej
+# wartosci - build pobiera dokladnie ten zip, bez fallbacku.
 
 param(
-  [string]$NodeVersion = '20.18.1',
+  [string]$NodeVersion = '24.19.0',
   [string]$Version = '',
   [string]$OutputDir = ''
 )

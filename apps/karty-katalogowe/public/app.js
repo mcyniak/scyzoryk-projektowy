@@ -50,7 +50,8 @@ const KK_KOLUMNY = {
   pompy: KK_KOLUMNY_KARTY,
   audyty: KK_KOLUMNY_DODATEK,
   schematy: KK_KOLUMNY_DODATEK,
-  'dokumenty-seryjne': KK_KOLUMNY_DODATEK
+  'dokumenty-seryjne': KK_KOLUMNY_DODATEK,
+  dobory: KK_KOLUMNY_DODATEK
 };
 
 const checkBtn = document.getElementById('checkBtn');
@@ -80,13 +81,13 @@ const MODE_COPY = {
     rootPathLabel: 'Ścieżka do głównego folderu INWESTYCJI (zawiera podfolder „PC powietrzne”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\20. Zagórów'
   },
-  // Te trzy tryby NIE dobieraja/kopiuja kart katalogowych w ogole - kazdy
+  // Te cztery tryby NIE dobieraja/kopiuja kart katalogowych w ogole - kazdy
   // dodaje TYLKO swoj jeden rodzaj pliku do folderu klienta, wg tego samego
   // arkusza co tryb Solary powyzej (adres/moc zestawu). Osobne opcje zamiast
-  // jednego wspolnego formularza z 3 zipami naraz - wlasciciel chcial
+  // jednego wspolnego formularza z wieloma zipami naraz - wlasciciel chcial
   // dodawac kazdy dodatek osobno, tak jak wybiera sie Solary/Pompy.
   audyty: {
-    desc: 'Dodaj audyty PV: dopasowuje pliki z audytami do adresu z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    desc: 'Audyty: dopasowuje pliki z audytami do adresu z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
   },
@@ -99,15 +100,21 @@ const MODE_COPY = {
     desc: 'Dodaj dokumenty seryjne: dopasowuje pliki po adresie z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
     placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+  },
+  dobory: {
+    desc: 'Dobory: dopasowuje pliki doboru (np. z Dobory Varmero/myEcodan, nazwy z przedrostkiem „Dob_”) do adresu z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
   }
 };
 
-// Sekcja z polem zip/sciezka pokazywana dla kazdego z 3 trybow "tylko dodatek" -
+// Sekcja z polem zip/sciezka pokazywana dla kazdego z trybow "tylko dodatek" -
 // null dla solary/pompy (te tryby nie maja wlasnej sekcji dodatku).
 const DODATEK_SECTION_ID = {
   audyty: 'kkAudytySection',
   schematy: 'kkSchematySection',
-  'dokumenty-seryjne': 'kkDokumentySeryjneSection'
+  'dokumenty-seryjne': 'kkDokumentySeryjneSection',
+  dobory: 'kkDoborySection'
 };
 
 function aktualnyRodzajKart() {
@@ -193,7 +200,8 @@ async function runJob(dryRun) {
   const DODATEK_POLA = {
     audyty: ['audytyZip', 'audytyPathInput', 'audytyPath'],
     schematy: ['schematyZip', 'schematyPathInput', 'schematyPath'],
-    'dokumenty-seryjne': ['dokumentySeryjneZip', 'dokumentySeryjnePathInput', 'dokumentySeryjnePath']
+    'dokumenty-seryjne': ['dokumentySeryjneZip', 'dokumentySeryjnePathInput', 'dokumentySeryjnePath'],
+    dobory: ['doboryZip', 'doboryPathInput', 'doboryPath']
   };
   if (DODATEK_POLA[tryb]) {
     const [zipField, pathInputId, pathField] = DODATEK_POLA[tryb];

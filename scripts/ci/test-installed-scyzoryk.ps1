@@ -162,7 +162,7 @@ Run-Test 'Aktualny panel i instrukcja w instalatorze' {
     '<h3>Pieczątki PDF</h3>',
     '<h3>Nazywarka skanów</h3>',
     '<h3>Zdjęcia do PDF Protokołów</h3>',
-    '<h3>Karty katalogowe</h3>',
+    '<h3>Przypisywanie plików do folderów</h3>',
     '<h3>OCR audytów</h3>',
     '<h3>Tworzenie folderów</h3>'
   )
@@ -179,7 +179,7 @@ Run-Test 'Aktualny panel i instrukcja w instalatorze' {
     'Wnioski powykonawcze PDF',
     'Dobory myEcodan',
     'Pieczątki PDF',
-    'Karty katalogowe',
+    'Przypisywanie plików do folderów',
     'OCR audytów',
     'Dobory Varmero',
     'Nazywarka skanów',

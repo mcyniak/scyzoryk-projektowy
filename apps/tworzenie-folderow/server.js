@@ -17,6 +17,7 @@ const { getAppDataDir } = require('../../lib/appPaths');
 const { browseFolder } = require('../../lib/folderBrowse');
 const { readTabelaAdresowa } = require('./src/excel.js');
 const { buildFolderPlan } = require('./src/folderPlan.js');
+const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 
 const APP_VERSION = require('./package.json').version;
 const app = express();
@@ -31,21 +32,8 @@ fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 scheduleCleanup([UPLOAD_DIR], 24 * 60 * 60 * 1000, 60 * 60 * 1000);
 
 // --- Bezpieczenstwo / middleware - ten sam wzorzec co kazda inna apka w repo ---
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-  'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-app.disable('x-powered-by');
-app.use((req, res, next) => { for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v); next(); });
-app.use((req, res, next) => {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (req.get('X-Scyzoryk-Request') === '1') return next();
-  return res.status(403).json({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie.' });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie.' }));
 app.use(express.json({ limit: '2mb' }));
 
 const apiLimiter = rateLimit({
@@ -69,7 +57,8 @@ function decodeOriginalName(name) {
 
 const upload = multer({
   dest: UPLOAD_DIR,
-  limits: { fileSize: 20 * 1024 * 1024, files: 1 },
+  // fieldNestingDepth: patrz komentarz w apps/drukarka/server.js (audyt 2026-08-20).
+  limits: { fileSize: 20 * 1024 * 1024, files: 1, fieldNestingDepth: 2 },
   fileFilter: (req, file, cb) => {
     const originalName = decodeOriginalName(String(file.originalname || ''));
     if (/\.xlsx$/i.test(originalName)) return cb(null, true);
@@ -122,7 +111,7 @@ async function readPlanFromUpload(req) {
     throw new Error(`Folder inwestycji nie istnieje: ${investmentFolder}. Ta appka wypełnia JUŻ ISTNIEJĄCY folder inwestycji, nie tworzy go od zera.`);
   }
   await validateXlsxFile(req.file);
-  const excelResult = readTabelaAdresowa(req.file.path);
+  const excelResult = await readTabelaAdresowa(req.file.path);
   const plan = buildFolderPlan(excelResult);
 
   const withStatus = plan.map(relativePath => {

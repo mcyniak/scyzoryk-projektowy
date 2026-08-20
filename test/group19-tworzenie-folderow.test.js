@@ -8,7 +8,13 @@ const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
-const XLSX = require('../apps/tworzenie-folderow/node_modules/xlsx');
+// xlsx tylko do ZAPISU fixture'ow testowych (bezpieczne - nie czyta danych
+// od uzytkownika) - pozyczone z ocr-audytow, jedynego modulu, ktory nadal
+// legalnie trzyma xlsx jako zaleznosc (patrz komentarz w
+// apps/ocr-audytow/src/excelExport.js). tworzenie-folderow samo juz go NIE
+// uzywa do odczytu (audyt 2026-08-20: migracja na read-excel-file, patrz
+// komentarz w src/excel.js).
+const XLSX = require('../apps/ocr-audytow/node_modules/xlsx');
 const { readTabelaAdresowa, classifySheetType, normalizeHeader, isAirSourcePump, isGroundSourcePump } = require('../apps/tworzenie-folderow/src/excel.js');
 const { buildFolderPlan, safeSegment, distinctGminas } = require('../apps/tworzenie-folderow/src/folderPlan.js');
 
@@ -61,7 +67,7 @@ test('readTabelaAdresowa: odczytuje wiele arkuszy naraz, klasyfikuje kazdy osobn
   ]);
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));
 
-  const result = readTabelaAdresowa(file);
+  const result = await readTabelaAdresowa(file);
   assert.equal(result.sheets.length, 2, 'arkusz "Notatki" nie pasuje do zadnego typu i jest pomijany');
 
   const pompy = result.sheets.find(s => s.type === 'pompy');
@@ -84,7 +90,7 @@ test('readTabelaAdresowa: kolumna LP obecna ale pusta w wierszach z adresem -> c
   ]);
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));
 
-  assert.throws(() => readTabelaAdresowa(file), /LP jest pusta.*Pompy ciepła.*2 wierszy/s);
+  await assert.rejects(() => readTabelaAdresowa(file), /LP jest pusta.*Pompy ciepła.*2 wierszy/s);
 });
 
 test('readTabelaAdresowa: kolumna ID (nie LP) tez jest rozpoznawana jako numer wiersza', async (t) => {
@@ -93,7 +99,7 @@ test('readTabelaAdresowa: kolumna ID (nie LP) tez jest rozpoznawana jako numer w
   ]);
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));
 
-  const result = readTabelaAdresowa(file);
+  const result = await readTabelaAdresowa(file);
   assert.equal(result.sheets[0].records[0].lpOrId, '5');
 });
 
@@ -103,7 +109,7 @@ test('readTabelaAdresowa: obecnosc kolumny Gmina jest sygnalem "wiele gmin" (pot
   ]);
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));
 
-  const result = readTabelaAdresowa(file);
+  const result = await readTabelaAdresowa(file);
   assert.equal(result.sheets[0].gminaColumnPresent, true);
   assert.equal(result.sheets[0].records[0].gmina, 'Żarnów');
 });

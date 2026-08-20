@@ -17,6 +17,7 @@ const { TABELA_FAMILIES, buildRowValues, allowedKeysForFamily } = require('./src
 const { validateOcrBatchInspections } = require('./src/ocrLimits');
 const { browseFolder } = require('../../lib/folderBrowse');
 const { contentDispositionHeader } = require('../../lib/printing');
+const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -48,22 +49,8 @@ scheduleCleanup([UPLOAD_DIR, OUTPUT_DIR], JOB_TTL_MS, 60 * 60 * 1000);
 // wyzej) dziala niezaleznie od stanu w pamieci i sprzata kazdy porzucony folder w ANALYSIS_DIR.
 scheduleCleanup([ANALYSIS_DIR], ANALYSIS_TTL_MS, 15 * 60 * 1000);
 
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-  'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-
-app.disable('x-powered-by');
-app.use((req, res, next) => { for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v); next(); });
-app.use((req, res, next) => {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (req.get('X-Scyzoryk-Request') === '1') return next();
-  return res.status(403).json({ ok: false, message: 'Odśwież stronę i spróbuj ponownie.' });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: 'Odśwież stronę i spróbuj ponownie.' }));
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/api/health', async (req, res) => {
@@ -209,7 +196,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: MAX_FILES },
+  // fieldNestingDepth: patrz komentarz w apps/drukarka/server.js (audyt 2026-08-20).
+  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: MAX_FILES, fieldNestingDepth: 2 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(decodeOriginalName(file.originalname || '')).toLowerCase();
     if (ext === '.pdf') return cb(null, true);

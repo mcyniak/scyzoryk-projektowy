@@ -377,7 +377,9 @@ export function makePdfName(input, rowNumber = '') {
   const base = sanitize(`${input.name || 'Brak nazwiska'} - ${input.address || (safeRow ? `wiersz ${safeRow}` : 'raport')}`)
     .replace(/\s+/g, ' ')
     .trim();
-  return `${prefix}${base || `wiersz-${safeRow || Date.now()}`}.pdf`;
+  // Przedrostek "Dob_" (wlasciciel, 2026-08-20) - ten sam wzorzec co
+  // apps/formularze-varmero/src/jobs.js#makePdfName, patrz komentarz tamze.
+  return `Dob_${prefix}${base || `wiersz-${safeRow || Date.now()}`}.pdf`;
 }
 
 export async function pathExists(filePath) {

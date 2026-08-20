@@ -382,7 +382,16 @@ const KEYWORD_MAP = [
   [["grup", "pompow"], ["grupa", "pomp"]],
   [["sterownik"], ["sterownik", "regulator"]],
   [["bilans"], ["ozc", "bilans", "zapotrzebowani"]],
-  [["dobor"], ["dobor", "doboru"]],
+  // "dob " (ze spacja koncowa) - PDF-y z apps/formularze-varmero i
+  // apps/formularze-ecodan maja od 2026-08-20 przedrostek "Dob_" w nazwie
+  // pliku (patrz makePdfName w obu apkach). normalize() zamienia "_" na
+  // spacje, wiec "Dob_001 - ...pdf" normalizuje sie do "dob 001 ...", NIE
+  // zawiera podciagu "dobor" - bez tego wpisu taki plik nigdy by sie nie
+  // dopasowal po slowie kluczowym i moglby zostac blednie porwany przez
+  // pozycyjny fallback dla INNEGO niedopasowanego zalacznika (patrz
+  // buildOrder). Spacja koncowa jest CELOWA - bez niej "dob" jako goly
+  // podciag lapalby tez przypadkowe polskie slowa typu "dobrze"/"dobry".
+  [["dobor"], ["dobor", "doboru", "dob "]],
   [["bufor"], ["bufor"]],
   [["pomp", "ciepla"], ["pomp"]],
   // "kociol" byl tu wpisany dwa razy (kopiuj-wklej) - usuniete jako martwy

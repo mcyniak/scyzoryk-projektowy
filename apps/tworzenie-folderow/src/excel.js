@@ -1,11 +1,18 @@
 // Czytnik tabeli adresowej dla tworzenie-folderow - wzorowany 1:1 na
-// apps/formularze-varmero/src/excel.js (ten sam pakiet xlsx, ta sama
+// apps/formularze-varmero/src/excel.js (ten sam pakiet do odczytu, ta sama
 // normalizeHeader() z poprawka na polskie "l/L" pod NFD, ten sam wzorzec
 // COLUMN_VARIANTS z fuzzy dopasowaniem naglowkow). Roznica: zamiast
 // wybierac JEDEN arkusz, iteruje po WSZYSTKICH arkuszach i klasyfikuje
 // kazdy osobno (pompy/kolektory/kotly) - jedna inwestycja moze miec
 // dowolna kombinacje tych trzech typow naraz.
-const XLSX = require('xlsx');
+//
+// Audyt 2026-08-20: zamieniono "xlsx" (SheetJS 0.18.5, CVE-2023-30533
+// prototype pollution + CVE-2024-22363 ReDoS przy CZYTANIU spreparowanego
+// arkusza, bez naprawionej wersji w rejestrze npm) na "read-excel-file" -
+// ten sam parser, ktory juz bezpiecznie dziala w karty-katalogowe i
+// dokumenty-seryjne. Odczyt jest teraz ASYNC (Promise), wiec
+// readTabelaAdresowa() rowniez - patrz zmiana wywolania w server.js.
+const readXlsxFile = require('read-excel-file/node');
 
 // UWAGA: polskie "l"/"L" (l z kreska) NIE rozklada sie pod NFD tak jak
 // a/e/c/n/s/z/z (patrz CLAUDE.md, ten sam pulapka co w dokumenty-seryjne i
@@ -114,9 +121,7 @@ function hasColumn(headerIndex, field) {
   return false;
 }
 
-function readSheet(workbook, sheetName, type) {
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+function readSheet(rows, sheetName, type) {
   const headerRowIndex = findHeaderRowIndex(rows);
   const headerRow = rows[headerRowIndex] || [];
   const headerIndex = buildHeaderIndex(headerRow);
@@ -170,13 +175,14 @@ function readSheet(workbook, sheetName, type) {
 // pompy/kolektory/kotly (arkusze niepasujace do zadnego wzorca sa cicho
 // pomijane, nie sa bledem). Czysty odczyt danych - zero dostepu do systemu
 // plikow/tworzenia folderow w tym module (patrz src/folderPlan.js).
-function readTabelaAdresowa(filePath) {
-  const workbook = XLSX.readFile(filePath);
+async function readTabelaAdresowa(filePath) {
+  const wszystkieArkusze = await readXlsxFile(filePath, { getSheets: true });
+  const sheetNames = wszystkieArkusze.map(arkusz => arkusz.sheet);
   const sheets = [];
-  for (const sheetName of workbook.SheetNames) {
-    const type = classifySheetType(sheetName);
+  for (const arkusz of wszystkieArkusze) {
+    const type = classifySheetType(arkusz.sheet);
     if (!type) continue;
-    sheets.push(readSheet(workbook, sheetName, type));
+    sheets.push(readSheet(arkusz.data, arkusz.sheet, type));
   }
 
   const sheetsWithMissingLp = sheets.filter(s => s.missingLpCount > 0);
@@ -187,7 +193,7 @@ function readTabelaAdresowa(filePath) {
     throw new Error(`Kolumna LP jest pusta w niektórych wierszach (${details}). Uzupełnij numer LP dla każdego adresu w Excelu i wgraj plik ponownie - bez niego nie da się nazwać folderu adresu.`);
   }
 
-  return { sheetNames: workbook.SheetNames, sheets };
+  return { sheetNames, sheets };
 }
 
 module.exports = {

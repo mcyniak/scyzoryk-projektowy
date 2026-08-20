@@ -78,9 +78,14 @@ async function callGemini(body) {
     let res;
     try {
       res = await withTimeout(
-        fetch(`${API_BASE}/${MODEL}:generateContent?key=${apiKey}`, {
+        // Klucz w naglowku (x-goog-api-key), nie w URL query (?key=...) -
+        // audyt 2026-08-20: URL z sekretem latwiej trafia do logow proxy/
+        // diagnostyki niz naglowek, mimo ze samo polaczenie i tak jest
+        // szyfrowane HTTPS. Naglowek to aktualnie udokumentowany przez
+        // Google sposob autoryzacji REST.
+        fetch(`${API_BASE}/${MODEL}:generateContent`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
           body: JSON.stringify(body)
         }),
         REQUEST_TIMEOUT_MS,

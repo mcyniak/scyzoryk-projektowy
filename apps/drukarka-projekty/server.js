@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
+const { applySecurityHeaders, applyMutationGuard } = require("../../lib/localRequestSecurity");
 const { browseFolder } = require("../../lib/folderBrowse");
 const { sessionMiddleware } = require("./lib/sessionStore");
 const excelInvestment = require("./src/excelInvestment");
@@ -30,21 +31,8 @@ const DATA_DIR = path.join(APP_DATA_ROOT, "data");
 const LAST_FOLDERS_FILE = path.join(DATA_DIR, "ostatnie-foldery.json");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const SECURITY_HEADERS = {
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "no-referrer",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Cross-Origin-Resource-Policy": "same-origin",
-  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-app.disable("x-powered-by");
-app.use((req, res, next) => { for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v); next(); });
-app.use((req, res, next) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  if (req.get("X-Scyzoryk-Request") === "1") return next();
-  res.status(403).json({ ok: false, message: "Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie." });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: "Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie." }));
 app.use(express.json({ limit: "2mb" }));
 
 app.use(sessionMiddleware(() => ({
@@ -79,7 +67,8 @@ app.use("/api", apiLimiter);
 app.use('/shared', express.static(path.join(__dirname, '..', '..', 'shared-styles')));
 app.use(express.static(path.join(__dirname, "public")));
 
-const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+// fieldNestingDepth: patrz komentarz w apps/drukarka/server.js (audyt 2026-08-20).
+const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, fieldNestingDepth: 2 } });
 
 function readLastFolders() {
   try {
@@ -137,10 +126,10 @@ app.post("/api/open-saved-pdf-folder", (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/excel/upload", excelUpload.single("file"), (req, res) => {
+app.post("/api/excel/upload", excelUpload.single("file"), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, message: "Brak pliku." });
-    const { token, sheets } = excelInvestment.loadWorkbookFromBuffer(req.file.buffer);
+    const { token, sheets } = await excelInvestment.loadWorkbookFromBuffer(req.file.buffer);
     // fileKey identyfikuje TRESC wgranego pliku (hash), nie sesje uploadu -
     // patrz komentarz przy lastFolderKey powyzej. Token z loadWorkbookFromBuffer
     // jest per-upload/ulotny (wygasa z workbookiem), wiec nie nadaje sie jako

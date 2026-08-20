@@ -64,22 +64,27 @@ test('rules.js calculate: brak OZC oznacza niepoprawny wynik, nie domyslna warto
 // nizej sa przekazywane wprost, nie "odgadywane" z nazwy gminy.
 
 test('excel.js readTabelaAdresowa: czyta OZC/procenty ogrzewania, pomija wiersze bez OZC', async () => {
-  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx')); // xlsx tylko do zapisu fixture'ow testowych (bezpieczne) - patrz komentarz w group19-tworzenie-folderow.test.js
   const dir = await makeTempDir();
   const fixturePath = path.join(dir, 'fixture.xlsx');
   const rows = [
     ['LP', 'Imię i Nazwisko', 'Adres', 'Rodzaj pompy', 'Ogrzewanie grzejnikowe', 'Ogrzewanie podłogowe', 'OZC'],
     [1, 'Jan Testowy', 'Testowa 1', 'Powietrze-woda', 70, 30, '11.27'],
+    ['', '', '', '', '', '', ''], // pusty wiersz W SRODKU (nie ostatni) - trafia do "uzywanego zakresu"
+    // arkusza u obu bibliotek; calkowicie pusty wiersz NA SAMYM KONCU pliku
+    // bywa przez read-excel-file (w odroznieniu od xlsx+aoa_to_sheet w
+    // testach) traktowany jako poza zakresem danych i w ogole nie
+    // zwracany - co i tak daje identyczny efekt koncowy (0 rekordow z tego
+    // wiersza), tylko bez wpisu w liczniku skipped.empty.
     [2, 'Anna Bezoze', 'Testowa 2', 'Powietrze-woda', 0, 100, ''],
-    [3, 'Bez Adresu', '', 'Powietrze-woda', '', '', '5'],
-    ['', '', '', '', '', '', '']
+    [3, 'Bez Adresu', '', 'Powietrze-woda', '', '', '5']
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Pompy ciepła');
   XLSX.writeFile(wb, fixturePath);
 
   const { readTabelaAdresowa } = await importSrc('excel.js');
-  const result = readTabelaAdresowa(fixturePath, { gminaName: 'Kamieńsk', postalCode: '97-360', zone: '3', wojewodztwo: 'Łódzkie' });
+  const result = await readTabelaAdresowa(fixturePath, { gminaName: 'Kamieńsk', postalCode: '97-360', zone: '3', wojewodztwo: 'Łódzkie' });
 
   assert.equal(result.records.length, 1);
   assert.equal(result.records[0].input.name, 'Jan Testowy');
@@ -95,7 +100,7 @@ test('excel.js readTabelaAdresowa: czyta OZC/procenty ogrzewania, pomija wiersze
 });
 
 test('excel.js readTabelaAdresowa: kolumna LP obecna ale pusta w konkretnym wierszu jest pomijana (skipped.missingLp), nie podstawia cicho numeru wiersza (ten sam blad co naprawiony w tworzenie-folderow/drukarka-projekty)', async () => {
-  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx')); // xlsx tylko do zapisu fixture'ow testowych (bezpieczne) - patrz komentarz w group19-tworzenie-folderow.test.js
   const dir = await makeTempDir();
   const fixturePath = path.join(dir, 'fixture.xlsx');
   const rows = [
@@ -108,7 +113,7 @@ test('excel.js readTabelaAdresowa: kolumna LP obecna ale pusta w konkretnym wier
   XLSX.writeFile(wb, fixturePath);
 
   const { readTabelaAdresowa } = await importSrc('excel.js');
-  const result = readTabelaAdresowa(fixturePath, { zone: '3' });
+  const result = await readTabelaAdresowa(fixturePath, { zone: '3' });
 
   assert.equal(result.records.length, 1);
   assert.equal(result.records[0].input.name, 'Jan Testowy');
@@ -118,7 +123,7 @@ test('excel.js readTabelaAdresowa: kolumna LP obecna ale pusta w konkretnym wier
 });
 
 test('excel.js readTabelaAdresowa: arkusz BEZ kolumny LP w ogole nadal dziala - fallback na numer wiersza pozostaje bezpieczny', async () => {
-  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx')); // xlsx tylko do zapisu fixture'ow testowych (bezpieczne) - patrz komentarz w group19-tworzenie-folderow.test.js
   const dir = await makeTempDir();
   const fixturePath = path.join(dir, 'fixture.xlsx');
   const rows = [
@@ -130,7 +135,7 @@ test('excel.js readTabelaAdresowa: arkusz BEZ kolumny LP w ogole nadal dziala - 
   XLSX.writeFile(wb, fixturePath);
 
   const { readTabelaAdresowa } = await importSrc('excel.js');
-  const result = readTabelaAdresowa(fixturePath, { zone: '3' });
+  const result = await readTabelaAdresowa(fixturePath, { zone: '3' });
 
   assert.equal(result.records.length, 1);
   assert.equal(result.skipped.missingLp, 0);
@@ -140,7 +145,7 @@ test('excel.js readTabelaAdresowa: arkusz BEZ kolumny LP w ogole nadal dziala - 
 });
 
 test('excel.js readTabelaAdresowa: kalkulator Varmero jest tylko dla pomp powietrznych - "Gruntowa" i brak/nieznana wartosc sa pomijane, NIGDY nie przechodza (realny blad zlapany w tej sesji - wszystkie 3 testowe zgloszenia na zywo mialy zly typ pompy)', async () => {
-  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx')); // xlsx tylko do zapisu fixture'ow testowych (bezpieczne) - patrz komentarz w group19-tworzenie-folderow.test.js
   const dir = await makeTempDir();
   const fixturePath = path.join(dir, 'fixture3.xlsx');
   const rows = [
@@ -155,7 +160,7 @@ test('excel.js readTabelaAdresowa: kalkulator Varmero jest tylko dla pomp powiet
   XLSX.writeFile(wb, fixturePath);
 
   const { readTabelaAdresowa } = await importSrc('excel.js');
-  const result = readTabelaAdresowa(fixturePath, { gminaName: 'Kamieńsk', postalCode: '97-360' });
+  const result = await readTabelaAdresowa(fixturePath, { gminaName: 'Kamieńsk', postalCode: '97-360' });
 
   assert.deepEqual(result.records.map(r => r.input.name), ['Powietrzny Testowy', 'Powietrzna Wariant']);
   assert.equal(result.skipped.notAirSourcePump, 2);
@@ -164,7 +169,7 @@ test('excel.js readTabelaAdresowa: kalkulator Varmero jest tylko dla pomp powiet
 });
 
 test('excel.js readTabelaAdresowa: bez podanej strefy -> zoneKnown:false, wiersze nadal maja zone:null (nie zgaduje, nie wymyśla domyślnej strefy)', async () => {
-  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx')); // xlsx tylko do zapisu fixture'ow testowych (bezpieczne) - patrz komentarz w group19-tworzenie-folderow.test.js
   const dir = await makeTempDir();
   const fixturePath = path.join(dir, 'fixture2.xlsx');
   const rows = [
@@ -176,11 +181,11 @@ test('excel.js readTabelaAdresowa: bez podanej strefy -> zoneKnown:false, wiersz
   XLSX.writeFile(wb, fixturePath);
 
   const { readTabelaAdresowa } = await importSrc('excel.js');
-  const result = readTabelaAdresowa(fixturePath, {});
+  const result = await readTabelaAdresowa(fixturePath, {});
   assert.equal(result.zoneKnown, false);
   assert.equal(result.records[0].input.zone, null);
 
-  const withInvalidZone = readTabelaAdresowa(fixturePath, { zone: '9' });
+  const withInvalidZone = await readTabelaAdresowa(fixturePath, { zone: '9' });
   assert.equal(withInvalidZone.zoneKnown, false);
 
   await fsp.rm(dir, { recursive: true, force: true });
@@ -198,7 +203,7 @@ test('jobs.js deriveSubmissionEmail: kazde wywolanie daje inny, unikalny adres p
 });
 
 test('jobs.js runBatchJob: wskazany folder zapisu jest sprawdzany przy pomijaniu gotowych kart', async () => {
-  const XLSX = require(path.join(appRoot, 'node_modules', 'xlsx'));
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx')); // xlsx tylko do zapisu fixture'ow testowych (bezpieczne) - patrz komentarz w group19-tworzenie-folderow.test.js
   const dir = await makeTempDir();
   const outputDir = path.join(dir, 'gotowe-karty');
   const fixturePath = path.join(dir, 'fixture-existing.xlsx');
@@ -212,7 +217,7 @@ test('jobs.js runBatchJob: wskazany folder zapisu jest sprawdzany przy pomijaniu
 
   const { readTabelaAdresowa } = await importSrc('excel.js');
   const { createJob, makePdfName, runBatchJob } = await importSrc('jobs.js');
-  const parsed = readTabelaAdresowa(fixturePath, { zone: '3' });
+  const parsed = await readTabelaAdresowa(fixturePath, { zone: '3' });
   await fsp.mkdir(outputDir, { recursive: true });
   await fsp.writeFile(path.join(outputDir, makePdfName(parsed.records[0])), 'ISTNIEJACY PDF');
 

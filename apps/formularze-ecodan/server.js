@@ -18,9 +18,11 @@ import { cancelAllJobs, cancelJob, createJob, jobs, persistJobsIndex, runAutomat
 import { readExcelRecords } from './src/excel.js';
 import appPaths from '../../lib/appPaths.js';
 import folderBrowse from '../../lib/folderBrowse.js';
+import localRequestSecurity from '../../lib/localRequestSecurity.js';
 
 const { getAppDataDir } = appPaths;
 const { browseFolder } = folderBrowse;
+const { applySecurityHeaders, applyMutationGuard } = localRequestSecurity;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_DATA_ROOT = getAppDataDir('formularze-ecodan');
@@ -37,21 +39,8 @@ process.on('uncaughtException', err => { appendDiagnostic('fatal', 'uncaughtExce
 process.on('unhandledRejection', err => appendDiagnostic('error', 'unhandledRejection', { message: err?.message || String(err), stack: err?.stack || '' }));
 appendDiagnostic('info', 'process-start', { node: process.version, platform: process.platform });
 const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-  'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-app.disable('x-powered-by');
-app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
-app.use((req, res, next) => {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (req.get('X-Scyzoryk-Request') === '1') return next();
-  res.status(403).json({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie.' });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, error: 'Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie.' }));
 app.use(express.json({ limit: '2mb' }));
 
 const apiLimiter = rateLimit({
@@ -81,7 +70,8 @@ const uploadDir = path.join(APP_DATA_ROOT, 'uploads');
 fs.mkdir(uploadDir, { recursive: true }).catch(() => {});
 const upload = multer({
   dest: uploadDir,
-  limits: { fileSize: 20 * 1024 * 1024 },
+  // fieldNestingDepth: patrz komentarz w apps/drukarka/server.js (audyt 2026-08-20).
+  limits: { fileSize: 20 * 1024 * 1024, fieldNestingDepth: 2 },
   fileFilter: (req, file, cb) => {
     const originalName = String(file.originalname || '');
     if (/\.xlsx$/i.test(originalName)) return cb(null, true);

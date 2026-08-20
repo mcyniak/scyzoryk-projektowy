@@ -104,32 +104,41 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
 - `wnioski-powykonawcze` — converts DOCX "wniosek materiałowy" files into "dokumentacja powykonawcza" PDFs.
 - `karty-katalogowe` — matches a UID column in an Excel sheet to product spec-sheet files and copies them
   into per-client folders.
-- `ocr-audytow` — OCR for scanned audit PDFs (incl. Polish handwriting): outputs a PDF with an invisible,
-  selectable/searchable text layer, splitting multi-address bundled files into one PDF per address after
-  a user-reviewed confirmation screen (never auto-splits silently). Uses **Google Cloud Document AI**
-  (a Form Parser processor, `src/documentAiEngine.js`) for text recognition — requires 4 env vars:
-  `OCR_DOCAI_KEY_FILE` (path to a GCP service-account JSON key — never commit this file, reference it
-  only via the env var), `OCR_DOCAI_PROJECT_ID`, `OCR_DOCAI_LOCATION` (e.g. `eu`), `OCR_DOCAI_PROCESSOR_ID`.
-  This replaced an earlier Google Cloud Vision version (2026-07-22; `src/visionEngine.js` was kept as a
-  rollback reference for a while but was fully unused by 2026-07-24 — deleted, retrievable from git
-  history if ever needed) after real-file testing showed Document AI recognizes
-  checkboxes as their own structured entity type (auto-paired with their label) instead of Vision's raw
-  Unicode glyph requiring manual geometric matching — eliminates a whole class of field-matching bugs, at
-  ~20x the cost ($30 vs $1.50/1000 pages). Document AI returns word/formField/table/visualElement
-  coordinates already in its own internally-corrected ("logical") frame, not the raw physical-image frame
-  Vision used. **No automatic page-rotation detection/correction** — this was deliberately removed
-  2026-07-24 (was ~40% of total pipeline time on a real 20-page file, ~54s of ~134s, from physically
-  re-rotating each page image via Jimp) after the owner judged it not worth the cost: a physically
-  upside-down/sideways scan is trivial for a person to fix before upload, so the tool no longer tries to
-  guess/correct it — pages must be uploaded already right-side-up, or field previews/manual marks on that
-  page will be wrong. Since Document AI has no built-in "searchable PDF" output mode, the invisible
-  text layer is assembled by hand via `pdf-lib` + `@pdf-lib/fontkit` (`src/ocrPipeline.js`'s `buildOcrPdf`
-  — needs a Unicode-capable font for Polish diacritics, read live from `C:\Windows\Fonts\arial.ttf`, same
-  pattern as `pieczatki-pdf`, not vendored in the repo). A single page's Document AI call has a 90s timeout
-  (`OCR_PAGE_TIMEOUT_MS` in `ocrPipeline.js`) — without it, one network-stuck page among a batch processed
-  concurrently would hang the entire file's analysis forever, since the client library has no timeout of
-  its own. This is also the only child app in the repo that makes outbound network calls — every other
-  app is deliberately offline/`127.0.0.1`-only end-to-end.
+- `ocr-audytow` — OCR for scanned audit PDFs (incl. Polish handwriting): extracts form-field values into a
+  reviewable table (optionally exported to Excel) and splits multi-address bundled files into one PDF per
+  address after a user-reviewed confirmation screen (never auto-splits silently). Output PDFs are plain
+  `pdf-lib` page copies of the original scan (`copyPages`, no rasterization) — stamps and handwritten notes
+  are untouched. Field extraction goes through a small provider router, `src/aiProvider.js` (added
+  2026-08-19), which every other module (`server.js` included) calls instead of a concrete engine, so
+  switching providers never touches call sites: **Google Gemini** (`src/geminiFieldEngine.js`) and
+  **OpenAI** (`src/openaiFieldEngine.js`, Responses API + Structured Outputs, added 2026-08-19 as a
+  second engine after Gemini's free-tier quota — 20 requests — proved too small for real batches) share
+  prompt/schema logic via `src/aiEngineShared.js` and differ only in API shape; a third, key-less
+  **`manual`** mode (also 2026-08-19) is a no-op handled inline in `aiProvider.js` (no separate engine
+  file) — every field comes back empty/`needsReview`, and the user reads values off the page preview and
+  types them in by hand, fully offline. The active provider is persisted in
+  `%LOCALAPPDATA%\Scyzoryk\ai-provider.json`; each AI engine's own key lives in its own
+  `%LOCALAPPDATA%\Scyzoryk\{gemini,openai}-api-key.json` (or `GEMINI_API_KEY`/`OPENAI_API_KEY` env var) —
+  saving a key auto-activates its provider. This replaced an earlier **Google Cloud Document AI** engine
+  (removed 2026-08-12, `OCR_DOCAI_*` env vars and the GCP-service-account-key installer variant are gone
+  entirely — nothing left to bake into a build) after a comparison test on real audits found it left 76%
+  of fields empty and could silently place a value in the wrong field (its geometric "nearest label"
+  matching), against ~18% empty for Gemini with no mismatch class of bug; each engine's model instead gets
+  a whole address block as a PDF in one request and assigns values to the field schema
+  (`src/fieldExtraction.js`'s `FIELD_DEFS`) semantically, with no geometric label→value matching of its
+  own. That same migration also dropped the invisible, searchable text layer the old pipeline used to
+  assemble by hand via `pdf-lib` + `@pdf-lib/fontkit` (`buildOcrPdf`, since deleted) — output PDFs are
+  scan-quality copies only, not searchable. **No automatic page-rotation detection/correction** — this was
+  deliberately removed 2026-07-24 (was ~40% of total pipeline time on a real 20-page file, ~54s of ~134s,
+  from physically re-rotating each page image via Jimp) after the owner judged it not worth the cost: a
+  physically upside-down/sideways scan is trivial for a person to fix before upload, so the tool no longer
+  tries to guess/correct it — pages must be uploaded already right-side-up, or field previews/manual marks
+  on that page will be wrong. Each engine's own request has a 90s timeout (`OCR_GEMINI_TIMEOUT_MS`/
+  `OCR_OPENAI_TIMEOUT_MS`, both in their respective engine files) — without it, one network-stuck request
+  would hang the whole block's analysis forever, since neither client library has a timeout of its own.
+  This is also the only child app in the repo that makes outbound network calls, and only when Gemini or
+  OpenAI is the active provider — `manual` mode and every other app are deliberately offline/
+  `127.0.0.1`-only end-to-end.
 
 Each app's `data/`, `logs/`, `uploads/`, `output/`, `tmp/` directories are runtime state (uploads, job
 data, generated output), not source — they're excluded from `scripts/check-project.js` and should not be
@@ -249,3 +258,13 @@ new app, copy this rather than inventing a new one:
   `server_*.log`) checked into app directories — there's no git here, so these accumulate as dead
   weight instead of being reversible via history. Delete them when found; nothing in the codebase reads
   them (`check-project.js` only picks up files ending in exactly `.js`/`.ps1`).
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

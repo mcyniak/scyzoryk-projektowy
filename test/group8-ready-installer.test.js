@@ -59,7 +59,7 @@ test('workflow wykonuje jeden kontrolowany przebieg z dwoma jobami i publikuje d
   assert.match(workflow, /name: Zbuduj gotowy instalator Windows/);
   assert.match(workflow, /workflow_dispatch/);
   assert.match(workflow, /\.github\/run-ready-installer/);
-  assert.doesNotMatch(workflow, /branches: \[ui-redesign-v1\][\s\S]*- 'public\/\*\*'/);
+  assert.doesNotMatch(workflow, /branches: \[main\][\s\S]*- 'public\/\*\*'/);
   assert.doesNotMatch(workflow, /git push|gh workflow run|\[instruction-screenshots\]/);
 
   assert.match(workflow, /prepare_final:/);
@@ -119,7 +119,7 @@ test('Pomoc prowadzi do rozbudowanej lokalnej instrukcji z aktualnymi zrzutami',
     'Wnioski powykonawcze PDF',
     'Dobory myEcodan',
     'Pieczątki PDF',
-    'Karty katalogowe',
+    'Przypisywanie plików do folderów',
     'OCR audytów',
     'Dobory Varmero',
     'Nazywarka skanów',

@@ -97,7 +97,11 @@ export function createJob({ sourceFile, options }) {
 
 export function makePdfName(record) {
   const label = `${record.input.name || 'brak-nazwiska'} - ${record.input.address || 'brak-adresu'}`;
-  return sanitize(`${String(record.rowNumber).padStart(3, '0')} - ${label}.pdf`) || `${record.rowNumber}.pdf`;
+  // Przedrostek "Dob_" (wlasciciel, 2026-08-20) - pozwala odroznic gotowe PDF-y
+  // doboru od innych plikow w tym samym folderze klienta i jest rozpoznawany
+  // przez tryb "Dobory" w apps/karty-katalogowe (dopasowanie po adresie
+  // dziala niezaleznie od przedrostka - patrz znajdzPlikiPoAdresie tamze).
+  return sanitize(`Dob_${String(record.rowNumber).padStart(3, '0')} - ${label}.pdf`) || `Dob_${record.rowNumber}.pdf`;
 }
 
 async function pathExists(filePath) {
@@ -192,7 +196,7 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
 
   let parsed;
   try {
-    parsed = readTabelaAdresowa(excelFilePath, { gminaName, postalCode, zone, wojewodztwo });
+    parsed = await readTabelaAdresowa(excelFilePath, { gminaName, postalCode, zone, wojewodztwo });
   } catch (error) {
     job.status = 'fatal-error';
     job.fatalReason = String(error?.message || error);

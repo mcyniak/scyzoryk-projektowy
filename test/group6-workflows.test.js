@@ -12,10 +12,16 @@ const {
   isTemporaryFile,
   findAddressFolder,
   addressTokens,
-  filenameMatchesOwnAddress
+  filenameMatchesOwnAddress,
+  buildOrder
 } = require('../apps/drukarka-projekty/src/folderMatch');
 const { isTruthyMark, loadWorkbookFromBuffer, listCandidates } = require('../apps/drukarka-projekty/src/excelInvestment');
-const XLSX = require('../apps/drukarka-projekty/node_modules/xlsx');
+// xlsx tylko do ZAPISU fixture'ow testowych (bezpieczne) - pozyczone z
+// ocr-audytow, jedynego modulu ktory nadal legalnie trzyma xlsx jako
+// zaleznosc (patrz komentarz w apps/ocr-audytow/src/excelExport.js).
+// drukarka-projekty samo juz go NIE uzywa do odczytu (audyt 2026-08-20:
+// migracja na read-excel-file, patrz komentarz w src/excelInvestment.js).
+const XLSX = require('../apps/ocr-audytow/node_modules/xlsx');
 const { findCategoryFolders } = require('../apps/drukarka-projekty/src/wmFolder');
 const { buildQueueFromGroups, matchOneAddress } = require('../apps/drukarka-projekty/server');
 const { isAffirmativeFlag } = require('../lib/businessFlags');
@@ -80,6 +86,24 @@ test('numery załączników zachowują segmenty i sortują się naturalnie', () 
   const items = extractAttachmentsList('Załącznik nr 1.1: Rysunek A\nZałącznik nr 1.2: Rysunek B');
   assert.deepEqual(items.map(item => item.num), ['1.1', '1.2']);
   assert.deepEqual(['10', '2', '1.1', '1', '10.1', '1.2'].sort(compareAttachmentNumbers), ['1', '1.1', '1.2', '2', '10', '10.1']);
+});
+
+test('buildOrder: PDF z przedrostkiem "Dob_" (Dobory Varmero/myEcodan) dopasowuje się do załącznika "Dobór..." mimo że normalize() zamienia "_" na spację (audyt 2026-08-20)', () => {
+  const classified = {
+    pool: ['Dob_001 - Jan Kowalski - Wierzchlas.pdf'],
+    titlePage: 'ST_test.pdf',
+    techDescPdf: 'OT_test.pdf',
+    techDescDocx: null,
+    otStVariants: [],
+    drawingLike: ['1_a_rysunek.pdf'],
+    protokolFileByContent: null
+  };
+  const attachmentsList = [{ num: '5', name: 'Dobór pompy ciepła Varmero' }];
+  const order = buildOrder(classified, attachmentsList, { adres: 'Wierzchlas' });
+  const wpis = order.find(o => o.file === 'Dob_001 - Jan Kowalski - Wierzchlas.pdf');
+  assert.ok(wpis, 'plik z przedrostkiem "Dob_" powinien trafić do wyniku, nie zniknąć jako niedopasowany');
+  assert.equal(wpis.label, 'Załącznik nr 5: Dobór pompy ciepła Varmero');
+  assert.equal(wpis.confidence, 'słowo kluczowe');
 });
 
 test('pliki tymczasowe są ignorowane, a flagi rezygnacji są jednoznaczne', async (t) => {
@@ -230,7 +254,7 @@ test('drukarka-projekty: isTruthyMark (audyt P1-4) uzywa bialej listy zamiast wy
   }
 });
 
-test('drukarka-projekty: listCandidates zglasza w skippedRows wiersze z adresem bez LP gminy (albo odwrotnie), zamiast cicho je gubic', () => {
+test('drukarka-projekty: listCandidates zglasza w skippedRows wiersze z adresem bez LP gminy (albo odwrotnie), zamiast cicho je gubic', async () => {
   const rows = [
     ['LP gmina', 'Adres', 'Odbiór', 'Rezygnacja'],
     [1, 'Testowa 1', '', ''],
@@ -243,7 +267,7 @@ test('drukarka-projekty: listCandidates zglasza w skippedRows wiersze z adresem 
   XLSX.utils.book_append_sheet(wb, ws, 'Solary');
   const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
-  const { token } = loadWorkbookFromBuffer(buffer);
+  const { token } = await loadWorkbookFromBuffer(buffer);
   const { candidates, skippedRows } = listCandidates(token, 'Solary');
 
   assert.deepEqual(candidates.map(c => c.adres), ['Testowa 1', 'Testowa 4']);

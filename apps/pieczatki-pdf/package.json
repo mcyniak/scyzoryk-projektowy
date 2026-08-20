@@ -17,6 +17,6 @@
     "express-rate-limit": "^7.5.0"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22 <27"
   }
 }

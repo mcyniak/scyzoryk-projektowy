@@ -222,6 +222,43 @@ test('geminiFieldEngine: isConfigured czyta klucz z pliku uzytkownika (%LOCALAPP
   assert.equal(isConfigured(), true);
 });
 
+// Audyt 2026-08-20: klucz szedl jako "?key=..." w URL - latwiej trafia do
+// logow proxy/diagnostyki niz naglowek. Test mockuje global.fetch (bez
+// prawdziwego zapytania sieciowego) i sprawdza sam ksztalt wywolania.
+test('geminiFieldEngine: klucz API idzie w naglowku x-goog-api-key, NIE w URL (?key=...)', async (t) => {
+  const previousEnvKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = 'test-sekret-w-naglowku';
+  const enginePath = require.resolve('../apps/ocr-audytow/src/geminiFieldEngine');
+  delete require.cache[enginePath];
+
+  const previousFetch = global.fetch;
+  let captured = null;
+  global.fetch = async (url, options) => {
+    captured = { url: String(url), headers: options?.headers || {} };
+    return {
+      ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: '{"blockStartPages":[0]}' }] } }] })
+    };
+  };
+  t.after(() => {
+    global.fetch = previousFetch;
+    if (previousEnvKey !== undefined) process.env.GEMINI_API_KEY = previousEnvKey; else delete process.env.GEMINI_API_KEY;
+    delete require.cache[enginePath];
+  });
+
+  const dir = await makeTempDir();
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const sourcePdfPath = path.join(dir, 'audyt.pdf');
+  await createPdf(sourcePdfPath, 2); // pageCount>1, zeby detectBlockStartPages faktycznie wywolalo Gemini
+
+  const { detectBlockStartPages } = require(enginePath);
+  await detectBlockStartPages({ sourcePdfPath, pageCount: 2 });
+
+  assert.ok(captured, 'fetch powinien zostac wywolany');
+  assert.doesNotMatch(captured.url, /key=/, 'URL nie moze juz zawierac sekretu');
+  assert.equal(captured.headers['x-goog-api-key'], 'test-sekret-w-naglowku');
+});
+
 test('geminiFieldEngine: saveUserApiKey odrzuca pusty klucz', async (t) => {
   const localAppData = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-gemini-cfg-'));
   const previousLocalAppData = process.env.LOCALAPPDATA;

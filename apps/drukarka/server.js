@@ -8,6 +8,7 @@ const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
+const { applySecurityHeaders, applyMutationGuard } = require("../../lib/localRequestSecurity");
 const printService = require("../../lib/printing");
 const { withPrintLease, PrintLeaseBusyError } = require("../../lib/printCoordinator");
 const pdfMerge = require("./src/pdfMerge");
@@ -36,21 +37,8 @@ for (const dir of [DATA_DIR, UPLOAD_DIR, MERGED_DIR, SAVE_AS_PDF_TMP_DIR, SAVE_A
 }
 scheduleCleanup([UPLOAD_DIR, MERGED_DIR, SAVE_AS_PDF_TMP_DIR], 24 * 60 * 60 * 1000, 60 * 60 * 1000);
 
-const SECURITY_HEADERS = {
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "no-referrer",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Cross-Origin-Resource-Policy": "same-origin",
-  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-app.disable("x-powered-by");
-app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
-app.use((req, res, next) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  if (req.get("X-Scyzoryk-Request") === "1") return next();
-  res.status(403).json({ ok: false, message: "Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie." });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: "Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie." }));
 app.use(express.json({ limit: "2mb" }));
 
 const apiLimiter = rateLimit({
@@ -124,7 +112,11 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: MAX_FILES },
+  // fieldNestingDepth: audyt 2026-08-20, zalecenie upstream multera przy
+  // CVE-2026-5079 (DoS przez glaboko zagniezdzone nazwy pol multipart) -
+  // ten formularz nigdy nie uzywa zagniezdzonych pol, wiec niski limit
+  // niczego tu nie ogranicza w normalnym uzyciu.
+  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: MAX_FILES, fieldNestingDepth: 2 },
   fileFilter: (req, file, cb) => {
     const original = decodeOriginalName(file.originalname);
     const ext = path.extname(original).toLowerCase();
@@ -176,24 +168,37 @@ function validateUploadedDocument(file) {
 async function buildMergedPrintItems(items, options = {}) {
   const { padOddPagesForDuplex = false } = options;
   const result = [];
+  // Sledzimy juz zapisane na dysku polaczone pliki osobno od "result" - jesli
+  // kolejny "bieg" PDF-ow w tej samej kolejce rzuci blad (np. uszkodzony
+  // plik), funkcja przerywa sie wyjatkiem i traci referencje do wynikow
+  // poprzednich, juz udanych laczen. Bez tego te wczesniejsze pliki
+  // zostawaly sierotami w MERGED_DIR (posprzatane dopiero przez ogolny
+  // 24h scheduleCleanup, nie od razu).
+  const createdMergedPaths = [];
   let i = 0;
-  while (i < items.length) {
-    if (items[i].ext === ".pdf") {
-      const run = [];
-      while (i < items.length && items[i].ext === ".pdf") { run.push(items[i]); i += 1; }
-      if (run.length >= 2) {
-        const mergedPath = path.join(MERGED_DIR, `${Date.now()}_${Math.round(Math.random() * 1e9)}_polaczone.pdf`);
-        await pdfMerge.mergePdfs(run.map(r => r.path), mergedPath, { padOddPagesExceptLast: padOddPagesForDuplex });
-        result.push({ ...run[0], path: mergedPath, originalName: `Połączony PDF (${run.length} plików).pdf`, merged: true });
+  try {
+    while (i < items.length) {
+      if (items[i].ext === ".pdf") {
+        const run = [];
+        while (i < items.length && items[i].ext === ".pdf") { run.push(items[i]); i += 1; }
+        if (run.length >= 2) {
+          const mergedPath = path.join(MERGED_DIR, `${Date.now()}_${Math.round(Math.random() * 1e9)}_polaczone.pdf`);
+          await pdfMerge.mergePdfs(run.map(r => r.path), mergedPath, { padOddPagesExceptLast: padOddPagesForDuplex });
+          createdMergedPaths.push(mergedPath);
+          result.push({ ...run[0], path: mergedPath, originalName: `Połączony PDF (${run.length} plików).pdf`, merged: true });
+        } else {
+          result.push(run[0]);
+        }
       } else {
-        result.push(run[0]);
+        result.push(items[i]);
+        i += 1;
       }
-    } else {
-      result.push(items[i]);
-      i += 1;
     }
+    return result;
+  } catch (err) {
+    cleanupFiles(createdMergedPaths.map(p => ({ path: p })));
+    throw err;
   }
-  return result;
 }
 
 function cleanupFiles(items) {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pomoc - Karty katalogowe</title>
+  <title>Pomoc - Przypisywanie plików do folderów</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="stylesheet" href="/shared/tokens.css" />
   <link rel="stylesheet" href="/shared/components.css" />
@@ -20,11 +20,11 @@
         <span class="app-divider"></span>
         <div class="app-current-tool">
           <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-book"/></svg>
-          <strong>Pomoc - Karty katalogowe</strong>
+          <strong>Pomoc - Przypisywanie plików do folderów</strong>
         </div>
       </div>
       <div class="app-header-right">
-        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
         <a class="btn btn-ghost btn-sm" href="index.html">
           <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
           Wroc do narzedzia
@@ -37,8 +37,13 @@
     </header>
 
     <div class="help-doc">
-      <p class="help-tagline" style="margin-top:22px">Dobiera karty katalogowe na podstawie danych w Excelu (solary - kolumna UID; pompy powietrzne Varmero - kolumna "Model pompy"), a potem kopiuje dokumenty do folderow klientow.</p>
-      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">foldery</span><span class="help-chip">UID</span></div>
+      <p class="help-tagline" style="margin-top:22px">Dobiera karty katalogowe na podstawie danych w Excelu (solary - kolumna UID; pompy powietrzne Varmero - kolumna "Model pompy") albo dokleja audyty/schematy/dokumenty seryjne/dobory po adresie - i kopiuje wszystko do folderow klientow.</p>
+      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">foldery</span><span class="help-chip">UID</span><span class="help-chip">adres</span></div>
+
+      <div class="help-callout info">
+        <span class="help-callout-label">Karty katalogowe albo dodatki</span>
+        <p>Rodzaj "Solary"/"Pompy powietrzne Varmero" dobiera i kopiuje karty katalogowe (komplet-albo-nic). Rodzaje "Audyty"/"Dodaj schematy elektryczne"/"Dodaj dokumenty seryjne"/"Dobory" NIE dobieraja kart w ogole - kazdy dokleja wylacznie swoj jeden rodzaj pliku do juz istniejacego folderu klienta, dopasowany po adresie (albo po mocy zestawu dla schematow).</p>
+      </div>
 
       <div class="help-shot-wrap">
         <img class="help-shot" data-main-asset="/instrukcja-images/07-karty.png" alt="Aktualny ekran Kart katalogowych" loading="lazy">

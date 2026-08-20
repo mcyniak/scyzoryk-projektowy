@@ -1,8 +1,8 @@
 <section id="karty-katalogowe">
-<h2>Karty katalogowe</h2>
-<p class="help-tagline">Dobiera karty katalogowe na podstawie danych i UID w Excelu, a następnie kopiuje je do folderów klientów.</p>
+<h2>Przypisywanie plików do folderów</h2>
+<p class="help-tagline">Dobiera karty katalogowe na podstawie danych i UID w Excelu, albo dokleja audyty/schematy/dokumenty seryjne/dobory po adresie - i kopiuje wszystko do folderów klientów.</p>
 <div class="help-chips"><a class="help-chip help-chip-link" data-app-link="3006" href="#">Pełna instrukcja i rozwiązywanie problemów →</a><span class="help-chip">XLSX</span><span class="help-chip">foldery</span></div>
-<div class="help-shot-wrap"><img class="help-shot" src="/instrukcja-images/07-karty.png" alt="Aktualny ekran Kart katalogowych" loading="lazy"><p class="help-shot-cap">Aktualny ekran narzedzia Karty katalogowe.</p></div>
+<div class="help-shot-wrap"><img class="help-shot" src="/instrukcja-images/07-karty.png" alt="Aktualny ekran Kart katalogowych" loading="lazy"><p class="help-shot-cap">Aktualny ekran narzedzia Przypisywanie plików do folderów.</p></div>
 </section>
 <hr>
 <section id="ocr-audytow">
@@ -13,9 +13,9 @@
 <div class="help-callout good"><span class="help-callout-label">Gotowe po instalacji</span><p>W przetestowanym instalatorze <strong>nie trzeba ustawiać klucza</strong>, zmiennych środowiskowych ani kopiować konfiguracji. OCR korzysta z konfiguracji dołączonej podczas bezpiecznego builda wewnętrznego.</p></div>
 <h3>Krok po kroku</h3>
 <ol><li>Dodaj jeden lub kilka zeskanowanych PDF-ów i kliknij <strong>Rozpoznaj tekst</strong>.</li><li>Sprawdź proponowany podział na adresy. Popraw granice i nazwy, jeżeli dokument został źle rozdzielony.</li><li>Wybierz rodzinę: Pompy ciepła, Solary albo Kotły. Wzór gminy może zostać dobrany automatycznie lub wskazany ręcznie.</li><li>Dla każdego niepewnego pola wpisz wartość i naciśnij Enter. Gdy pole naprawdę jest puste, kliknij <strong>Brak w oryginale</strong>.</li><li>Opcjonalnie podaj ścieżkę nowego Excela. Istniejący plik wymaga jawnego potwierdzenia nadpisania; zapis jest wykonywany atomowo z kopią bezpieczeństwa.</li><li>Kliknij <strong>Zapisz i pobierz</strong>. Oryginalny PDF pozostaje bez zmian.</li></ol>
-<div class="help-callout warn"><span class="help-callout-label">Dane wysyłane do Google</span><p>Strony wymagające rozpoznania są wysyłane do Google Document AI. Nie uruchamiaj tej samej dużej paczki wielokrotnie bez potrzeby, ponieważ zużywa to limit i generuje koszt.</p></div>
+<div class="help-callout warn"><span class="help-callout-label">Gdzie trafiają dane skanu</span><p>Przy pierwszym uruchomieniu wybierasz sposób rozpoznawania: <strong>Google Gemini</strong> albo <strong>OpenAI</strong> (strony wymagające rozpoznania są wtedy wysyłane do wybranego dostawcy pod Twoim własnym kluczem API — nie uruchamiaj tej samej dużej paczki wielokrotnie bez potrzeby, bo zużywa to limit i generuje koszt) albo <strong>Ręcznie (bez AI)</strong> — wtedy nic nigdzie nie jest wysyłane, wszystkie pola uzupełniasz sam z podglądu strony.</p></div>
 <h3>Najczęstsze problemy</h3>
-<dl class="help-errors"><div><dt>Niska pewność rozpoznania</dt><dd>Sprawdź fragment skanu i popraw wartość ręcznie.</dd></div><div><dt>Nie da się wyeksportować Excela</dt><dd>Najpierw rozstrzygnij wszystkie pola wymagające kontroli. Sam PDF może pozostać dostępny.</dd></div><div><dt>OCR nie odpowiada</dt><dd>Sprawdź internet. W gotowym instalatorze nie wykonuj ręcznej konfiguracji klucza — zgłoś problem wraz z komunikatem.</dd></div></dl>
+<dl class="help-errors"><div><dt>Niska pewność rozpoznania</dt><dd>Sprawdź fragment skanu i popraw wartość ręcznie.</dd></div><div><dt>Nie da się wyeksportować Excela</dt><dd>Najpierw rozstrzygnij wszystkie pola wymagające kontroli. Sam PDF może pozostać dostępny.</dd></div><div><dt>OCR nie odpowiada</dt><dd>Jeśli używasz Gemini/OpenAI, sprawdź internet i poprawność klucza API w ustawieniach narzędzia (przycisk „Zmień klucz API”) — ewentualnie przełącz się na tryb ręczny (bez AI, bez klucza).</dd></div></dl>
 </section>
 <hr>
 <section id="varmero">

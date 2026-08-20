@@ -13,6 +13,7 @@ const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJson
 const { getAppDataDir } = require('../../lib/appPaths');
 const { isAffirmativeFlag } = require('../../lib/businessFlags');
 const { browseFolder } = require('../../lib/folderBrowse');
+const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -32,22 +33,8 @@ scheduleCleanup([UPLOAD_DIR], JOB_TTL_MS, 60 * 60 * 1000);
 
 // --- Bezpieczenstwo / middleware, wzorowane na pozostalych modulach Scyzoryka ---
 
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-  'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-
-app.disable('x-powered-by');
-app.use((req, res, next) => { for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v); next(); });
-app.use((req, res, next) => {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (req.get('X-Scyzoryk-Request') === '1') return next();
-  return res.status(403).json({ ok: false, message: 'Odśwież stronę i spróbuj ponownie.' });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: 'Odśwież stronę i spróbuj ponownie.' }));
 app.use(express.json({ limit: '2mb' }));
 
 const apiLimiter = rateLimit({
@@ -86,29 +73,30 @@ const storage = multer.diskStorage({
   }
 });
 
-// Cztery niezalezne pola pliku w jednym requescie: "excel" (zawsze wymagany),
-// oraz opcjonalne "audytyZip"/"schematyZip"/"dokumentySeryjneZip" - alternatywa
-// dla wpisania sciezki do folderu na dysku (audytyPath/schematyPath/
-// dokumentySeryjnePath), bo audyty/schematy czesto leza na dysku Google
-// innego dzialu, do ktorego nie ma stalej, zmapowanej sciezki (patrz
+// Piec niezaleznych pol pliku w jednym requescie: "excel" (zawsze wymagany),
+// oraz opcjonalne "audytyZip"/"schematyZip"/"dokumentySeryjneZip"/"doboryZip" -
+// alternatywa dla wpisania sciezki do folderu na dysku (audytyPath/schematyPath/
+// dokumentySeryjnePath/doboryPath), bo audyty/schematy czesto leza na dysku
+// Google innego dzialu, do ktorego nie ma stalej, zmapowanej sciezki (patrz
 // komentarz przy rozpakujZipDoTemp nizej).
 const MAX_ZIP_MB = Number(process.env.KK_MAX_ZIP_MB || 500);
 const uploadWieloplikowy = multer({
   storage,
-  // 4 mozliwe pola naraz: excel + audytyZip + schematyZip + dokumentySeryjneZip
-  // (limit files musi nadazac za liczba pol w .fields() ponizej - bylo 3,
-  // zanim dolozono dokumentySeryjneZip, co realnie wywalalo "too many files"
-  // przy wgrywaniu wszystkich trzech dodatkow naraz).
-  limits: { fileSize: Math.max(MAX_FILE_MB, MAX_ZIP_MB) * 1024 * 1024, files: 4 },
+  // 5 mozliwych pol naraz: excel + audytyZip + schematyZip + dokumentySeryjneZip
+  // + doboryZip (limit files musi nadazac za liczba pol w .fields() ponizej -
+  // bylo 3, zanim dolozono dokumentySeryjneZip, co realnie wywalalo "too many
+  // files" przy wgrywaniu wszystkich dodatkow naraz).
+  // fieldNestingDepth: patrz komentarz w apps/drukarka/server.js (audyt 2026-08-20).
+  limits: { fileSize: Math.max(MAX_FILE_MB, MAX_ZIP_MB) * 1024 * 1024, files: 5, fieldNestingDepth: 2 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(decodeOriginalName(file.originalname || '')).toLowerCase();
     if (file.fieldname === 'excel') {
       if (ext === '.xlsx') return cb(null, true);
       return cb(new Error('Wybierz plik Excel .xlsx.'));
     }
-    if (file.fieldname === 'audytyZip' || file.fieldname === 'schematyZip' || file.fieldname === 'dokumentySeryjneZip') {
+    if (file.fieldname === 'audytyZip' || file.fieldname === 'schematyZip' || file.fieldname === 'dokumentySeryjneZip' || file.fieldname === 'doboryZip') {
       if (ext === '.zip') return cb(null, true);
-      return cb(new Error('Audyty/schematy/dokumenty seryjne przyjmowane sa wylacznie jako plik .zip.'));
+      return cb(new Error('Audyty/schematy/dokumenty seryjne/dobory przyjmowane sa wylacznie jako plik .zip.'));
     }
     return cb(new Error('Nieoczekiwane pole pliku.'));
   }
@@ -619,12 +607,12 @@ async function dopasujISkopiujDodatek({ trafienia, folderKlienta, istniejace, dr
   }
 }
 
-// audytyPliki/dokumentySeryjnePliki/schematyIndeks: null = zrodlo nie zostalo
-// podane dla tego uruchomienia (dodatek w ogole nie pojawia sie w wyniku
-// wiersza); pusta tablica = zrodlo podane, ale nic sie w nim nie znalazlo
-// (kazdy wiersz dostanie ostrzezenie 'brak'). Patrz komentarz przy
+// audytyPliki/dokumentySeryjnePliki/doboryPliki/schematyIndeks: null = zrodlo
+// nie zostalo podane dla tego uruchomienia (dodatek w ogole nie pojawia sie w
+// wyniku wiersza); pusta tablica = zrodlo podane, ale nic sie w nim nie
+// znalazlo (kazdy wiersz dostanie ostrzezenie 'brak'). Patrz komentarz przy
 // znajdzPlikiPoAdresie/znajdzSchemat.
-async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki = null, dokumentySeryjnePliki = null, schematyIndeks = null, pominKarty = false, wymuszony = false }) {
+async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki = null, dokumentySeryjnePliki = null, doboryPliki = null, schematyIndeks = null, pominKarty = false, wymuszony = false }) {
   // wymuszony: uzytkownik JAWNIE wybral ten arkusz z listy (patrz /api/sheets
   // i /api/run w server.js) - NIGDY nie odrzuca arkusza z powodu nazwy (realne
   // tabele czesto maja arkusz nazwany inaczej niz "Solary", np. "PV_",
@@ -884,6 +872,9 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
       if (dokumentySeryjnePliki !== null) {
         dodatki.dokumentSeryjny = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, dokumentySeryjnePliki), folderKlienta, istniejace, dryRun });
       }
+      if (doboryPliki !== null) {
+        dodatki.dobor = await dopasujISkopiujDodatek({ trafienia: znajdzPlikiPoAdresie(adres, doboryPliki), folderKlienta, istniejace, dryRun });
+      }
       if (schematyIndeks !== null) {
         dodatki.schemat = colMoc === -1
           ? { status: 'brak' }
@@ -895,10 +886,11 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
     if (pominKarty) {
       // Tryb "tylko dodatek": status/komunikat calego wiersza to WPROST status
       // jedynego dodatku, ktory ten przebieg dostarcza (dokladnie jeden z
-      // audytyPliki/schematyIndeks/dokumentySeryjnePliki jest non-null - patrz
-      // /api/run) - brak osobnego stanu "karty" do zgloszenia w tym trybie.
+      // audytyPliki/schematyIndeks/dokumentySeryjnePliki/doboryPliki jest
+      // non-null - patrz /api/run) - brak osobnego stanu "karty" do
+      // zgloszenia w tym trybie.
       const zDod = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa });
-      const jedynyDodatek = zDod.audyt || zDod.schemat || zDod.dokumentSeryjny || null;
+      const jedynyDodatek = zDod.audyt || zDod.schemat || zDod.dokumentSeryjny || zDod.dobor || null;
       wynikiByIdx[idx] = {
         ...zDod,
         status: jedynyDodatek ? jedynyDodatek.status : 'blad',
@@ -1196,7 +1188,8 @@ app.post('/api/run', uploadWieloplikowy.fields([
   { name: 'excel', maxCount: 1 },
   { name: 'audytyZip', maxCount: 1 },
   { name: 'schematyZip', maxCount: 1 },
-  { name: 'dokumentySeryjneZip', maxCount: 1 }
+  { name: 'dokumentySeryjneZip', maxCount: 1 },
+  { name: 'doboryZip', maxCount: 1 }
 ]), async (req, res) => {
   const jobId = crypto.randomUUID();
   req.jobId = jobId;
@@ -1205,7 +1198,8 @@ app.post('/api/run', uploadWieloplikowy.fields([
     ...(req.files?.excel || []),
     ...(req.files?.audytyZip || []),
     ...(req.files?.schematyZip || []),
-    ...(req.files?.dokumentySeryjneZip || [])
+    ...(req.files?.dokumentySeryjneZip || []),
+    ...(req.files?.doboryZip || [])
   ];
   try {
     const excelFile = req.files?.excel?.[0];
@@ -1232,17 +1226,19 @@ app.post('/api/run', uploadWieloplikowy.fields([
     const DODATEK_ZRODLA = {
       audyty: { etykieta: 'audyty', zip: 'audytyZip', sciezka: 'audytyPath' },
       schematy: { etykieta: 'schematy', zip: 'schematyZip', sciezka: 'schematyPath' },
-      'dokumenty-seryjne': { etykieta: 'dokumenty-seryjne', zip: 'dokumentySeryjneZip', sciezka: 'dokumentySeryjnePath' }
+      'dokumenty-seryjne': { etykieta: 'dokumenty-seryjne', zip: 'dokumentySeryjneZip', sciezka: 'dokumentySeryjnePath' },
+      dobory: { etykieta: 'dobory', zip: 'doboryZip', sciezka: 'doboryPath' }
     };
     const typRaw = normalizujTekst(req.body.typ);
     const typ = typRaw === 'pompy' ? 'pompy' : (DODATEK_ZRODLA[typRaw] ? typRaw : 'solary');
 
-    // Audyty/schematy/dokumenty seryjne dotycza WYLACZNIE solarow (schematy
-    // sa dobierane po mocy zestawu fotowoltaicznego, audyty/dokumenty
-    // seryjne po adresie z arkusza PV) - dla pomp te pola sa po prostu
+    // Audyty/schematy/dokumenty seryjne/dobory dotycza WYLACZNIE solarow
+    // (schematy sa dobierane po mocy zestawu fotowoltaicznego, pozostale
+    // dodatki po adresie z arkusza PV) - dla pomp te pola sa po prostu
     // ignorowane, nawet jesli front-end jakims trafem by je wyslal.
     let audytyPliki = null;
     let dokumentySeryjnePliki = null;
+    let doboryPliki = null;
     let schematyIndeks = null;
     let pominKarty = false;
     if (typ === 'solary') {
@@ -1255,6 +1251,11 @@ app.post('/api/run', uploadWieloplikowy.fields([
       if (dokSeryjneZrodlo) {
         if (dokSeryjneZrodlo.wyczysc) doWyczyszczenia.push(dokSeryjneZrodlo.dir);
         dokumentySeryjnePliki = await zbierzPlikiPdf(dokSeryjneZrodlo.dir);
+      }
+      const doboryZrodlo = await rozstrzygnijZrodloDodatku(req, 'dobory', 'doboryZip', 'doboryPath');
+      if (doboryZrodlo) {
+        if (doboryZrodlo.wyczysc) doWyczyszczenia.push(doboryZrodlo.dir);
+        doboryPliki = await zbierzPlikiPdf(doboryZrodlo.dir);
       }
       const schematyZrodlo = await rozstrzygnijZrodloDodatku(req, 'schematy', 'schematyZip', 'schematyPath');
       if (schematyZrodlo) {
@@ -1270,6 +1271,7 @@ app.post('/api/run', uploadWieloplikowy.fields([
       const pliki = await zbierzPlikiPdf(zrodlo.dir);
       if (typ === 'audyty') audytyPliki = pliki;
       else if (typ === 'dokumenty-seryjne') dokumentySeryjnePliki = pliki;
+      else if (typ === 'dobory') doboryPliki = pliki;
       else if (typ === 'schematy') schematyIndeks = zbudujIndeksSchematow(pliki);
     }
 
@@ -1293,7 +1295,7 @@ app.post('/api/run', uploadWieloplikowy.fields([
       if (typ === 'pompy') {
         wynikiWszystkie.push(...await przetworzArkuszPomp({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath, dryRun, wymuszony: true }));
       } else {
-        wynikiWszystkie.push(...await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, schematyIndeks, pominKarty, wymuszony: true }));
+        wynikiWszystkie.push(...await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki, schematyIndeks, pominKarty, wymuszony: true }));
       }
     } else {
       for (const arkusz of wszystkieArkusze) {
@@ -1306,7 +1308,7 @@ app.post('/api/run', uploadWieloplikowy.fields([
           const wynikiPompy = await przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun });
           wynikiWszystkie.push(...wynikiPompy);
         } else {
-          const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, schematyIndeks, pominKarty });
+          const wynikiSolary = await przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki, dokumentySeryjnePliki, doboryPliki, schematyIndeks, pominKarty });
           wynikiWszystkie.push(...wynikiSolary);
         }
       }
@@ -1342,7 +1344,7 @@ app.use((err, req, res, next) => {
 // (test/*.test.js wymaga przetworzArkusz/adresPasujeDoFolderu ponizej i nie
 // powinien przy tym bindowac prawdziwego portu).
 if (require.main === module) {
-  const server = app.listen(PORT, HOST, () => console.log(`Karty katalogowe: http://${HOST}:${PORT}`));
+  const server = app.listen(PORT, HOST, () => console.log(`Przypisywanie plikow do folderow: http://${HOST}:${PORT}`));
   applyHttpTimeouts(server, 'KK');
 }
 

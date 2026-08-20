@@ -18,7 +18,8 @@ function registerFolderRoutes(app, deps) {
 
   const folderUpload = multer({
     storage,
-    limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 300 },
+    // fieldNestingDepth: patrz komentarz w apps/drukarka/server.js (audyt 2026-08-20).
+    limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: 300, fieldNestingDepth: 2 },
     fileFilter: (req, file, cb) => {
       const ext = path.extname(decodeOriginalName(file.originalname || "")).toLowerCase();
       if (file.fieldname === "folderTemplates" && (ext === ".docx" || ext === ".pdf")) return cb(null, true);

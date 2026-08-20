@@ -9,7 +9,10 @@ const path = require('node:path');
 // do ODCZYTU), ale jest juz zaleznoscia drukarka-projekty w tym repo - wykorzystujemy
 // jej node_modules do ZAPISU prawdziwego pliku .xlsx na potrzeby testu (ten sam wzorzec
 // co test/group3-ocr.test.js requirujacy exceljs z node_modules ocr-audytow).
-const XLSX = require('../apps/drukarka-projekty/node_modules/xlsx');
+// xlsx tylko do ZAPISU fixture'ow testowych (bezpieczne) - pozyczone z
+// ocr-audytow, jedynego modulu ktory nadal legalnie trzyma xlsx jako
+// zaleznosc (patrz komentarz w apps/ocr-audytow/src/excelExport.js).
+const XLSX = require('../apps/ocr-audytow/node_modules/xlsx');
 const readXlsxFile = require('../apps/karty-katalogowe/node_modules/read-excel-file/node');
 const AdmZip = require('../apps/karty-katalogowe/node_modules/adm-zip');
 const {
@@ -780,6 +783,41 @@ test('przetworzArkusz: audyt/dokument seryjny/schemat sa dolaczane NIEZALEZNIE o
   assert.equal(w2.status, 'skopiowano', 'brak audytu/schematu NIE blokuje kart (decyzja wlasciciela)');
   assert.deepEqual(w2.audyt, { status: 'brak' });
   assert.deepEqual(w2.schemat, { status: 'brak' });
+});
+
+test('przetworzArkusz: dobor (przedrostek "Dob_" z Dobory Varmero/myEcodan) dopasowuje po adresie tak samo jak audyt/dokument seryjny (dodatek "dobory", 2026-08-20)', async (t) => {
+  const { root, projektyDir } = await przygotujRoot({
+    foldery: ['41 - Wierzchlas, Częstochowska 26', '42 - Wierzchlas, Krótka 3'],
+    kartyPliki: WYMAGANE_KARTY
+  });
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const doboryPliki = await zbierzPlikiPdf(await (async () => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-dobory-'));
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+    await fsp.writeFile(path.join(dir, 'Dob_001 - Jan Kowalski - Wierzchlas, ul. Częstochowska 26.pdf'), 'dobor-1');
+    // Zadnego pliku dla adresu "Krótka 3" - musi dac ostrzezenie 'brak', nie blad.
+    return dir;
+  })());
+
+  const { file, dir: xlsxDir } = await napiszArkuszPV('Solary Zarnow', [
+    [41, 'Wierzchlas, Częstochowska 26', '2/250', '', 2.85, 'Trójfazowe'],
+    [42, 'Wierzchlas, Krótka 3', '2/250', '', 2.85, 'Trójfazowe']
+  ]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({
+    sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false,
+    audytyPliki: null, dokumentySeryjnePliki: null, doboryPliki, schematyIndeks: null
+  });
+
+  assert.equal(wyniki.length, 2);
+  const [w1, w2] = wyniki;
+
+  assert.deepEqual(w1.dobor, { status: 'skopiowano', plik: 'Dob_001 - Jan Kowalski - Wierzchlas, ul. Częstochowska 26.pdf' });
+  assert.ok(fs.existsSync(path.join(projektyDir, '41 - Wierzchlas, Częstochowska 26', 'Dob_001 - Jan Kowalski - Wierzchlas, ul. Częstochowska 26.pdf')));
+  assert.deepEqual(w2.dobor, { status: 'brak' });
 });
 
 test('przetworzArkusz: schemat z dwoma wariantami fazowymi bez znanej fazy w Excelu -> "wieloznaczne", nigdy nie zgaduje', async (t) => {

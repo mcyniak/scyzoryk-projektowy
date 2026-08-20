@@ -358,7 +358,10 @@ function cleanupXlsxDirLater(dir) {
 }
 
 async function writeLpTestSheet(rows) {
-  const XLSX = require(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'node_modules', 'xlsx'));
+  // xlsx tylko do ZAPISU fixture'ow testowych (bezpieczne) - pozyczone z
+  // ocr-audytow, jedynego modulu ktory nadal legalnie trzyma xlsx jako
+  // zaleznosc (patrz komentarz w apps/ocr-audytow/src/excelExport.js).
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx'));
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ecodan-xlsx-'));
   const file = path.join(dir, 'dane.xlsx');
   const ws = XLSX.utils.aoa_to_sheet(rows);
@@ -407,8 +410,8 @@ test('readExcelRecords: bez kolumny LP w arkuszu zostaje bezpieczny fallback na 
 test('makePdfName: preferuje LP nad numerem wiersza, gdy oba sa dostepne', async () => {
   const { makePdfName } = await import('../apps/formularze-ecodan/src/excel.js');
   const input = { name: 'Jan Kowalski', address: 'Testowa 1' };
-  assert.match(makePdfName(input, '5'), /^005 - /);
-  assert.match(makePdfName(input, 42), /^042 - /);
+  assert.match(makePdfName(input, '5'), /^Dob_005 - /);
+  assert.match(makePdfName(input, 42), /^Dob_042 - /);
 });
 
 test('indeks zadań i frontend obsługują restart oraz ostrzeżenie ścieżki', async () => {

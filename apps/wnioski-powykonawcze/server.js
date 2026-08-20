@@ -26,6 +26,7 @@ const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
 const { getAppDataDir } = require('../../lib/appPaths');
 const wmFolderScan = require('./src/wmFolderScan');
+const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3005);
@@ -45,22 +46,8 @@ const JOB_TTL_MS = Number(process.env.WM_JOB_TTL_MS || 24 * 60 * 60 * 1000);
 for (const dir of [DATA_DIR, UPLOAD_DIR, OUTPUT_DIR]) fs.mkdirSync(dir, { recursive: true });
 scheduleCleanup([UPLOAD_DIR, OUTPUT_DIR], JOB_TTL_MS, 60 * 60 * 1000);
 
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-  'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-
-app.disable('x-powered-by');
-app.use((req, res, next) => { for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v); next(); });
-app.use((req, res, next) => {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (req.get('X-Scyzoryk-Request') === '1') return next();
-  return res.status(403).json({ ok: false, message: 'Odśwież stronę i spróbuj ponownie.' });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: 'Odśwież stronę i spróbuj ponownie.' }));
 app.use(express.json({ limit: '2mb' }));
 
 const apiLimiter = rateLimit({
@@ -209,7 +196,8 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: MAX_FILES },
+  // fieldNestingDepth: patrz komentarz w apps/drukarka/server.js (audyt 2026-08-20).
+  limits: { fileSize: MAX_FILE_MB * 1024 * 1024, files: MAX_FILES, fieldNestingDepth: 2 },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(decodeOriginalName(file.originalname || '')).toLowerCase();
     if (ext === '.docx') return cb(null, true);

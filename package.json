@@ -32,6 +32,6 @@
     "build-installer": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-installer.ps1"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22 <27"
   }
 }

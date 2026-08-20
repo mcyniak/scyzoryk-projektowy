@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Karty katalogowe</title>
+<title>Przypisywanie plików do folderów</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg" />
 <link rel="stylesheet" href="/shared/tokens.css" />
 <link rel="stylesheet" href="/shared/components.css" />
@@ -20,11 +20,11 @@
         <span class="app-divider"></span>
         <div class="app-current-tool">
           <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-book"/></svg>
-          <strong>Karty katalogowe</strong>
+          <strong>Przypisywanie plików do folderów</strong>
         </div>
       </div>
       <div class="app-header-right">
-        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
         <a class="btn btn-ghost btn-sm" href="pomoc.html">
           <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
           Pomoc
@@ -38,14 +38,14 @@
 
     <section class="hero">
       <div class="panel hero-main">
-        <div class="kicker">Dobór kart katalogowych</div>
-        <h1>Karty katalogowe</h1>
-        <p class="lead">Wybierz rodzaj — karty katalogowe (solary/pompy) albo osobne dodanie audytów/schematów/dokumentów seryjnych — wskaż Excel i folder z projektami.</p>
+        <div class="kicker">Pliki do folderów klientów</div>
+        <h1>Przypisywanie plików do folderów</h1>
+        <p class="lead">Wybierz rodzaj — karty katalogowe (solary/pompy) albo osobne dodanie audytów/schematów/dokumentów seryjnych/doborów — wskaż Excel i folder z projektami.</p>
       </div>
       <aside class="panel info-card">
         <h2>Jak działa?</h2>
         <div class="pill-list">
-          <div class="pill">Wybierz rodzaj: karty (solary/pompy) albo jeden z dodatków (audyty/schematy/dokumenty seryjne).</div>
+          <div class="pill">Wybierz rodzaj: karty (solary/pompy) albo jeden z dodatków (audyty/schematy/dokumenty seryjne/dobory).</div>
           <div class="pill">Wybierz plik Excel i podaj ścieżkę do głównego folderu.</div>
           <div class="pill">Uruchom najpierw podgląd, potem kopiowanie.</div>
         </div>
@@ -77,9 +77,10 @@
         <div class="kk-mode-row">
           <label class="kk-mode-option"><input type="radio" name="kkMode" value="solary" id="kkModeSolary" checked> Solary (karty katalogowe)</label>
           <label class="kk-mode-option"><input type="radio" name="kkMode" value="pompy" id="kkModePompy"> Pompy powietrzne Varmero (karty katalogowe)</label>
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="audyty" id="kkModeAudyty"> Dodaj audyty PV</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="audyty" id="kkModeAudyty"> Audyty</label>
           <label class="kk-mode-option"><input type="radio" name="kkMode" value="schematy" id="kkModeSchematy"> Dodaj schematy elektryczne</label>
           <label class="kk-mode-option"><input type="radio" name="kkMode" value="dokumenty-seryjne" id="kkModeDokumentySeryjne"> Dodaj dokumenty seryjne</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="dobory" id="kkModeDobory"> Dobory</label>
         </div>
       </div>
 
@@ -128,6 +129,19 @@
           </div>
         </div>
         <p class="kk-hint">Karty katalogowe NIE są w tym trybie w ogóle dobierane/kopiowane - tylko dokumenty seryjne. Brak dopasowania dla adresu daje w wyniku status „Brak”, nie błąd.</p>
+      </div>
+
+      <div id="kkDoborySection" class="kk-field" hidden>
+        <label>Dobory (dołączane do folderu klienta wg adresu z arkusza „Solary”)</label>
+        <div class="kk-dodatek-row">
+          <input type="file" id="doboryZipInput" accept=".zip">
+          <span class="kk-or">albo</span>
+          <div class="path-row">
+            <input type="text" id="doboryPathInput" placeholder="Ścieżka do folderu z doborami">
+            <button type="button" class="btn btn-secondary kk-browse-btn" data-browse-target="doboryPathInput">Przeglądaj...</button>
+          </div>
+        </div>
+        <p class="kk-hint">Karty katalogowe NIE są w tym trybie w ogóle dobierane/kopiowane - tylko dobory. Brak dopasowania dla adresu daje w wyniku status „Brak”, nie błąd.</p>
       </div>
 
       <div class="controls">

@@ -26,7 +26,7 @@ STARTUJ-SCYZORYK.cmd
         ├── Dobory myEcodan            port 3003
         ├── Dokumenty seryjne            port 3004
         ├── Wnioski powykonawcze         port 3005
-        ├── Karty katalogowe             port 3006
+        ├── Przypisywanie plików do folderów port 3006
         ├── Drukarka projekty            port 3010
         └── OCR audytów                  port 3011
 ```
@@ -170,7 +170,7 @@ interfejs HTML/JavaScript
           ├── Microsoft Word przez PowerShell
           ├── drukarki systemu Windows
           ├── zewnętrzny formularz przez Playwright
-          └── Google Cloud Document AI dla OCR
+          └── Google Gemini / OpenAI dla OCR (opcjonalnie — dostępny tez tryb ręczny bez AI)
 ```
 
 Żądania zmieniające dane powinny zawierać nagłówek:
@@ -276,20 +276,30 @@ Ważne jest zachowanie istniejącego formatowania dokumentów. Dlatego uzupełni
 
 Aplikacja przetwarza pliki Word i tworzy końcową dokumentację PDF. Może działać dla pojedynczego pliku albo przetwarzać większy folder według ustalonych reguł.
 
-### 7.7 Karty katalogowe
+### 7.7 Przypisywanie plików do folderów
 
-Narzędzie odczytuje identyfikatory urządzeń z Excela, wyszukuje właściwe karty katalogowe i kopiuje je do folderów przypisanych do klientów lub lokalizacji.
+Narzędzie odczytuje identyfikatory urządzeń z Excela, wyszukuje właściwe karty katalogowe i kopiuje je do folderów przypisanych do klientów lub lokalizacji. Alternatywnie (bez doboru kart) dokleja audyty, schematy elektryczne, dokumenty seryjne albo dobory (Varmero/myEcodan) do już istniejącego folderu klienta, dopasowane po adresie z tego samego arkusza.
 
-Główne ryzyko biznesowe stanowi poprawne dopasowanie identyfikatora do właściwego pliku, dlatego nazewnictwo i reguły dopasowania powinny być testowane na rzeczywistych inwestycjach.
+Główne ryzyko biznesowe stanowi poprawne dopasowanie identyfikatora (albo adresu) do właściwego pliku, dlatego nazewnictwo i reguły dopasowania powinny być testowane na rzeczywistych inwestycjach.
 
 ### 7.8 OCR audytów
 
 OCR audytów jest najbardziej rozbudowanym przepływem analizy dokumentu.
 
-Aktualnie wykorzystuje Google Cloud Document AI (procesor Form Parser) w trybie rozpoznawania
-dokumentów. Silnik został wybrany po testach na rzeczywistych audytach — rozpoznaje pola formularza
-i checkboxy jako osobne, ustrukturyzowane elementy (sparowane z etykietą), a nie tylko surowy tekst,
-co znacznie ułatwia dopasowywanie wartości do kolumn tabelki adresowej.
+Od 12 sierpnia 2026 narzędzie ma trzech wymiennych dostawców rozpoznawania (moduł
+`src/aiProvider.js` działa jako wspólny adapter — reszta aplikacji nie zależy od tego, który
+dostawca jest akurat aktywny):
+
+- **Google Gemini** — użytkownik wpisuje własny klucz API w ustawieniach narzędzia,
+- **OpenAI** — analogicznie, własny klucz API,
+- **Ręcznie (bez AI)** — żaden klucz, żadne zapytanie sieciowe; użytkownik sam odczytuje wartości
+  z dużego, przybliżalnego podglądu strony obok tabeli pól.
+
+Wcześniejsza wersja korzystała z Google Cloud Document AI z wbudowaną w instalator konfiguracją
+konta serwisowego — to rozwiązanie zostało **całkowicie usunięte**. Instalator (zarówno publiczny,
+jak i deweloperski) nie zawiera już żadnego sekretu OCR; każdy klucz API jest wpisywany ręcznie
+przez użytkownika po instalacji i trzymany lokalnie na jego komputerze
+(`%LOCALAPPDATA%\Scyzoryk\gemini-api-key.json` albo analogiczny plik dla OpenAI).
 
 Przepływ wygląda następująco:
 
@@ -297,14 +307,10 @@ Przepływ wygląda następująco:
 zeskanowany PDF
       │
       ▼
-rozpoznanie stron przez Google Cloud Document AI
+podział zbiorczego pliku na adresy
       │
-      ├── tekst i pola formularza
-      ├── położenie słów/pól/tabel
-      └── poziom pewności
-      │
-      ▼
-propozycja podziału zbiorczego pliku na adresy
+      ├── Gemini/OpenAI: automatyczna propozycja podziału na bloki
+      └── tryb ręczny: caly plik = jeden blok, uzytkownik dzieli recznie
       │
       ▼
 kontrola i korekta przez użytkownika
@@ -312,10 +318,13 @@ kontrola i korekta przez użytkownika
       ▼
 rozpoznanie pól formularza
       │
+      ├── Gemini/OpenAI: automatyczne (w tym pismo odręczne i checkboxy)
+      └── tryb ręczny: wszystkie pola startują puste, wymagają recznego uzupelnienia
+      │
       ▼
 kontrola pól niepewnych lub pustych
       │
-      ├── przeszukiwalne PDF-y
+      ├── PDF wyjściowy = kopia oryginalnych stron (bez utraty jakości)
       └── opcjonalny zapis danych do Excela
 ```
 
@@ -325,16 +334,13 @@ Narzędzie nie wykrywa ani nie poprawia automatycznie obrotu strony (świadomie 
 muszą być wgrane już w prawidłowej orientacji, w przeciwnym razie podglądy pól i ręczne zaznaczenia
 na tej stronie będą nietrafione.
 
-Google Cloud Document AI nie tworzy bezpośrednio końcowego PDF-a z warstwą tekstową. Scyzoryk buduje tę warstwę samodzielnie, zachowując obrazy oryginalnych stron i umieszczając na nich niewidoczny tekst. Dla polskich znaków używana jest czcionka dostępna w systemie Windows.
+Wyjściowy PDF to zwykła kopia stron oryginalnego skanu (bez ponownej rasteryzacji, bez utraty jakości) — od migracji z Document AI (12 sierpnia 2026) narzędzie nie buduje już niewidocznej, przeszukiwalnej warstwy tekstu; rozpoznane wartości trafiają wyłącznie do tabeli pól i opcjonalnego eksportu do Excela.
 
-OCR jest jedynym narzędziem projektu wykonującym połączenia z usługą zewnętrzną. Wymaga zmiennych:
-
-```text
-OCR_DOCAI_KEY_FILE       # ścieżka do pliku klucza konta serwisowego GCP (nigdy nie commitować)
-OCR_DOCAI_PROJECT_ID
-OCR_DOCAI_LOCATION       # np. eu
-OCR_DOCAI_PROCESSOR_ID
-```
+OCR w trybie Gemini/OpenAI jest jedynym miejscem w projekcie wykonującym połączenia z usługą
+zewnętrzną — strony wymagające rozpoznania są wtedy wysyłane do wybranego dostawcy. Tryb ręczny nie
+łączy się z niczym. Konfiguracja to wyłącznie klucz API wpisany przez użytkownika w UI (albo,
+opcjonalnie przy uruchomieniu ze źródeł, zmienna środowiskowa `GEMINI_API_KEY`/`OPENAI_API_KEY`) —
+brak jakichkolwiek zmiennych `OCR_DOCAI_*` (usunięte razem z Document AI).
 
 ## 8. Pliki robocze i czyszczenie
 

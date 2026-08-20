@@ -1,4 +1,4 @@
-/* Karty katalogowe - style specyficzne dla tego modulu (reszta: /shared/*.css) */
+/* Przypisywanie plikow do folderow (dawniej "Karty katalogowe") - style specyficzne dla tego modulu (reszta: /shared/*.css) */
 
 .kk-field { margin-bottom: var(--space-4); }
 .kk-field label { display: block; font-weight: 700; margin-bottom: 8px; color: var(--text-secondary); font-size: var(--text-sm); }

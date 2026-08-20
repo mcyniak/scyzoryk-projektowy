@@ -114,7 +114,10 @@ test('frontend pobiera wszystkie strony rekordów przed renderowaniem', async ()
 // =====================================================================
 {
   const os = require('node:os');
-  const XLSX = require(path.join(__dirname, '..', 'apps', 'drukarka-projekty', 'node_modules', 'xlsx'));
+  // xlsx tylko do ZAPISU fixture'ow testowych (bezpieczne) - pozyczone z
+  // ocr-audytow, jedynego modulu ktory nadal legalnie trzyma xlsx jako
+  // zaleznosc (patrz komentarz w apps/ocr-audytow/src/excelExport.js).
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx'));
   const AdmZip = require(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'node_modules', 'adm-zip'));
   const { pickDefaultSheet, getSheetOrderFromWorkbookXml, validateReferenceColumns, groupMailMergeTemplates } = require('../apps/dokumenty-seryjne/server');
 

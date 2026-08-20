@@ -28,6 +28,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
 const { getAppDataDir } = require('../../lib/appPaths');
+const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -77,9 +78,11 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
+  // fieldNestingDepth: patrz komentarz w apps/drukarka/server.js (audyt 2026-08-20).
   limits: {
     fileSize: MAX_FILE_MB * 1024 * 1024,
     files: MAX_FILES,
+    fieldNestingDepth: 2,
   },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(decodeOriginalName(file.originalname || '')).toLowerCase();
@@ -89,21 +92,8 @@ const upload = multer({
   },
 });
 
-const SECURITY_HEADERS = {
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'Referrer-Policy': 'no-referrer',
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-  'Cross-Origin-Resource-Policy': 'same-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-app.disable('x-powered-by');
-app.use((req, res, next) => { for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value); next(); });
-app.use((req, res, next) => {
-  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
-  if (req.get('X-Scyzoryk-Request') === '1') return next();
-  res.status(403).json({ error: 'Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie.' });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ error: 'Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie.' }));
 app.use('/pdfjs', express.static(path.join(ROOT, 'node_modules', 'pdfjs-dist', 'build')));
 app.use('/shared', express.static(path.join(ROOT, '..', '..', 'shared-styles')));
 app.use(express.static(path.join(ROOT, 'public')));

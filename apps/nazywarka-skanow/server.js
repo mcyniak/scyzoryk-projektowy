@@ -8,6 +8,7 @@ const { setupProcessDiagnostics, applyHttpTimeouts } = require("../../lib/harden
 const { getAppDataDir } = require("../../lib/appPaths");
 const { contentDispositionHeader } = require("../../lib/printing");
 const { sessionMiddleware } = require("./lib/sessionStore");
+const { applySecurityHeaders, applyMutationGuard } = require("../../lib/localRequestSecurity");
 
 const app = express();
 const APP_DATA_ROOT = getAppDataDir("nazywarka-skanow");
@@ -15,21 +16,8 @@ setupProcessDiagnostics("nazywarka-skanow", APP_DATA_ROOT);
 const PORT = Number(process.env.PORT || 3007);
 const HOST = process.env.SCYZORYK_HOST || "127.0.0.1";
 
-const SECURITY_HEADERS = {
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "no-referrer",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Cross-Origin-Resource-Policy": "same-origin",
-  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
-};
-app.disable("x-powered-by");
-app.use((req, res, next) => { for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v); next(); });
-app.use((req, res, next) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
-  if (req.get("X-Scyzoryk-Request") === "1") return next();
-  res.status(403).json({ ok: false, message: "Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie." });
-});
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: "Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie." }));
 app.use(express.json({ limit: "256kb" }));
 
 const apiLimiter = rateLimit({

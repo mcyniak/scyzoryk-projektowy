@@ -1,5 +1,47 @@
-const XLSX = require("xlsx");
+// Audyt 2026-08-20: "xlsx" (SheetJS 0.18.5) zamieniony na "read-excel-file" -
+// CVE-2023-30533 (prototype pollution przy CZYTANIU spreparowanego arkusza)
+// i CVE-2024-22363 (ReDoS), obie bez naprawionej wersji w rejestrze npm.
+// Ten sam parser, ktory juz bezpiecznie dziala w karty-katalogowe/
+// dokumenty-seryjne/tworzenie-folderow/formularze-varmero.
+const readXlsxFile = require("read-excel-file/node");
+const AdmZip = require("adm-zip");
 const { isAffirmativeFlag } = require("../../../lib/businessFlags");
+
+// read-excel-file NIE gwarantuje kolejnosci arkuszy zgodnej z prawdziwym
+// xl/workbook.xml (zweryfikowane empirycznie w tej samej sesji na pliku
+// eksportowanym z Google Sheets - dokumenty-seryjne#getSheetOrderFromWorkbookXml,
+// ten sam mechanizm) - dla tego narzedzia kolejnosc MA znaczenie, bo
+// uzytkownik wybiera zakladke z listy w UI, ktora powinna odzwierciedlac
+// prawdziwa kolejnosc kart w Excelu. Czyta prawdziwa kolejnosc bezposrednio
+// z xl/workbook.xml (ten sam plik jest zarowno .xlsx jak i zwykle .zip) i
+// przestawia wynik read-excel-file, zeby dopasowac. Nigdy nie rzuca -
+// nieudany odczyt zostawia oryginalna kolejnosc z read-excel-file
+// (zdegradowane, ale wciaz uzywalne zachowanie zamiast twardego bledu).
+function reorderSheetsByWorkbookXml(buffer, sheets) {
+  try {
+    const zip = new AdmZip(buffer);
+    const entry = zip.getEntry("xl/workbook.xml");
+    if (!entry) return sheets;
+    const xml = zip.readAsText(entry, "utf8");
+    const prawdziwaKolejnosc = [];
+    const sheetTagRe = /<sheet\b[^>]*\/>/g;
+    let m;
+    while ((m = sheetTagRe.exec(xml))) {
+      const nameMatch = m[0].match(/name="([^"]*)"/);
+      if (nameMatch) prawdziwaKolejnosc.push(nameMatch[1]);
+    }
+    if (!prawdziwaKolejnosc.length) return sheets;
+    const byName = new Map(sheets.map(s => [s.sheet, s]));
+    const posortowane = prawdziwaKolejnosc.map(name => byName.get(name)).filter(Boolean);
+    // Kazda nazwa z read-excel-file, ktorej z jakiegos powodu nie ma w
+    // odczytanym xl/workbook.xml (nie powinno sie zdarzyc, ale bezpieczny
+    // fallback) - dokladamy na koniec, zeby zaden arkusz nie zniknal.
+    for (const s of sheets) if (!posortowane.includes(s)) posortowane.push(s);
+    return posortowane;
+  } catch (_) {
+    return sheets;
+  }
+}
 
 // Przechowujemy ostatnio wgrany arkusz w pamięci procesu - to lokalne,
 // jednoosobowe narzędzie, więc nie potrzeba pełnej sesyjności. Wpisy nigdy
@@ -24,12 +66,13 @@ function cleanupOldWorkbooks() {
 const cleanupTimer = setInterval(cleanupOldWorkbooks, 60 * 60 * 1000);
 cleanupTimer.unref?.();
 
-function loadWorkbookFromBuffer(buffer) {
+async function loadWorkbookFromBuffer(buffer) {
   cleanupOldWorkbooks();
-  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  const surowe = await readXlsxFile(buffer, { getSheets: true }); // [{sheet, data}, ...]
+  const sheets = reorderSheetsByWorkbookXml(buffer, surowe);
   const token = nextToken();
-  workbooks.set(token, { wb, createdAt: Date.now() });
-  return { token, sheets: wb.SheetNames };
+  workbooks.set(token, { sheets, createdAt: Date.now() });
+  return { token, sheets: sheets.map(s => s.sheet) };
 }
 
 function getWorkbook(token) {
@@ -38,7 +81,7 @@ function getWorkbook(token) {
     workbooks.delete(token);
     throw new Error("Nie znaleziono wgranego arkusza (token wygasł). Wgraj plik ponownie.");
   }
-  return entry.wb;
+  return entry.sheets;
 }
 
 function normalizeHeader(text) {
@@ -136,11 +179,11 @@ function isRezygnacja(value) {
 // posortowana po LP gmina rosnaco. Kazdy wpis ma tez surowy numer wiersza
 // arkusza (do ewentualnej pozniejszej edycji recznej przez Piotrka).
 function listCandidates(token, sheetName) {
-  const wb = getWorkbook(token);
-  const sheet = wb.Sheets[sheetName];
-  if (!sheet) throw new Error(`Nie znaleziono zakladki "${sheetName}" w arkuszu.`);
+  const sheets = getWorkbook(token);
+  const arkusz = sheets.find(s => s.sheet === sheetName);
+  if (!arkusz) throw new Error(`Nie znaleziono zakladki "${sheetName}" w arkuszu.`);
 
-  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, raw: true });
+  const rows = arkusz.data;
   if (!rows.length) return { candidates: [], columnsFound: {} };
 
   const header = rows[0];

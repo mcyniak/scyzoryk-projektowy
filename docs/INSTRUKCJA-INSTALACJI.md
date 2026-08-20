@@ -14,11 +14,10 @@ oraz przez przycisk **Pomoc** na panelu głównym.
 ## 1. Co jest potrzebne
 
 - Windows 10 lub Windows 11 w wersji 64-bitowej,
-- połączenie z internetem podczas instalacji,
-- połączenie z internetem podczas korzystania z OCR audytów i Formularzy Ecodan,
 - Microsoft Word dla narzędzi **Dokumenty seryjne PDF** i **Wnioski powykonawcze PDF**,
 - dostęp do używanej drukarki,
-- pliki z Dysku Google ustawione jako dostępne offline.
+- pliki z Dysku Google ustawione jako dostępne offline,
+- internet dla Doborów myEcodan/Varmero (zewnętrzne formularze producentów) oraz dla OCR audytów, jeśli używasz automatycznego rozpoznawania tekstu (Gemini/OpenAI) — tryb ręczny OCR działa bez internetu.
 
 Nie jest wymagane instalowanie:
 
@@ -27,29 +26,22 @@ Nie jest wymagane instalowanie:
 - Playwrighta,
 - Chromium,
 - Pythona,
-- klucza Google Document AI.
+- żadnego klucza API — instalator go nie zawiera; jeśli chcesz automatyczne rozpoznawanie w OCR, wpisujesz własny klucz Gemini albo OpenAI po instalacji.
 
-Gotowy instalator zawiera przenośny Node.js, a podczas instalacji pobiera wymagane zależności i Chromium. Wewnętrzna wersja instalatora zawiera również gotową konfigurację Google Document AI.
+Gotowy instalator zawiera przenośny Node.js i wszystkie zależności (w tym Chromium) już spakowane w środku — **nic nie jest pobierane podczas instalacji**, sama instalacja działa więc offline.
 
 ## 2. Pobranie właściwego instalatora
 
-1. Otwórz repozytorium na GitHubie.
-2. Przejdź do zakładki **Actions**.
-3. Uruchom workflow **Zbuduj gotowy instalator Windows z OCR**.
-4. Poczekaj, aż przejdą oba joby:
-   - **Zbuduj instalator**,
-   - **Świeża instalacja i pełne testy**.
-5. Pobierz artefakt:
+1. Otwórz stronę **Releases** repozytorium (zakładka „Releases” na GitHubie albo `<adres-repozytorium>/releases`).
+2. Otwórz najnowsze wydanie (numer wersji `vX.Y.Z`).
+3. Pobierz plik instalatora:
+   - `ScyzorykProjektowy-Setup-<wersja>.exe` — pierwsza instalacja albo pełna naprawa (zawiera wszystko, ok. 600–900 MB),
+   - `ScyzorykProjektowy-Update-<wersja>.exe` — zwykła aktualizacja, gdy program już jest zainstalowany (dużo mniejszy plik, bez ponownego pobierania Node.js/Chromium).
+4. Uruchom pobrany plik `.exe`.
 
-```text
-Scyzoryk-Projektowy-gotowy-Windows-z-OCR
-```
+Każde wydanie jest publikowane dopiero po pełnym teście: instalacji na świeżym Windowsie, uruchomieniu wszystkich modułów i przejściu testów regresyjnych (patrz `.github/workflows/release-public-installer.yml`).
 
-6. Rozpakuj ZIP i uruchom plik `ScyzorykProjektowy-Setup-....exe`.
-
-Finalny artefakt jest publikowany dopiero po zainstalowaniu go na świeżym runnerze Windows, uruchomieniu wszystkich modułów, wykonaniu testów regresyjnych, zrzutów ekranów oraz prawdziwego testu Google Document AI.
-
-> Instalator zawiera wewnętrzną konfigurację OCR. Traktuj go jako plik poufny i nie udostępniaj publicznie.
+> Instalator jest w pełni publiczny i nie zawiera żadnych poufnych danych ani kluczy — można go swobodnie udostępniać.
 
 ## 3. Instalacja
 
@@ -195,28 +187,55 @@ Dokument mający jedną lub dwie strony pozostaje odpowiednio jedno- lub dwustro
 5. Kliknij **Dodaj pieczątki i pobierz**.
 6. Często używane ustawienia zapisz jako preset.
 
-## 12. Karty katalogowe
+## 12. Przypisywanie plików do folderów
 
 1. Wybierz Excel z arkuszami `Solary {gmina}`.
 2. Wklej ścieżkę głównego folderu Kolektory.
-3. Kliknij **Sprawdź tabelę**.
-4. Sprawdź dopasowania UID, folderów i adresów.
-5. Kliknij **Uruchom dobór kart**.
+3. Wybierz rodzaj: karty katalogowe (Solary/Pompy) albo jeden z dodatków (Audyty/schematy elektryczne/dokumenty seryjne/Dobory) dołączanych po adresie do już istniejącego folderu klienta.
+4. Kliknij **Sprawdź tabelę**.
+5. Sprawdź dopasowania UID/adresu, folderów.
+6. Kliknij **Uruchom dobór kart** (albo doklejenie wybranego dodatku).
 
 ## 13. OCR audytów
 
 1. Dodaj zeskanowane PDF-y.
-2. Kliknij **Rozpoznaj tekst**.
-3. Sprawdź podział na adresy.
-4. Wybierz rodzinę dokumentów: Pompy ciepła, Solary albo Kotły.
-5. W razie potrzeby wybierz wzór gminy.
-6. Uzupełnij niepewne pola. Jeśli pole jest puste w oryginale, kliknij **Brak w oryginale**.
-7. Opcjonalnie podaj ścieżkę nowego pliku Excel.
-8. Kliknij **Zapisz i pobierz**.
+2. Przy pierwszym uruchomieniu wybierz sposób rozpoznawania tekstu:
+   - **Google Gemini** albo **OpenAI** — wpisz własny klucz API dostawcy (rozpoznawanie automatyczne, w tym pismo odręczne),
+   - **Ręcznie (bez AI)** — bez żadnego klucza; wszystkie pola trzeba uzupełnić samodzielnie, korzystając z podglądu strony obok.
+3. Kliknij **Rozpoznaj tekst**.
+4. Sprawdź podział na adresy.
+5. Wybierz rodzinę dokumentów: Pompy ciepła, Solary albo Kotły.
+6. W razie potrzeby wybierz wzór gminy.
+7. Uzupełnij niepewne pola. Jeśli pole jest puste w oryginale, kliknij **Brak w oryginale**.
+8. Opcjonalnie podaj ścieżkę nowego pliku Excel.
+9. Kliknij **Zapisz i pobierz**.
 
-W gotowym instalatorze OCR działa bez ręcznego ustawiania klucza. Strony wymagające rozpoznania są wysyłane do Google Document AI, dlatego wymagają internetu i generują koszt usługi.
+Klucz API (jeśli go używasz) jest zapisywany lokalnie na Twoim komputerze i nigdy nie trafia do repozytorium ani do instalatora. W trybie Gemini/OpenAI strony wymagające rozpoznania są wysyłane do wybranego dostawcy — wymaga to internetu i generuje koszt po stronie tego dostawcy. Tryb ręczny nie wysyła nigdzie żadnych danych i działa bez internetu.
 
-## 14. Najczęstsze problemy
+## 14. Dobory Varmero
+
+1. Dodaj Excel z tabelą adresową (kolumna „Rodzaj pompy” — tylko wiersze „Powietrze-woda” trafiają do kalkulatora).
+2. Podaj gminę, kod pocztowy, strefę klimatyczną i województwo dla całej paczki.
+3. Zaznacz adresy do zgłoszenia.
+4. Podaj adres e-mail, na który mają przyjść karty wynikowe (Scyzoryk sam odbiera je z poczty i zapisuje jako PDF).
+5. Kliknij start — narzędzie samo wypełnia kalkulator Varmero dla każdego adresu i pobiera kartę wynikową mailem.
+
+## 15. Nazywarka skanów
+
+Zmienia nazwy zeskanowanych plików PDF **w miejscu**, bezpośrednio na sieciowym udziale skanera, na podstawie zawartości/podglądu strony — bez kopiowania plików gdziekolwiek indziej.
+
+## 16. Tworzenie folderów
+
+1. Dodaj Excel z tabelą adresową (arkusze pomp/kolektorów/kotłów rozpoznawane po nazwie zakładki).
+2. Wskaż istniejący już folder inwestycji (narzędzie **nie** tworzy folderu inwestycji od zera, tylko uzupełnia w nim podfoldery).
+3. Sprawdź podgląd planowanej struktury (WM, PC Grunt/PC powietrzne, kolektory, kotły — z podziałem na gminy, jeśli w tabeli jest więcej niż jedna).
+4. Zatwierdź utworzenie folderów.
+
+## 17. Zdjęcia do PDF Protokołów
+
+Składa zdjęcia protokołów z folderów adresów (ten sam układ folderów co Drukarka projektów) w przycięte, czarno-białe pliki PDF gotowe do druku.
+
+## 18. Najczęstsze problemy
 
 | Problem | Rozwiązanie |
 |---|---|
@@ -224,16 +243,17 @@ W gotowym instalatorze OCR działa bez ręcznego ustawiania klucza. Strony wymag
 | Word nie tworzy PDF | Sprawdź instalację i aktywację Worda oraz dostępność pliku offline. |
 | Nie znaleziono pliku na Dysku Google | Ustaw plik lub folder jako dostępny offline. |
 | Drukowanie jest zajęte | Poczekaj na zakończenie serii w innym module lub karcie. |
-| OCR nie odpowiada | Sprawdź internet. Gotowy instalator nie wymaga ręcznego ustawiania klucza. |
+| OCR nie odpowiada / błąd klucza | Jeśli używasz Gemini/OpenAI, sprawdź internet i poprawność klucza API w ustawieniach narzędzia; ewentualnie przełącz się na tryb ręczny (bez AI, bez klucza). |
 | Ecodan ma tylko trzy strony | To prawidłowe i wymagane działanie. |
 | Niepewny dokument projektu nie został zaznaczony | Sprawdź podgląd i zaznacz go ręcznie. |
 
-## 15. Aktualizacja
+## 19. Aktualizacja
 
-Nie aktualizuj komputera użytkownika przez pobieranie ZIP-a repozytorium.
+Najprostszy sposób: Scyzoryk sam sprawdza dostępność nowej wersji i potrafi się zaktualizować z poziomu panelu (przycisk sprawdzania aktualizacji w nagłówku) — nie trzeba nic pobierać ręcznie.
 
-1. Uruchom ponownie workflow **Zbuduj gotowy instalator Windows z OCR** na właściwym branchu.
-2. Pobierz nowy przetestowany artefakt.
-3. Uruchom nowy instalator na komputerze użytkownika.
+Aktualizacja ręczna (np. gdy automatyczna z jakiegoś powodu zawiedzie):
 
-Instalator wykona ponowną instalację. Dane użytkownika znajdują się poza katalogiem programu.
+1. Pobierz najnowszy `ScyzorykProjektowy-Update-<wersja>.exe` ze strony **Releases** repozytorium (patrz sekcja 2) — nie trzeba pobierać pełnego instalatora, jeśli program już jest zainstalowany.
+2. Uruchom pobrany plik na komputerze użytkownika.
+
+Aktualizacja nadpisuje wyłącznie pliki programu. Dane użytkownika (`%LOCALAPPDATA%\ScyzorykProjektowy\Data`) znajdują się poza katalogiem programu i nie są ruszane.

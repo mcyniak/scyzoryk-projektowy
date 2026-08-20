@@ -16,6 +16,6 @@
     "sanitize-filename": "^1.6.3"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22 <27"
   }
 }
