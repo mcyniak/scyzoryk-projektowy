@@ -39,6 +39,7 @@ public sealed class LauncherApp
     private readonly IAutostartManager _autostartManager;
     private readonly ITrayIconHost _tray;
     private readonly LauncherTimings _timings;
+    private readonly IStartupProgressPresenter _startupProgress;
 
     /// <summary>Domyslny "brak ikony" - TryRunResident zawsze zwraca false (nigdy nie
     /// blokuje, nigdy nie dotyka realnego WinForms). Uzywany wylacznie gdy wywolujacy
@@ -61,7 +62,8 @@ public sealed class LauncherApp
         IUpdateApplier updateApplier,
         IAutostartManager autostartManager,
         LauncherTimings? timings = null,
-        ITrayIconHost? tray = null)
+        ITrayIconHost? tray = null,
+        IStartupProgressPresenter? startupProgress = null)
     {
         _paths = paths;
         _health = health;
@@ -74,6 +76,7 @@ public sealed class LauncherApp
         _autostartManager = autostartManager;
         _timings = timings ?? LauncherTimings.Production;
         _tray = tray ?? new NullTrayIconHost();
+        _startupProgress = startupProgress ?? new NullStartupProgressPresenter();
     }
 
     public async Task<int> RunAsync(ParsedArgs args)
@@ -134,7 +137,10 @@ public sealed class LauncherApp
             return ExitCodes.MissingFile;
         }
 
-        var ensure = await EnsureServerRunningAsync().ConfigureAwait(false);
+        // Okno postepu - tylko w trybie normalnym (openBrowserOnSuccess), nigdy
+        // przy --autostart (patrz komentarz przy IStartupProgressPresenter).
+        var ensure = await EnsureServerRunningAsync(showProgress: openBrowserOnSuccess).ConfigureAwait(false);
+        _startupProgress.Close();
         if (!ensure.Healthy)
         {
             var message =
@@ -178,7 +184,7 @@ public sealed class LauncherApp
     /// przez kogos innego) odpowiedzialnosc za odpalenie node.exe. Muteks jest
     /// trzymany WYLACZNIE na czas tego kroku - nigdy przez otwieranie przegladarki.
     /// </summary>
-    private async Task<EnsureResult> EnsureServerRunningAsync()
+    private async Task<EnsureResult> EnsureServerRunningAsync(bool showProgress)
     {
         if (await _health.ProbeAlreadyRunningAsync(
                 _paths.HealthUrl, _timings.ProbeAttempts, _timings.ProbeAttemptTimeout, _timings.ProbeDelayBetween).ConfigureAwait(false))
@@ -188,12 +194,17 @@ public sealed class LauncherApp
         }
 
         _logger.Log(LogLevel.Info, "Panel nie odpowiada po kilku probach - probuje przejac start.");
+        // Audyt na zywo 2026-08-21: dopiero TERAZ wiadomo, ze to nie bedzie
+        // blyskawiczny, niewidoczny "juz dziala" - pokaz okno, zeby powtorne
+        // klikniecie skrotu (przez uzytkownika myslacego, ze "nic sie nie
+        // dzieje") nie odpalilo drugiej, zbednej proby przejecia startu.
+        if (showProgress) _startupProgress.Show("Uruchamianie Scyzoryka Projektowego...");
 
         if (_gate.TryAcquire(_timings.OwnerAcquireTimeout))
         {
             try
             {
-                return await StartAndWaitAsOwnerAsync().ConfigureAwait(false);
+                return await StartAndWaitAsOwnerAsync(showProgress).ConfigureAwait(false);
             }
             finally
             {
@@ -202,6 +213,7 @@ public sealed class LauncherApp
         }
 
         _logger.Log(LogLevel.Info, "Inna instancja launchera juz odpala serwer - czekam na jej wynik, bez wlasnego spawnu.");
+        if (showProgress) _startupProgress.UpdateMessage("Inna instancja Scyzoryka juz startuje - czekam na jej wynik...");
         var waiterOutcome = await _health.WaitForHealthyAsync(
             _paths.HealthUrl, _timings.WaiterTopUpTimeout, TimeSpan.Zero, () => false).ConfigureAwait(false);
 
@@ -210,7 +222,7 @@ public sealed class LauncherApp
             : EnsureResult.Fail("Inna instancja Scyzoryka probowala wystartowac serwer, ale nie doczekano sie odpowiedzi w wyznaczonym czasie.");
     }
 
-    private async Task<EnsureResult> StartAndWaitAsOwnerAsync()
+    private async Task<EnsureResult> StartAndWaitAsOwnerAsync(bool showProgress)
     {
         // Krotkie ponowne sprawdzenie na wypadek nieszkodliwej gonitwy - ktos inny mogl
         // zdazyc wystartowac miedzy naszym probe a przejeciem muteksu.
@@ -235,6 +247,7 @@ public sealed class LauncherApp
         }
 
         _logger.Log(LogLevel.Info, "Odpalono serwer.", new Dictionary<string, string> { ["pid"] = spawn.Pid.ToString() });
+        if (showProgress) _startupProgress.UpdateMessage("Uruchamianie Scyzoryka Projektowego - to moze potrwac chwile, zwlaszcza zaraz po aktualizacji...");
 
         var startedAt = DateTime.UtcNow;
         var outcome = await _health.WaitForHealthyAsync(

@@ -49,7 +49,8 @@ public static class Program
                 new MessageBoxFatalErrorPresenter(),
                 new UpdateApplier(processManager, health, paths, logger),
                 new AutostartManager(),
-                tray: new NotifyIconTrayHost(paths.TrayMutexName, paths.ResidentTrayPidFilePath, logger));
+                tray: new NotifyIconTrayHost(paths.TrayMutexName, paths.ResidentTrayPidFilePath, logger),
+                startupProgress: new WinFormsStartupProgressPresenter());
 
             return app.RunAsync(parsedArgs).GetAwaiter().GetResult();
         }

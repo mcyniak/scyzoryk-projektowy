@@ -192,6 +192,106 @@ public sealed class LauncherAppTests
         Assert.Equal(0, tray.TryRunResidentCallCount);
     }
 
+    // =====================================================================
+    // Okno postepu startu (IStartupProgressPresenter) - audyt na zywo
+    // 2026-08-21: bez zadnej informacji zwrotnej podczas dlugiego startu
+    // (np. zaraz po cichej instalacji aktualizacji), uzytkownik klikal skrot
+    // ponownie myslac ze "nic sie nie dzieje", co odpalalo kolejna, zbedna
+    // probe przejecia startu serwera.
+    // =====================================================================
+
+    [Fact]
+    public async Task AlreadyRunning_NeverShowsProgressWindow()
+    {
+        // Typowy przypadek ("juz dziala") musi zostac blyskawiczny i cichy -
+        // zadnego okna, ktore migneloby niepotrzebnie.
+        using var dir = new TempInstallDir();
+        var health = new FakeHealthChecker { AlreadyRunningResult = true };
+        var progress = new FakeStartupProgressPresenter();
+        var app = new LauncherApp(dir.Paths, health, new FakeProcessManager(), new FakeBrowserLauncher(), new FakeSingleInstanceGate(),
+            new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(),
+            TestTimings.Fast, new FakeTrayIconHost(), progress);
+
+        var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.False(progress.WasShown);
+    }
+
+    [Fact]
+    public async Task NotRunning_NormalMode_ShowsProgressWindow_ThenClosesItOnSuccess()
+    {
+        using var dir = new TempInstallDir();
+        var health = new FakeHealthChecker
+        {
+            AlreadyRunningResult = false,
+            RespondOnceResult = false,
+            WaitOutcomeResult = HealthWaitOutcome.Healthy
+        };
+        var gate = new FakeSingleInstanceGate { AcquireResult = true };
+        var process = new FakeProcessManager { SpawnResultToReturn = SpawnResult.Ok(4321) };
+        var progress = new FakeStartupProgressPresenter();
+        var app = new LauncherApp(dir.Paths, health, process, new FakeBrowserLauncher(), gate,
+            new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(),
+            TestTimings.Fast, new FakeTrayIconHost(), progress);
+
+        var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.True(progress.WasShown);
+        Assert.Equal(1, progress.CloseCallCount);
+    }
+
+    [Fact]
+    public async Task NotRunning_AutostartMode_NeverShowsProgressWindow()
+    {
+        // --autostart ma zostac calkowicie ciche - to zadanie logowania w tle,
+        // nikt nie patrzy na ekran w tym momencie.
+        using var dir = new TempInstallDir();
+        var health = new FakeHealthChecker
+        {
+            AlreadyRunningResult = false,
+            RespondOnceResult = false,
+            WaitOutcomeResult = HealthWaitOutcome.Healthy
+        };
+        var gate = new FakeSingleInstanceGate { AcquireResult = true };
+        var process = new FakeProcessManager { SpawnResultToReturn = SpawnResult.Ok(4321) };
+        var progress = new FakeStartupProgressPresenter();
+        var app = new LauncherApp(dir.Paths, health, process, new FakeBrowserLauncher(), gate,
+            new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(),
+            TestTimings.Fast, new FakeTrayIconHost(), progress);
+
+        var code = await app.RunAsync(Args(LauncherMode.Autostart));
+
+        Assert.Equal(ExitCodes.Ok, code);
+        Assert.False(progress.WasShown);
+    }
+
+    [Fact]
+    public async Task StartupFailed_NormalMode_StillClosesProgressWindow()
+    {
+        // Okno postepu nie moze zostac "otwarte na zawsze" jesli start sie nie
+        // udal - musi zniknac PRZED pokazaniem komunikatu bledu.
+        using var dir = new TempInstallDir();
+        var health = new FakeHealthChecker
+        {
+            AlreadyRunningResult = false,
+            RespondOnceResult = false,
+            WaitOutcomeResult = HealthWaitOutcome.TimedOutProcessAlive
+        };
+        var gate = new FakeSingleInstanceGate { AcquireResult = true };
+        var progress = new FakeStartupProgressPresenter();
+        var app = new LauncherApp(dir.Paths, health, new FakeProcessManager(), new FakeBrowserLauncher(), gate,
+            new FakeLauncherLogger(), new FakeFatalErrorPresenter(), new FakeUpdateApplier(), new FakeAutostartManager(),
+            TestTimings.Fast, new FakeTrayIconHost(), progress);
+
+        var code = await app.RunAsync(Args(LauncherMode.Normal));
+
+        Assert.Equal(ExitCodes.StartupFailed, code);
+        Assert.True(progress.WasShown);
+        Assert.Equal(1, progress.CloseCallCount);
+    }
+
     [Fact]
     public async Task MissingNodeExe_NormalMode_NoSpawnAttempted_ReturnsNonZero_LogsReadableError()
     {
