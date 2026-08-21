@@ -19,7 +19,13 @@ test('wybrany arkusz jest walidowany w podglądzie, paginacji i generowaniu', as
   const source = await fsp.readFile(serverPath, 'utf8');
   const validations = source.match(/validateReferenceColumns\(/g) || [];
   assert.ok(validations.length >= 5, `wywołania walidacji: ${validations.length}`);
-  assert.match(source, /missingColumns,\s*message: `Arkusz "\$\{sheetName\}"/);
+  // Komunikat o brakujacych kolumnach jest teraz jedna wspolna funkcja
+  // (audyt 2026-08-21 - hint "to moze byc zla tabela" w jednym miejscu,
+  // zamiast 4 rozjezdzajacych sie kopii tego samego stringa).
+  assert.match(source, /function komunikatBrakujacychKolumn\(sheetName, missingColumns\)/);
+  assert.match(source, /Arkusz "\$\{sheetName\}" nie ma wymaganych kolumn: \$\{missingColumns\.join/);
+  const wywolania = source.match(/komunikatBrakujacychKolumn\(/g) || [];
+  assert.ok(wywolania.length >= 5, `wywolania komunikatu (1 definicja + min. 4 uzycia): ${wywolania.length}`);
 });
 
 test('zadania aktywne po restarcie są przerywane i można je anulować', async () => {

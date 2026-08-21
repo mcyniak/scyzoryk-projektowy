@@ -1,0 +1,91 @@
+/* Pipeline inwestycji - style specyficzne dla tego modulu (reszta: /shared/*.css) */
+
+label { display: block; font-weight: 700; color: var(--text-secondary); font-size: var(--text-sm); }
+.field-help { display: block; color: var(--text-tertiary); font-size: 12px; font-weight: 600; margin-top: 7px; line-height: 1.35; }
+input[type="text"], input[type="file"], select { width: 100%; margin-top: 8px; min-height: var(--hit-min); padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: var(--bg-surface); color: var(--text-primary); font: inherit; }
+.actions { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-4); align-items: center; }
+
+button:not(.btn) { border: 0; border-radius: var(--radius-md); min-height: var(--hit-min); padding: 0 18px; font: inherit; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--brand-500); color: #fff; transition: background var(--duration-fast); }
+button:not(.btn):hover { background: var(--brand-600); }
+button:not(.btn):disabled { opacity: .55; cursor: not-allowed; }
+button.secondary { background: var(--gray-800); }
+
+.notice { padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid var(--danger-100); background: var(--danger-50); color: var(--danger-600); font-size: var(--text-sm); line-height: 1.45; margin-top: var(--space-4); }
+.notice.blue { border-color: var(--info-100); background: var(--info-50); color: var(--info-600); }
+.notice.ok { border-color: var(--success-100); background: var(--success-50); color: var(--success-600); }
+code { background: var(--gray-100); border: 1px solid var(--border-default); padding: 2px 7px; border-radius: 6px; color: var(--text-primary); word-break: break-all; }
+.small { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.35; }
+.hidden { display: none !important; }
+
+.sheet-summary { display: flex; flex-wrap: wrap; gap: 10px; margin-top: var(--space-3); }
+.sheet-pill { background: var(--bg-surface-muted); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: 8px 14px; font-size: var(--text-sm); }
+.sheet-pill strong { font-variant-numeric: tabular-nums; }
+
+.badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 4px 10px; font-weight: 700; font-size: 11.5px; }
+.badge.ok { color: var(--success-600); background: var(--success-50); }
+.badge.bad { color: var(--danger-600); background: var(--danger-50); }
+.badge.skip { color: var(--warning-600); background: var(--warning-50); }
+.badge.wait { color: var(--info-600); background: var(--info-50); }
+
+.folder-tree { margin-top: var(--space-4); max-height: 420px; overflow: auto; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--bg-surface); }
+.folder-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border-default); font-size: var(--text-sm); }
+.folder-row:last-child { border-bottom: 0; }
+.folder-row.clickable { cursor: pointer; font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace; }
+.folder-row.clickable:hover { background: var(--bg-surface-muted); }
+.folder-row.up-nav { color: var(--text-secondary); font-weight: 700; font-family: inherit; }
+
+.path-row { display: flex; gap: var(--space-3); align-items: center; margin-top: 8px; }
+.path-row input { margin-top: 0; flex: 1; min-width: 0; }
+.path-row button { white-space: nowrap; flex: none; }
+
+/* Kroki: karty z checkboxem + pola wlasciwe dla danego kroku, ujawniane
+   dopiero po zaznaczeniu (zeby nie zaslaniac formularza polami, ktore i tak
+   sa nieistotne dla uzytkownika, dopoki krok nie jest wybrany). */
+.krok-card { border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: 14px 16px; margin-top: var(--space-3); background: var(--bg-surface); }
+.krok-card summary-row { display: flex; align-items: center; gap: 10px; }
+.krok-head { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.krok-head input[type="checkbox"] { width: 18px; height: 18px; margin: 0; flex: none; }
+.krok-head strong { font-size: var(--text-sm); }
+.krok-desc { color: var(--text-tertiary); font-size: 12px; margin: 4px 0 0 28px; line-height: 1.4; }
+.krok-fields { margin: 12px 0 0 28px; display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.krok-fields.hidden { display: none !important; }
+.krok-fields label { font-size: 12px; }
+
+.sekcja-tytul { margin: var(--space-4) 0 0; font-size: var(--text-sm); font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; }
+
+.typ-grupa { border: 1px solid var(--border-strong); border-radius: var(--radius-lg); padding: 16px; margin-top: var(--space-4); }
+.typ-grupa-tytul { font-size: var(--text-md); font-weight: 800; margin: 0 0 10px; }
+
+/* Podglad adresow - tabela z zaznaczaniem/filtrowaniem (ten sam wzorzec co
+   dokumenty-seryjne/formularze-varmero/formularze-ecodan, audyt 2026-08-21:
+   "zaznacz wszystkie" dziala TYLKO na widocznych, po filtrze, wierszach). */
+.adresy-toolbar { display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap; margin-top: var(--space-4); }
+.adresy-toolbar input[type="search"] { flex: 1; min-width: 220px; margin-top: 0; }
+.adresy-table-wrap { margin-top: var(--space-3); max-height: 360px; overflow: auto; border: 1px solid var(--border-default); border-radius: var(--radius-lg); }
+.adresy-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.adresy-table thead th { position: sticky; top: 0; background: var(--bg-surface-muted); text-align: left; padding: 8px 12px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-tertiary); border-bottom: 1px solid var(--border-default); }
+.adresy-table td { padding: 7px 12px; border-bottom: 1px solid var(--border-default); }
+.adresy-table tr.is-hidden { display: none; }
+.adresy-table tr:last-child td { border-bottom: 0; }
+.adresy-table td.select-col, .adresy-table th.select-col { width: 32px; }
+
+/* Pasek postepu per krok - realny procent dla krokow job-based (Dokumenty
+   seryjne per arkusz, Dobory myEcodan/Varmero), spinner-tekst dla krokow
+   synchronicznych bez wlasnej granularnosci postepu (Tworzenie folderow,
+   Przypisywanie plikow do folderow) - patrz src/runs.js#odczytajPostep. */
+.krok-progress-list { display: flex; flex-direction: column; gap: 10px; margin-top: var(--space-4); }
+.krok-progress-item { border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: 12px 14px; background: var(--bg-surface); }
+.krok-progress-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: var(--text-sm); font-weight: 700; }
+.krok-progress-bar-track { margin-top: 8px; height: 8px; border-radius: 999px; background: var(--bg-surface-muted); overflow: hidden; }
+.krok-progress-bar-fill { height: 100%; border-radius: 999px; background: var(--brand-500); transition: width var(--duration-fast); }
+.krok-progress-bar-fill.indeterminate { width: 35%; animation: krok-indeterminate 1.2s ease-in-out infinite; }
+.krok-progress-msg { margin-top: 6px; font-size: 12px; color: var(--text-tertiary); }
+@keyframes krok-indeterminate {
+  0% { margin-left: 0%; }
+  50% { margin-left: 65%; }
+  100% { margin-left: 0%; }
+}
+
+@media (max-width: 980px) {
+  .krok-fields { grid-template-columns: 1fr; }
+}

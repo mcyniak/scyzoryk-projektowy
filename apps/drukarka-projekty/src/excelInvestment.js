@@ -48,8 +48,18 @@ function reorderSheetsByWorkbookXml(buffer, sheets) {
 // nie byly usuwane, wiec pamiec rosla bez ograniczen przy kazdym kolejnym
 // wgranym pliku przez cały czas dzialania serwera - czyscimy je po TTL,
 // tym samym wzorcem co scheduleCleanup w lib/hardening.js.
-const WORKBOOK_TTL_MS = 12 * 60 * 60 * 1000;
-const workbooks = new Map(); // token -> { wb: XLSX.WorkBook, createdAt: number }
+//
+// Audyt zuzycia RAM 2026-08-21: samo TTL nie wystarczylo - w ciagu jednego
+// dnia pracy (TTL bylo 12h) moglo sie uzbierac kilkanascie w pelni
+// sparsowanych arkuszy naraz, po jednym na kazdy wgrany plik. Skrocone TTL
+// (1h - to narzedzie od otwarcia pliku do zlecenia druku dziala w minutach,
+// nie godzinach) PLUS twardy limit liczby jednoczesnie trzymanych
+// workbookow (LRU po ostatnim uzyciu, nie tylko po utworzeniu) - w typowej
+// pracy trzeba tylko ostatnio otwartego pliku, wiec 3 to bezpieczny zapas
+// gdyby uzytkownik mial otwarte kilka kart naraz.
+const WORKBOOK_TTL_MS = 60 * 60 * 1000;
+const MAX_WORKBOOKS = 3;
+const workbooks = new Map(); // token -> { sheets, createdAt: number, lastAccessedAt: number }
 let counter = 0;
 
 function nextToken() {
@@ -60,27 +70,41 @@ function nextToken() {
 function cleanupOldWorkbooks() {
   const now = Date.now();
   for (const [token, entry] of workbooks.entries()) {
-    if (now - entry.createdAt > WORKBOOK_TTL_MS) workbooks.delete(token);
+    if (now - entry.lastAccessedAt > WORKBOOK_TTL_MS) workbooks.delete(token);
   }
 }
-const cleanupTimer = setInterval(cleanupOldWorkbooks, 60 * 60 * 1000);
+const cleanupTimer = setInterval(cleanupOldWorkbooks, 15 * 60 * 1000);
 cleanupTimer.unref?.();
+
+function evictLeastRecentlyUsedIfOverCapacity() {
+  while (workbooks.size >= MAX_WORKBOOKS) {
+    let oldestToken = null;
+    let oldestAt = Infinity;
+    for (const [token, entry] of workbooks.entries()) {
+      if (entry.lastAccessedAt < oldestAt) { oldestAt = entry.lastAccessedAt; oldestToken = token; }
+    }
+    if (oldestToken == null) break;
+    workbooks.delete(oldestToken);
+  }
+}
 
 async function loadWorkbookFromBuffer(buffer) {
   cleanupOldWorkbooks();
+  evictLeastRecentlyUsedIfOverCapacity();
   const surowe = await readXlsxFile(buffer, { getSheets: true }); // [{sheet, data}, ...]
   const sheets = reorderSheetsByWorkbookXml(buffer, surowe);
   const token = nextToken();
-  workbooks.set(token, { sheets, createdAt: Date.now() });
+  workbooks.set(token, { sheets, createdAt: Date.now(), lastAccessedAt: Date.now() });
   return { token, sheets: sheets.map(s => s.sheet) };
 }
 
 function getWorkbook(token) {
   const entry = workbooks.get(token);
-  if (!entry || Date.now() - entry.createdAt > WORKBOOK_TTL_MS) {
+  if (!entry || Date.now() - entry.lastAccessedAt > WORKBOOK_TTL_MS) {
     workbooks.delete(token);
     throw new Error("Nie znaleziono wgranego arkusza (token wygasł). Wgraj plik ponownie.");
   }
+  entry.lastAccessedAt = Date.now();
   return entry.sheets;
 }
 
@@ -261,4 +285,4 @@ function listCandidates(token, sheetName) {
   return { candidates, columnsFound, skippedRows: { missingLpGmina, missingAdres } };
 }
 
-module.exports = { loadWorkbookFromBuffer, listCandidates, isTruthyMark };
+module.exports = { loadWorkbookFromBuffer, listCandidates, isTruthyMark, MAX_WORKBOOKS };

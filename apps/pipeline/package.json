@@ -1,0 +1,22 @@
+{
+  "name": "pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Automatyzacja calej inwestycji naraz - odpala po kolei wybrane istniejace narzedzia (Dokumenty seryjne, Dobory myEcodan/Varmero, Tworzenie folderow, Przypisywanie plikow do folderow) jako klient ich wlasnego HTTP API.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check src/childAppClient.js && node --check src/runs.js && node --check src/steps.js && node --check src/filteredWorkbook.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.6.0",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.5.0",
+    "multer": "^2.0.2",
+    "read-excel-file": "^9.2.0"
+  },
+  "engines": {
+    "node": ">=22 <27"
+  }
+}

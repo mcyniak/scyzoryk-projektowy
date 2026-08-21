@@ -8,8 +8,19 @@
 const fs = require('fs/promises');
 const { PDFDocument } = require('pdf-lib');
 
-async function pdfSliceToBase64(sourcePdfPath, startPage, endPage) {
+// Audyt zuzycia RAM/CPU 2026-08-21: gdy zakres OBEJMUJE CALY dokument
+// (startPage=0, endPage=totalPages-1 - dokladnie tak wola dzis
+// detectBlockStartPages), poprzednia wersja i tak robila
+// PDFDocument.load() -> PDFDocument.create() -> copyPages() -> save(), zeby
+// wyprodukowac bajt w bajt tę samą zawartosc co oryginal - dla 50-100 MB
+// skanu to realny, zbedny pik RAM/CPU. `totalPages` jest OPCJONALNY (istniejace
+// wywolania per-blok nie musza go podawac) - fast-path aktywuje sie tylko,
+// gdy wywolujacy jawnie potwierdzi, ze to naprawde caly dokument.
+async function pdfSliceToBase64(sourcePdfPath, startPage, endPage, totalPages) {
   const sourceBytes = await fs.readFile(sourcePdfPath);
+  if (totalPages != null && startPage === 0 && endPage === totalPages - 1) {
+    return sourceBytes.toString('base64');
+  }
   const sourceDoc = await PDFDocument.load(sourceBytes, { updateMetadata: false });
   const sliceDoc = await PDFDocument.create();
   const pageIndexes = Array.from({ length: endPage - startPage + 1 }, (_, i) => startPage + i);

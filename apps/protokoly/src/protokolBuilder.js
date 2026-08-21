@@ -521,7 +521,13 @@ async function processPhoto(photoPath, { manualRotateDeg = 0 } = {}) {
 // zbierane do tablicy po indeksie, strony dodawane sekwencyjnie na koncu),
 // niezaleznie od kolejnosci w jakiej faktycznie skoncza sie poszczegolne
 // zadania.
-const PROCESS_CONCURRENCY = Number(process.env.PROTOKOLY_CONCURRENCY || 3);
+// Audyt zuzycia RAM 2026-08-21: kazdy pipeline (Jimp.read -> bitmapa -> clone
+// do miniatury -> maski -> applyShadingCorrection - kolejny clone) trzyma
+// nieskompresowana bitmape RGBA. Dla typowego zdjecia z telefonu (~3000x4000)
+// to ~48 MB SAMEJ bitmapy, wiec przy dawnej wartosci domyslnej (3) piki RAM
+// mogly siegac kilkuset MB naraz - a Jimp i tak robi ciezka obrobke w czystym
+// JS (jednowatkowo), wiec 3 rownolegle zadania nie daja 3x przyspieszenia.
+const PROCESS_CONCURRENCY = Number(process.env.PROTOKOLY_CONCURRENCY || 1);
 
 // rotations: obiekt { [indeks_zdjecia]: stopnie(0/90/180/270) } - reczne
 // poprawki obrotu z podgladu UI dla pojedynczych zdjec, ktorych auto-

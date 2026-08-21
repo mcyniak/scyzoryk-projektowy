@@ -21,7 +21,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     function esc(v) { return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 
     function setBusy(isBusy) {
-      ['uploadBtn','generateBtn','selectAllBtn','selectNoneBtn','selectVisibleBtn','selectVisibleNoneBtn','filePrefix','addFilterRowBtn'].forEach(id => setDisabled(id, isBusy));
+      ['uploadBtn','generateBtn','selectAllBtn','selectNoneBtn','filePrefix','addFilterRowBtn'].forEach(id => setDisabled(id, isBusy));
       document.querySelectorAll('#filterRowsContainer select, #filterRowsContainer input').forEach(el => { el.disabled = isBusy; });
     }
 
@@ -223,7 +223,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         return `<tr data-search="${esc(searchText).toLowerCase()}" data-cols="${colsJson}"><td class="select-col"><input class="row-check" type="checkbox" data-record="${row._record}" checked></td>${usefulColumns.map(c => `<td>${esc(row[c])}</td>`).join('')}</tr>`;
       }).join('');
       $('recordsTable').innerHTML = head + `<tbody>${bodyRows}</tbody>`;
-      $('checkAllRows').onchange = e => { document.querySelectorAll('.row-check').forEach(ch => ch.checked = e.target.checked); updateSelectedMetric(); };
+      $('checkAllRows').onchange = e => { setVisibleRowsChecked(e.target.checked); };
       document.querySelectorAll('.row-check').forEach(ch => ch.onchange = updateSelectedMetric);
       document.querySelectorAll('#recordsTable tbody tr').forEach(tr => {
         tr.addEventListener('click', e => {
@@ -433,10 +433,14 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     $('uploadBtn')?.addEventListener('click', () => uploadFiles());
     $('generateBtn')?.addEventListener('click', generate);
     $('cancelBtn')?.addEventListener('click', cancelJob);
-    $('selectAllBtn')?.addEventListener('click', () => { document.querySelectorAll('.row-check').forEach(ch => ch.checked = true); updateSelectedMetric(); });
-    $('selectNoneBtn')?.addEventListener('click', () => { document.querySelectorAll('.row-check').forEach(ch => ch.checked = false); updateSelectedMetric(); });
-    $('selectVisibleBtn')?.addEventListener('click', () => setVisibleRowsChecked(true));
-    $('selectVisibleNoneBtn')?.addEventListener('click', () => setVisibleRowsChecked(false));
+    // "Zaznacz/Odznacz wszystkie" dziala TYLKO na aktualnie widocznych (po
+    // filtrach) wierszach - audyt 2026-08-21, wczesniej dzialalo na calej
+    // tabeli, wiec po przefiltrowaniu klikniecie "zaznacz wszystkie" po
+    // cichu zaznaczalo tez wiersze spoza filtra. Osobny przycisk "Zaznacz
+    // tylko widoczne" robil dokladnie to samo, wiec zostal usuniety jako
+    // zbedny duplikat (patrz index.html).
+    $('selectAllBtn')?.addEventListener('click', () => setVisibleRowsChecked(true));
+    $('selectNoneBtn')?.addEventListener('click', () => setVisibleRowsChecked(false));
     $('zipLink')?.addEventListener('click', e => { if ($('zipLink').dataset.disabled === '1') e.preventDefault(); });
     $('recordSearch')?.addEventListener('input', filterRecords);
     $('filterColumn')?.addEventListener('change', () => {

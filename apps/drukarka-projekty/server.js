@@ -193,6 +193,23 @@ app.post("/api/wm/scan", async (req, res) => {
 // wybieramy najswiezej zmodyfikowany (typowo najbardziej aktualna kopia).
 // Bez podpowiedzi adresu z Excela (rzadkie) nie ma jak bezpiecznie rozstrzygnac
 // - zostaje dawne zachowanie (blokujemy z czytelnym bledem).
+// Audyt 2026-08-21: dwie NAPRAWDE rozne nazwy folderow moga oba przejsc
+// fuzzy dopasowanie adresu (>=60% wspolnych tokenow - patrz
+// filenameMatchesOwnAddress), np. ten sam numer domu, inna ulica/miejscowosc.
+// "Wybierz najswiezszy" ponizej ma sens WYLACZNIE dla naprawde kosmetycznej
+// roznicy (dopisany sufiks typu "-pdf"/"(kopia)"), NIE dla dwoch realnie
+// innych nazw, ktore przypadkiem obie zmiescily sie w progu fuzzy
+// dopasowania - zwraca true tylko gdy jedna znormalizowana nazwa jest
+// DOKLADNYM prefiksem tokenowym drugiej.
+function tylkoKosmetycznaRoznicaNazwy(a, b) {
+  if (a === b) return true;
+  const tokensA = a.split(' ').filter(Boolean);
+  const tokensB = b.split(' ').filter(Boolean);
+  const [shorter, longer] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
+  if (!shorter.length) return false;
+  return shorter.every((tok, i) => longer[i] === tok);
+}
+
 function resolveAmbiguousMatches(baseFolder, matches, addressHint) {
   let candidates = matches;
   if (addressHint?.adres) {
@@ -203,8 +220,20 @@ function resolveAmbiguousMatches(baseFolder, matches, addressHint) {
     }
   }
   if (candidates.length === 1) return candidates[0];
-  const normalizedNames = new Set(candidates.map(m => folderMatch.normalize(path.basename(m))));
-  if (normalizedNames.size !== 1 && !addressHint?.adres) return null;
+  const normalizedCandidates = candidates.map(m => folderMatch.normalize(path.basename(m)));
+  const normalizedNames = new Set(normalizedCandidates);
+  if (normalizedNames.size !== 1) {
+    if (!addressHint?.adres) return null;
+    // Nawet z podpowiedzia adresu z Excela, wiecej niz jeden PRAWDZIWIE
+    // rozny (nie tylko kosmetycznie) kandydat zostaje niejednoznaczny -
+    // nigdy nie zgadujemy miedzy dwoma rownie prawdopodobnymi, ale roznymi
+    // klientami.
+    for (let i = 0; i < normalizedCandidates.length; i += 1) {
+      for (let j = i + 1; j < normalizedCandidates.length; j += 1) {
+        if (!tylkoKosmetycznaRoznicaNazwy(normalizedCandidates[i], normalizedCandidates[j])) return null;
+      }
+    }
+  }
   let best = candidates[0];
   let bestMtime = -Infinity;
   for (const rel of candidates) {
@@ -772,7 +801,13 @@ app.post("/api/queue/set-merged", async (req, res) => {
   }
   req.session.queue = built;
   req.session.queuePowykonawczaDone = false;
-  res.json({ ok: true, queue: req.session.queue });
+  // Audyt 2026-08-21: "missing" byl wczesniej zwracany TYLKO gdy built.length
+  // === 0 (calkowita porazka) - jesli chocby JEDNA pozycja sie powiodla,
+  // ktoreokolwiek brakujace/zniknniete miedzy dopasowaniem a potwierdzeniem
+  // pliki byly cicho pomijane, a odpowiedz wygladala na pelny sukces. Ta
+  // trasa (w odroznieniu od /api/queue/set nizej) swiadomie dopuszcza
+  // czesciowy sukces, wiec "missing" musi byc widoczne rowniez wtedy.
+  res.json({ ok: true, queue: req.session.queue, missing });
 });
 
 app.post("/api/queue/set", (req, res) => {

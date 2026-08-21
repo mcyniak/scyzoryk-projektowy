@@ -15,6 +15,7 @@ const { isAffirmativeFlag } = require('../../lib/businessFlags');
 const { browseFolder } = require('../../lib/folderBrowse');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 const { isAirSourcePump } = require('../../lib/pumpSourceType');
+const { znajdzFolderZrodlowySolarow, znajdzFolderyPomp } = require('../../lib/wzorFolderResolve');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3006);
@@ -128,11 +129,17 @@ function nazwaZasobnika(rozmiar) { return `Zasobnik SGW(S)B ${rozmiar}.pdf`; }
 // podfolder rozmiaru istnieje, ma pierwszenstwo; jesli nie istnieje, kod
 // spada do ZAWSZE_KARTY/nazwaZasobnika jak dotychczas - stara, juz
 // zweryfikowana sciezka dla innych inwestycji zostaje bez zmian.
-async function znajdzPodfolderRozmiaru(kartyDir, rozmiar) {
+// Zwraca WSZYSTKIE podfoldery, ktorych nazwa zawiera rozmiar - nie tylko
+// pierwszy (audyt 2026-08-21: wczesniej Array.find bralo pierwsze trafienie
+// wg kolejnosci fs.readdir, ktora NIE jest gwarantowana alfabetyczna, wiec
+// np. przypadkowy folder-kopia "2.300 (stary)" obok prawdziwego "2.300"
+// moglby zostac cicho wybrany zamiast zglosic niejednoznacznosc - ten sam
+// wzorzec ochrony co znajdzFolderyModeluPompy nizej). Wywolujacy MUSI sam
+// zdecydowac, co zrobic z wiecej niz jednym trafieniem.
+async function znajdzPodfolderyRozmiaru(kartyDir, rozmiar) {
   const nazwyFolderow = await listujFoldery(kartyDir);
-  if (!nazwyFolderow) return null;
-  const trafiony = nazwyFolderow.find(nazwa => nazwa.includes(rozmiar));
-  return trafiony ? path.join(kartyDir, trafiony) : null;
+  if (!nazwyFolderow) return [];
+  return nazwyFolderow.filter(nazwa => nazwa.includes(rozmiar)).map(nazwa => path.join(kartyDir, nazwa));
 }
 
 async function listujKartyNumerowane(folder) {
@@ -248,19 +255,6 @@ function rozpoznajArkuszSolarow(sheetName) {
   return gmina ? { gmina } : null;
 }
 
-// Zrodlowy folder z kartami solarow - starsza konwencja nazywa go "karty",
-// nowsza "wzór" (ten sam folder co uzywany przez dokumenty seryjne dla
-// innych typow dokumentow - real przypadek, uzytkownik potwierdzil ze obie
-// nazwy wystepuja w praktyce). Sprawdzamy "karty" jako pierwsze (stara,
-// nadal najczestsza konwencja), potem "wzór".
-function znajdzFolderZrodlowySolarow(rootPath) {
-  const karty = path.join(rootPath, 'karty');
-  if (fs.existsSync(karty)) return karty;
-  const wzor = path.join(rootPath, 'wzór');
-  if (fs.existsSync(wzor)) return wzor;
-  return karty; // zaden nie istnieje - komunikat bledu nizej i tak pokaze ta sciezke
-}
-
 // Pompy powietrzne Varmero maja model zapisany w kolumnie "Model pompy" jako
 // "VPM<cyfry>" (wartosc WYLICZONA formula w arkuszu - read-excel-file czyta
 // gotowy wynik, nie sama formule, wiec to dziala bez dodatkowej obslugi).
@@ -304,16 +298,7 @@ async function znajdzFolderyModeluPompy(wzorDir, model) {
 }
 
 // Ustala sciezki wzoru/projektow dla pomp - patrz komentarz przy wywolaniu w
-// przetworzArkuszPomp. Zwraca "PC powietrzne" jako domyslny (do komunikatu
-// bledu), jesli ZADEN wariant nie istnieje na dysku.
-function znajdzFolderyPomp(rootPath) {
-  const warianty = ['PC powietrzne', 'PC'];
-  for (const folder of warianty) {
-    const wzorDir = path.join(rootPath, folder, 'wzór');
-    if (fs.existsSync(wzorDir)) return { wzorDir, projektyDir: path.join(rootPath, folder, 'Projekty') };
-  }
-  return { wzorDir: path.join(rootPath, warianty[0], 'wzór'), projektyDir: path.join(rootPath, warianty[0], 'Projekty') };
-}
+// przetworzArkuszPomp - patrz lib/wzorFolderResolve.js.
 
 async function listujFoldery(dirPath) {
   try {
@@ -920,7 +905,12 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
     // pliki to WSZYSTKIE numerowane pliki w srodku, nie stala lista nazw.
     let zrodloDir = kartyDir;
     let wymaganePliki;
-    const podfolderRozmiaru = await znajdzPodfolderRozmiaru(kartyDir, rozmiar);
+    const podfolderyRozmiaru = await znajdzPodfolderyRozmiaru(kartyDir, rozmiar);
+    if (podfolderyRozmiaru.length > 1) {
+      wynikiByIdx[idx] = await zDodatkami({ gmina, sheet: sheetName, wiersz, id, adres, uid, folder: folderNazwa, status: 'wieloznaczne', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: znaleziono ${podfolderyRozmiaru.length} podfoldery pasujace do rozmiaru "${rozmiar}" (${podfolderyRozmiaru.map(p => path.basename(p)).join(', ')}) dla adresu "${adres || '(brak adresu)'}" - usun/zmien nazwe niepotrzebnego, zeby dopasowanie bylo jednoznaczne.` });
+      return;
+    }
+    const podfolderRozmiaru = podfolderyRozmiaru[0] || null;
     if (podfolderRozmiaru) {
       zrodloDir = podfolderRozmiaru;
       const numerowane = await listujKartyNumerowane(podfolderRozmiaru);

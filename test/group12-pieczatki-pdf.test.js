@@ -150,3 +150,38 @@ test('drawPreparedStampOnPage: kotwica KAZDEJ linii tekstu stempla zostaje w gra
     }
   }
 });
+
+// =====================================================================
+// public/app.js#parseContentDispositionFilename - root cause naprawiony
+// 2026-08-21 (audyt "zle fallbacki"): polskie znaki w nazwie pobieranego
+// pliku zamienialy sie na literalne "?", bo front-end parsowal WYLACZNIE
+// ASCII-owy fallback "filename=..." (gdzie diakrytyki juz sa zamienione na
+// "?" przez biblioteke content-disposition po stronie serwera), zamiast
+// preferowac poprawny "filename*=UTF-8''...". Funkcja zyje w kodzie
+// przegladarki (public/app.js, bez module.exports) - wyciagamy jej zrodlo
+// regexem i uruchamiamy w izolowanym vm, ten sam wzorzec co source-grep
+// testy gdzie indziej w repo (patrz test/group5-dokumenty-seryjne.test.js),
+// tylko z faktycznym wykonaniem zamiast samego dopasowania tekstu.
+test('parseContentDispositionFilename: odczytuje prawdziwe polskie znaki z filename*=UTF-8..., nie ASCII-owy fallback z "?" (audyt 2026-08-21)', async () => {
+  const contentDisposition = require('../apps/pieczatki-pdf/node_modules/content-disposition');
+  const vm = require('node:vm');
+
+  const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'pieczatki-pdf', 'public', 'app.js'), 'utf8');
+  const match = source.match(/function parseContentDispositionFilename\([\s\S]*?\n\}/);
+  assert.ok(match, 'nie znaleziono funkcji parseContentDispositionFilename w public/app.js');
+
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext(`${match[0]}\nthis.parseContentDispositionFilename = parseContentDispositionFilename;`, sandbox);
+  const { parseContentDispositionFilename } = sandbox;
+
+  const realHeader = contentDisposition('Zażółć gęślą jaźń - ostemplowany.pdf');
+  assert.match(realHeader, /filename="Za\?/, 'zakladamy, ze ASCII fallback faktycznie ma "?" - inaczej test nic nie sprawdza');
+
+  const wynik = parseContentDispositionFilename(realHeader);
+  assert.equal(wynik, 'Zażółć gęślą jaźń - ostemplowany.pdf', 'musi odczytac PRAWDZIWE polskie znaki, nie ASCII "?" fallback');
+
+  // Brak filename*= w ogole (starszy/inny serwer) -> bezpieczny fallback na zwykly filename=.
+  assert.equal(parseContentDispositionFilename('attachment; filename="proste.pdf"'), 'proste.pdf');
+  assert.equal(parseContentDispositionFilename(''), null);
+});

@@ -407,6 +407,47 @@ test('readExcelRecords: bez kolumny LP w arkuszu zostaje bezpieczny fallback na 
   assert.equal(parsed.skipped.missingLp, 0);
 });
 
+test('jobs.js runBatchJob: pusta/brakujaca selectedRows NIGDY nie zglasza calej tabeli (audyt 2026-08-21, real incydent - przypadkowy start na 70 adresow)', async (t) => {
+  const { file, dir: xlsxDir } = await writeLpTestSheet([
+    LP_TEST_HEADER,
+    [1, 'Jan Testowy', 'Testowa 1', '9,5', '9 kW', '60', '40', '200 l'],
+    [2, 'Anna Testowa', 'Testowa 2', '8,0', '9 kW', '60', '40', '200 l']
+  ]);
+  t.after(() => cleanupXlsxDirLater(xlsxDir));
+  const outputDir = path.join(xlsxDir, 'gotowe-karty');
+
+  const { createJob, runBatchJob } = await import('../apps/formularze-ecodan/src/jobs.js');
+  const job = createJob({ sourceFile: 'fixture.xlsx', options: { location: '62-561 Ślesin', outputPath: outputDir, skipExisting: true, concurrency: 1 } });
+  job.outputBase = path.join(xlsxDir, 'workspace');
+
+  // selectedRows CELOWO pominiete - to dokladnie ksztalt bledu z incydentu.
+  await runBatchJob(job, file, { location: '62-561 Ślesin', outputPath: outputDir, skipExisting: true, concurrency: 1 });
+
+  assert.equal(job.total, 0, 'bez selectedRows job NIE moze przetworzyc obu adresow z pliku');
+  assert.equal(job.status, 'finished');
+});
+
+test('jobs.js pruneOldJobs: usuwa tylko STARE zakonczone zadania (>7 dni), nigdy aktywne ani niedawno zakonczone (audyt zuzycia RAM 2026-08-21)', async () => {
+  const { jobs, pruneOldJobs, JOB_RETENTION_MS } = await import('../apps/formularze-ecodan/src/jobs.js');
+  const staraData = new Date(Date.now() - JOB_RETENTION_MS - 60000).toISOString();
+  const swiezaData = new Date().toISOString();
+
+  jobs.set('test-stare-zakonczone', { id: 'test-stare-zakonczone', status: 'finished', finishedAt: staraData });
+  jobs.set('test-swiezo-zakonczone', { id: 'test-swiezo-zakonczone', status: 'finished', finishedAt: swiezaData });
+  jobs.set('test-aktywne-stare', { id: 'test-aktywne-stare', status: 'running', finishedAt: null, startedAt: staraData });
+
+  try {
+    pruneOldJobs();
+    assert.equal(jobs.has('test-stare-zakonczone'), false, 'stare zakonczone zadanie powinno zostac usuniete');
+    assert.equal(jobs.has('test-swiezo-zakonczone'), true, 'niedawno zakonczone zadanie musi zostac');
+    assert.equal(jobs.has('test-aktywne-stare'), true, 'aktywne zadanie NIGDY nie moze zostac usuniete, niezaleznie od wieku');
+  } finally {
+    jobs.delete('test-stare-zakonczone');
+    jobs.delete('test-swiezo-zakonczone');
+    jobs.delete('test-aktywne-stare');
+  }
+});
+
 test('makePdfName: preferuje LP nad numerem wiersza, gdy oba sa dostepne', async () => {
   const { makePdfName } = await import('../apps/formularze-ecodan/src/excel.js');
   const input = { name: 'Jan Kowalski', address: 'Testowa 1' };

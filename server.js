@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { createRequire } = require('module');
-const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog } = require('./lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, appendJsonLine, sanitizeForLog, runPowerShell } = require('./lib/hardening');
+const { parseCimProcessRows, sumProcessTreeBytes } = require('./lib/processTree');
 const { acquireSingleInstanceLock } = require('./lib/singleInstanceLock');
 const { recordChildFailure } = require('./lib/childRestartPolicy');
 const { getDataRoot, getAppDataDir } = require('./lib/appPaths');
@@ -84,7 +85,8 @@ const apps = [
   { slug: 'nazywarka-skanow', name: 'Nazywarka skanów', description: 'Zmiana nazw zeskanowanych PDF-ow w miejscu, na sieciowym udziale skanera.', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), port: Number(process.env.NAZYWARKA_SKANOW_PORT || 3007), healthPath: '/api/health' },
   { slug: 'formularze-varmero', name: 'Dobory Varmero', description: 'Automatyczne zgloszenia do kalkulatora doboru pompy ciepla Varmero na podstawie tabeli adresowej, z odbiorem kart wynikowych mailem.', dir: path.join(ROOT, 'apps', 'formularze-varmero'), port: Number(process.env.FORMULARZE_VARMERO_PORT || 3012), healthPath: '/api/health', extraEnv: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || '0' } },
   { slug: 'tworzenie-folderow', name: 'Tworzenie folderów', description: 'Automatyczne tworzenie struktury podfolderow (WM/pompy/kolektory/kotly) w istniejacym folderze inwestycji, na podstawie tabeli adresowej.', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), port: Number(process.env.TWORZENIE_FOLDEROW_PORT || 3013), healthPath: '/api/health' },
-  { slug: 'protokoly', name: 'Zdjęcia do PDF Protokołów', description: 'Sklada zdjecia protokolow (z folderow adresow, tak jak w drukarce projektow) w przyciete, czarno-biale PDF-y gotowe do druku.', dir: path.join(ROOT, 'apps', 'protokoly'), port: Number(process.env.PROTOKOLY_PORT || 3014), healthPath: '/api/health' }
+  { slug: 'protokoly', name: 'Zdjęcia do PDF Protokołów', description: 'Sklada zdjecia protokolow (z folderow adresow, tak jak w drukarce projektow) w przyciete, czarno-biale PDF-y gotowe do druku.', dir: path.join(ROOT, 'apps', 'protokoly'), port: Number(process.env.PROTOKOLY_PORT || 3014), healthPath: '/api/health' },
+  { slug: 'pipeline', name: 'Pipeline inwestycji', description: 'Odpala po kolei wybrane narzedzia (Tworzenie folderow, Dokumenty seryjne, Przypisywanie plikow do folderow, Dobory myEcodan/Varmero) dla jednej inwestycji naraz.', dir: path.join(ROOT, 'apps', 'pipeline'), port: Number(process.env.PIPELINE_PORT || 3015), healthPath: '/api/health' }
 ];
 
 
@@ -100,7 +102,8 @@ const dependencyChecks = [
   { slug: 'nazywarka-skanow', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), deps: ['express', 'express-rate-limit'] },
   { slug: 'formularze-varmero', dir: path.join(ROOT, 'apps', 'formularze-varmero'), deps: ['express', 'playwright', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx', 'imapflow', 'mailparser'], playwright: true },
   { slug: 'tworzenie-folderow', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), deps: ['express', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx'] },
-  { slug: 'protokoly', dir: path.join(ROOT, 'apps', 'protokoly'), deps: ['express', 'express-rate-limit', 'jimp', 'pdf-lib'] }
+  { slug: 'protokoly', dir: path.join(ROOT, 'apps', 'protokoly'), deps: ['express', 'express-rate-limit', 'jimp', 'pdf-lib'] },
+  { slug: 'pipeline', dir: path.join(ROOT, 'apps', 'pipeline'), deps: ['express', 'multer', 'express-rate-limit', 'read-excel-file', 'adm-zip', 'exceljs'] }
 ];
 
 function appHasDependencies(app) {
@@ -230,6 +233,25 @@ function startChild(app, attempt = 0) {
   });
 }
 
+// Audyt zuzycia RAM/CPU 2026-08-21: to jest sedno najwiekszej zmiany w tym
+// audycie - Scyzoryk NIE startuje juz automatycznie wszystkich 13 apek przy
+// wlasnym starcie (kazda to osobny proces Node z wlasnym V8/heap/Express -
+// OCR laduje pdf-lib/Jimp/Excel, drukarki pdf-lib, Ecodan/Varmero caly kod
+// Playwrighta, nawet gdy uzytkownik danego dnia w ogole ich nie dotyka).
+// Zamiast tego apka startuje DOPIERO gdy uzytkownik faktycznie ja otworzy
+// (kliknie kafelek w panelu -> POST /api/apps/:slug/start), a panel czeka
+// na jej /api/health przed przekierowaniem. `ensureChildStarted` jest
+// idempotentne (bezpieczne wywolanie wielokrotne) i respektuje ta sama
+// flage testowa co dawny petla-przy-starcie (SCYZORYK_SKIP_CHILD_START),
+// zeby istniejace testy panelu (fakeHealth, zero prawdziwych dzieci) nie
+// zaczely nagle spawnowac prawdziwych procesow przez ten nowy endpoint.
+function ensureChildStarted(app) {
+  if (process.env.SCYZORYK_SKIP_CHILD_START === '1') return false;
+  if (children.has(app.slug)) return true;
+  startChild(app);
+  return true;
+}
+
 function stopChildren() { for (const child of children.values()) { try { child.kill(); } catch (_) {} } }
 process.on('SIGINT', () => { stopChildren(); process.exit(0); });
 process.on('SIGTERM', () => { stopChildren(); process.exit(0); });
@@ -349,11 +371,69 @@ function dirSizeSafe(dir, limitFiles = 2000) {
   return { bytes: total, files, truncated: files >= limitFiles };
 }
 
+// Audyt zuzycia RAM/CPU 2026-08-21: /api/apps jest odpytywane co 10s przez
+// panel (setInterval w public/inline-1.js) i za kazdym razem liczylo
+// dirSizeSafe() od nowa - synchroniczne readdirSync/statSync na az do 2000
+// plikow, na kazdym tickcie, nawet gdy uzytkownik nic nie robi. Rozmiar
+// danych zmienia sie wolno (uploady/output rosna w minutach, nie
+// sekundach), wiec cache'ujemy wynik na 2 minuty zamiast liczyc go co tick.
+const STORAGE_CACHE_TTL_MS = 2 * 60 * 1000;
+let storageCache = null; // { value, at }
+function cachedDirSize(dir) {
+  const now = Date.now();
+  if (storageCache && now - storageCache.at < STORAGE_CACHE_TTL_MS) return storageCache.value;
+  const value = dirSizeSafe(dir);
+  storageCache = { value, at: now };
+  return value;
+}
+
+// Audyt zuzycia RAM 2026-08-21: `/api/apps` zwracal `process.memoryUsage()`
+// WYLACZNIE glownego procesu panelu - z 13 apkami dzialajacymi caly czas
+// jako osobne procesy Node (plus Chromium spod Playwrighta w
+// formularze-ecodan/formularze-varmero), to bylo mylace: liczba na ekranie
+// mogla pokazywac np. 70 MB, podczas gdy caly Scyzoryk realnie zuzywal
+// kilkaset MB-kilka GB. Jeden `Get-CimInstance Win32_Process` zwraca
+// PID/PPID/WorkingSetSize WSZYSTKICH procesow na maszynie - w JS budujemy z
+// tego drzewo i sumujemy kazdego dziecka Scyzoryka WRAZ Z JEGO POTOMKAMI
+// (Chromium spod Playwrighta jest wnukiem/prawnukiem procesu apki, nie
+// bezposrednim dzieckiem panelu), zeby dostac prawdziwy calkowity koszt.
+// `Get-CimInstance Win32_Process` dla WSZYSTKICH procesow na maszynie
+// potrafi realnie trwac sekundy (WMI, nie super szybkie) - odpytywanie tego
+// SYNCHRONICZNIE w handlerze /api/apps kiedys tu bylo i zlapalo sie na
+// zywo: request timeoutowal (patrz test/group1-supervisor.test.js, 3s
+// limit klienta). Odswiezanie idzie wiec WYLACZNIE w tle na interwale -
+// handler requestu zawsze czyta juz-gotowy wynik z cache'u, nigdy nie czeka
+// na PowerShella. Pierwsze kilkanascie sekund po starcie panelu (zanim
+// pierwsze odswiezenie w tle sie skonczy) memoryBytes bedzie po prostu
+// null dla kazdej apki - bezpieczna, oczekiwana degradacja.
+const MEMORY_TREE_REFRESH_INTERVAL_MS = 15 * 1000;
+let memoryTreeByPid = new Map();
+
+async function refreshProcessTree() {
+  try {
+    const { stdout } = await runPowerShell(null, ['-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,WorkingSetSize | ConvertTo-Json -Compress'], { timeoutMs: 10000 });
+    memoryTreeByPid = parseCimProcessRows(stdout);
+  } catch (_) {
+    // Blad zapytania - zostawiamy poprzedni (juz zaladowany) wynik zamiast
+    // go czyscic; wywolujacy i tak ma bezpieczny fallback (memoryBytes:null).
+  }
+}
+
+if (process.env.SCYZORYK_SKIP_CHILD_START !== '1') {
+  refreshProcessTree();
+  const memoryTreeTimer = setInterval(refreshProcessTree, MEMORY_TREE_REFRESH_INTERVAL_MS);
+  memoryTreeTimer.unref?.();
+}
+
+
 async function getAppsStatus(req) {
   const hostname = safePanelHostname(req);
+  const processTree = memoryTreeByPid;
   const statuses = await Promise.all(apps.map(async app => {
     const health = await checkHealth(app);
     const meta = getChildMeta(app.slug);
+    const child = children.get(app.slug);
+    const memoryBytes = child?.pid ? sumProcessTreeBytes(processTree, child.pid) : null;
     return {
       slug: app.slug,
       name: app.name,
@@ -364,6 +444,10 @@ async function getAppsStatus(req) {
       processAlive: children.has(app.slug),
       health,
       queue: health.payload?.queue || null,
+      // memoryBytes obejmuje WLASNY proces apki ORAZ wszystkich jego
+      // potomkow (np. Chromium spod Playwrighta w ecodan/varmero) - null
+      // gdy apka nie dziala albo zapytanie PowerShella zawiodlo.
+      memoryBytes,
       child: {
         restarts: meta.restarts,
         failures: meta.failures,
@@ -376,7 +460,9 @@ async function getAppsStatus(req) {
       }
     };
   }));
-  return { ok: true, mainPort: PORT, host: HOST, version: getInstalledVersion(ROOT).version, uptimeSec: Math.round(process.uptime()), memory: process.memoryUsage(), storage: dirSizeSafe(getDataRoot()), apps: statuses };
+  const panelMemoryBytes = process.memoryUsage().rss;
+  const totalMemoryBytes = panelMemoryBytes + statuses.reduce((sum, s) => sum + (s.memoryBytes || 0), 0);
+  return { ok: true, mainPort: PORT, host: HOST, version: getInstalledVersion(ROOT).version, uptimeSec: Math.round(process.uptime()), memory: process.memoryUsage(), panelMemoryBytes, totalMemoryBytes, storage: cachedDirSize(getDataRoot()), apps: statuses };
 }
 
 
@@ -394,6 +480,23 @@ const server = http.createServer(async (req, res) => {
   const decodedPath = safeDecodePathname(url.pathname);
   if (decodedPath === null) return send(res, 400, 'Bad Request');
   if (decodedPath === '/api/apps' || decodedPath === '/api/health') return send(res, 200, JSON.stringify(await getAppsStatus(req), null, 2), 'application/json; charset=utf-8');
+
+  // Lazy-start (audyt zuzycia RAM 2026-08-21): jedyny sposob, w jaki apka-
+  // dziecko w ogole zaczyna dzialac - kliknięcie "Otworz" w panelu (albo
+  // Pipeline upewniajacy sie, ze potrzebna mu apka juz zyje, zanim zawola
+  // jej prawdziwe API - patrz apps/pipeline/src/childAppClient.js). Sam
+  // start jest asynchroniczny (fire-and-forget) - wywolujacy odpytuje potem
+  // /api/apps, zeby sprawdzic kiedy `running` bedzie true.
+  const startMatch = decodedPath.match(/^\/api\/apps\/([a-z0-9-]+)\/start$/);
+  if (startMatch) {
+    if (req.method !== 'POST') return sendJson(res, 405, { ok: false, message: 'Metoda niedozwolona.' });
+    try { await drainRequestBody(req); } catch (_) { return sendJson(res, 400, { ok: false, message: 'Nieprawidlowe zadanie.' }); }
+    if (!requireTrustedMutation(req, res)) return;
+    const targetApp = apps.find(a => a.slug === startMatch[1]);
+    if (!targetApp) return sendJson(res, 404, { ok: false, message: 'Nieznane narzedzie.' });
+    ensureChildStarted(targetApp);
+    return sendJson(res, 202, { ok: true, message: 'Uruchamianie rozpoczete.' });
+  }
 
   if (decodedPath === '/api/update/status') {
     if (req.method !== 'GET') return sendJson(res, 405, { ok: false, message: 'Metoda niedozwolona.' });
@@ -454,10 +557,11 @@ ensureDependenciesBeforeStart();
 if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
   migrateLegacyDataIfNeeded(apps);
 }
-// Flaga sluzy testom prawdziwych tras panelu bez uruchamiania osmiu procesow potomnych.
-if (process.env.SCYZORYK_SKIP_CHILD_START !== '1') {
-  for (const app of apps) startChild(app);
-}
+// Audyt zuzycia RAM/CPU 2026-08-21: apki JUZ NIE startuja tu wszystkie
+// naraz - kazda startuje leniwie, dopiero na zadanie (patrz
+// ensureChildStarted/POST /api/apps/:slug/start). SCYZORYK_SKIP_CHILD_START
+// nadal dziala - blokuje TAKZE ten leniwy start, zeby testy panelu (fakeHealth,
+// zero prawdziwych dzieci) zostaly bez zmian.
 // Pierwsze sprawdzenie aktualizacji leci asynchronicznie (3s po starcie, patrz
 // scheduleAutoChecks) i NIE blokuje startu panelu - awaria GitHuba/brak
 // internetu nie moze zatrzymac Scyzoryka.

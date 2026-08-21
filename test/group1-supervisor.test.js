@@ -30,6 +30,20 @@ function request(port, requestPath) {
   });
 }
 
+function postRequest(port, requestPath, { headers = {} } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ hostname: '127.0.0.1', port, path: requestPath, method: 'POST', timeout: 3000, headers }, res => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => resolve({ statusCode: res.statusCode, body }));
+    });
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 function fakeHealth(statusCode, payload) {
   return http.createServer((req, res) => {
     res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -113,4 +127,30 @@ test('panel usuwa trasy admina i uznaje tylko poprawny kontrakt health', async t
   assert.equal(bySlug.get('pieczatki-pdf').health.ok, false);
   assert.equal(bySlug.get('formularze-ecodan').health.ok, false);
   assert.equal(bySlug.get('dokumenty-seryjne').health.ok, false);
+
+  // Audyt zuzycia RAM 2026-08-21 (lazy-start): panel juz nie startuje
+  // wszystkich apek automatycznie - kazda zyje w stanie "processAlive:false"
+  // dopoki ktos jej faktycznie nie otworzy (POST /api/apps/:slug/start).
+  for (const app of payload.apps) {
+    assert.equal(app.processAlive, false, `${app.slug} nie powinien byc uruchomiony automatycznie przy starcie panelu`);
+  }
+
+  // POST /api/apps/:slug/start - bez naglowka X-Scyzoryk-Request odrzucane
+  // 403, tak jak kazda inna mutujaca trasa w tym repo.
+  const bezNaglowka = await postRequest(panelPort, '/api/apps/drukarka/start');
+  assert.equal(bezNaglowka.statusCode, 403);
+
+  // Nieznany slug - 404, nie cichy sukces.
+  const nieznanySlug = await postRequest(panelPort, '/api/apps/nieistniejaca-apka/start', { headers: { 'X-Scyzoryk-Request': '1' } });
+  assert.equal(nieznanySlug.statusCode, 404);
+
+  // Znany slug, z naglowkiem - 202 (SCYZORYK_SKIP_CHILD_START=1 w tym
+  // procesie testowym gwarantuje, ze faktycznie NIC nie zostanie
+  // zaspawnowane, mimo ze trasa zwraca sukces - patrz ensureChildStarted).
+  const znanySlug = await postRequest(panelPort, '/api/apps/drukarka/start', { headers: { 'X-Scyzoryk-Request': '1' } });
+  assert.equal(znanySlug.statusCode, 202);
+  assert.equal(JSON.parse(znanySlug.body).ok, true);
+
+  // Zla metoda (GET zamiast POST) na trasie startu - 405.
+  assert.equal((await request(panelPort, '/api/apps/drukarka/start')).statusCode, 405);
 });

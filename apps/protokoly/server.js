@@ -35,6 +35,39 @@ app.use("/api", apiLimiter);
 app.use("/shared", express.static(path.join(__dirname, "..", "..", "shared-styles")));
 app.use(express.static(path.join(__dirname, "public")));
 
+// Audyt zuzycia RAM/CPU 2026-08-21: /api/preview i /api/save wolaly
+// buildProtocolPdf NIEZALEZNIE - caly ciezki pipeline (Jimp.read -> crop ->
+// maski -> shading -> grayscale -> JPEG -> PDF) wykonywal sie DRUGI RAZ przy
+// zapisie, mimo ze uzytkownik zazwyczaj klika "Zapisz" od razu po obejrzeniu
+// dokladnie tego samego podgladu. Krotki, maly cache w pamieci (klucz =
+// folder + tozsamosc zdjec + obroty) pozwala /api/save odtworzyc gotowy
+// wynik z /api/preview zamiast go liczyc od nowa - jesli cache chybi (inny
+// komputer/restart/TTL/inne zdjecia), po prostu liczymy normalnie, wiec
+// zapis nigdy nie moze sie zepsuc z powodu tego cache'u.
+const PREVIEW_CACHE_TTL_MS = 10 * 60 * 1000;
+const PREVIEW_CACHE_MAX_ENTRIES = 5;
+const previewCache = new Map(); // key -> { pdfBytes, createdAt }
+
+function previewCacheKey(folderPath, photos, rotations) {
+  const photosPart = photos.map(p => `${p.path}#${p.time}`).join('|');
+  return `${folderPath}::${photosPart}::${JSON.stringify(rotations || {})}`;
+}
+
+function rememberPreview(key, pdfBytes) {
+  previewCache.set(key, { pdfBytes, createdAt: Date.now() });
+  if (previewCache.size > PREVIEW_CACHE_MAX_ENTRIES) {
+    const oldestEntry = [...previewCache.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt)[0];
+    if (oldestEntry) previewCache.delete(oldestEntry[0]);
+  }
+}
+
+function recallPreview(key) {
+  const entry = previewCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.createdAt > PREVIEW_CACHE_TTL_MS) { previewCache.delete(key); return null; }
+  return entry.pdfBytes;
+}
+
 function isPathInsideFolder(filePath, folderPath) {
   if (!filePath || !folderPath) return false;
   try {
@@ -187,7 +220,9 @@ app.get("/api/preview", async (req, res) => {
     if (!photos.length) return res.status(404).json({ ok: false, message: "Nie znaleziono zdjec protokolu w tym folderze." });
 
     const rotations = parseRotations(req.query.rotations);
+    const cacheKey = previewCacheKey(folderPath, photos, rotations);
     const pdfBytes = await builder.buildProtocolPdf(photos.map(p => p.path), rotations);
+    rememberPreview(cacheKey, pdfBytes);
 
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
     res.setHeader(
@@ -215,7 +250,8 @@ app.post("/api/save", async (req, res) => {
     if (!photos.length) return res.status(404).json({ ok: false, message: "Nie znaleziono zdjec protokolu w tym folderze." });
 
     const rotations = parseRotations(req.body?.rotations);
-    const pdfBytes = await builder.buildProtocolPdf(photos.map(p => p.path), rotations);
+    const cacheKey = previewCacheKey(folderPath, photos, rotations);
+    const pdfBytes = recallPreview(cacheKey) || await builder.buildProtocolPdf(photos.map(p => p.path), rotations);
     const saveDir = builder.targetSaveDir(folderPath, photos);
     const fileName = builder.outputFileName(folderName);
     const savePath = path.join(saveDir, fileName);

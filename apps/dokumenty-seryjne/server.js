@@ -625,6 +625,22 @@ function validateReferenceColumns(columns) {
     .map(req => req.label);
 }
 
+// Ten sam brakujacy-kolumny blad w 4 miejscach (upload + wybor arkusza +
+// pobranie wierszy + generowanie) - jeden wspolny komunikat, zeby nie
+// rozjezdzaly sie z czasem. Audyt 2026-08-21: brakujaca kolumna (zwlaszcza
+// "Beneficjent") czesto oznacza, ze uzytkownik wgral tabele bez danych
+// uczestnika - real przypadek zgloszony przez wlasciciela, arkusz "Solary"
+// w glownej tabeli adresowej Kamienska nie ma kolumny Beneficjenta (mimo ze
+// arkusze Pompy/Kotly w tym samym pliku ja maja), wiec wyglada jak "nie
+// mozna go wybrac", mimo ze arkusz sam w sobie jest poprawny. NIE zakladamy
+// jednak, ze to ZAWSZE zla tabela - wlasciciel potwierdzil, ze dla niektorych
+// inwestycji glowna tabela adresowa wystarcza, a dla innych potrzebna jest
+// osobna tabela z folderu "wzor" - zalezy od inwestycji, wiec komunikat
+// tylko podpowiada, czego szukac, nie stwierdza stanowczo bledu w pliku.
+function komunikatBrakujacychKolumn(sheetName, missingColumns) {
+  return `Arkusz "${sheetName}" nie ma wymaganych kolumn: ${missingColumns.join(', ')}. Upewnij się, że to właściwa tabela dla korespondencji seryjnej - musi mieć, obok ID i Adresu, kolumnę z danymi uczestnika (np. Beneficjent/Imię i Nazwisko). Czasem to główna tabela adresowa inwestycji, a czasem osobny plik z folderu wzoru - zależy od inwestycji.`;
+}
+
 // Dla kazdej zaznaczonej "logicznej" pozycji buduje liste konkretnych zadan
 // generowania: {templatePath, templateOriginalName, rowRecords}. Jesli
 // pozycja ma warianty (250/300/400), dzieli wybrane wiersze wg rozmiaru
@@ -1065,7 +1081,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     if (missingColumns.length) {
       return res.status(400).json({
         ok: false,
-        message: `Tabela Excel nie ma kolumn wymaganych dla korespondencji seryjnej: ${missingColumns.join(', ')}. Sprawdź, czy arkusz „${workbook.sheetName}” ma taką samą strukturę kolumn jak wzorcowa tabela (ID, Adres, Beneficjent...).`
+        message: komunikatBrakujacychKolumn(workbook.sheetName, missingColumns)
       });
     }
 
@@ -1127,7 +1143,7 @@ app.get('/api/sheet/:jobId/:sheetName', (req, res) => {
   if (!sheet || sheet.sheetName !== sheetName) return res.status(404).json({ ok: false, message: 'Nie znaleziono arkusza w Excelu.' });
   const missingColumns = validateReferenceColumns(sheet.columns);
   if (missingColumns.length) {
-    return res.status(400).json({ ok: false, sheetName, missingColumns, message: `Arkusz "${sheetName}" nie ma wymaganych kolumn: ${missingColumns.join(', ')}.` });
+    return res.status(400).json({ ok: false, sheetName, missingColumns, message: komunikatBrakujacychKolumn(sheetName, missingColumns) });
   }
   res.json({ ok: true, workbook: workbookPreview(job.workbook, sheetName), suggestedAddressColumn: guessAddressColumn(sheet.columns || []), suggestedUidColumn: guessUidColumn(sheet.columns || []) });
 });
@@ -1139,7 +1155,7 @@ app.get('/api/jobs/:jobId/sheets/:sheetName/rows', (req, res) => {
   if (!sheet || sheet.sheetName !== req.params.sheetName) return res.status(404).json({ ok: false, message: 'Nie znaleziono arkusza w Excelu.' });
   const missingColumns = validateReferenceColumns(sheet.columns);
   if (missingColumns.length) {
-    return res.status(400).json({ ok: false, sheetName: sheet.sheetName, missingColumns, message: `Arkusz "${sheet.sheetName}" nie ma wymaganych kolumn: ${missingColumns.join(', ')}.` });
+    return res.status(400).json({ ok: false, sheetName: sheet.sheetName, missingColumns, message: komunikatBrakujacychKolumn(sheet.sheetName, missingColumns) });
   }
   const offset = Math.max(0, Number(req.query.offset) || 0);
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
@@ -1159,7 +1175,7 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
     const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
     const missingColumns = validateReferenceColumns(selectedSheet?.columns || []);
     if (missingColumns.length) {
-      return res.status(400).json({ ok: false, sheetName, missingColumns, message: `Arkusz "${sheetName}" nie ma wymaganych kolumn: ${missingColumns.join(', ')}.` });
+      return res.status(400).json({ ok: false, sheetName, missingColumns, message: komunikatBrakujacychKolumn(sheetName, missingColumns) });
     }
     const selectedRowRecords = Array.isArray(body.selectedRows) ? body.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
     const selectedGroups = Array.isArray(body.selectedGroups) ? body.selectedGroups.filter(Boolean) : null;

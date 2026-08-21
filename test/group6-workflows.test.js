@@ -15,7 +15,7 @@ const {
   filenameMatchesOwnAddress,
   buildOrder
 } = require('../apps/drukarka-projekty/src/folderMatch');
-const { isTruthyMark, loadWorkbookFromBuffer, listCandidates } = require('../apps/drukarka-projekty/src/excelInvestment');
+const { isTruthyMark, loadWorkbookFromBuffer, listCandidates, MAX_WORKBOOKS } = require('../apps/drukarka-projekty/src/excelInvestment');
 // xlsx tylko do ZAPISU fixture'ow testowych (bezpieczne) - pozyczone z
 // ocr-audytow, jedynego modulu ktory nadal legalnie trzyma xlsx jako
 // zaleznosc (patrz komentarz w apps/ocr-audytow/src/excelExport.js).
@@ -27,7 +27,7 @@ const { buildQueueFromGroups, matchOneAddress } = require('../apps/drukarka-proj
 const { isAffirmativeFlag } = require('../lib/businessFlags');
 const { normalizeDate } = require('../apps/wnioski-powykonawcze/src/dateValidation');
 const { app: wmApp, isPathInsideFolder: wmIsPathInsideFolder } = require('../apps/wnioski-powykonawcze/server');
-const { findCategoryFolders: wmPowykonawczeFindCategoryFolders } = require('../apps/wnioski-powykonawcze/src/wmFolderScan');
+const { findCategoryFolders: wmPowykonawczeFindCategoryFolders, scanWmFolder: wmPowykonawczeScanWmFolder } = require('../apps/wnioski-powykonawcze/src/wmFolderScan');
 const { PDFDocument } = require('../apps/drukarka-projekty/node_modules/pdf-lib');
 
 async function createTestPdf(filePath) {
@@ -64,6 +64,22 @@ test('WM: nieczytelny folder WM rzuca czytelny blad zamiast "0 kategorii znalezi
 test('wnioski-powykonawcze WM: nieczytelny folder WM rzuca czytelny blad zamiast "0 kategorii znaleziono" (kopia tego samego wzorca co drukarka-projekty)', async () => {
   const nieistniejacyFolder = path.join(os.tmpdir(), 'scyzoryk-wm-powyk-nieistniejacy-' + Date.now());
   await assert.rejects(() => wmPowykonawczeFindCategoryFolders(nieistniejacyFolder), /Nie udało się odczytać folderu WM/);
+});
+
+test('wnioski-powykonawcze WM: DWA pliki "WM ...docx" w tym samym folderze (np. stary szkic obok poprawionej wersji) daja "wieloznaczne", nigdy cichy wybor pierwszego (audyt 2026-08-21)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-wm-dwuznaczne-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  const kategoriaDir = path.join(root, '1. Pompa ciepła split');
+  await fsp.mkdir(kategoriaDir, { recursive: true });
+  await fsp.writeFile(path.join(kategoriaDir, 'WM Pompa ciepła split.docx'), 'wersja poprawiona');
+  await fsp.writeFile(path.join(kategoriaDir, 'WM Pompa ciepła split (stara).docx'), 'stary szkic');
+
+  const result = await wmPowykonawczeScanWmFolder(root);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].status, 'wieloznaczne', JSON.stringify(result.items[0]));
+  assert.equal(result.items[0].sourcePath, null, 'bez sourcePath nie da sie tego wybrac do przerobienia');
+  assert.equal(result.items[0].sourceDocxCandidates.length, 2);
+  assert.equal(result.toConvertCount, 0, 'niejednoznaczna kategoria nie liczy sie jako gotowa do przerobienia');
 });
 
 test('duplikaty są rozstrzygane tylko w tym samym podfolderze', async (t) => {
@@ -275,6 +291,40 @@ test('drukarka-projekty: listCandidates zglasza w skippedRows wiersze z adresem 
   assert.equal(skippedRows.missingAdres, 1, 'wiersz z LP gminy ale bez adresu');
 });
 
+// Audyt zuzycia RAM 2026-08-21: przed ta zmiana kazdy wgrany plik zostawal w
+// pamieci procesu az do TTL (bylo 12h) bez zadnego limitu liczby - w ciagu
+// jednego dnia moglo sie uzbierac kilkanascie w pelni sparsowanych
+// workbookow naraz. Teraz najstarszy (po ostatnim uzyciu, nie po utworzeniu)
+// jest usuwany, gdy liczba przekracza MAX_WORKBOOKS.
+test('drukarka-projekty: loadWorkbookFromBuffer trzyma najwyzej MAX_WORKBOOKS naraz, usuwajac najdawniej uzywany (LRU)', async () => {
+  function bufferZJednymWierszem(adres) {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['LP gmina', 'Adres', 'Odbiór', 'Rezygnacja'],
+      [1, adres, '', '']
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Solary');
+    return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  }
+
+  const tokens = [];
+  for (let i = 0; i < MAX_WORKBOOKS; i += 1) {
+    const { token } = await loadWorkbookFromBuffer(bufferZJednymWierszem(`Adres ${i}`));
+    tokens.push(token);
+  }
+  // Odswiez "ostatnie uzycie" wszystkiego OPROCZ tokens[0] - powinien
+  // zostac wysledzony jako najdawniej uzywany i jako pierwszy wyrzucony.
+  for (const token of tokens.slice(1)) listCandidates(token, 'Solary');
+
+  const { token: nowyToken } = await loadWorkbookFromBuffer(bufferZJednymWierszem('Adres nowy'));
+
+  assert.throws(() => listCandidates(tokens[0], 'Solary'), /token wygasł/, 'najdawniej uzywany workbook powinien zostac wyrzucony po przekroczeniu limitu');
+  for (const token of tokens.slice(1)) {
+    assert.doesNotThrow(() => listCandidates(token, 'Solary'), 'niedawno uzywane workbooki powinny przetrwac');
+  }
+  assert.doesNotThrow(() => listCandidates(nowyToken, 'Solary'));
+});
+
 test('drukarka-projekty: dopasowanie folderu po LP musi sprawdzic adres (audyt P0-6b)', async (t) => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-lp-conflict-'));
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
@@ -387,6 +437,19 @@ test('drukarka-projekty: matchOneAddress rozstrzyga prawdziwe duplikaty adresu, 
   assert.equal(crossInvestmentHint.ok, true, crossInvestmentHint.message);
   assert.match(crossInvestmentHint.folderPath, /Zarnow, ul\. Spacerowa/);
   assert.doesNotMatch(crossInvestmentHint.folderPath, /Kolektory/);
+
+  // Scenariusz 5 (audyt 2026-08-21): DWA folderyktore obydwa przechodza fuzzy
+  // dopasowanie do TEJ SAMEJ podpowiedzi adresu (bo kazdy trafia inna czesc
+  // nazwy ulicy - proog dopasowania wymaga tylko 1 z 2 tokenow nazwy), ale
+  // reprezentuja NAPRAWDE rozne adresy (rozna ulica/miejscowosc), nie
+  // kosmetyczny wariant tej samej nazwy (jak "-pdf" w scenariuszu 3) -
+  // wczesniej resolveAmbiguousMatches cicho wybieralo najswiezszy z nich,
+  // teraz musi zablokowac jako niejednoznaczne.
+  await makeDupFolder('Wyslane do gminy/5.Zarnow, ul. Krotka', -60000);
+  await makeDupFolder('Dla gminy 14.08.2026/5.Kolonia, ul. Dluga', 0);
+  const genuinelyDifferentHint = await matchOneAddress(root, '5', { adres: 'Zarnow, ul. Dluga' });
+  assert.equal(genuinelyDifferentHint.ok, false, 'dwie naprawde rozne nazwy nie moga byc cicho rozstrzygniete po samej dacie, nawet z podpowiedzia adresu');
+  assert.match(genuinelyDifferentHint.message, /wiecej niz jeden pasujacy folder/);
 });
 
 test('drukarka-projekty: buildQueueFromGroups zachowuje przeplot PDF/DOCX/PDF zamiast grupowac (audyt P1-3)', async (t) => {

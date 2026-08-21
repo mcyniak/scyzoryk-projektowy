@@ -12,6 +12,20 @@ const {
   withPrintLease
 } = require('../lib/printCoordinator');
 
+test('formatPrintError: rozpoznane bledy PRINT_* przechodza bez zmian', () => {
+  const err = new Error('PRINT_TARGETED_FAILED: Nie udalo sie wyslac pliku na drukarke \'Brother\' (Sumatra i Ghostscript zawiodly). Sprawdz, czy drukarka jest wlaczona i dostepna w sieci.');
+  const wynik = printing.formatPrintError(err);
+  assert.equal(wynik.message, err.message);
+});
+
+test('formatPrintError: nierozpoznany surowy blad (np. brak drukarki domyslnej) dostaje czytelny naglowek po polsku', () => {
+  const err = { stderr: 'Exception calling "GetDefaultPrinterName": no default printer is set' };
+  const wynik = printing.formatPrintError(err);
+  assert.match(wynik.message, /Drukowanie nie powiodlo sie/);
+  assert.match(wynik.message, /drukarka moze byc wylaczona/);
+  assert.match(wynik.message, /GetDefaultPrinterName/, 'oryginalny szczegol techniczny nadal musi byc obecny w komunikacie do diagnostyki');
+});
+
 function withDataRoot(tempRoot, body) {
   const previous = process.env.SCYZORYK_DATA_ROOT;
   process.env.SCYZORYK_DATA_ROOT = tempRoot;

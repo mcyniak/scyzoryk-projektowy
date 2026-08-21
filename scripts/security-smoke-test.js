@@ -32,6 +32,40 @@ function get(port, path, expectedName) {
   });
 }
 
+// Audyt zuzycia RAM 2026-08-21 (lazy-start): apki-dzieci JUZ NIE startuja
+// automatycznie przy starcie Scyzoryka - bez tego kroku kazdy ponizszy
+// health-check zawiodlby po cichu (apka po prostu nigdy by nie wstala),
+// tak jakby to byl prawdziwy problem bezpieczenstwa/dostepnosci. Prosimy
+// panel o start kazdej apki (idempotentne) i czekamy, az realnie odpowie,
+// zanim faktyczny smoke test zacznie cokolwiek sprawdzac.
+function startApp(panelPort, slug) {
+  return new Promise(resolve => {
+    const req = http.request({
+      hostname: '127.0.0.1', port: panelPort, path: `/api/apps/${slug}/start`, method: 'POST', timeout: 3000,
+      headers: { 'X-Scyzoryk-Request': '1', 'Content-Length': 0 }
+    }, res => { res.resume(); resolve(); });
+    req.on('timeout', () => { req.destroy(); resolve(); });
+    req.on('error', () => resolve());
+    req.end();
+  });
+}
+
+async function ensureAppsStarted(panelPort) {
+  for (const check of checks) {
+    if (!check.name) continue; // pierwszy wpis to sam panel, nie ma go co startowac
+    await startApp(panelPort, check.name);
+  }
+  const deadline = Date.now() + 60000;
+  for (const check of checks) {
+    if (!check.name) continue;
+    while (Date.now() < deadline) {
+      const result = await get(check.port, check.path, check.name);
+      if (result.ok) break;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+}
+
 function postWithoutHeader() {
   return new Promise(resolve => {
     const body = '{}';
@@ -53,6 +87,8 @@ function postWithoutHeader() {
 }
 
 (async () => {
+  await ensureAppsStarted(checks[0].port);
+
   let failed = 0;
   for (const check of checks) {
     const result = await get(check.port, check.path, check.name);

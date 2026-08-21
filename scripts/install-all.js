@@ -21,7 +21,8 @@ const apps = [
   { name: 'Nazywarka skanów', dir: path.join(ROOT, 'apps', 'nazywarka-skanow'), deps: ['express', 'express-rate-limit'] },
   { name: 'Dobory Varmero', dir: path.join(ROOT, 'apps', 'formularze-varmero'), deps: ['express', 'playwright', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx', 'imapflow', 'mailparser'], playwright: true },
   { name: 'Tworzenie folderów', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), deps: ['express', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx'] },
-  { name: 'Protokoły', dir: path.join(ROOT, 'apps', 'protokoly'), deps: ['express', 'express-rate-limit', 'jimp', 'pdf-lib'] }
+  { name: 'Protokoły', dir: path.join(ROOT, 'apps', 'protokoly'), deps: ['express', 'express-rate-limit', 'jimp', 'pdf-lib'] },
+  { name: 'Pipeline inwestycji', dir: path.join(ROOT, 'apps', 'pipeline'), deps: ['express', 'multer', 'express-rate-limit', 'read-excel-file', 'adm-zip', 'exceljs'] }
 ];
 
 function quoteCmdArg(value) {

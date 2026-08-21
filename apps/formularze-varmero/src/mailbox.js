@@ -24,6 +24,14 @@ export class NoNewEmailError extends Error {
   }
 }
 
+// Audyt 2026-08-21 - patrz komentarz przy waitForVarmeroCard.
+export class CancelledWaitError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'CancelledWaitError';
+  }
+}
+
 // Wybiera wlasciwy zalacznik (karte) z juz sparsowanej listy zalacznikow
 // maila - czysta funkcja, testowalna bez prawdziwego polaczenia IMAP.
 export function pickCardAttachment(attachments) {
@@ -67,17 +75,26 @@ async function findFoldersToSearch(client) {
 
 // `createClient` jest wstrzykiwalny (domyslnie prawdziwy ImapFlow) - do
 // testow jednostkowych bez prawdziwej skrzynki.
+// isCancelled: sprawdzane na poczatku kazdej proby (czyli tez zaraz po
+// kazdym oczekiwaniu miedzy probami, skoro to jest poczatek petli) - audyt
+// 2026-08-21, bez tego "Anuluj" nie mialo tu zadnego efektu, mimo ze reszta
+// joba juz reaguje na cancelRequested (patrz jobs.js#takeNext) -
+// uzytkownik czekalby az do pelnego timeoutu (domyslnie 3 minuty,
+// konfigurowalne wyzej) zanim anulowanie faktycznie cokolwiek by zmienilo
+// dla wiersza, ktory akurat czeka na maila.
 export async function waitForVarmeroCard({
   imapConfig,
   recipientEmail,
   timeoutMs,
   pollIntervalMs = 5000,
-  createClient = () => new ImapFlow({ ...imapConfig, logger: imapConfig?.logger ?? false })
+  createClient = () => new ImapFlow({ ...imapConfig, logger: imapConfig?.logger ?? false }),
+  isCancelled = () => false
 }) {
   if (!recipientEmail) throw new Error('waitForVarmeroCard: brak recipientEmail - dopasowanie po odbiorcy jest wymagane.');
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
+    if (isCancelled()) throw new CancelledWaitError('Oczekiwanie na mail z karta Varmero przerwane na zadanie uzytkownika.');
     const client = createClient();
     await client.connect();
     try {

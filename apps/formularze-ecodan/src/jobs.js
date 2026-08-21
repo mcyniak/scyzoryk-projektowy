@@ -85,6 +85,34 @@ function terminalStatus(status) {
   return ['finished', 'finished-with-errors', 'fatal-error', 'cancelled'].includes(status);
 }
 
+// Audyt zuzycia RAM 2026-08-21: `jobs` (i plik jobs-index.json, ktory
+// serializuje CALA ta mape przy KAZDYM zdarzeniu - patrz appendJobEvent)
+// rosly bez zadnego ograniczenia - po 500 zadaniach mapa mialaby 500
+// wpisow, kazdy z wlasna tablica `results`/`errors`. AKTYWNE zadania
+// (jeszcze nie terminalStatus) nigdy nie sa usuwane - usuwamy tylko
+// zakonczone, i to dopiero gdy sa naprawde stare (7 dni) albo jest ich
+// zbyt duzo naraz (ponad MAX_TERMINAL_JOBS, liczac od najstarszych).
+// Same pliki wynikowe (PDF-y, CSV, telemetria na dysku) NIE sa tu ruszane -
+// to tylko czyszczenie stanu w pamieci procesu/indeksu JSON.
+export const JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAX_TERMINAL_JOBS = 200;
+
+export function pruneOldJobs() {
+  const now = Date.now();
+  const terminalEntries = [];
+  for (const [id, job] of jobs.entries()) {
+    if (!terminalStatus(job.status)) continue;
+    const finishedAtMs = job.finishedAt ? Date.parse(job.finishedAt) : 0;
+    if (now - finishedAtMs > JOB_RETENTION_MS) { jobs.delete(id); continue; }
+    terminalEntries.push([id, finishedAtMs]);
+  }
+  if (terminalEntries.length > MAX_TERMINAL_JOBS) {
+    terminalEntries.sort((a, b) => a[1] - b[1]);
+    const toDelete = terminalEntries.length - MAX_TERMINAL_JOBS;
+    for (let i = 0; i < toDelete; i += 1) jobs.delete(terminalEntries[i][0]);
+  }
+}
+
 function getJobSessionSet(jobId) {
   if (!jobSessions.has(jobId)) jobSessions.set(jobId, new Set());
   return jobSessions.get(jobId);
@@ -250,6 +278,7 @@ export function createJob(initial = {}) {
     fatalReason: null,
     ...initial
   };
+  pruneOldJobs();
   jobs.set(id, job);
   persistJobsIndex().catch(() => {});
   return job;
@@ -590,7 +619,11 @@ export async function runBatchJob(job, filePath, options = {}) {
   const allRecords = parsed.records;
   const selectedRows = normalizeSelectedRows(options.selectedRows);
   const selectedSet = new Set(selectedRows.map(String));
-  const recordsToProcess = selectedSet.size ? allRecords.filter(record => selectedSet.has(String(record.rowNumber))) : allRecords;
+  // Audyt 2026-08-21 (real incydent): pusta selekcja NIGDY nie oznacza
+  // "przetworz wszystko" - /api/batch/start juz blokuje ten przypadek u
+  // zrodla, ale ta funkcja jest tez wywolywalna bezposrednio (np. przez
+  // pipeline), wiec ta sama ochrona zostaje TU jako druga warstwa.
+  const recordsToProcess = selectedSet.size ? allRecords.filter(record => selectedSet.has(String(record.rowNumber))) : [];
   parsed.records = recordsToProcess;
   job.selectedRows = selectedRows;
   job.eligibleTotal = allRecords.length;

@@ -196,6 +196,23 @@ function parseSelectedRows(value) {
   }
 }
 
+// Audyt UX 2026-08-21: tresc widoczna uzytkownikowi nie powinna wymieniac
+// nazw zmiennych srodowiskowych (VARMERO_IMAP_HOST/USER/PASSWORD) - to nic
+// nie znaczy dla nietechnicznego pracownika biura. Pelny szczegol techniczny
+// zostaje w logu serwera (console.error nizej), na ekran idzie tylko
+// wskazowka "zglos do administratora".
+const MAILBOX_NOT_CONFIGURED_MESSAGE = 'Skrzynka pocztowa do odbioru kart Varmero nie jest jeszcze skonfigurowana na tym komputerze - zgłoś to do administratora/IT przed uruchomieniem zgłoszeń.';
+
+// Audyt UX 2026-08-21: brak konfiguracji skrzynki wczesniej wykrywano
+// dopiero w /api/batch/start (ostatnie kliknieccie, po wgraniu Excela,
+// przejrzeniu adresow i wypelnieniu wszystkich pol) - uzytkownik mogl
+// stracic realny czas na przygotowanie duzej paczki, zeby na koncu dostac
+// blad, ktory dalo sie wykryc od razu. Ten endpoint pozwala frontendowi
+// sprawdzic to od razu po zaladowaniu strony.
+app.get('/api/mailbox-status', (req, res) => {
+  res.json({ ok: true, configured: Boolean(readImapConfig()) });
+});
+
 function publicJob(job) {
   return {
     ...job,
@@ -213,7 +230,7 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
   const imapConfig = readImapConfig();
   if (!imapConfig) {
     if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
-    return res.status(400).json({ ok: false, error: 'Skrzynka pocztowa nie jest jeszcze skonfigurowana (brak VARMERO_IMAP_HOST/USER/PASSWORD) - bez niej nie da się odebrać kart.' });
+    return res.status(400).json({ ok: false, error: MAILBOX_NOT_CONFIGURED_MESSAGE });
   }
   try {
     await validateXlsxFile(req.file);
@@ -234,6 +251,15 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     const skipExisting = String(req.body.skipExisting || 'true').toLowerCase() !== 'false';
     const selectedRows = parseSelectedRows(req.body.selectedRows);
     if (!/^[1-5]$/.test(zone)) return res.status(400).json({ ok: false, error: 'Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga, a nie da się jej wyczytać z tabeli adresowej.' });
+    // Audyt 2026-08-21 (real incydent - przypadkowy start na 70 adresow):
+    // pusta/brakujaca selectedRows kiedys po cichu oznaczala "zglos cala
+    // tabele" (patrz jobs.js#runBatchJob) - dla Varmero kazdy wiersz to
+    // realne, nieodwracalne zgloszenie do zewnetrznego kalkulatora + realny
+    // mail, wiec blokujemy zamiast zgadywac "wszystko".
+    if (!selectedRows.length) {
+      if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
+      return res.status(400).json({ ok: false, error: 'Nie wybrano żadnych adresów. Wczytaj podgląd tabeli i zaznacz adresy do zgłoszenia przed uruchomieniem.' });
+    }
 
     const job = createJob({
       sourceFile: req.file.originalname,

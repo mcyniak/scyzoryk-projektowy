@@ -1150,6 +1150,30 @@ previewPageInput.addEventListener('keydown', event => {
 window.addEventListener('resize', updateBoxes);
 preview.addEventListener('scroll', updateBoxes);
 
+// Odczytuje prawdziwa (mozliwe polskie znaki) nazwe pliku z naglowka
+// Content-Disposition - audyt 2026-08-21, root cause bledu "polskie znaki
+// zamieniaja sie na '?' w nazwie pobranego pliku". Serwer poprawnie wysyla
+// OBA warianty (RFC 6266/5987): ASCII-owy fallback `filename="..."` (gdzie
+// kazdy diakrytyk poza o/O jest juz zamieniony na '?' przez biblioteke
+// "content-disposition" po stronie serwera) ORAZ pelny, poprawny tekst w
+// `filename*=UTF-8''...`. Poprzedni kod parsowal WYLACZNIE pierwszy
+// (ASCII) wariant, wiec `decodeURIComponent` na nim byl zwyklym no-opem na
+// stringu bez zadnego '%' - stad literalne '?' w zapisanej nazwie. Ten sam
+// naglowek moze wiec teoretycznie trafic i do innych apek, ale grep po
+// public/*.js we wszystkich apkach pokazal, ze tylko ten jeden front-end w
+// ogole parsuje Content-Disposition recznie.
+function parseContentDispositionFilename(disposition) {
+  const extended = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (extended) {
+    try { return decodeURIComponent(extended[1].trim()); } catch { /* spadnij do fallbacku ponizej */ }
+  }
+  const plain = disposition.match(/filename="?([^";]+)"?/i);
+  if (plain) {
+    try { return decodeURIComponent(plain[1]); } catch { return plain[1]; }
+  }
+  return null;
+}
+
 form.addEventListener('submit', async event => {
   event.preventDefault();
   const pdfs = [...pdfInput.files];
@@ -1195,9 +1219,8 @@ form.addEventListener('submit', async event => {
     const fontFallback = response.headers.get('x-stamp-font-fallback') === '1';
     const blob = await response.blob();
     const disposition = response.headers.get('content-disposition') || '';
-    const match = disposition.match(/filename="?([^";]+)"?/i);
     const fallback = pdfs.length === 1 ? pdfs[0].name.replace(/\.pdf$/i, ' - ostemplowany.pdf') : 'ostemplowane-pdf.zip';
-    const filename = decodeURIComponent(match?.[1] || fallback);
+    const filename = parseContentDispositionFilename(disposition) || fallback;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

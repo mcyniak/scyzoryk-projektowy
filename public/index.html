@@ -57,7 +57,40 @@
       </div>
     </section>
 
+    <details class="panel resource-usage" id="resourceUsagePanel">
+      <summary>
+        <span>Zużycie zasobów: <strong id="metricMemory">--</strong> RAM łącznie (<span id="metricServices">--</span> narzędzi gotowych, <span id="metricStorage">--</span> danych na dysku)</span>
+        <span class="hint" id="lastRefresh"></span>
+      </summary>
+      <div class="resource-usage-body">
+        <p class="field-help">Suma obejmuje panel oraz każde uruchomione narzędzie WRAZ z jego procesami potomnymi (np. przeglądarkę Chromium, którą Dobory myEcodan/Varmero uruchamiają w tle) - nie tylko sam proces panelu. Może pokazywać "--" przez pierwszych kilkanaście sekund po starcie Scyzoryka.</p>
+        <div id="memoryBreakdownList"></div>
+        <div class="resource-usage-row"><span>Tryb pracy</span><strong id="metricMode">--</strong></div>
+      </div>
+    </details>
+
     <div id="tools" aria-label="Lista narzędzi">
+      <div class="tool-category" data-category="Automatyzacja">
+        <div class="tool-category-head">
+          <svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg>
+          <h2>Automatyzacja</h2>
+        </div>
+        <div class="tool-grid">
+          <article class="tool-card panel" data-app="pipeline">
+            <div class="card-topline">
+              <span class="icon-tile"><svg class="icon"><use href="/shared/icons.svg#i-refresh"/></svg></span>
+              <span class="badge" aria-label="Status narzędzia">sprawdzam</span>
+            </div>
+            <h3>Pipeline inwestycji</h3>
+            <p>Wgraj tabelę adresową i odpal po kolei potrzebne narzędzia (foldery, dokumenty seryjne, dobory, przypisanie plików) dla całej inwestycji naraz.</p>
+            <div class="card-foot">
+              <a class="button-link btn btn-secondary" href="http://127.0.0.1:3015">Otwórz</a>
+              <span class="card-meta hint" aria-hidden="true"></span>
+            </div>
+          </article>
+        </div>
+      </div>
+
       <div class="tool-category" data-category="Drukowanie">
         <div class="tool-category-head">
           <svg class="icon"><use href="/shared/icons.svg#i-printer"/></svg>

@@ -147,7 +147,21 @@ const sheetBox = document.getElementById('kkSheetBox');
 const sheetSelect = document.getElementById('sheetSelect');
 const sheetHint = document.getElementById('kkSheetHint');
 
+// Audyt UX 2026-08-21: po pokazaniu podgladu (dryRun) i przycisku "Uruchom
+// dobor kart", NIC wczesniej nie chowalo tego przycisku z powrotem, jesli
+// uzytkownik potem zmienil plik/arkusz/sciezke - realny "uruchomilem co
+// innego niz widzialem w podgladzie" gap. Kazda zmiana wejscia po pokazaniu
+// wyniku wymusza swiezy podglad, zanim znow bedzie mozna nacisnac "Uruchom".
+function wymusPonownyPodglad() {
+  if (!runBtn.hidden) {
+    runBtn.hidden = true;
+    statusEl.className = '';
+    statusEl.textContent = 'Dane się zmieniły od czasu ostatniego podglądu - kliknij "Sprawdź tabelę" ponownie przed uruchomieniem.';
+  }
+}
+
 document.getElementById('excelFile').addEventListener('change', async (event) => {
+  wymusPonownyPodglad();
   const file = event.target.files[0];
   sheetBox.hidden = true;
   sheetSelect.innerHTML = '';
@@ -248,6 +262,8 @@ async function runJob(dryRun) {
 
 checkBtn.addEventListener('click', () => runJob(true));
 runBtn.addEventListener('click', () => runJob(false));
+sheetSelect.addEventListener('change', wymusPonownyPodglad);
+document.getElementById('rootPath').addEventListener('input', wymusPonownyPodglad);
 
 // Przegladarka folderow w stronie zamiast recznego wpisywania sciezki -
 // natywne okno Windows nie dziala niezawodnie na tej maszynie, patrz

@@ -1,8 +1,12 @@
 // Orkiestracja paczki zgloszen - wzorowana na apps/formularze-ecodan/src/jobs.js
-// (pula workerow, maszyna stanow joba, obsluga anulowania), ale PROSTSZA:
-// bez wyrafinowanego circuit-breakera Ecodana (closed-session-streak itp.) -
-// przy concurrency domyslnie 1 i tak niewielkiej skali paczek (dziesiatki,
-// nie tysiace adresow) prostsze "utworz nowa sesje przy bledzie" wystarcza.
+// (pula workerow, maszyna stanow joba, obsluga anulowania). Prostsze "utworz
+// nowa sesje przy bledzie" bez Ecodanowego rozroznienia przyczyny bledu
+// (closed-session-streak itp.) - Varmero nie ma dzis takiej kategorii.
+// DOSTAJE JEDNAK ten sam prosty wylacznik calej paczki po serii bledow z
+// rzedu (audyt 2026-08-21, patrz MAX_CONSECUTIVE_FAILURES w config.js) - bez
+// niego, jesli strona Varmero sie zmieni/IMAP przestanie dzialac, KAZDY
+// pozostaly wiersz i tak wysylalby REALNE zgloszenie do Varmero, zanim
+// identyczny blad zostanie wykryty.
 // Cykl zycia KAZDEGO wiersza ma jeden dodatkowy krok, ktorego Ecodan nie ma:
 // po udanym zgloszeniu (submit) czeka na przychodzacy mail (mailbox.js)
 // PRZED oznaczeniem wiersza jako gotowego.
@@ -17,13 +21,39 @@ import { solveCaptcha, UnknownCaptchaIconError } from './automation/captcha.js';
 import { waitForVarmeroCard, NoNewEmailError } from './mailbox.js';
 import { saveDebug } from './debug.js';
 import { ensureJobWorkspace, appendJobEvent as appendJobEventRaw, writeResultsCsv, writeSummary } from './telemetry.js';
-import { BATCH_CONCURRENCY_DEFAULT, EMAIL_WAIT_TIMEOUT_MS, CAPTCHA_MAX_ATTEMPTS } from './config.js';
+import { BATCH_CONCURRENCY_DEFAULT, EMAIL_WAIT_TIMEOUT_MS, CAPTCHA_MAX_ATTEMPTS, MAX_CONSECUTIVE_FAILURES } from './config.js';
 
 export const jobs = new Map();
 const jobSessions = new Map(); // jobId -> Set<session>
 
 function terminalStatus(status) {
   return ['finished', 'finished-with-errors', 'cancelled', 'fatal-error'].includes(status);
+}
+
+// Audyt zuzycia RAM 2026-08-21: `jobs` rosla bez zadnego ograniczenia - po
+// wielu paczkach mapa mialaby wpis na kazde zadanie, kazdy z wlasna
+// tablica `results`/`errors`. AKTYWNE zadania (jeszcze nie terminalStatus)
+// nigdy nie sa usuwane - usuwamy tylko zakonczone, i to dopiero gdy sa
+// naprawde stare (7 dni) albo jest ich zbyt duzo naraz (ponad
+// MAX_TERMINAL_JOBS, liczac od najstarszych). Same pliki wynikowe (karty
+// PDF na dysku) NIE sa tu ruszane - to tylko czyszczenie stanu w pamieci.
+export const JOB_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAX_TERMINAL_JOBS = 200;
+
+export function pruneOldJobs() {
+  const now = Date.now();
+  const terminalEntries = [];
+  for (const [id, job] of jobs.entries()) {
+    if (!terminalStatus(job.status)) continue;
+    const finishedAtMs = job.finishedAt ? Date.parse(job.finishedAt) : 0;
+    if (now - finishedAtMs > JOB_RETENTION_MS) { jobs.delete(id); continue; }
+    terminalEntries.push([id, finishedAtMs]);
+  }
+  if (terminalEntries.length > MAX_TERMINAL_JOBS) {
+    terminalEntries.sort((a, b) => a[1] - b[1]);
+    const toDelete = terminalEntries.length - MAX_TERMINAL_JOBS;
+    for (let i = 0; i < toDelete; i += 1) jobs.delete(terminalEntries[i][0]);
+  }
 }
 
 async function appendJobEvent(job, type, payload) {
@@ -91,6 +121,7 @@ export function createJob({ sourceFile, options }) {
     options,
     concurrency: Math.max(1, Number(options?.concurrency) || BATCH_CONCURRENCY_DEFAULT)
   };
+  pruneOldJobs();
   jobs.set(id, job);
   return job;
 }
@@ -164,7 +195,8 @@ async function processRecord(record, { job, session, imapConfig, baseEmail, skip
         imapConfig,
         recipientEmail,
         timeoutMs: EMAIL_WAIT_TIMEOUT_MS,
-        createClient: createImapClient
+        createClient: createImapClient,
+        isCancelled: () => job.cancelRequested
       });
     } catch (err) {
       if (err instanceof NoNewEmailError) job.emailTimeouts += 1;
@@ -178,7 +210,10 @@ async function processRecord(record, { job, session, imapConfig, baseEmail, skip
     const message = String(error?.message || error);
     await saveDebug(session.page, `row${record.rowNumber}-error`, message, null, job.outputRoot).catch(() => {});
     await appendJobEvent(job, 'record-error', { rowNumber: record.rowNumber, error: message });
-    return { ...base, ok: false, error: message, durationMs: Date.now() - startedAt };
+    // cancelled: przerwanie na zadanie uzytkownika (patrz mailbox.js#CancelledWaitError)
+    // NIE jest "prawdziwym" bledem - runWorker nie powinien liczyc tego do
+    // wylacznika calej paczki (audyt 2026-08-21).
+    return { ...base, ok: false, cancelled: error?.name === 'CancelledWaitError', error: message, durationMs: Date.now() - startedAt };
   }
 }
 
@@ -204,10 +239,13 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
     return job;
   }
 
-  if (Array.isArray(selectedRows) && selectedRows.length) {
-    const wanted = new Set(selectedRows);
-    parsed = { ...parsed, records: parsed.records.filter(r => wanted.has(r.rowNumber)) };
-  }
+  // Audyt 2026-08-21 (real incydent): pusta/brakujaca selekcja NIGDY nie
+  // oznacza "zglos cala tabele" - /api/batch/start juz blokuje ten przypadek
+  // u zrodla, ale ta funkcja jest tez wywolywalna bezposrednio (np. przez
+  // pipeline), wiec ta sama ochrona zostaje TU jako druga warstwa - kazdy
+  // wiersz to realne, nieodwracalne zgloszenie do Varmero.
+  const wanted = new Set(Array.isArray(selectedRows) ? selectedRows : []);
+  parsed = { ...parsed, records: wanted.size ? parsed.records.filter(r => wanted.has(r.rowNumber)) : [] };
 
   job.skipped = parsed.skipped;
   job.total = parsed.records.length;
@@ -224,14 +262,36 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
   job.status = 'running';
   const records = [...parsed.records];
   let nextIndex = 0;
+  job.consecutiveFailures = 0;
   const takeNext = () => (job.cancelRequested || nextIndex >= records.length ? null : records[nextIndex++]);
+
+  // Audyt 2026-08-21: wylacznik calej paczki po N zgloszeniach z rzedu
+  // zakonczonych bledem - takie samo dzialanie jak wlasciciel zainicjowal
+  // recznie przyciskiem "Anuluj" (job.cancelRequested = true), tylko
+  // automatycznie i zanim caly pozostaly batch zdazy wyslac kolejne realne,
+  // najprawdopodobniej rowniez nieudane zgloszenia do Varmero.
+  function markCircuitBreaker(reason) {
+    if (job.fatalReason) return;
+    job.fatalReason = reason;
+    job.cancelRequested = true;
+    job.cancelRequestedAt = job.cancelRequestedAt || new Date().toISOString();
+    job.circuitBroken = true;
+  }
 
   async function runWorker(workerId) {
     let session = null;
     try {
       let record;
       while ((record = takeNext())) {
-        job.current = `worker ${workerId}: wiersz ${record.rowNumber} (${record.input.address})`;
+        // Audyt UX 2026-08-21: koncurrencja jest w UI na sztywno zablokowana
+        // na 1 (index.html), wiec "worker N" pojawialo sie w KAZDYM komunikacie
+        // postepu, mimo ze nigdy nie bylo realnie wiecej niz jeden - slowo bez
+        // znaczenia dla nietechnicznego uzytkownika. Pokazujemy je tylko, gdy
+        // faktycznie dziala wiecej niz jeden watek (np. przyszla zmiana
+        // konfiguracji), zeby nie zgubic informacji diagnostycznej.
+        job.current = workerCount > 1
+          ? `worker ${workerId}: wiersz ${record.rowNumber} (${record.input.address})`
+          : `wiersz ${record.rowNumber} (${record.input.address})`;
         const startedAt = Date.now();
         const pdfPath = path.join(job.pdfDir, makePdfName(record));
         let result;
@@ -257,9 +317,21 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
         job.done += 1;
         if (result.ok) {
           if (result.skippedExisting) job.skippedExisting += 1;
-          else job.ok += 1;
+          else { job.ok += 1; job.consecutiveFailures = 0; }
         }
-        else { job.failed += 1; job.errors.push(result); }
+        else {
+          job.failed += 1;
+          job.errors.push(result);
+          // Przerwanie na zadanie uzytkownika (result.cancelled) nie jest
+          // "prawdziwym" bledem strony/skrzynki - nie powinno wliczac sie do
+          // wylacznika calej paczki (audyt 2026-08-21).
+          if (!result.cancelled) {
+            job.consecutiveFailures = (job.consecutiveFailures || 0) + 1;
+            if (job.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+              markCircuitBreaker(`Przerwano po ${job.consecutiveFailures} zgloszeniach z rzedu zakonczonych bledem - dalsze wiersze najprawdopodobniej takze by sie nie udaly (np. zmiana na stronie Varmero albo problem ze skrzynka IMAP).`);
+            }
+          }
+        }
 
         // Sesja jest odtwarzana po kazdym wierszu, w ktorym cos nie
         // zadzialalo (formularz/CAPTCHA/submit) - prostsze niz Ecodanowy licznik
@@ -286,7 +358,7 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
 
   job.current = null;
   job.finishedAt = new Date().toISOString();
-  job.status = job.cancelRequested ? 'cancelled' : job.failed > 0 ? 'finished-with-errors' : 'finished';
+  job.status = job.circuitBroken ? 'fatal-error' : job.cancelRequested ? 'cancelled' : job.failed > 0 ? 'finished-with-errors' : 'finished';
 
   await writeResultsCsv(job);
   await writeSummary(job);

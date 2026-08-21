@@ -21,6 +21,48 @@ async function createPdf(filePath, pageCount = 3) {
   await fsp.writeFile(filePath, await document.save());
 }
 
+// Audyt zuzycia RAM/CPU 2026-08-21: pdfSliceToBase64 dla zakresu
+// obejmujacego CALY dokument (startPage=0, endPage=totalPages-1, dokladnie
+// jak wola dzis detectBlockStartPages) wczesniej i tak robila pelny
+// PDFDocument.load->create->copyPages->save, zeby odtworzyc bajt w bajt to
+// samo co oryginal - zbedny koszt RAM/CPU dla duzych skanow. Fast-path
+// zwraca surowe bajty pliku wprost.
+test('pdfSliceToBase64: dla calego dokumentu (z totalPages) zwraca surowe bajty pliku, bez load/copy/save', async () => {
+  const { pdfSliceToBase64 } = require('../apps/ocr-audytow/src/aiEngineShared');
+  const dir = await makeTempDir();
+  try {
+    const pdfPath = path.join(dir, 'audyt.pdf');
+    await createPdf(pdfPath, 4);
+    const rawBytes = await fsp.readFile(pdfPath);
+
+    const fastPath = await pdfSliceToBase64(pdfPath, 0, 3, 4);
+    assert.equal(fastPath, rawBytes.toString('base64'), 'caly dokument powinien wrocic jako surowe bajty pliku (identyczne z oryginalem)');
+
+    // Bez totalPages (istniejace wywolania per-blok) zachowanie zostaje
+    // takie samo jak dotychczas - przechodzi przez PDFDocument (wciaz
+    // poprawny wynik, po prostu inna sciezka kodu).
+    const bezTotalPages = await pdfSliceToBase64(pdfPath, 0, 3);
+    const odtworzony = await PDFDocument.load(Buffer.from(bezTotalPages, 'base64'));
+    assert.equal(odtworzony.getPageCount(), 4);
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('pdfSliceToBase64: zakres CZESCIOWY (nie caly dokument) nadal idzie przez PDFDocument, nawet z podanym totalPages', async () => {
+  const { pdfSliceToBase64 } = require('../apps/ocr-audytow/src/aiEngineShared');
+  const dir = await makeTempDir();
+  try {
+    const pdfPath = path.join(dir, 'audyt.pdf');
+    await createPdf(pdfPath, 5);
+    const base64 = await pdfSliceToBase64(pdfPath, 1, 2, 5);
+    const sliceDoc = await PDFDocument.load(Buffer.from(base64, 'base64'));
+    assert.equal(sliceDoc.getPageCount(), 2, 'zakres 1-2 z 5-stronicowego dokumentu powinien dac 2-stronicowy wycinek, nie caly dokument');
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+});
+
 // =====================================================================
 // ocrPipeline.js - od 2026-08-12 (migracja Document AI -> Gemini, patrz
 // pamiec projektu) juz NIE robi wlasnego OCR-u per strona - tylko liczy
@@ -273,6 +315,28 @@ test('geminiFieldEngine: saveUserApiKey odrzuca pusty klucz', async (t) => {
   const { saveUserApiKey } = require(enginePath);
   assert.throws(() => saveUserApiKey(''), /Podaj klucz/);
   assert.throws(() => saveUserApiKey('   '), /Podaj klucz/);
+});
+
+// Audyt UX 2026-08-21: surowy, angielski tekst bledu Google (np. limit,
+// nieprawidlowy klucz) leciał wczesniej 1:1 do polskojezycznego uzytkownika
+// bez zadnej wskazowki, co zrobic - formatGeminiError tlumaczy najczestsze
+// przypadki po kodzie HTTP/statusie API, zachowujac oryginal do diagnostyki.
+test('geminiFieldEngine: formatGeminiError tlumaczy typowe bledy Google na czytelny polski komunikat', () => {
+  const { formatGeminiError } = require('../apps/ocr-audytow/src/geminiFieldEngine');
+
+  const limit = formatGeminiError(429, { error: { status: 'RESOURCE_EXHAUSTED', message: 'Quota exceeded for quota metric... free_tier_requests, limit: 20' } });
+  assert.match(limit.message, /Przekroczono limit zapytań/);
+  assert.match(limit.message, /free_tier_requests/, 'oryginalny tekst Google musi zostac w komunikacie do diagnostyki');
+
+  const auth = formatGeminiError(401, { error: { status: 'UNAUTHENTICATED', message: 'API key not valid' } });
+  assert.match(auth.message, /Klucz API Gemini jest nieprawidłowy/);
+
+  const serverErr = formatGeminiError(503, { error: { message: 'The model is overloaded' } });
+  assert.match(serverErr.message, /chwilowo niedostępna/);
+
+  const nieznany = formatGeminiError(400, { error: { message: 'Invalid argument' } });
+  assert.match(nieznany.message, /Nie udało się przetworzyć strony/);
+  assert.match(nieznany.message, /Invalid argument/);
 });
 
 // =====================================================================

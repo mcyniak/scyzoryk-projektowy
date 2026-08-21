@@ -321,6 +321,8 @@ const $ = s => document.querySelector(s);
     const wmAlreadyList = $('#wmAlreadyList');
     const wmMissingBlock = $('#wmMissingBlock');
     const wmMissingList = $('#wmMissingList');
+    const wmAmbiguousBlock = $('#wmAmbiguousBlock');
+    const wmAmbiguousList = $('#wmAmbiguousList');
     const wmConvertBtn = $('#wmConvertBtn');
     const wmConvertStatus = $('#wmConvertStatus');
     const wmConvertResult = $('#wmConvertResult');
@@ -375,7 +377,9 @@ const $ = s => document.querySelector(s);
         ? `już ma: ${escapeHtml(item.existingDokPod || '')}`
         : item.status === 'brak-docx'
           ? 'brak pliku WM ...docx w tym folderze'
-          : escapeHtml(item.sourceDocx || '');
+          : item.status === 'wieloznaczne'
+            ? `kilka pasujących plików: ${escapeHtml([...(item.sourceDocxCandidates || []), ...(item.existingDokPodCandidates || [])].join(', '))} - usuń/zmień nazwę zbędnego, żeby dopasowanie było jednoznaczne`
+            : escapeHtml(item.sourceDocx || '');
       return `
         <div class="row${withCheckbox ? '' : ' muted-row'}">
           ${check}
@@ -404,6 +408,7 @@ const $ = s => document.querySelector(s);
         const toConvert = wmScanItems.filter(i => i.status === 'do-przerobienia');
         const already = wmScanItems.filter(i => i.status === 'juz-istnieje');
         const missing = wmScanItems.filter(i => i.status === 'brak-docx');
+        const ambiguous = wmScanItems.filter(i => i.status === 'wieloznaczne');
 
         if (!wmScanItems.length) {
           showWmScanStatus(`Nie znaleziono żadnego podfolderu z plikiem "WM ..." w: ${folderPath}`, 'err');
@@ -417,6 +422,8 @@ const $ = s => document.querySelector(s);
         wmAlreadyList.innerHTML = already.map(i => renderWmRow(i, { withCheckbox: false })).join('');
         wmMissingBlock.hidden = !missing.length;
         wmMissingList.innerHTML = missing.map(i => renderWmRow(i, { withCheckbox: false })).join('');
+        wmAmbiguousBlock.hidden = !ambiguous.length;
+        wmAmbiguousList.innerHTML = ambiguous.map(i => renderWmRow(i, { withCheckbox: false })).join('');
         wmResultsCard.hidden = false;
         wmConvertBtn.disabled = !toConvert.length;
         showWmScanStatus(`Gotowe. Znaleziono ${data.categoriesFound} kategorii.`, 'ok');
@@ -434,6 +441,12 @@ const $ = s => document.querySelector(s);
         .map(el => el.dataset.wmCheck);
       const items = wmScanItems.filter(i => i.status === 'do-przerobienia' && checked.includes(i.sourcePath));
       if (!items.length) return showWmConvertStatus('Zaznacz przynajmniej jedną kategorię do przerobienia.', 'err');
+
+      // Audyt UX 2026-08-21: ten tryb zapisuje PDF-y wprost w prawdziwych
+      // folderach klienta (czesto na dysku sieciowym), bez zadnego kroku
+      // pobierania/przegladu - jedyne takie miejsce w tym repo bez
+      // potwierdzenia, w odroznieniu np. od tworzenie-folderow.
+      if (!confirm(`Przerobić ${items.length} ${items.length === 1 ? 'kategorię' : 'kategorii'} i zapisać PDF-y bezpośrednio w folderach klientów? Tej operacji nie da się cofnąć.`)) return;
 
       wmConvertBtn.disabled = true;
       wmConvertResult.innerHTML = '';

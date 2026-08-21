@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc — Pipeline inwestycji</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+  <script src="/shared/theme.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-settings"/></svg>
+          <strong>Pomoc — Pipeline inwestycji</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Odpala po kolei kilka już istniejących narzędzi dla jednej inwestycji naraz - Tworzenie folderów, Przypisywanie plików do folderów (karty/audyty/dokumenty seryjne/dobory) i Dobory myEcodan/Varmero - zamiast otwierać każde z nich osobno i przepisywać te same dane.</p>
+      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">orkiestracja</span></div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Wgraj tabelę adresową <code>.xlsx</code>. Program sam rozpozna, jakie arkusze (Pompy / Solary / Kotły) są w środku i ile adresów każdego typu zawierają - dokładnie tak, jak dziś robi to Tworzenie folderów.</li>
+        <li>Pojawią się tylko kroki sensowne dla wykrytych typów instalacji (np. bez pomp powietrznych nie zobaczysz Doborów myEcodan/Varmero). Zaznacz, co ma się wykonać, i podaj wymagane ścieżki/pola dla każdego zaznaczonego kroku.</li>
+        <li>Kliknij <strong>Uruchom pipeline</strong>. Dobory myEcodan/Varmero startują od razu, ale NIE są czekane - reszta zaznaczonych kroków (Tworzenie folderów, Dokumenty seryjne, Przypisywanie kart/audytów) wykonuje się w międzyczasie, niezależnie.</li>
+        <li>Śledź postęp - każdy krok raportuje się osobno, błąd jednego nigdy nie blokuje pozostałych.</li>
+        <li>Gdy używasz Doborów myEcodan/Varmero: wróć później (Varmero realnie czeka na maila - może to być minuty, a czasem godziny) i kliknij <strong>Sprawdź i rozłóż gotowe dobory</strong>. Ten przycisk można kliknąć wielokrotnie, aż wszystko przestanie być oczekujące - nic nie zgłasza się do kalkulatora ponownie, tylko sprawdza, co już jest gotowe.</li>
+      </ol>
+
+      <div class="help-callout warn">
+        <span class="help-callout-label">Zakres</span>
+        <p>Pipeline NIE tworzy tabeli adresowej ani nie robi OCR audytów - to założenie wejściowe. Nie rusza Wniosków powykonawczych ani fizycznego drukowania (Drukarka projektów) - to świadomie osobne kroki, wykonywane ręcznie po zakończeniu pipeline'u.</p>
+      </div>
+
+      <h3>Możliwe błędy i co zrobić</h3>
+      <dl class="help-errors">
+        <div><dt>„Nie przesłano pliku Excel”</dt><dd>Sprawdź, czy plik faktycznie się wybrał w polu „Tabela adresowa”.</dd></div>
+        <div><dt>„Podana ścieżka (...) nie istnieje”</dt><dd>Każda wpisana ścieżka (folder inwestycji, root Solary/Pompy, folder audytów, folder szablonów) musi już istnieć - program niczego nie zakłada od zera poza samym rozdzielaniem plików w środku.</dd></div>
+        <div><dt>„Dobór Varmero wymaga podania strefy klimatycznej (1-5)”</dt><dd>Kalkulator Varmero wymaga strefy klimatycznej wprost - nie da się jej wyczytać automatycznie z tabeli adresowej, trzeba ją wybrać ręcznie.</dd></div>
+        <div><dt>Krok zgłasza błąd, ale inne kroki dalej działają</dt><dd>To zamierzone - każdy krok jest w pełni niezależny (ta sama zasada co w Przypisywaniu plików do folderów). Popraw wskazaną ścieżkę/plik dla tego jednego kroku i uruchom pipeline ponownie - już rozłożone pliki nie zostaną zdublowane.</dd></div>
+        <div><dt>Status przebiegu: „przerwany restartem serwera”</dt><dd>Scyzoryk został zrestartowany w trakcie tego przebiegu, zanim wszystkie kroki się dokończyły. Uruchom pipeline dla tej inwestycji ponownie - już rozłożone pliki nie zostaną zdublowane.</dd></div>
+      </dl>
+    </div>
+  </div>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

@@ -227,7 +227,10 @@ test('jobs.js runBatchJob: wskazany folder zapisu jest sprawdzany przy pomijaniu
   });
   job.outputBase = path.join(dir, 'workspace');
 
-  await runBatchJob(job, fixturePath, { zone: '3', skipExisting: true });
+  // selectedRows musi byc jawnie podane (audyt 2026-08-21: pusta/brakujaca
+  // selekcja NIGDY nie oznacza "przetworz wszystko" - kazdy wiersz to
+  // realne zgloszenie do zewnetrznego kalkulatora).
+  await runBatchJob(job, fixturePath, { zone: '3', skipExisting: true, selectedRows: [parsed.records[0].rowNumber] });
 
   assert.equal(job.status, 'finished');
   assert.equal(job.pdfDir, outputDir);
@@ -238,6 +241,56 @@ test('jobs.js runBatchJob: wskazany folder zapisu jest sprawdzany przy pomijaniu
   assert.equal(job.results[0].ok, true);
 
   await fsp.rm(dir, { recursive: true, force: true });
+});
+
+test('jobs.js runBatchJob: pusta/brakujaca selectedRows NIGDY nie zglasza calej tabeli (audyt 2026-08-21, real incydent - przypadkowy start na 70 adresow)', async () => {
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx'));
+  const dir = await makeTempDir();
+  const fixturePath = path.join(dir, 'fixture-wielu-adresow.xlsx');
+  const rows = [
+    ['LP', 'Imie i Nazwisko', 'Adres', 'Rodzaj pompy', 'OZC'],
+    [1, 'Jan Testowy', 'Testowa 1', 'Powietrze-woda', '9.5'],
+    [2, 'Anna Testowa', 'Testowa 2', 'Powietrze-woda', '8.0']
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Pompy ciepla');
+  XLSX.writeFile(wb, fixturePath);
+
+  const { createJob, runBatchJob } = await importSrc('jobs.js');
+  const job = createJob({
+    sourceFile: 'fixture-wielu-adresow.xlsx',
+    options: { investmentName: 'Inwestycja testowa', outputPath: path.join(dir, 'gotowe-karty'), skipExisting: true, concurrency: 1 }
+  });
+  job.outputBase = path.join(dir, 'workspace');
+
+  // selectedRows CELOWO pominiete - to dokladnie ksztalt bledu z incydentu.
+  await runBatchJob(job, fixturePath, { zone: '3', skipExisting: true });
+
+  assert.equal(job.total, 0, 'bez selectedRows job NIE moze przetworzyc obu adresow z pliku');
+  assert.equal(job.status, 'finished');
+
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
+test('jobs.js pruneOldJobs: usuwa tylko STARE zakonczone zadania (>7 dni), nigdy aktywne ani niedawno zakonczone (audyt zuzycia RAM 2026-08-21)', async () => {
+  const { jobs, pruneOldJobs, JOB_RETENTION_MS } = await importSrc('jobs.js');
+  const staraData = new Date(Date.now() - JOB_RETENTION_MS - 60000).toISOString();
+  const swiezaData = new Date().toISOString();
+
+  jobs.set('test-stare-zakonczone', { id: 'test-stare-zakonczone', status: 'finished', finishedAt: staraData });
+  jobs.set('test-swiezo-zakonczone', { id: 'test-swiezo-zakonczone', status: 'finished', finishedAt: swiezaData });
+  jobs.set('test-aktywne-stare', { id: 'test-aktywne-stare', status: 'running', finishedAt: null, startedAt: staraData });
+
+  try {
+    pruneOldJobs();
+    assert.equal(jobs.has('test-stare-zakonczone'), false, 'stare zakonczone zadanie powinno zostac usuniete');
+    assert.equal(jobs.has('test-swiezo-zakonczone'), true, 'niedawno zakonczone zadanie musi zostac');
+    assert.equal(jobs.has('test-aktywne-stare'), true, 'aktywne zadanie NIGDY nie moze zostac usuniete, niezaleznie od wieku');
+  } finally {
+    jobs.delete('test-stare-zakonczone');
+    jobs.delete('test-swiezo-zakonczone');
+    jobs.delete('test-aktywne-stare');
+  }
 });
 
 // --- mailbox.js -------------------------------------------------------------
@@ -275,6 +328,34 @@ test('mailbox.js waitForVarmeroCard: ponawia proby i rzuca NoNewEmailError po ti
     NoNewEmailError
   );
   assert.ok(connectCount >= 2, `oczekiwano co najmniej 2 prob polaczenia, bylo ${connectCount}`);
+});
+
+test('mailbox.js waitForVarmeroCard: przerywa oczekiwanie NATYCHMIAST (nie dopiero po pelnym timeoutcie) gdy isCancelled zwroci true (audyt 2026-08-21)', async () => {
+  const { waitForVarmeroCard, CancelledWaitError } = await importSrc('mailbox.js');
+  let connectCount = 0;
+  const fakeClient = () => {
+    connectCount += 1;
+    return {
+      connect: async () => {},
+      list: async () => [{ path: 'INBOX' }],
+      getMailboxLock: async () => ({ release: () => {} }),
+      search: async () => [],
+      download: async () => { throw new Error('nie powinno byc wolane'); },
+      logout: async () => {}
+    };
+  };
+  const start = Date.now();
+  await assert.rejects(
+    () => waitForVarmeroCard({
+      imapConfig: {}, recipientEmail: 'test+varmero-abc123@gmail.com',
+      // Timeout celowo dlugi (30 minut) - test musi zakonczyc sie SZYBKO
+      // dzieki isCancelled, nie dzieki (nieosiagnietemu) timeoutowi.
+      timeoutMs: 30 * 60 * 1000, pollIntervalMs: 20, createClient: fakeClient,
+      isCancelled: () => connectCount >= 1
+    }),
+    CancelledWaitError
+  );
+  assert.ok(Date.now() - start < 5000, 'anulowanie musi przerwac oczekiwanie od razu, nie czekac na 30-minutowy timeout');
 });
 
 test('mailbox.js waitForVarmeroCard: znajduje karte w folderze Spam, gdy INBOX jest pusty (realny przypadek z tej sesji)', async () => {

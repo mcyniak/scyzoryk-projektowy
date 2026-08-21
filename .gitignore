@@ -66,3 +66,9 @@ release/
 # deweloperskim moze pojawic sie tylko recznie (np. do testowania updatera
 # lokalnie), nigdy nie powinien byc zacommitowany.
 /build-info.json
+
+# graphify - wygenerowany cache grafu wiedzy (duzy, odtwarzalny komenda
+# `graphify update .`) i kopia zapasowa ustawien sprzed instalacji skilla -
+# zadne z nich nie jest zrodlem, nie powinny trafiac do historii repo.
+graphify-out/
+.claude/settings.json.graphify-bak

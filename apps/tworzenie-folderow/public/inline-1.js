@@ -107,7 +107,12 @@ function resetPlanUi() {
   document.querySelector('#sheetSummary').innerHTML = '';
   document.querySelector('#planBox').classList.add('hidden');
   document.querySelector('#folderTree').innerHTML = '';
-  document.querySelector('#createBtn').disabled = true;
+  const createBtn = document.querySelector('#createBtn');
+  createBtn.disabled = true;
+  // Audyt UX 2026-08-21: bez tego przycisk zostawal na "Gotowe ✓" nawet po
+  // wczytaniu nowego, poprawnego planu - wygladalo to jak "juz zrobione",
+  // mimo ze klikniecie znow realnie tworzyloby foldery.
+  createBtn.textContent = 'Utwórz foldery';
 }
 
 async function maybeLoadPreview() {

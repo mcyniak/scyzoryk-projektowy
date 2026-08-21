@@ -632,7 +632,15 @@
       enablePanel("panelPrint");
       setStep(5);
       window.scrollTo({ top: document.querySelector("#panelPrint").offsetTop, behavior: "smooth" });
-      showError("orderError", "Kolejka została utworzona. Możesz teraz kliknąć DRUKUJ.");
+      // Audyt 2026-08-21: /api/queue/set-merged dopuszcza czesciowy sukces -
+      // "missing" (pliki, ktore zniknely/przestaly pasowac miedzy
+      // dopasowaniem a tym potwierdzeniem) trzeba pokazac, nie tylko cichy
+      // "Kolejka gotowa" jakby wszystko sie udalo.
+      if (data.missing?.length) {
+        showError("orderError", `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie zostal" : "plikow nie zostalo"} dodanych (zniknely albo przestaly pasowac): ${data.missing.join(", ")}`);
+      } else {
+        showError("orderError", "Kolejka została utworzona. Możesz teraz kliknąć DRUKUJ.");
+      }
     } catch (err) {
       showError("orderError", err.message);
     } finally {
@@ -832,7 +840,10 @@
       enablePanel("panelPrint");
       setStep(3, "stepperWm");
       window.scrollTo({ top: document.querySelector("#panelPrint").offsetTop, behavior: "smooth" });
-      showError("wmError", "");
+      // Audyt 2026-08-21: patrz komentarz przy poprzednim wywolaniu set-merged.
+      showError("wmError", data.missing?.length
+        ? `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie zostal" : "plikow nie zostalo"} dodanych (zniknely albo przestaly pasowac): ${data.missing.join(", ")}`
+        : "");
     } catch (err) {
       showError("wmError", err.message);
     } finally {
@@ -844,9 +855,15 @@
   $("clearBtn").addEventListener("click", () => window.location.reload());
 
   $("printBtn").addEventListener("click", async () => {
+    const groups = buildPendingGroups();
+    const kopie = Number($("copiesInput").value || 1);
+    // Audyt UX 2026-08-21: to najbardziej krytyczna apka drukowania (realny
+    // papier/toner, konkretna kolejnosc dokumentow per klient), a mimo to
+    // byla jedynym miejscem w tym repo bez potwierdzenia przed wyslaniem do
+    // druku - patrz analogiczny confirm() w prostszej apce drukarka.
+    if (!confirm(`Wysłać do druku ${groups.length} ${groups.length === 1 ? "adres" : "adresów"}, ${kopie} ${kopie === 1 ? "kopia" : "kopie/kopii"}?`)) return;
     $("printBtn").disabled = true;
     try {
-      const groups = buildPendingGroups();
       await api("/api/print", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

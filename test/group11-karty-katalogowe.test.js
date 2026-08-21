@@ -623,6 +623,34 @@ test('przetworzArkusz: podfolder rozmiaru z numerowanymi plikami (nowsza konwenc
   ].sort(), 'rozna tresc nazwy "2." dla innego rozmiaru - dopasowanie po numerze, nie po tresci');
 });
 
+test('przetworzArkusz: DWA podfoldery pasujace do tego samego rozmiaru (np. kopia/stary folder obok prawdziwego) daja "wieloznaczne", nigdy cichy wybor pierwszego (audyt 2026-08-21)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-root-solary-dwuznaczne-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
+  const wzorDir = path.join(root, 'wzór');
+  const folder300 = path.join(wzorDir, '2.300');
+  const folder300Stary = path.join(wzorDir, '2.300 (stary)');
+  await fsp.mkdir(folder300, { recursive: true });
+  await fsp.mkdir(folder300Stary, { recursive: true });
+  await fsp.writeFile(path.join(folder300, '1. Karta.pdf'), 'x');
+  await fsp.writeFile(path.join(folder300Stary, '1. Karta.pdf'), 'stara wersja');
+
+  const projektyDir = path.join(root, 'Projekty');
+  const folderKlienta = path.join(projektyDir, '2 - Kamiensk, ul. Pierwsza');
+  await fsp.mkdir(folderKlienta, { recursive: true });
+
+  const { file, dir: xlsxDir } = await napiszArkusz('Solary', [[2, 'Kamiensk, ul. Pierwsza', '2/300', '']]);
+  t.after(() => usunPozniej(xlsxDir));
+
+  const [arkusz] = await readXlsxFile(file, { getSheets: true });
+  const wyniki = await przetworzArkusz({ sheetName: arkusz.sheet, rows: arkusz.data, rootPath: root, dryRun: false });
+
+  assert.equal(wyniki.length, 1);
+  assert.equal(wyniki[0].status, 'wieloznaczne', JSON.stringify(wyniki));
+  assert.match(wyniki[0].komunikat, /2 podfoldery/);
+  assert.deepEqual(await fsp.readdir(folderKlienta), [], 'nic nie zostalo skopiowane, dopoki niejednoznacznosc nie zostanie recznie rozwiazana');
+});
+
 test('przetworzArkusz: bez podfolderu rozmiaru dalej dziala stara, plaska konwencja (zero regresji dla juz zweryfikowanych inwestycji)', async (t) => {
   const { root, projektyDir } = await przygotujRoot({
     foldery: ['41 - Zarnow, ul. Spacerowa'],

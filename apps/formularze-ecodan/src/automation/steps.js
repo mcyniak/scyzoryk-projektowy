@@ -446,7 +446,14 @@ export async function fillVisibleField(page, locator, value, opts = {}) {
 }
 
 export async function fillLocationField(page, location) {
-  const value = String(location || '62-561 Ślesin').trim();
+  // Audyt 2026-08-21: byl tu martwy, ale wciaz obecny fallback do
+  // prawdziwego adresu "62-561 Slesin" - nieosiagalny w normalnym uzyciu
+  // (calculate()/jobs.js juz blokuja pusta lokalizacje przed wywolaniem tej
+  // funkcji), ale realne ryzyko na wypadek nowego/alternatywnego wywolania,
+  // ktore ominie te ochrone. Zamiast cicho zglosic realny, inny adres do
+  // kalkulatora, rzucamy blad.
+  const value = String(location || '').trim();
+  if (!value) throw new Error('Brak lokalizacji - nie mozna wypelnic formularza bez adresu.');
   const fields = page.locator('input[placeholder*="lokal" i], input[placeholder*="kod" i], input[aria-label*="lokal" i], input, textarea');
   const field = await fillVisibleField(page, fields, value);
 
@@ -598,7 +605,7 @@ async function goToPowerStepFromClimate(page) {
 }
 
 export async function chooseLocation(page, location) {
-  await fillLocationField(page, location || '62-561 Ślesin');
+  await fillLocationField(page, location);
   await waitForUiSettled(page, { timeout: 1600, stableMs: 180 });
   await goToPowerStepFromClimate(page);
 

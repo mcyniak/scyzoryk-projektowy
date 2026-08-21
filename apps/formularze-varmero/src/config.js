@@ -16,6 +16,15 @@ export const BATCH_CONCURRENCY_DEFAULT = Math.max(1, Math.min(2, Number(process.
 export const BATCH_CONCURRENCY_MAX = Math.max(1, Math.min(2, Number(process.env.BATCH_CONCURRENCY_MAX || 2)));
 
 export const RECORD_TIMEOUT_MS = Math.max(60000, Number(process.env.RECORD_TIMEOUT_MS || 8 * 60 * 1000));
+// Wylacznik calej paczki po N zgloszeniach z rzedu, ktore skonczyly sie
+// bledem (audyt 2026-08-21) - bez tego, jesli strona Varmero sie zmieni albo
+// IMAP przestanie dzialac, KAZDY pozostaly wiersz i tak wysyla REALNE
+// zgloszenie do zewnetrznego kalkulatora, zanim identyczny blad zostanie
+// wykryty - ten sam wzorzec co MAX_JOB_CLOSED_SESSION_STREAK w
+// apps/formularze-ecodan/src/config.js, tylko liczony po prostu po bledach,
+// nie po konkretnej przyczynie (Varmero nie ma dzis odpowiednika "zamknieta
+// sesja Chrome" jako osobnej kategorii bledu).
+export const MAX_CONSECUTIVE_FAILURES = Math.max(1, Number(process.env.VARMERO_MAX_CONSECUTIVE_FAILURES || 3));
 // Katalog ikon CAPTCHY (automation/captcha.js) ma dzis niepelne pokrycie
 // (~40%, zweryfikowane w tej sesji) - zamiast poddawac caly wiersz po
 // pierwszej nieznanej ikonie, probujemy ponownie (nowe zaladowanie strony =

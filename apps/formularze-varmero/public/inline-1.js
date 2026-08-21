@@ -88,11 +88,28 @@ document.querySelector('#wojewodztwo').addEventListener('change', (event) => {
 // varmero wszystkie pola strefy/wojewodztwa/gminy sa opcjonalne dla samego
 // podgladu (tylko ostrzegaja, nigdy nie blokuja), wiec auto-check od razu
 // po wyborze pliku nie traci danych.
+// Audyt UX 2026-08-21: brak konfiguracji skrzynki wczesniej wychodzil na jaw
+// dopiero po kliknieciu "Uruchom zgloszenia" (ostatni krok, po wgraniu
+// Excela i wypelnieniu wszystkich pol) - sprawdzamy to od razu po
+// zaladowaniu strony, zeby uzytkownik nie stracil czasu na przygotowanie
+// calej paczki tylko po to, zeby na koncu dostac ten sam blad.
+(async function sprawdzSkrzynkeOdRazu() {
+  try {
+    const res = await fetch('/api/mailbox-status');
+    const json = await res.json().catch(() => null);
+    if (json?.ok && json.configured === false) showImapNotice('Skrzynka pocztowa do odbioru kart Varmero nie jest jeszcze skonfigurowana na tym komputerze - zgłoś to do administratora/IT przed uruchomieniem zgłoszeń.');
+  } catch (_) { /* brak polaczenia - blad i tak wyjdzie na jaw przy starcie */ }
+})();
+
 document.querySelector('#excelFile').addEventListener('change', () => loadAddressPreview());
 document.querySelector('#reloadPreview').addEventListener('click', () => loadAddressPreview());
 document.querySelector('#addressSearch').addEventListener('input', () => renderAddressRows());
-document.querySelector('#selectAllRecords').addEventListener('click', () => { selectedRows = new Set(previewRecords.map(row => row.rowNumber)); renderAddressRows(); });
-document.querySelector('#clearRecords').addEventListener('click', () => { selectedRows = new Set(); renderAddressRows(); });
+// "Zaznacz/Odznacz wszystkie" dziala TYLKO na aktualnie widocznych (po
+// filtrze "#addressSearch") wierszach - audyt 2026-08-21, wczesniej
+// dzialalo na calym previewRecords, wiec po przefiltrowaniu klikniecie
+// "zaznacz wszystkie" po cichu zaznaczalo tez adresy spoza filtra.
+document.querySelector('#selectAllRecords').addEventListener('click', () => { filteredPreviewRecords().forEach(row => selectedRows.add(row.rowNumber)); renderAddressRows(); });
+document.querySelector('#clearRecords').addEventListener('click', () => { filteredPreviewRecords().forEach(row => selectedRows.delete(row.rowNumber)); renderAddressRows(); });
 document.querySelector('#browseOutputFolder')?.addEventListener('click', () => {
   openFolderBrowser(document.querySelector('#outputPath').value.trim() || null);
 });
@@ -388,7 +405,11 @@ function normalizeSearch(value) {
 
 document.querySelector('#cancelBatch').addEventListener('click', async () => {
   if (!activeJob || cancelRequested) return;
-  const sure = confirm('Przerwać zgłaszanie? Karty już odebrane zostaną w folderze zadania.');
+  // Audyt UX 2026-08-21: poprzedni tekst mowil tylko o kartach juz
+  // odebranych - nie ostrzegal, ze WIERSZ aktualnie w trakcie (job.current)
+  // mogl juz zostac naprawde, nieodwracalnie zgloszony do kalkulatora
+  // Varmero, zanim Anuluj zdazy przerwac tylko oczekiwanie na maila.
+  const sure = confirm('Przerwać zgłaszanie? Wiersz aktualnie przetwarzany mógł już zostać nieodwracalnie zgłoszony do Varmero (przerwane zostanie tylko oczekiwanie na jego mail) - kolejne wiersze się nie rozpoczną. Karty już odebrane zostaną w folderze zadania.');
   if (!sure) return;
 
   cancelRequested = true;

@@ -77,15 +77,22 @@ function categoryLabel(relPath) {
 // Zwykly plik "WM ..." (nie dok.pod) w formacie DOCX - jedyny format, ktory
 // da sie przerobic przez Word COM. Jesli tytul istnieje tylko jako PDF (bez
 // zrodlowego DOCX), nie ma z czego zrobic wersji powykonawczej.
-function pickSourceDocx(files) {
-  const matches = files.filter(name =>
+//
+// Zwracaja WSZYSTKICH kandydatow, nie tylko pierwszego (audyt 2026-08-21) -
+// wczesniej `matches[0]` cicho wybieralo jeden z kilku pasujacych plikow
+// (np. stary szkic obok poprawionej wersji, oba bez sufiksu "dok.pod"), bez
+// zadnego sladu, ze drugi kandydat w ogole istnial - wynikowy PDF trafial
+// PROSTO do prawdziwego folderu klienta (server.js, brak kroku
+// download/podgladu dla tej sciezki). Ten sam wzorzec ochrony co
+// apps/karty-katalogowe/server.js#znajdzFolderyModeluPompy - wywolujacy
+// (scanWmFolder nizej) MUSI sam potraktowac >1 kandydata jako niejednoznaczne.
+function pickSourceDocxCandidates(files) {
+  return files.filter(name =>
     WM_TITLE_RE.test(name) && !WM_DOKPOD_RE.test(name) && name.toLowerCase().endsWith('.docx'));
-  return matches[0] || null;
 }
 
-function pickExistingDokPod(files) {
-  const matches = files.filter(name => WM_DOKPOD_RE.test(name));
-  return matches[0] || null;
+function pickExistingDokPodCandidates(files) {
+  return files.filter(name => WM_DOKPOD_RE.test(name));
 }
 
 // Skanuje folder WM (dowolnej inwestycji) i zwraca liste kategorii z
@@ -96,12 +103,24 @@ async function scanWmFolder(rootPath) {
 
   const items = categories.map(cat => {
     const label = categoryLabel(cat.relPath);
-    const sourceDocx = pickSourceDocx(cat.files);
-    const existingDokPod = pickExistingDokPod(cat.files);
+    const sourceDocxCandidates = pickSourceDocxCandidates(cat.files);
+    const existingDokPodCandidates = pickExistingDokPodCandidates(cat.files);
     let status;
-    if (existingDokPod) status = 'juz-istnieje';
-    else if (sourceDocx) status = 'do-przerobienia';
-    else status = 'brak-docx';
+    let sourceDocx = null;
+    let existingDokPod = null;
+    // Wiecej niz jeden kandydat (w obu kategoriach) = niejednoznaczne, NIGDY
+    // cichy wybor pierwszego - uzytkownik musi recznie usunac/przemianowac
+    // zbedny plik w tym folderze, zanim ta kategoria bedzie mozliwa do
+    // przerobienia (audyt 2026-08-21).
+    if (existingDokPodCandidates.length > 1 || sourceDocxCandidates.length > 1) {
+      status = 'wieloznaczne';
+    } else {
+      existingDokPod = existingDokPodCandidates[0] || null;
+      sourceDocx = sourceDocxCandidates[0] || null;
+      if (existingDokPod) status = 'juz-istnieje';
+      else if (sourceDocx) status = 'do-przerobienia';
+      else status = 'brak-docx';
+    }
 
     return {
       category: label,
@@ -110,6 +129,8 @@ async function scanWmFolder(rootPath) {
       sourceDocx,
       sourcePath: sourceDocx ? path.join(cat.folderPath, sourceDocx) : null,
       existingDokPod,
+      sourceDocxCandidates,
+      existingDokPodCandidates,
       status
     };
   });

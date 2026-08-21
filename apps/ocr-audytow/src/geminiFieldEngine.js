@@ -104,9 +104,31 @@ async function callGemini(body) {
       await sleep(RETRY_BASE_DELAY_MS * (attempt + 1));
       continue;
     }
-    throw new Error(data?.error?.message || `Gemini zwrocilo blad ${res.status}`);
+    throw formatGeminiError(res.status, data);
   }
   throw lastError || new Error('Gemini: nie udalo sie uzyskac odpowiedzi po kilku probach.');
+}
+
+// Audyt UX 2026-08-21: bez tego surowy, angielski tekst bledu Google (np.
+// przekroczony limit darmowego poziomu, zly/wygasly klucz) leciał 1:1 do
+// polskojezycznego, nietechnicznego uzytkownika bez zadnej podpowiedzi co
+// zrobic. Rozpoznajemy najczestsze realne przypadki po kodzie HTTP/statusie
+// API, ale ZAWSZE dolaczamy oryginalny tekst Google - potrzebny do realnej
+// diagnostyki (np. zgloszenia u wlasciciela klucza).
+function formatGeminiError(httpStatus, data) {
+  const oryginal = data?.error?.message || `HTTP ${httpStatus}`;
+  const status = data?.error?.status;
+  let podpowiedz;
+  if (httpStatus === 401 || httpStatus === 403 || status === 'PERMISSION_DENIED' || status === 'UNAUTHENTICATED') {
+    podpowiedz = 'Klucz API Gemini jest nieprawidłowy albo nieaktywny - sprawdź go w ustawieniach (Dane i OCR -> OCR audytów -> Ustawienia dostawcy AI).';
+  } else if (httpStatus === 429 || status === 'RESOURCE_EXHAUSTED') {
+    podpowiedz = 'Przekroczono limit zapytań do Gemini (darmowy poziom albo limit czasowy) - odczekaj chwilę albo przełącz dostawcę AI w ustawieniach.';
+  } else if (httpStatus >= 500) {
+    podpowiedz = 'Usługa Gemini jest chwilowo niedostępna - spróbuj ponownie za chwilę.';
+  } else {
+    podpowiedz = 'Nie udało się przetworzyć strony przez Gemini.';
+  }
+  return new Error(`${podpowiedz} (Szczegóły Google: ${oryginal})`);
 }
 
 function extractJsonText(response) {
@@ -153,7 +175,7 @@ const BOUNDARY_SCHEMA = {
 // dotychczasowym zachowaniem aplikacji.
 async function detectBlockStartPages({ sourcePdfPath, pageCount }) {
   if (pageCount <= 1) return [0];
-  const base64 = await pdfSliceToBase64(sourcePdfPath, 0, pageCount - 1);
+  const base64 = await pdfSliceToBase64(sourcePdfPath, 0, pageCount - 1, pageCount);
   const body = {
     contents: [{ parts: [{ text: BOUNDARY_PROMPT }, { inline_data: { mime_type: 'application/pdf', data: base64 } }] }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: BOUNDARY_SCHEMA }
@@ -170,5 +192,6 @@ module.exports = {
   saveUserApiKey,
   extractFieldsForBlock,
   detectBlockStartPages,
-  USER_CONFIG_PATH
+  USER_CONFIG_PATH,
+  formatGeminiError
 };

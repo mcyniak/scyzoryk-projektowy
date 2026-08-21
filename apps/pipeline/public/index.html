@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pipeline inwestycji</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="app.css" />
+  <script src="/shared/theme.js"></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-settings"/></svg>
+          <strong>Pipeline inwestycji</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <a class="btn btn-ghost btn-sm" href="pomoc.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
+          Pomoc
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="panel hero-main">
+        <div class="kicker">Automatyzacja całej inwestycji</div>
+        <h1>Odpal po kolei kilka narzędzi dla jednej inwestycji</h1>
+        <p class="lead">Wskaż tabelę adresową - program sam rozpozna, jakie instalacje w niej są (pompy powietrzne / gruntowe, kolektory, kotły) i pokaże tylko sensowne kroki. Każdy krok to to samo narzędzie, które i tak dziś otwierasz osobno - tylko odpalone automatycznie, po kolei.</p>
+      </div>
+      <aside class="panel info-card">
+        <h2>Jak działa?</h2>
+        <div class="pill-list">
+          <div class="pill">Wgraj tabelę adresową (.xlsx).</div>
+          <div class="pill">Odznacz adresy, których nie chcesz.</div>
+          <div class="pill">Zaznacz kroki, podaj ścieżki, uruchom.</div>
+        </div>
+      </aside>
+    </section>
+
+    <div id="topNotice" class="panel notice hidden" role="alert"></div>
+
+    <section class="panel hidden" id="ostatniePrzebiegiPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Wcześniej rozpoczęte przebiegi</h2>
+          <p class="panel-desc">Jeśli zamknąłeś stronę w trakcie (np. czekając na Dobór Varmero), wróć tutaj zamiast zaczynać od nowa.</p>
+        </div>
+      </div>
+      <div id="ostatniePrzebiegiList"></div>
+    </section>
+
+    <section class="panel" id="uploadPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">1</span>Tabela adresowa</h2>
+          <p class="panel-desc">Ten sam plik, który wskazujesz dziś osobno w każdym narzędziu.</p>
+        </div>
+      </div>
+      <label>Tabela adresowa (.xlsx)
+        <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+      </label>
+      <div id="analyzaBox" class="sheet-summary hidden"></div>
+
+      <div id="adresyPanel" class="hidden">
+        <div class="adresy-toolbar">
+          <input type="search" id="adresSearch" placeholder="Szukaj adresu, gminy, LP..." />
+          <button type="button" class="secondary" id="selectAllAdresyBtn">Zaznacz wszystkie</button>
+          <button type="button" class="secondary" id="selectNoneAdresyBtn">Odznacz wszystkie</button>
+          <span class="small" id="adresySelectedCount"></span>
+        </div>
+        <div class="adresy-table-wrap">
+          <table class="adresy-table" id="adresyTable"></table>
+        </div>
+        <p class="field-help">Odznacz adresy, których NIE chcesz przetwarzać w tym przebiegu (np. niekompletne wiersze) - reszta programu dostanie tylko zaznaczone adresy.</p>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="krokiPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">2</span>Kroki do wykonania</h2>
+          <p class="panel-desc">Każdy krok jest niezależny - błąd jednego nigdy nie blokuje pozostałych. Dobory myEcodan/Varmero startują od razu, ale mogą realnie trwać (Varmero czeka na maila) - resztę kroków program wykonuje w międzyczasie.</p>
+        </div>
+      </div>
+
+      <div class="krok-card" data-krok="tworzenieFolderow">
+        <label class="krok-head">
+          <input type="checkbox" data-krok-checkbox="tworzenieFolderow" />
+          <strong>Tworzenie folderów</strong>
+        </label>
+        <p class="krok-desc">Uzupełnia podfoldery (WM/pompy/kolektory/kotły) w już istniejącym folderze inwestycji - bezpieczne, nic nie nadpisuje.</p>
+        <div class="krok-fields hidden" data-krok-fields="tworzenieFolderow"></div>
+      </div>
+
+      <div id="danaWspolneBox" class="hidden">
+        <h3 class="sekcja-tytul">Dane wspólne dla dodatków</h3>
+        <p class="field-help">Wpisz raz - poniższe kroki (dla Solarów i Pomp osobno) będą z tego korzystać.</p>
+        <div class="krok-fields" id="danaWspolnePola"></div>
+      </div>
+
+      <div id="grupaTypowKontener"></div>
+
+      <div class="actions">
+        <button type="button" id="startBtn">Uruchom pipeline</button>
+      </div>
+    </section>
+
+    <section class="panel hidden" id="runPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">3</span>Postęp przebiegu</h2>
+          <p class="panel-desc" id="runInfo"></p>
+        </div>
+      </div>
+      <div id="krokiWynikList" class="krok-progress-list hidden"></div>
+      <div class="actions" id="runActions">
+        <button type="button" class="secondary" id="cancelRunBtn">Przerwij przebieg</button>
+      </div>
+      <div class="actions hidden" id="collectDoboryActions">
+        <button type="button" id="collectDoboryBtn">Sprawdź i rozłóż gotowe dobory</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-overlay" id="folderBrowseModal" role="dialog" aria-modal="true" aria-labelledby="folderBrowseTitle" aria-hidden="true">
+    <div class="modal-box" role="document">
+      <div class="modal-head">
+        <strong id="folderBrowseTitle">Wybierz folder</strong>
+        <button type="button" class="btn btn-ghost btn-sm" id="folderBrowseClose" aria-label="Zamknij">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="small" id="folderBrowseCurrentPath"></p>
+        <div id="folderBrowseList" class="folder-tree"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" id="folderBrowseSelect">Wybierz ten folder</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script src="main-link.js"></script>
+</body>
+</html>

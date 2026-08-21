@@ -241,6 +241,16 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
   const outputPath = String(req.body.outputPath || '').trim().replace(/^['"]|['"]$/g, '').slice(0, 1000);
   const skipExisting = String(req.body.skipExisting || 'true').toLowerCase() !== 'false';
   const selectedRows = parseSelectedRows(req.body.selectedRows);
+  // Audyt 2026-08-21 (real incydent - przypadkowy start na 70 adresow):
+  // pusta/brakujaca selectedRows kiedys po cichu oznaczala "przetworz cala
+  // tabele" (patrz jobs.js#normalizeSelectedRows) - normalny uzytkownik
+  // ZAWSZE ma tu niepusta liste (frontend zaznacza wszystko po zaladowaniu
+  // podgladu), wiec pusta lista na tym etapie oznacza, ze podglad nigdy nie
+  // zostal wczytany/zatwierdzony - blokujemy zamiast zgadywac "wszystko".
+  if (!selectedRows.length) {
+    if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
+    return res.status(400).json({ ok: false, error: 'Nie wybrano żadnych adresów. Wczytaj podgląd tabeli (przycisk "Sprawdź adresy") i zaznacz adresy do wygenerowania przed uruchomieniem.' });
+  }
   const rawConcurrency = Number(req.body.concurrency || process.env.BATCH_CONCURRENCY || BATCH_CONCURRENCY_DEFAULT);
   const concurrency = Math.max(1, Math.min(BATCH_CONCURRENCY_MAX, Math.floor(Number.isFinite(rawConcurrency) ? rawConcurrency : BATCH_CONCURRENCY_DEFAULT)));
   const job = createJob({

@@ -40,7 +40,8 @@ together by `npm run test:regressions`, see below).
   directly, e.g. `npm run test:group11` (see `package.json` for the full list) or
   `node --test test/group11-karty-katalogowe.test.js`, for a faster loop while iterating on one area.
 - `npm run security-smoke` / `node scripts/security-smoke-test.js` — smoke-tests a **running** instance:
-  hits each child app's health endpoint and verifies that a mutating POST without the
+  starts every child app on demand (same `POST /api/apps/:slug/start` the panel UI uses — see lazy-start
+  below), waits for each to answer its health endpoint, then verifies that a mutating POST without the
   `X-Scyzoryk-Request` header is rejected with 403. Requires `node server.js` already running.
 - `STARTUJ-SCYZORYK.cmd` — the normal "just run it" entry point for end users: kills stray `node.exe`,
   installs deps, runs the check, starts the server.
@@ -66,9 +67,16 @@ together by `npm run test:regressions`, see below).
   checks. Ports are configurable via env vars (`DRUKARKA_PORT`, `PIECZATKI_PORT`, `FORMULARZE_PORT`,
   `SERYJNE_PORT`, `WNIOSKI_PORT`, `KARTY_PORT`, `DRUKARKA_PROJEKTY_PORT`, `OCR_AUDYTOW_PORT`), default
   `PORT=3000` for the panel itself.
-- Spawns each app as a child process (`spawn(process.execPath, ['server.js'], { cwd: app.dir, ... })`),
-  captures stdout/stderr into prefixed log lines, and auto-restarts crashed children with backoff
-  (capped at 30s), tracking restart/failure counts per app.
+- **Lazy-start** (since 2026-08-21, audit — resting RAM/CPU footprint): apps are **not** spawned at panel
+  boot. Each child process (`spawn(process.execPath, ['server.js'], { cwd: app.dir, ... })`) starts only
+  on demand, via `ensureChildStarted()` / `POST /api/apps/:slug/start` — the same route the panel UI's
+  "Otwórz" button calls before navigating (it polls `/api/apps` until `running` flips true, then
+  redirects) and the one `apps/pipeline/src/childAppClient.js#ensureChildAppRunning` calls before every
+  cross-app HTTP request, since Pipeline itself drives other child apps' APIs and can't assume the user
+  ever opened them by hand. `startChild()` captures stdout/stderr into prefixed log lines and auto-restarts
+  crashed children with backoff (capped at 30s), tracking restart/failure counts per app — unchanged once
+  a child has actually been started. `SCYZORYK_SKIP_CHILD_START=1` still suppresses this entirely
+  (real tests use it so panel-route tests never spawn real children).
 - Serves the static panel (`public/index.html`) and admin page (`public/admin.html`), plus JSON endpoints
   `/api/apps` (aggregated health/status of every child) and `/api/admin/logs` (tail of
   `logs/children.jsonl`). It does **not** proxy requests to child apps — the browser talks to each child

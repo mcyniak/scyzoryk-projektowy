@@ -18,13 +18,12 @@ let activeJob = null;
     document.querySelector('#checkAddresses').addEventListener('click', () => loadAddressPreview());
     document.querySelector('#reloadPreview').addEventListener('click', () => loadAddressPreview());
     document.querySelector('#addressSearch').addEventListener('input', () => renderAddressRows());
-    document.querySelector('#selectAllRecords').addEventListener('click', () => { selectedRows = new Set(previewRecords.map(row => row.rowNumber)); renderAddressRows(); });
-    document.querySelector('#clearRecords').addEventListener('click', () => { selectedRows = new Set(); renderAddressRows(); });
-    document.querySelector('#selectVisibleRecords')?.addEventListener('click', () => {
-      const visible = filteredPreviewRecords();
-      visible.forEach(row => selectedRows.add(row.rowNumber));
-      renderAddressRows();
-    });
+    // "Zaznacz/Odznacz wszystkie" dziala TYLKO na aktualnie widocznych (po
+    // filtrze "#addressSearch") wierszach - audyt 2026-08-21, wczesniej
+    // dzialalo na calym previewRecords, wiec po przefiltrowaniu klikniecie
+    // "zaznacz wszystkie" po cichu zaznaczalo tez adresy spoza filtra.
+    document.querySelector('#selectAllRecords').addEventListener('click', () => { filteredPreviewRecords().forEach(row => selectedRows.add(row.rowNumber)); renderAddressRows(); });
+    document.querySelector('#clearRecords').addEventListener('click', () => { filteredPreviewRecords().forEach(row => selectedRows.delete(row.rowNumber)); renderAddressRows(); });
     document.querySelector('#browseOutputFolder')?.addEventListener('click', () => {
       openFolderBrowser(document.querySelector('#outputPath').value.trim() || null);
     });

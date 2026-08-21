@@ -174,7 +174,7 @@ const BOUNDARY_SCHEMA = {
 // dotychczasowym zachowaniem aplikacji (ten sam kontrakt co Gemini).
 async function detectBlockStartPages({ sourcePdfPath, pageCount }) {
   if (pageCount <= 1) return [0];
-  const base64 = await pdfSliceToBase64(sourcePdfPath, 0, pageCount - 1);
+  const base64 = await pdfSliceToBase64(sourcePdfPath, 0, pageCount - 1, pageCount);
   const body = {
     model: MODEL,
     input: buildInput(BOUNDARY_PROMPT, base64),

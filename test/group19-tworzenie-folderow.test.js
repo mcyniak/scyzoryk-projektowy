@@ -93,6 +93,25 @@ test('readTabelaAdresowa: kolumna LP obecna ale pusta w wierszach z adresem -> c
   await assert.rejects(() => readTabelaAdresowa(file), /LP jest pusta.*Pompy ciepła.*2 wierszy/s);
 });
 
+test('readTabelaAdresowa: wiersz z danymi, ale pustym Adresem -> czytelny blad zamiast cichego pominiecia (audyt 2026-08-21, symetryczne do brakujacego LP)', async (t) => {
+  const HEADER_POMPY = ['LP', 'Adres', 'Rodzaj pompy'];
+  const { dir, file } = await napiszArkusze([
+    ['Pompy ciepła', [HEADER_POMPY, ['1', '', 'Powietrze-woda'], ['2', 'Testowa 2', 'Gruntowa']]]
+  ]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  await assert.rejects(() => readTabelaAdresowa(file), /Adres jest pusta.*Pompy ciepła.*1 wiersz/s);
+});
+
+test('readTabelaAdresowa: nierozpoznany wiersz naglowka (brak kolumn Adres/LP-ID w pierwszych 20 wierszach) -> czytelny blad zamiast cichego "0 rekordow" (audyt 2026-08-21)', async (t) => {
+  const { dir, file } = await napiszArkusze([
+    ['Pompy ciepła', [['Cos', 'Zupelnie', 'Innego'], ['a', 'b', 'c']]]
+  ]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  await assert.rejects(() => readTabelaAdresowa(file), /nie znaleziono wiersza nagłówka/i);
+});
+
 test('readTabelaAdresowa: kolumna ID (nie LP) tez jest rozpoznawana jako numer wiersza', async (t) => {
   const { dir, file } = await napiszArkusze([
     ['Kotły', [['ID', 'Adres'], ['5', 'Testowa 5']]]
@@ -101,6 +120,18 @@ test('readTabelaAdresowa: kolumna ID (nie LP) tez jest rozpoznawana jako numer w
 
   const result = await readTabelaAdresowa(file);
   assert.equal(result.sheets[0].records[0].lpOrId, '5');
+});
+
+test('readTabelaAdresowa: naglowek dwuwyrazowy "ID Gminy" (nie samo "ID") tez jest rozpoznawany jako wiersz naglowka (audyt 2026-08-21 - wczesniej findHeaderRowIndex wymagal dopasowania DOKLADNEGO, wiec caly wiersz naglowka nie byl w ogole wykryty)', async (t) => {
+  const { dir, file } = await napiszArkusze([
+    ['Pompy', [['ID Gminy', 'Adres', 'Rodzaj pompy'], ['7', 'Testowa 7', 'Powietrze-woda']]]
+  ]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  const result = await readTabelaAdresowa(file);
+  assert.equal(result.sheets[0].records.length, 1);
+  assert.equal(result.sheets[0].records[0].lpOrId, '7');
+  assert.equal(result.sheets[0].records[0].pumpType, 'powietrzna');
 });
 
 test('readTabelaAdresowa: obecnosc kolumny Gmina jest sygnalem "wiele gmin" (potwierdzone przez wlasciciela)', async (t) => {
