@@ -45,6 +45,43 @@ function Run-Test {
   }
 }
 
+# Audyt zuzycia RAM 2026-08-21 (lazy-start): apki-dzieci JUZ NIE startuja
+# automatycznie razem z panelem - kazda startuje dopiero na zadanie
+# (POST /api/apps/:slug/start, patrz server.js#ensureChildStarted). Ten test
+# CI wczesniej zakladal, ze po samym starcie Scyzoryk.exe wszystkie apki juz
+# odpowiadaja - teraz trzeba je jawnie poprosic o start, tak jak robi to
+# klikniecie "Otworz" w prawdziwym panelu.
+function Start-ScyzorykApp {
+  param([string]$Slug)
+  # Retry, nie pojedyncza proba: tuz po (re)starcie panelu (np. zaraz po
+  # wyzwoleniu zadania --autostart) sam panel moze jeszcze nie sluchac na
+  # porcie - bez ponawiania to "poprosze o start" ginelo w ciszy i apka
+  # nigdy by nie dostala zadania startu, mimo ze pozniejszy health-check
+  # cierpliwie by na nia czekal 90s.
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      Invoke-WebRequest -Uri "http://127.0.0.1:3000/api/apps/$Slug/start" -Method Post -Headers @{ 'X-Scyzoryk-Request' = '1' } -TimeoutSec 5 -UseBasicParsing | Out-Null
+      return
+    } catch {
+      Start-Sleep -Milliseconds 500
+    }
+  }
+  # Nie przerywamy tutaj nawet po wyczerpaniu prob - kolejny health-check i
+  # tak zglosi czytelny blad, jesli apka faktycznie nie wstanie.
+}
+
+function Start-AllScyzorykApps {
+  param([string[]]$Slugs)
+  foreach ($slug in $Slugs) { Start-ScyzorykApp -Slug $slug }
+}
+
+$script:AllAppSlugs = @(
+  'drukarka','pieczatki-pdf','formularze-ecodan','dokumenty-seryjne','wnioski-powykonawcze',
+  'karty-katalogowe','drukarka-projekty','ocr-audytow','formularze-varmero','nazywarka-skanow',
+  'tworzenie-folderow','protokoly','pipeline'
+)
+
 function Stop-Scyzoryk {
   # Scyzoryk.exe --stop jest tym samym mechanizmem, ktorego uzywa [UninstallRun]
   # (patrz installer\scyzoryk.iss) - testujemy tu realna, uzytkownikowi widoczna
@@ -270,6 +307,8 @@ Run-Test 'Health-check wszystkich narzedzi i stan OCR' {
     @{ name='ocr-audytow'; port=3011; path='/api/health'; expectedName='ocr-audytow' }
   )
 
+  Start-AllScyzorykApps -Slugs ($checks | Where-Object { $_.name -ne 'panel' } | ForEach-Object { $_.name })
+
   foreach ($check in $checks) {
     $deadline = (Get-Date).AddSeconds(90)
     $ok = $false
@@ -331,6 +370,7 @@ Run-Test 'Endpoint /api/update/status odpowiada z poprawnym kontraktem' {
 }
 
 Run-Test 'Zrzuty ekranow wszystkich narzedzi i instrukcji' {
+  Start-AllScyzorykApps -Slugs $script:AllAppSlugs
   $targetsPath = Join-Path $LogsDir 'screenshot-targets.json'
   @(
     @{slug='01-panel'; url='http://127.0.0.1:3000/'},
@@ -346,7 +386,8 @@ Run-Test 'Zrzuty ekranow wszystkich narzedzi i instrukcji' {
     @{slug='11-varmero'; url='http://127.0.0.1:3012/'},
     @{slug='12-nazywarka-skanow'; url='http://127.0.0.1:3007/'},
     @{slug='13-tworzenie-folderow'; url='http://127.0.0.1:3013/'},
-    @{slug='14-protokoly'; url='http://127.0.0.1:3014/'}
+    @{slug='14-protokoly'; url='http://127.0.0.1:3014/'},
+    @{slug='15-pipeline'; url='http://127.0.0.1:3015/'}
   ) | ConvertTo-Json | Set-Content $targetsPath -Encoding utf8
 
   $env:NODE_PATH = Join-Path $InstallDir 'apps\formularze-ecodan\node_modules'
@@ -463,6 +504,21 @@ if ($UpdateInstallerPath) {
     # wystarczy, ze pliki runtime przetrwaly, musi tez realnie wystartowac.
     $launcherExe = Join-Path $InstallDir 'Scyzoryk.exe'
     Start-Process -FilePath $launcherExe -WindowStyle Hidden | Out-Null
+
+    # Lazy-start: apki nie wstaja same, tylko na zadanie - zanim odpytamy
+    # panel o wszystkie, poczekaj az SAM panel zacznie odpowiadac, potem
+    # popros go o start kazdej apki.
+    $panelDeadline = (Get-Date).AddSeconds(30)
+    $panelUp = $false
+    while ((Get-Date) -lt $panelDeadline) {
+      try {
+        if ((Invoke-WebRequest -Uri 'http://127.0.0.1:3000/api/apps' -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { $panelUp = $true; break }
+      } catch {}
+      Start-Sleep -Seconds 1
+    }
+    Assert-True $panelUp 'Panel nie odpowiedzial po restarcie z instalatora aktualizacyjnego.'
+    Start-AllScyzorykApps -Slugs $script:AllAppSlugs
+
     $deadline = (Get-Date).AddSeconds(90)
     $healthy = $false
     while ((Get-Date) -lt $deadline) {
