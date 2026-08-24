@@ -256,7 +256,12 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     // tabele" (patrz jobs.js#runBatchJob) - dla Varmero kazdy wiersz to
     // realne, nieodwracalne zgloszenie do zewnetrznego kalkulatora + realny
     // mail, wiec blokujemy zamiast zgadywac "wszystko".
-    if (!selectedRows.length) {
+    // Wyjatek: selectAll='true' dla programatycznych wywolan miedzy apkami
+    // (pipeline) - tam plik jest juz przefiltrowany przez selekcje uzytkownika
+    // w kroku 1 Pipeline'u, wiec "wszystkie wiersze" = dokladnie jego jawna
+    // intencja ("Dobor Varmero" zaznaczony recznie). UI tej flagi nie wysyla.
+    const selectAll = String(req.body.selectAll || '').trim().toLowerCase() === 'true';
+    if (!selectedRows.length && !selectAll) {
       if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
       return res.status(400).json({ ok: false, error: 'Nie wybrano żadnych adresów. Wczytaj podgląd tabeli i zaznacz adresy do zgłoszenia przed uruchomieniem.' });
     }
@@ -272,7 +277,7 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     // paczke (kazdy wiersz to realne zgloszenie + czekanie na maila, moze
     // trwac minuty).
     setImmediate(() => {
-      runBatchJob(job, req.file.path, { email, imapConfig, gminaName, postalCode, zone, wojewodztwo, outputPath, skipExisting, selectedRows })
+      runBatchJob(job, req.file.path, { email, imapConfig, gminaName, postalCode, zone, wojewodztwo, outputPath, skipExisting, selectedRows, selectAll })
         .catch(error => {
           job.status = 'fatal-error';
           job.fatalReason = String(error?.message || error);

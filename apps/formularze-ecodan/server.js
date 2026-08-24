@@ -247,7 +247,12 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
   // ZAWSZE ma tu niepusta liste (frontend zaznacza wszystko po zaladowaniu
   // podgladu), wiec pusta lista na tym etapie oznacza, ze podglad nigdy nie
   // zostal wczytany/zatwierdzony - blokujemy zamiast zgadywac "wszystko".
-  if (!selectedRows.length) {
+  // Wyjatek: selectAll='true' dla programatycznych wywolan miedzy apkami
+  // (pipeline) - tam plik jest juz przefiltrowany przez selekcje uzytkownika
+  // (zbudujExcelWgSelekcji), wiec "wszystkie wiersze" to dokladnie jego
+  // jawna intencja. UI tej flagi nie wysyla.
+  const selectAll = String(req.body.selectAll || '').trim().toLowerCase() === 'true';
+  if (!selectedRows.length && !selectAll) {
     if (req.file?.path) fs.unlink(req.file.path).catch(() => {});
     return res.status(400).json({ ok: false, error: 'Nie wybrano żadnych adresów. Wczytaj podgląd tabeli (przycisk "Sprawdź adresy") i zaznacz adresy do wygenerowania przed uruchomieniem.' });
   }
@@ -255,14 +260,14 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
   const concurrency = Math.max(1, Math.min(BATCH_CONCURRENCY_MAX, Math.floor(Number.isFinite(rawConcurrency) ? rawConcurrency : BATCH_CONCURRENCY_DEFAULT)));
   const job = createJob({
     sourceFile: req.file.originalname,
-    options: { location, investmentName, outputPath, skipExisting, concurrency, selectedRows },
+    options: { location, investmentName, outputPath, skipExisting, concurrency, selectedRows, selectAll },
     concurrency
   });
 
   res.json({ ok: true, jobId: job.id });
 
   setImmediate(() => {
-    runBatchJob(job, req.file.path, { location, investmentName, outputPath, skipExisting, concurrency, selectedRows }).catch(error => {
+    runBatchJob(job, req.file.path, { location, investmentName, outputPath, skipExisting, concurrency, selectedRows, selectAll }).catch(error => {
       job.status = 'fatal-error';
       job.finishedAt = new Date().toISOString();
       job.errors.push({ error: String(error?.message || error), stack: String(error?.stack || '') });

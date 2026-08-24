@@ -623,7 +623,12 @@ export async function runBatchJob(job, filePath, options = {}) {
   // "przetworz wszystko" - /api/batch/start juz blokuje ten przypadek u
   // zrodla, ale ta funkcja jest tez wywolywalna bezposrednio (np. przez
   // pipeline), wiec ta sama ochrona zostaje TU jako druga warstwa.
-  const recordsToProcess = selectedSet.size ? allRecords.filter(record => selectedSet.has(String(record.rowNumber))) : [];
+  // Wyjatek selectAll: programatyczne wywolania miedzyapkami (pipeline) -
+  // plik juz przefiltrowany przez selekcje uzytkownika, patrz server.js.
+  const selectAll = options.selectAll === true || String(options.selectAll || '').toLowerCase() === 'true';
+  const recordsToProcess = selectedSet.size
+    ? allRecords.filter(record => selectedSet.has(String(record.rowNumber)))
+    : (selectAll ? allRecords.slice() : []);
   parsed.records = recordsToProcess;
   job.selectedRows = selectedRows;
   job.eligibleTotal = allRecords.length;

@@ -223,7 +223,7 @@ async function processRecord(record, { job, session, imapConfig, baseEmail, skip
 // wierszy Excela do faktycznego przetworzenia; bez tego kazde uruchomienie
 // zglaszaloby CALA tabele adresowa (dziesiatki/setki prawdziwych zgloszen
 // naraz) - w praktyce zawsze chce sie wybrac konkretne, gotowe adresy.
-export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapConfig, gminaName, postalCode, zone, wojewodztwo, skipExisting = true, selectedRows, createImapClient } = {}) {
+export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapConfig, gminaName, postalCode, zone, wojewodztwo, skipExisting = true, selectedRows, selectAll = false, createImapClient } = {}) {
   job.status = 'reading-excel';
   job.startedAt = new Date().toISOString();
 
@@ -244,8 +244,11 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
   // u zrodla, ale ta funkcja jest tez wywolywalna bezposrednio (np. przez
   // pipeline), wiec ta sama ochrona zostaje TU jako druga warstwa - kazdy
   // wiersz to realne, nieodwracalne zgloszenie do Varmero.
+  // Wyjatek selectAll: programatyczne wywolania miedzyapkami (pipeline) -
+  // plik juz przefiltrowany przez selekcje uzytkownika, patrz server.js.
   const wanted = new Set(Array.isArray(selectedRows) ? selectedRows : []);
-  parsed = { ...parsed, records: wanted.size ? parsed.records.filter(r => wanted.has(r.rowNumber)) : [] };
+  const wszystkie = selectAll === true || String(selectAll).toLowerCase() === 'true';
+  parsed = { ...parsed, records: wanted.size ? parsed.records.filter(r => wanted.has(r.rowNumber)) : (wszystkie ? parsed.records : []) };
 
   job.skipped = parsed.skipped;
   job.total = parsed.records.length;
