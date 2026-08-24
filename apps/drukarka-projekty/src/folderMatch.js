@@ -171,7 +171,30 @@ function readDirWithRetry(currentPath, depth) {
 function pdfSubfolderRank(relPath) {
   const dir = path.dirname(relPath);
   if (dir === '.') return 1;
-  return /pdf/i.test(dir.split(path.sep)[0]) ? 0 : 1;
+  const seg = dir.split(path.sep)[0];
+  return (/pdf/i.test(seg) || /ostemplowane/i.test(seg)) ? 0 : 1;
+}
+
+// Zadane na zywo 2026-08-24: jesli folder adresu zawiera podfolder z gotowymi
+// PDF-ami ("pdf"/"PDF" albo "ostemplowane"), bierzemy WYŁĄCZNIE pliki z niego
+// - bez mieszania z plikami roboczymi lezacymi luzem w folderze adresu
+// (DWG/TIF/BAK...) ani z plikami innych podfolderow. Gdy sa i "pdf", i
+// "ostemplowane", wygrywa "ostemplowane" (nowszy etap pracy nad dokumentacja).
+// Brak takiego podfolderu = zachowanie jak wczesniej (wszystkie pliki).
+function wybierzPlikiZPodfolderuPdf(results) {
+  // UWAGA: segment liczymy z dirname, NIE z calej sciezki - plik lezacy luzem
+  // w folderze adresu ma jako "pierwszy segment" wlasna nazwe ("opis.pdf"),
+  // ktora bez tego trafialaby pod /pdf/i i blednie wlaczala tryb podfolderu.
+  const pasujace = new Set();
+  for (const rel of results) {
+    const dir = path.dirname(rel);
+    if (dir === '.') continue;
+    const seg = dir.split(path.sep)[0];
+    if (/pdf/i.test(seg) || /ostemplowane/i.test(seg)) pasujace.add(seg);
+  }
+  if (!pasujace.size) return results;
+  const wybranySegment = [...pasujace].find(s => /ostemplowane/i.test(s)) || [...pasujace][0];
+  return results.filter(rel => path.dirname(rel).split(path.sep)[0] === wybranySegment);
 }
 
 function scanFilesRecursive(folderPath) {
@@ -212,7 +235,8 @@ function scanFilesRecursive(folderPath) {
     }
   }
   walk(folderPath, '', 0);
-  results.sort((a, b) => pdfSubfolderRank(a) - pdfSubfolderRank(b));
+  const wybrane = wybierzPlikiZPodfolderuPdf(results);
+  wybrane.sort((a, b) => pdfSubfolderRank(a) - pdfSubfolderRank(b));
   // Audyt na zywo 2026-08-13 (zlapane przez CI, test/group6-workflows.test.js):
   // scanFilesRecursive jest publicznie eksportowana i mial zewnetrzny test
   // wywolujacy .sort() bezposrednio na wyniku ORAZ inny porownujacy go przez
@@ -222,8 +246,8 @@ function scanFilesRecursive(folderPath) {
   // dzialaja dokladnie jak wczesniej, deepStrictEqual jej nie widzi (patrzy
   // tylko na wlasne enumerowalne wlasciwosci), a classifyFiles ponizej i tak
   // moze ja odczytac przez zwykly dostep do wlasciwosci.
-  Object.defineProperty(results, 'warnings', { value: warnings, enumerable: false });
-  return results;
+  Object.defineProperty(wybrane, 'warnings', { value: warnings, enumerable: false });
+  return wybrane;
 }
 
 function classifyFiles(folderPath) {

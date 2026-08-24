@@ -56,6 +56,45 @@ test('skanowanie: nieczytelny folder adresu rzuca czytelny blad, nie znika po ci
   assert.throws(() => scanFilesRecursive(nieistniejacyFolder), /Nie udało się odczytać folderu/);
 });
 
+// Zadane na zywo 2026-08-24: gdy folder adresu ma podfolder z gotowymi PDF-ami
+// ("pdf"/"ostemplowane"), bierzemy WYLACZNIE pliki z niego - bez mieszania
+// z plikami roboczymi z folderu adresu ani z innymi podfolderami.
+test('skanowanie: podfolder pdf/ostemplowane = wylaczone zrodlo plikow (bez mieszania z folderem adresu)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-pdf-podfolder-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(root, 'projekt.dwg'), '');
+  await fsp.writeFile(path.join(root, 'opis techniczny.pdf'), '');
+  await fsp.mkdir(path.join(root, 'PDF'));
+  await fsp.writeFile(path.join(root, 'PDF', 'dokument 1.pdf'), '');
+  await fsp.writeFile(path.join(root, 'PDF', 'dokument 2.pdf'), '');
+  const wynik = scanFilesRecursive(root);
+  assert.deepEqual(wynik.sort(), [
+    path.join('PDF', 'dokument 1.pdf'),
+    path.join('PDF', 'dokument 2.pdf'),
+  ]);
+});
+
+test('skanowanie: gdy sa i "pdf", i "ostemplowane", wygrywa ostemplowane (nowszy etap pracy)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-ostemplowane-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  await fsp.mkdir(path.join(root, 'pdf'));
+  await fsp.writeFile(path.join(root, 'pdf', 'stary.pdf'), '');
+  await fsp.mkdir(path.join(root, 'Ostemplowane'));
+  await fsp.writeFile(path.join(root, 'Ostemplowane', 'gotowy.pdf'), '');
+  const wynik = scanFilesRecursive(root);
+  assert.deepEqual(wynik.sort(), [path.join('Ostemplowane', 'gotowy.pdf')]);
+});
+
+test('skanowanie: brak podfolderu pdf/ostemplowane = wszystkie pliki jak wczesniej (bez zmian zachowania)', async (t) => {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-bez-pdf-'));
+  t.after(() => fsp.rm(root, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(root, 'opis.pdf'), '');
+  await fsp.mkdir(path.join(root, 'Zdjecia'));
+  await fsp.writeFile(path.join(root, 'Zdjecia', 'foto.jpg'), '');
+  const wynik = scanFilesRecursive(root);
+  assert.deepEqual(wynik.sort().map(p => p.split(path.sep).pop()), ['foto.jpg', 'opis.pdf']);
+});
+
 test('WM: nieczytelny folder WM rzuca czytelny blad zamiast "0 kategorii znaleziono" (ten sam wzorzec co scanFilesRecursive)', () => {
   const nieistniejacyFolder = path.join(os.tmpdir(), 'scyzoryk-wm-nieistniejacy-' + Date.now());
   assert.throws(() => findCategoryFolders(nieistniejacyFolder), /Nie udało się odczytać folderu WM/);
@@ -85,14 +124,17 @@ test('wnioski-powykonawcze WM: DWA pliki "WM ...docx" w tym samym folderze (np. 
 test('duplikaty są rozstrzygane tylko w tym samym podfolderze', async (t) => {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-dupes-'));
   t.after(() => fsp.rm(root, { recursive: true, force: true }));
-  await fsp.mkdir(path.join(root, 'PDF'));
+  // UWAGA: podfolder NIE moze nazywac sie "PDF"/"ostemplowane" - od 2026-08-24
+  // taka nazwa wlacza tryb "wylacznie z tego podfolderu" (patrz testy
+  // skanowania wyzej) i zdominowalby scenariusz duplikatow.
+  await fsp.mkdir(path.join(root, 'RYSUNKI'));
   await fsp.mkdir(path.join(root, 'DOCX'));
-  await fsp.writeFile(path.join(root, 'PDF', 'rysunek.pdf'), '');
+  await fsp.writeFile(path.join(root, 'RYSUNKI', 'rysunek.pdf'), '');
   await fsp.writeFile(path.join(root, 'DOCX', 'rysunek.docx'), '');
   await fsp.writeFile(path.join(root, 'lokalny.pdf'), '');
   await fsp.writeFile(path.join(root, 'lokalny.docx'), '');
   const result = classifyFiles(root);
-  assert.ok(result.printable.includes(path.join('PDF', 'rysunek.pdf')));
+  assert.ok(result.printable.includes(path.join('RYSUNKI', 'rysunek.pdf')));
   assert.ok(result.printable.includes(path.join('DOCX', 'rysunek.docx')));
   assert.ok(result.printable.includes('lokalny.pdf'));
   assert.ok(result.droppedDuplicates.includes('lokalny.docx'));
