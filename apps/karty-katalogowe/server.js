@@ -343,8 +343,23 @@ function normalizeAdresDoPorownania(text) {
 
 const POMIJANE_TOKENY_ADRESU = new Set(['ul', 'nr']);
 
+// Realny blad zlapany na produkcji (Zarnow, 2026-08-24): Excel czesto ma
+// pelny adres "ulica numer, KOD-POCZTOWY Miejscowosc" (np. "Miedzna
+// Murowana ul. Zlota 3, 26-330 Zarnow"), a folder na dysku - poprawnie -
+// NIGDY nie powtarza kodu pocztowego/miejscowosci (juz jest w kontekscie
+// arkusza/inwestycji, np. "Solary Zarnow"). Bez usuniecia tego dopisku
+// tokeny "26"/"330"/"zarnow" wchodzily do licznika wymaganych trafien
+// (adresPasujeDoFolderu wymaga >=60% tokenow), sztucznie podnoszac prog i
+// odrzucajac poprawne dopasowania jako "mozliwy konflikt numeracji".
+// Usuwane TYLKO gdy jest prawdziwy polski kod pocztowy (NN-NNN) - format
+// na tyle charakterystyczny, ze ryzyko przypadkowego trafienia w numer
+// domu/dzialki jest znikome.
+function usunKodPocztowyIMiejscowosc(adres) {
+  return String(adres || '').replace(/,?\s*\d{2}-\d{3}.*$/, '');
+}
+
 function tokenyAdresu(adres) {
-  return normalizeAdresDoPorownania(adres)
+  return normalizeAdresDoPorownania(usunKodPocztowyIMiejscowosc(adres))
     .split(' ')
     .filter(t => t && (t.length > 1 || /^\d$/.test(t)) && !POMIJANE_TOKENY_ADRESU.has(t));
 }

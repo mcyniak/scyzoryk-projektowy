@@ -54,7 +54,10 @@
       <div class="field-row">
         <label class="option-field" style="grid-column: 1 / -1;">
           <span class="option-label">Ścieżka UNC folderu</span>
-          <input id="folderPathInput" type="text" placeholder="\\192.168.99.251\skan\twoj_login" autocomplete="off" />
+          <div class="path-row">
+            <input id="folderPathInput" type="text" placeholder="\\192.168.99.251\skan\twoj_login" autocomplete="off" />
+            <button type="button" class="btn btn-secondary" id="browseFolderBtn">Przeglądaj...</button>
+          </div>
         </label>
       </div>
       <div class="open-folder-row">
@@ -122,6 +125,22 @@
       </div>
     </section>
   </main>
+
+  <div class="modal-overlay" id="folderBrowseModal" role="dialog" aria-modal="true" aria-labelledby="folderBrowseTitle" aria-hidden="true">
+    <div class="modal-box" role="document">
+      <div class="modal-head">
+        <strong id="folderBrowseTitle">Wybierz folder</strong>
+        <button type="button" class="btn btn-ghost btn-sm" id="folderBrowseClose" aria-label="Zamknij">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="small" id="folderBrowseCurrentPath"></p>
+        <div id="folderBrowseList" class="folder-tree"></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-primary" id="folderBrowseSelect">Wybierz ten folder</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

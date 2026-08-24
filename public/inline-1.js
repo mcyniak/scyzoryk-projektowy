@@ -1,5 +1,4 @@
 const cards = new Map([...document.querySelectorAll('.tool-card')].map(card => [card.dataset.app, card]));
-const fmtMb = bytes => `${Math.round((bytes || 0) / 1024 / 1024)} MB`;
 function fmtTime(ts) {
   if (!ts) return 'brak';
   const date = new Date(ts);
@@ -19,25 +18,6 @@ function setText(selector, value) {
   const el = document.querySelector(selector);
   if (el) el.textContent = value;
 }
-// Audyt zuzycia RAM 2026-08-21: rozwijalna lista pod paskiem "Zuzycie
-// zasobow" - panel (proces glowny) + kazde URUCHOMIONE narzedzie, zeby
-// bylo widac, co realnie zajmuje RAM, zamiast jednej zbiorczej liczby.
-function renderMemoryBreakdown(data, apps) {
-  const list = document.querySelector('#memoryBreakdownList');
-  if (!list) return;
-  const rows = [`<div class="resource-usage-row"><span>Panel (proces główny)</span><strong>${fmtMb(data.panelMemoryBytes ?? data.memory?.rss ?? 0)}</strong></div>`];
-  for (const app of apps) {
-    if (!app.processAlive) continue;
-    const wartosc = app.memoryBytes == null ? '…' : fmtMb(app.memoryBytes);
-    rows.push(`<div class="resource-usage-row"><span>${escapeHtmlBasic(app.name)}</span><strong>${wartosc}</strong></div>`);
-  }
-  list.innerHTML = rows.join('');
-}
-
-function escapeHtmlBasic(value) {
-  return String(value).replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
-}
-
 async function refreshStatus() {
   try {
     const response = await fetch('/api/apps', { cache: 'no-store' });
@@ -45,20 +25,8 @@ async function refreshStatus() {
     const apps = data.apps || [];
     const running = apps.filter(a => a.running).length;
     if (data.version) setText('#panelVersionLabel', `v${data.version}`);
-    setText('#metricServices', `${running}/${apps.length}`);
-    // Audyt zuzycia RAM 2026-08-21: pokazujemy totalMemoryBytes (panel +
-    // KAZDE narzedzie WRAZ z jego potomkami, np. Chromium) zamiast dawnego
-    // data.memory.rss, ktore bylo tylko procesem panelu - myslace, bo
-    // panel moze pokazywac np. 70 MB, podczas gdy caly Scyzoryk realnie
-    // zuzywa kilkaset MB. Fallback na samo rss, gdyby starszy panel/testowy
-    // mock nie mial jeszcze totalMemoryBytes w odpowiedzi.
-    setText('#metricMemory', fmtMb(data.totalMemoryBytes ?? data.memory?.rss ?? 0));
-    setText('#metricStorage', fmtMb(data.storage?.bytes || 0));
-    setText('#metricMode', data.host === '127.0.0.1' ? 'Lokalny' : data.host);
-    setText('#lastRefresh', `Ostatnie sprawdzenie: ${new Date().toLocaleTimeString('pl-PL')}`);
     setText('#statOnline', String(running));
     setText('#statTotal', String(apps.length));
-    renderMemoryBreakdown(data, apps);
     for (const app of apps) {
       const card = cards.get(app.slug);
       if (!card) continue;

@@ -97,6 +97,34 @@ test('adresPasujeDoFolderu: przy 2 tokenach sam numer domu nie wystarcza, sama n
   assert.equal(adresPasujeDoFolderu('Kwiatowa 15', '41 - Zarnow, ul. Kwiatowa 15'), true);
 });
 
+test('adresPasujeDoFolderu: kod pocztowy + miejscowosc dopisane w Excelu ("ulica numer, NN-NNN Miejscowosc") nie moga sztucznie podnosic progu i odrzucac poprawnego dopasowania (real blad na produkcji, Zarnow 2026-08-24)', () => {
+  // Realny przypadek zgloszony przez wlasciciela: folder na dysku (poprawnie)
+  // nie powtarza kodu pocztowego/miejscowosci - sa juz w kontekscie arkusza
+  // "Solary Zarnow". Bez usuniecia tego dopisku z adresu Excela, tokeny
+  // "26"/"330"/"zarnow" liczyly sie do wymaganych 60% trafien, mimo ze
+  // folder nigdy nie moglby ich zawierac - falszywy blad "mozliwy konflikt
+  // numeracji" na w pelni poprawnym dopasowaniu.
+  assert.equal(
+    adresPasujeDoFolderu('Miedzna Murowana ul. Złota 3, 26-330 Żarnów', '9 - Miedzna Murowana, ul. Złota 3'),
+    true
+  );
+  // Kod pocztowy bez przecinka przed nim tez musi dzialac.
+  assert.equal(
+    adresPasujeDoFolderu('Miedzna Murowana ul. Złota 3 26-330 Żarnów', '9 - Miedzna Murowana, ul. Złota 3'),
+    true
+  );
+  // Adres BEZ kodu pocztowego dalej dziala dokladnie jak wczesniej (zero
+  // regresji dla istniejacych, prostszych adresow).
+  assert.equal(adresPasujeDoFolderu('Miedzna Murowana ul. Złota 3', '9 - Miedzna Murowana, ul. Złota 3'), true);
+  // Prawdziwy konflikt numeracji (inna ulica/miejscowosc) MUSI nadal zostac
+  // wykryty - usuwanie kodu pocztowego nie moze uczynic dopasowania
+  // nadmiernie tolerancyjnym.
+  assert.equal(
+    adresPasujeDoFolderu('Inna Miejscowosc ul. Polna 3, 26-330 Żarnów', '9 - Miedzna Murowana, ul. Złota 3'),
+    false
+  );
+});
+
 test('parseIdFolderu: liczba calkowita (w tym zapisana jako X.0) przechodzi, prawdziwy ulamek (X.9) jest bledem (audyt rozdz. 16, P1)', () => {
   assert.equal(parseIdFolderu(78), '78');
   assert.equal(parseIdFolderu('78'), '78');

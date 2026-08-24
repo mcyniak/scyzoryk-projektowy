@@ -27,15 +27,6 @@
 .hero-search-card .stat small { color: var(--text-tertiary); font-weight: 700; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
 @media (max-width: 960px) { .hero { grid-template-columns: 1fr; } }
 
-/* --- Zuzycie zasobow (audyt RAM 2026-08-21) --- */
-.resource-usage { margin-bottom: var(--space-5); padding: var(--space-3) var(--space-4); }
-.resource-usage summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); cursor: pointer; list-style: none; font-size: var(--text-sm); color: var(--text-secondary); }
-.resource-usage summary::-webkit-details-marker { display: none; }
-.resource-usage summary strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
-.resource-usage-body { margin-top: var(--space-3); border-top: 1px solid var(--border-default); padding-top: var(--space-3); }
-.resource-usage-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: 4px 0; font-size: var(--text-sm); color: var(--text-secondary); }
-.resource-usage-row strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
-
 /* --- Kategorie / grupy narzedzi --- */
 .tool-category { margin-top: var(--space-6); }
 .tool-category:first-of-type { margin-top: 0; }

@@ -6,6 +6,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { setupProcessDiagnostics, applyHttpTimeouts } = require("../../lib/hardening");
 const { getAppDataDir } = require("../../lib/appPaths");
+const { browseFolder } = require("../../lib/folderBrowse");
 const { contentDispositionHeader } = require("../../lib/printing");
 const { sessionMiddleware } = require("./lib/sessionStore");
 const { applySecurityHeaders, applyMutationGuard } = require("../../lib/localRequestSecurity");
@@ -111,6 +112,23 @@ function sessionSummary(session) {
 }
 
 app.get("/api/health", (req, res) => res.json({ ok: true, name: "nazywarka-skanow" }));
+
+// Audyt UX na zywo 2026-08-24: ta apka byla jedynym narzedziem w repo ze
+// sciezka folderu wpisywana WYLACZNIE recznie, mimo ze pozostale (tworzenie-
+// folderow, karty-katalogowe, drukarka-projekty, pipeline) maja przegladarke
+// w stronie (patrz lib/folderBrowse.js) - niespojne, i uciazliwe akurat tu,
+// bo sciezki UNC do skanera sa dlugie i latwo je zle przepisac. Ten sam
+// wzorzec co wszedzie indziej: bez dodatkowej weryfikacji "czy sciezka jest
+// w dozwolonym katalogu" (to czysty odczyt nazw podfolderow do wyboru, nie
+// zapis).
+app.get("/api/browse-folder", (req, res) => {
+  try {
+    const result = browseFolder(req.query.path);
+    res.json({ ok: true, ...result });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  }
+});
 
 app.post("/api/open-folder", (req, res) => {
   const folderPath = String(req.body?.folderPath || "").trim();

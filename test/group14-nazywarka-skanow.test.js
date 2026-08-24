@@ -48,6 +48,31 @@ test('isPathInsideFolder: blokuje wyjscie poza wskazany folder', () => {
   assert.equal(isPathInsideFolder(null, 'C:\\skan'), false);
 });
 
+// Audyt UX 2026-08-24: nazywarka-skanow byla jedyna apka bez przegladarki
+// folderow w stronie (patrz lib/folderBrowse.js, uzyte tez w tworzenie-
+// folderow/karty-katalogowe/drukarka-projekty/pipeline) - uciazliwe akurat
+// tu, bo sciezki UNC do skanera sa dlugie.
+test('GET /api/browse-folder: listuje podfoldery wskazanej sciezki (ten sam wzorzec co w innych apkach)', async (t) => {
+  const server = app.listen(0, '127.0.0.1');
+  const port = await listen(server);
+  t.after(() => close(server));
+
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-nazywarka-browse-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  await fsp.mkdir(path.join(dir, 'Podfolder A'));
+  await fsp.mkdir(path.join(dir, 'Podfolder B'));
+
+  const res = await call(port, 'GET', `/api/browse-folder?path=${encodeURIComponent(dir)}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.json.ok, true);
+  const names = res.json.entries.map(e => e.name).sort();
+  assert.deepEqual(names, ['Podfolder A', 'Podfolder B']);
+
+  const zlaSciezka = await call(port, 'GET', `/api/browse-folder?path=${encodeURIComponent(path.join(dir, 'nie-istnieje'))}`);
+  assert.equal(zlaSciezka.status, 400);
+  assert.equal(zlaSciezka.json.ok, false);
+});
+
 test('listPdfFiles: tylko PDF, sortowanie naturalne (polskie znaki, liczby)', async (t) => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-nazywarka-list-'));
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));

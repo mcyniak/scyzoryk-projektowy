@@ -37,6 +37,79 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Przegladarka folderow w stronie - ten sam wzorzec co tworzenie-folderow/
+// karty-katalogowe/drukarka-projekty/pipeline (lib/folderBrowse.js). Bez
+// startowej sciezki pokazuje same litery dyskow (nie widzi sieciowych UNC
+// "z powietrza") - uzytkownik nadal musi raz wpisac poczatek sciezki
+// sieciowej (np. "\\192.168.99.251\skan\"), ale potem moze klikac w
+// podfoldery zamiast przepisywac cala, dlugosc UNC-sciezke recznie.
+let browseTargetInput = null;
+let currentBrowsePath = null;
+
+document.getElementById("browseFolderBtn").addEventListener("click", () => {
+  browseTargetInput = folderPathInput;
+  const startPath = folderPathInput.value.trim();
+  openFolderBrowser(startPath || null);
+});
+document.getElementById("folderBrowseClose").addEventListener("click", closeFolderBrowser);
+document.getElementById("folderBrowseModal").addEventListener("click", (event) => {
+  if (event.target.id === "folderBrowseModal") closeFolderBrowser();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && document.getElementById("folderBrowseModal").classList.contains("open")) closeFolderBrowser();
+});
+
+function closeFolderBrowser() {
+  document.getElementById("folderBrowseModal").classList.remove("open");
+}
+
+async function openFolderBrowser(startPath) {
+  document.getElementById("folderBrowseModal").classList.add("open");
+  await loadFolderBrowse(startPath);
+}
+
+async function loadFolderBrowse(targetPath) {
+  const listEl = document.getElementById("folderBrowseList");
+  const currentEl = document.getElementById("folderBrowseCurrentPath");
+  listEl.innerHTML = '<div class="folder-row">Wczytuję...</div>';
+  try {
+    const url = targetPath ? `/api/browse-folder?path=${encodeURIComponent(targetPath)}` : "/api/browse-folder";
+    const res = await fetch(url);
+    const json = await res.json().catch(() => null);
+    if (!json || !json.ok) {
+      listEl.innerHTML = `<div class="folder-row">${escapeHtml(json?.error || "Nie udało się wczytać folderów.")}</div>`;
+      return;
+    }
+    currentBrowsePath = json.path;
+    currentEl.textContent = json.path || "Wybierz dysk";
+
+    const rows = [];
+    if (json.path !== null) {
+      const isDriveRoot = json.parent === null;
+      const upTarget = isDriveRoot ? "" : json.parent;
+      rows.push(`<div class="folder-row clickable up-nav" data-path="${escapeHtml(upTarget)}">${isDriveRoot ? "⬆ Lista dysków" : "⬆ .."}</div>`);
+    }
+    for (const entry of json.entries) {
+      rows.push(`<div class="folder-row clickable" data-path="${escapeHtml(entry.path)}">📁 ${escapeHtml(entry.name)}</div>`);
+    }
+    listEl.innerHTML = rows.join("") || '<div class="folder-row">Brak podfolderów.</div>';
+  } catch (error) {
+    listEl.innerHTML = `<div class="folder-row">${escapeHtml(String(error.message || error))}</div>`;
+  }
+}
+
+document.getElementById("folderBrowseList").addEventListener("click", (event) => {
+  const row = event.target.closest("[data-path]");
+  if (!row) return;
+  loadFolderBrowse(row.dataset.path);
+});
+
+document.getElementById("folderBrowseSelect").addEventListener("click", () => {
+  if (!currentBrowsePath || !browseTargetInput) return;
+  browseTargetInput.value = currentBrowsePath;
+  closeFolderBrowser();
+});
+
 function previewUrlFor(index) {
   return `/api/preview/${index}?t=${encodeURIComponent(state.previewToken || "")}`;
 }

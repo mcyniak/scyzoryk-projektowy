@@ -103,14 +103,12 @@
           </div>
           <div class="selector-tools">
             <input id="addressSearch" type="search" placeholder="Szukaj adresu, osoby albo wiersza..." />
-            <button type="button" class="secondary" id="selectAllRecords">Zaznacz wszystkie</button>
-            <button type="button" class="secondary" id="clearRecords">Odznacz wszystkie</button>
             <button type="button" class="secondary" id="reloadPreview">Odśwież listę</button>
           </div>
           <p class="selector-summary" id="selectedSummary">Zaznaczono: 0</p>
           <div class="address-table-wrap">
             <table>
-              <thead><tr><th class="record-check"></th><th>Wiersz</th><th>Osoba</th><th>Adres</th><th>Dane</th></tr></thead>
+              <thead><tr><th class="record-check"><input type="checkbox" id="recordCheckAll" checked title="Zaznacz/odznacz wszystkie widoczne" /></th><th>Wiersz</th><th>Osoba</th><th>Adres</th><th>Dane</th></tr></thead>
               <tbody id="addressRows"></tbody>
             </table>
           </div>
