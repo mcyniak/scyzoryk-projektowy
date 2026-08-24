@@ -14,6 +14,27 @@
 // wiec ryzyko jest analogiczne do reszty apki, ale trzymamy sie jednego,
 // juz zaakceptowanego w repo silnika do zapisu .xlsx.
 const ExcelJS = require('exceljs');
+const AdmZip = require('adm-zip');
+
+// Zlapane na zywo 2026-08-24 (tabela adresowa ze wspoldzielonymi formulami,
+// klon w T2): wywala sie NIE tylko czytanie - tez ZAPIS. Czytanie potrafi
+// przejsc bez bledu (formuly trafiaja do modelu), ale przy writeFile exceljs
+// przelicza od nowa rejestry si/master i rzuca "Shared Formula master must
+// exist above and or left of clone" na klonach poza zasiegiem wzorca. Pipeline
+// potrzebuje TYLKO WARTOSCI, wiec czytamy ZAWSZE przez sanitizacje: wyciagamy
+// z XML-a arkuszy elementy <f> (formuly), wartosci <v> zostaja nietkiete.
+// AdmZip juz jest zaleznoscia apki.
+async function wczytajTylkoWartosci(workbook, sourcePath) {
+  const zip = new AdmZip(sourcePath);
+  const sheetEntries = zip.getEntries().filter(entry => /^xl\/worksheets\/sheet\d+\.xml$/i.test(entry.entryName));
+  for (const entry of sheetEntries) {
+    const xml = entry.getData().toString('utf8')
+      .replace(/<f\b[^>]*\/>/g, '')
+      .replace(/<f\b[^>]*>[\s\S]*?<\/f>/g, '');
+    zip.updateFile(entry.entryName, Buffer.from(xml, 'utf8'));
+  }
+  await workbook.xlsx.load(zip.toBuffer());
+}
 
 // keepBySheet: Map<sheetName, { headerRowIndex, keepRowIndexes: number[] }>
 // - indeksy 0-based, DOKLADNIE tej samej konwencji co
@@ -23,7 +44,7 @@ const ExcelJS = require('exceljs');
 // skopiowane bez zadnej zmiany (np. inne, nierozpoznane zakladki w pliku).
 async function buildFilteredWorkbookFile({ sourcePath, outputPath, keepBySheet }) {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(sourcePath);
+  await wczytajTylkoWartosci(workbook, sourcePath);
 
   for (const [sheetName, { headerRowIndex, keepRowIndexes }] of keepBySheet.entries()) {
     const worksheet = workbook.getWorksheet(sheetName);

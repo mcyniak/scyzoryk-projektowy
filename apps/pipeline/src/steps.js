@@ -50,7 +50,14 @@ async function krokPrzypisywanie({ baseUrl, excelPath, rootPath, typ, sheetName,
 // wynikow miedzy proba), wiec DWA wywolania generate na TYM SAMYM jobId dla
 // dwoch roznych arkuszy tej samej tabeli skasowalyby sobie wzajemnie wyniki
 // - kazdy taki arkusz potrzebowalby WLASNEGO uploadu+jobId.
-async function krokDokumentySeryjne({ baseUrl, excelPath, templatePaths, sheetName, stagingDir, onProgress = () => {} }) {
+// Zadane na zywo 2026-08-24 (plan zatwierdzony przez wlasciciela): arkusze
+// tabeli wzorowej to MOCE ("8kW", warianty "12kW ROZ 300"), szablony .docx
+// maja powiazania mail-merge z konkretnymi arkuszami-mocami. Jedno wywolanie
+// /api/generate obsluguje DOKLADNIE jeden arkusz, a kazde nastepne CZYSCI
+// outputDir joba - dlatego generujemy PETLA po mocach: generate -> poll ->
+// pobranie ZIP -> nastepna moc. Moc bez szablonu (ani szablon bez arkusza w
+// tabeli) jest pomijana z zapisem w komunikacie kroku, nie bledem.
+async function krokDokumentySeryjne({ baseUrl, excelPath, templatePaths, stagingDir, onProgress = () => {} }) {
   if (!templatePaths?.length) throw new Error('Nie wybrano żadnego szablonu .docx dla Dokumentów seryjnych.');
 
   const form = new FormData();
@@ -63,27 +70,57 @@ async function krokDokumentySeryjne({ baseUrl, excelPath, templatePaths, sheetNa
   if (!uploadRes.ok || uploadData.ok === false) throw new Error(uploadData.message || 'Wgranie do Dokumentow seryjnych nie powiodlo sie.');
   const jobId = uploadData.jobId;
 
-  const generateRes = await fetch(`${baseUrl}/api/generate/${jobId}`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ sheetName }) });
-  const generateData = await generateRes.json();
-  if (!generateRes.ok || generateData.ok === false) throw new Error(generateData.message || 'Uruchomienie generowania Dokumentow seryjnych nie powiodlo sie.');
+  // Moce do roboty = arkusze wgranej tabeli, dla ktorych ISTNIEJE szablon
+  // (powiazanie mail-merge z tym arkuszem). Arkusz tabeli bez szablonu ani
+  // szablon bez arkusza niczego nie wygeneruje - raportujemy to jako
+  // pominiete, a nie blad (typowe: wzor ma moc, ktorej jeszcze nie ma
+  // w tabeli adresowej albo odwrotnie).
+  const arkuszeTabeli = uploadData.workbook?.sheetNames || [];
+  const moceSzablonow = new Set();
+  for (const grupa of uploadData.templateGroups || []) {
+    for (const klucz of Object.keys(grupa.variants || {})) moceSzablonow.add(klucz);
+  }
+  const moce = arkuszeTabeli.filter(a => moceSzablonow.has(a));
+  const pominieteArkusze = arkuszeTabeli.filter(a => !moceSzablonow.has(a));
+  const pominieteMoce = [...moceSzablonow].filter(m => !arkuszeTabeli.includes(m));
+  if (!moce.length) {
+    throw new Error(
+      `Żaden szablon nie jest powiązany z arkuszami tej tabeli. ` +
+      `Arkusze tabeli: ${arkuszeTabeli.join(', ') || 'brak'}. ` +
+      `Arkusze z powiązań szablonów: ${[...moceSzablonow].join(', ') || 'brak'}.`
+    );
+  }
 
-  const job = await pollJob({
-    statusUrl: `${baseUrl}/api/job/${jobId}`,
-    isDone: j => j.status === 'done',
-    isError: j => j.status === 'error' || j.status === 'cancelled',
-    onTick: onProgress
-  });
+  let plikiRazem = 0;
+  let ostatniJob = null;
+  for (const moc of moce) {
+    const generateRes = await fetch(`${baseUrl}/api/generate/${jobId}`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ sheetName: moc }) });
+    const generateData = await generateRes.json();
+    if (!generateRes.ok || generateData.ok === false) throw new Error(generateData.message || `Uruchomienie generowania dla mocy ${moc} nie powiodlo sie.`);
 
-  // Brak wlasnego "outputPath" w tej apce (w odroznieniu od doborow) - trzeba
-  // pobrac ZIP i rozpakowac do wlasnego folderu roboczego (patrz ryzyko TTL
-  // w planie - robimy to OD RAZU po statusie "done", nie czekamy dluzej).
-  const zipRes = await fetch(`${baseUrl}/api/download/${jobId}/zip`);
-  if (!zipRes.ok) throw new Error('Pobranie gotowych dokumentow seryjnych nie powiodlo sie.');
-  const zipBuffer = Buffer.from(await zipRes.arrayBuffer());
-  await fs.mkdir(stagingDir, { recursive: true });
-  new AdmZip(zipBuffer).extractAllTo(stagingDir, true);
+    const job = await pollJob({
+      statusUrl: `${baseUrl}/api/job/${jobId}`,
+      isDone: j => j.status === 'done',
+      // 'interrupted' = apka dokumenty-seryjne przeszla restart w trakcie -
+      // bez tego polling wisialby do timeoutu (zadane na zywo 2026-08-24).
+      isError: j => j.status === 'error' || j.status === 'cancelled' || j.status === 'interrupted',
+      timeoutMs: 60 * 60 * 1000, // tyle co wewnetrzny timeout Worda w tej apce
+      onTick: onProgress
+    });
+    ostatniJob = job;
 
-  return { jobId, job, stagingDir };
+    // Kazde generate czysci outputDir joba - ZIP musi zejsc PRZED nastepna
+    // moca, inaczej kolejna iteracja skasuje wyniki poprzedniej.
+    const zipRes = await fetch(`${baseUrl}/api/download/${jobId}/zip`);
+    if (!zipRes.ok) throw new Error(`Pobranie gotowych dokumentów seryjnych (moc ${moc}) nie powiodło się.`);
+    const zipBuffer = Buffer.from(await zipRes.arrayBuffer());
+    const cel = path.join(stagingDir, moc);
+    await fs.mkdir(cel, { recursive: true });
+    new AdmZip(zipBuffer).extractAllTo(cel, true);
+    plikiRazem += job.result?.created?.length || 0;
+  }
+
+  return { jobId, job: ostatniJob, stagingDir, moce, pominieteArkusze, pominieteMoce, plikiRazem };
 }
 
 // --- Dobory myEcodan / Dobory Varmero (job-based, ALE z "outputPath" -
@@ -99,7 +136,12 @@ async function krokDokumentySeryjne({ baseUrl, excelPath, templatePaths, sheetNa
 // state jeszcze go nie mial).
 async function krokDoboryBatch({ baseUrl, excelPath, stagingDir, dodatkoweOpcje = {}, onJobStarted = () => {}, onProgress = () => {} }) {
   await fs.mkdir(stagingDir, { recursive: true });
-  const fields = { excel: { filePath: excelPath }, outputPath: stagingDir, skipExisting: 'true', ...dodatkoweOpcje };
+  // selectAll='true' - zadane na zywo 2026-08-24: audyt apek formularzy
+  // (2026-08-21) zablokowal pusta selectedRows ("nie zgaduj wszystkiego"),
+  // co zablokowalo tez pipeline. Tu plik jest juz przefiltrowany przez
+  // selekcje uzytkownika z kroku 1 (zbudujExcelWgSelekcji), a krok "Dobor"
+  // uzytkownik zaznacza recznie - "wszystkie wiersze pliku" = jego intencja.
+  const fields = { excel: { filePath: excelPath }, outputPath: stagingDir, skipExisting: 'true', selectAll: 'true', ...dodatkoweOpcje };
   const startData = await postMultipart(`${baseUrl}/api/batch/start`, fields);
   const jobId = startData.jobId;
   onJobStarted(jobId);

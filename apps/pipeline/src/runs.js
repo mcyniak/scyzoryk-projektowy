@@ -36,6 +36,63 @@ async function analyzujTabeleAdresowa(excelPath) {
   return { sheetNames, sheets, podsumowanie };
 }
 
+// --- Osobna tabela dokumentow seryjnych: filtracja do zaznaczonych adresow ---
+// Potwierdzone na realnych danych (2026-08-24, folder "wzor"): kolumna ID w
+// osobnej tabeli zawiera te same wartosci co LP/ID w glownej tabeli TEJ SAMEJ
+// inwestycji (Kazimierz Biskupi 16/16 trafien, Slesin 4/4). Arkusze osobnej
+// tabeli to MOCE ("8kW", warianty "12kW ROZ 300"). Wiersze bez pary w glownej
+// tabeli (np. wzor nowszy niz tabela adresowa - Rychwal mial 7 takich) sa
+// POMIJANE i raportowane, nigdy cicho generowane.
+async function zbierzLpZGlownejTabeli(excelPath) {
+  const wszystkieArkusze = await readXlsxFile(excelPath, { getSheets: true });
+  const { sheets } = buildTabelaAdresowa(wszystkieArkusze);
+  const lp = new Set();
+  for (const sheet of sheets) {
+    for (const rec of sheet.records) {
+      const wartosc = String(rec.lpOrId ?? '').trim();
+      if (wartosc) lp.add(wartosc);
+    }
+  }
+  return lp;
+}
+
+// Zwraca { outputPath, dopasowano, pominieteId: [], pusteArkusze: [] }.
+// Konwencja indeksow identyczna jak w zbudujExcelWgSelekcji (rowIndex 0-based
+// na wierszach z naglowkiem, przekazywane dalej do filteredWorkbook).
+async function przefiltrujOsobnaTabele({ sourcePath, outputPath, zaznaczoneLp }) {
+  const arkusze = await readXlsxFile(sourcePath, { getSheets: true });
+  const keepBySheet = new Map();
+  let dopasowano = 0;
+  const pominieteId = [];
+  const pusteArkusze = [];
+  for (const arkusz of arkusze) {
+    const nazwa = arkusz.sheet;
+    const rows = Array.isArray(arkusz.data) ? arkusz.data : [];
+    let headerRowIndex = -1;
+    let idColIndex = -1;
+    for (let i = 0; i < Math.min(rows.length, 10); i += 1) {
+      const vals = rows[i] || [];
+      const idx = vals.findIndex(v => /^(id|uid|lp)$/i.test(String(v ?? '').trim()));
+      if (idx !== -1) { headerRowIndex = i; idColIndex = idx; break; }
+    }
+    if (headerRowIndex === -1) continue;
+    const keep = [];
+    for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
+      const row = rows[i] || [];
+      const id = String(row[idColIndex] ?? '').trim();
+      if (!id) continue;
+      if (zaznaczoneLp.has(id)) { keep.push(i); dopasowano += 1; }
+      else pominieteId.push(id);
+    }
+    if (!keep.length) pusteArkusze.push(nazwa);
+    else keepBySheet.set(nazwa, { headerRowIndex, keepRowIndexes: keep });
+  }
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await buildFilteredWorkbookFile({ sourcePath, outputPath, keepBySheet });
+  return { outputPath, dopasowano, pominieteId, pusteArkusze };
+}
+
+
 // Buduje kopie pliku Excel zawierajaca TYLKO adresy zaznaczone przez
 // uzytkownika w podgladzie (krok 1 UI) - jedyny sposob na "wybranie czesci
 // adresow" dla apek bez wlasnego wsparcia dla zaznaczania wierszy (patrz
@@ -293,15 +350,47 @@ async function wykonajPrzebieg(store, runId, apps) {
   ]) {
     if (store.get(runId)?.przerwany) return store.get(runId);
     if (!input.kroki?.[checkboxNazwa] || !input[rootPole]) continue;
-    const excelPathDlaDokSeryjnych = input[excelPole] || input.excelPath;
+    let excelPathDlaDokSeryjnych = input[excelPole] || input.excelPath;
     const krokNazwa = `dokumenty-seryjne-${typ}`;
     const dsStagingDir = path.join(stagingDir, 'dokumenty-seryjne', typ);
     store.upsertKrok(runId, krokNazwa, { status: 'w-toku' });
     try {
-      await krokDokumentySeryjne({
+      // Osobna tabela: filtrujemy ja do zaznaczonych adresow z kroku 1
+      // (dopasowanie po kolumnie ID == LP/ID glownej tabeli). Zadane na zywo
+      // 2026-08-24 - bez tego generowaly sie WSZYSTKIE wiersze osobnej tabeli,
+      // nawet te odznaczone/nieobecne w glownej. Glowna tabela nie wymaga
+      // filtracji - input.excelPath jest juz przefiltrowana.
+      const czesciKomunikatu = [];
+      if (input[excelPole]) {
+        const zaznaczoneLp = await zbierzLpZGlownejTabeli(input.excelPath);
+        const wynikFiltracji = await przefiltrujOsobnaTabele({
+          sourcePath: excelPathDlaDokSeryjnych,
+          outputPath: path.join(stagingDir, 'dokumenty-seryjne', `${typ}-tabela-przefiltrowana.xlsx`),
+          zaznaczoneLp,
+        });
+        if (!wynikFiltracji.dopasowano) {
+          throw new Error(
+            'Osobna tabela nie ma żadnego wiersza pasującego do zaznaczonych adresów ' +
+            '(kolumna ID osobnej tabeli musi zawierać LP/ID z głównej tabeli tej samej inwestycji).'
+          );
+        }
+        excelPathDlaDokSeryjnych = wynikFiltracji.outputPath;
+        czesciKomunikatu.push(`osobna tabela: dopasowano ${wynikFiltracji.dopasowano} wierszy` +
+          (wynikFiltracji.pominieteId.length ? `, pominięto ID: ${wynikFiltracji.pominieteId.join(', ')}` : ''));
+      }
+      const wynikDokSeryjne = await krokDokumentySeryjne({
         baseUrl: apps.dokumentySeryjne, excelPath: excelPathDlaDokSeryjnych, templatePaths: input[templatesPole], stagingDir: dsStagingDir,
         onProgress: job => store.upsertKrok(runId, krokNazwa, { status: 'w-toku', ...odczytajPostep(job) })
       });
+      if (wynikDokSeryjne.pominieteArkusze.length) {
+        czesciKomunikatu.push(`arkusze tabeli bez szablonu (pominięte): ${wynikDokSeryjne.pominieteArkusze.join(', ')}`);
+      }
+      if (wynikDokSeryjne.pominieteMoce.length) {
+        czesciKomunikatu.push(`szablony bez arkusza w tabeli (pominięte): ${wynikDokSeryjne.pominieteMoce.join(', ')}`);
+      }
+      if (czesciKomunikatu.length) {
+        store.upsertKrok(runId, krokNazwa, { komunikat: czesciKomunikatu.join('; ') });
+      }
       const wynikRozdziel = await krokPrzypisywanie({ baseUrl: apps.przypisywanie, excelPath: input.excelPath, rootPath: input[rootPole], typ: 'dokumenty-seryjne', dodatekPath: dsStagingDir, dodatekPole: 'dokumentySeryjnePath' });
       store.upsertKrok(runId, krokNazwa, { status: 'skonczony', wynik: wynikRozdziel });
     } catch (err) {
@@ -400,6 +489,8 @@ async function collectDobory(store, runId, apps) {
 module.exports = {
   analyzujTabeleAdresowa,
   zbudujExcelWgSelekcji,
+  przefiltrujOsobnaTabele,
+  zbierzLpZGlownejTabeli,
   makeRunsStore,
   wykonajPrzebieg,
   collectDobory,

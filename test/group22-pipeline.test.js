@@ -4,13 +4,14 @@
 // pollJob z childAppClient.js na zamockowanym fetch (sukces/blad/timeout).
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 
 const XLSX = require('../apps/ocr-audytow/node_modules/xlsx');
 const readXlsxFile = require('../apps/pipeline/node_modules/read-excel-file/node');
-const { analyzujTabeleAdresowa, zbudujExcelWgSelekcji, makeRunsStore, wykonajPrzebieg, przerwijPrzebieg } = require('../apps/pipeline/src/runs');
+const { analyzujTabeleAdresowa, zbudujExcelWgSelekcji, przefiltrujOsobnaTabele, zbierzLpZGlownejTabeli, makeRunsStore, wykonajPrzebieg, przerwijPrzebieg } = require('../apps/pipeline/src/runs');
 const { pollJob, getJson, ensureChildAppRunning, PORT_TO_PANEL_SLUG } = require('../apps/pipeline/src/childAppClient');
 
 async function napiszArkusze(sheets) {
@@ -136,6 +137,62 @@ test('zbudujExcelWgSelekcji: prawdziwe zawezenie buduje nowy plik z TYLKO zaznac
   const przefiltrowane = await readXlsxFile(outputPath, { getSheets: true });
   const wiersze = przefiltrowane.find(a => a.sheet === 'Pompy').data;
   assert.deepEqual(wiersze, [['LP', 'Adres'], ['2', 'Testowa 2']]);
+});
+
+// =====================================================================
+// przefiltrujOsobnaTabele / zbierzLpZGlownejTabeli (src/runs.js) -
+// osobna tabela dokumentow seryjnych zawezana do zaznaczonych adresow
+// (zadane na zywo 2026-08-24; ID w wzorze = LP/ID glownej tabeli tej
+// samej inwestycji - potwierdzone na realnych danych Kazimierz/Slesin)
+// =====================================================================
+
+test('przefiltrujOsobnaTabele: zostawia tylko wiersze z ID nalezacym do zaznaczonych LP, raportuje pominiete i puste arkusze', async (t) => {
+  // Arkusze = moce ("8kW", "10kW ROZ 300" - pusty), kolumny jak w realnym wzorze
+  const { dir, file } = await napiszArkusze([
+    ['8kW', [['ID', 'Adres', 'Beneficjent'], ['1', 'Testowa 1', 'A Kowalski'], ['2', 'Testowa 2', 'B Nowak'], ['99', 'Testowa 99', 'Z Obcy']]],
+    // arkusz mocy z naglowkiem, ale bez zadnego wiersza danych
+    ['10kW ROZ 300', [['ID', 'Adres', 'Beneficjent']]]
+  ]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  const wynik = await przefiltrujOsobnaTabele({
+    sourcePath: file,
+    outputPath: path.join(dir, 'przefiltrowana.xlsx'),
+    zaznaczoneLp: new Set(['1']) // uzytkownik zaznaczyl tylko LP 1
+  });
+  assert.equal(wynik.dopasowano, 1);
+  assert.deepEqual(wynik.pominieteId.sort(), ['2', '99']);
+  assert.deepEqual(wynik.pusteArkusze, ['10kW ROZ 300']);
+
+  const arkusze = await readXlsxFile(wynik.outputPath, { getSheets: true });
+  const osiem = arkusze.find(a => a.sheet === '8kW').data;
+  assert.deepEqual(osiem, [['ID', 'Adres', 'Beneficjent'], ['1', 'Testowa 1', 'A Kowalski']]);
+});
+
+test('przefiltrujOsobnaTabele: zero dopasowan raportuje dopasowano=0 (wywolujacy rzuca wtedy blad - osobna tabela z innej inwestycji)', async (t) => {
+  const { dir, file } = await napiszArkusze([['8kW', [['ID', 'Adres', 'Beneficjent'], ['500', 'Obca 1', 'X Y']]]]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  const wynik = await przefiltrujOsobnaTabele({
+    sourcePath: file,
+    outputPath: path.join(dir, 'out.xlsx'),
+    zaznaczoneLp: new Set(['1', '2'])
+  });
+  assert.equal(wynik.dopasowano, 0);
+  assert.deepEqual(wynik.pominieteId, ['500']);
+});
+
+test('zbierzLpZGlownejTabeli: zbiera LP/ID ze wszystkich rozpoznanych arkuszy glownej tabeli', async (t) => {
+  const HEADER_POMPY = ['LP', 'Adres', 'Rodzaj pompy'];
+  const HEADER_KOLEKTORY = ['ID', 'Adres'];
+  const { dir, file } = await napiszArkusze([
+    ['Pompy ciepła', [HEADER_POMPY, ['1', 'Testowa 1', 'Powietrze-woda'], ['2', 'Testowa 2', 'Gruntowa']]],
+    ['Solary', [HEADER_KOLEKTORY, ['10', 'Kolektorowa 1'], ['11', 'Kolektorowa 2']]]
+  ]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  const lp = await zbierzLpZGlownejTabeli(file);
+  assert.deepEqual([...lp].sort(), ['1', '10', '11', '2']);
 });
 
 test('makeRunsStore: restore() wczytuje przebiegi z poprzedniej sesji, oznacza przerwany "running" jako "przerwany-restartem" (patrz Ryzyko trwalosci stanu w planie)', async (t) => {
@@ -309,16 +366,25 @@ test('wykonajPrzebieg: dokumenty seryjne wysylaja WLASNA, oddzielna tabele Excel
   const pustyZipBuffer = new AdmZip().toBuffer();
 
   const wywolaneUploadEcxelName = [];
+  const wywolaneGeneraty = [];
   const oryginalFetch = global.fetch;
   global.fetch = async (url, opts) => {
     const u = String(url);
     if (u.includes('/api/upload')) {
       const excelBlob = opts.body.get('excel');
       wywolaneUploadEcxelName.push(excelBlob.name);
-      return { ok: true, json: async () => ({ ok: true, jobId: 'job-1' }) };
+      return { ok: true, json: async () => ({
+        ok: true, jobId: 'job-1',
+        // Realny ksztalt odpowiedzi /api/upload dokumentow-seryjnych
+        workbook: { sheetNames: ['Beneficjenci'] },
+        templateGroups: [{ name: 'PT', hasVariants: false, variants: { Beneficjenci: {} }, single: null }]
+      }) };
     }
-    if (u.includes('/api/generate/')) return { ok: true, json: async () => ({ ok: true }) };
-    if (u.includes('/api/job/')) return { ok: true, json: async () => ({ ok: true, status: 'done' }) };
+    if (u.includes('/api/generate/')) {
+      wywolaneGeneraty.push(JSON.parse(opts.body));
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    if (u.includes('/api/job/')) return { ok: true, json: async () => ({ ok: true, status: 'done', result: { created: [] } }) };
     if (u.includes('/api/download/')) return { ok: true, arrayBuffer: async () => pustyZipBuffer.buffer.slice(pustyZipBuffer.byteOffset, pustyZipBuffer.byteOffset + pustyZipBuffer.byteLength) };
     if (u.includes('/api/run')) return { ok: true, json: async () => ({ ok: true, jobId: 'x', podsumowanie: {}, wyniki: [] }) };
     throw new Error('nieoczekiwane wywolanie: ' + u);
@@ -338,10 +404,13 @@ test('wykonajPrzebieg: dokumenty seryjne wysylaja WLASNA, oddzielna tabele Excel
   await wykonajPrzebieg(store, run.id, { przypisywanie: 'http://child', dokumentySeryjne: 'http://ds' });
 
   assert.equal(wywolaneUploadEcxelName.length, 1, 'dokladnie jedno wgranie do dokumentow seryjnych');
-  assert.equal(wywolaneUploadEcxelName[0], path.basename(dokSeryjneExcelPompy), 'wgrany plik to OSOBNA tabela dokumentow seryjnych, NIE glowna tabela adresowa');
+  assert.ok(wywolaneUploadEcxelName[0].endsWith('tabela-przefiltrowana.xlsx'), 'wgrany plik to PRZEFILTROWANA osobna tabela (tylko zaznaczone adresy)');
+  assert.deepEqual(wywolaneGeneraty.map(g => g.sheetName), ['Beneficjenci'], 'generate idzie na arkusz z powiazania szablonu');
 
   const zaktualizowany = store.get(run.id);
-  assert.equal(zaktualizowany.kroki.find(k => k.nazwa === 'dokumenty-seryjne-pompy')?.status, 'skonczony');
+  const krokDs = zaktualizowany.kroki.find(k => k.nazwa === 'dokumenty-seryjne-pompy');
+  assert.equal(krokDs?.status, 'skonczony');
+  assert.ok(krokDs?.komunikat?.includes('dopasowano 1'), `komunikat raportuje filtracje: ${krokDs?.komunikat}`);
 });
 
 test('wykonajPrzebieg: dokumenty seryjne BEZ wskazanej osobnej tabeli spadaja na glowna tabele adresowa (audyt 2026-08-21 - dla niektorych inwestycji glowna tabela juz wystarcza, user sam wybiera per typ w UI)', async (t) => {
@@ -360,15 +429,23 @@ test('wykonajPrzebieg: dokumenty seryjne BEZ wskazanej osobnej tabeli spadaja na
   const pustyZipBuffer = new AdmZip().toBuffer();
 
   const wywolaneUploadEcxelName = [];
+  const wywolaneGeneraty = [];
   const oryginalFetch = global.fetch;
   global.fetch = async (url, opts) => {
     const u = String(url);
     if (u.includes('/api/upload')) {
       wywolaneUploadEcxelName.push(opts.body.get('excel').name);
-      return { ok: true, json: async () => ({ ok: true, jobId: 'job-1' }) };
+      return { ok: true, json: async () => ({
+        ok: true, jobId: 'job-1',
+        workbook: { sheetNames: ['Pompy'] },
+        templateGroups: [{ name: 'DS', hasVariants: false, variants: { Pompy: {} }, single: null }]
+      }) };
     }
-    if (u.includes('/api/generate/')) return { ok: true, json: async () => ({ ok: true }) };
-    if (u.includes('/api/job/')) return { ok: true, json: async () => ({ ok: true, status: 'done' }) };
+    if (u.includes('/api/generate/')) {
+      wywolaneGeneraty.push(JSON.parse(opts.body));
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    if (u.includes('/api/job/')) return { ok: true, json: async () => ({ ok: true, status: 'done', result: { created: [] } }) };
     if (u.includes('/api/download/')) return { ok: true, arrayBuffer: async () => pustyZipBuffer.buffer.slice(pustyZipBuffer.byteOffset, pustyZipBuffer.byteOffset + pustyZipBuffer.byteLength) };
     if (u.includes('/api/run')) return { ok: true, json: async () => ({ ok: true, jobId: 'x', podsumowanie: {}, wyniki: [] }) };
     throw new Error('nieoczekiwane wywolanie: ' + u);
@@ -388,7 +465,89 @@ test('wykonajPrzebieg: dokumenty seryjne BEZ wskazanej osobnej tabeli spadaja na
   await wykonajPrzebieg(store, run.id, { przypisywanie: 'http://child', dokumentySeryjne: 'http://ds' });
 
   assert.equal(wywolaneUploadEcxelName[0], path.basename(excelPath), 'bez osobnej tabeli, wgrana zostaje GLOWNA tabela adresowa');
+  assert.deepEqual(wywolaneGeneraty.map(g => g.sheetName), ['Pompy'], 'generate idzie na arkusz z powiazania szablonu');
   assert.equal(store.get(run.id).kroki.find(k => k.nazwa === 'dokumenty-seryjne-pompy')?.status, 'skonczony');
+});
+
+// Zadane na zywo 2026-08-24: arkusze tabeli wzorowej to MOCE - generowanie
+// idzie petla per moc (generate czysci outputDir, wiec ZIP musi zejsc miedzy
+// iteracjami), a arkusz/moc bez szablonu jest pomijana z raportem.
+test('krokDokumentySeryjne: petla po mocach (arkusz x szablon), ZIP po kazdej mocy, pominieta moc raportowana', async (t) => {
+  const { dir, file } = await napiszArkusze([['szablon.docx', [['x']]]]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const templatePath = path.join(dir, 'szablon.docx');
+  await fsp.writeFile(templatePath, 'x');
+
+  const AdmZip = require('../apps/pipeline/node_modules/adm-zip');
+  const pustyZipBuffer = new AdmZip().toBuffer();
+  const generaty = [];
+  const pobraniaZip = [];
+  const oryginalFetch = global.fetch;
+  global.fetch = async (url, opts) => {
+    const u = String(url);
+    if (u.includes('/api/upload')) {
+      return { ok: true, json: async () => ({
+        ok: true, jobId: 'job-multi',
+        workbook: { sheetNames: ['8kW', '10kW', '12kW'] },
+        templateGroups: [
+          { name: 'A', hasVariants: false, variants: { '8kW': {}, '10kW': {}, '20kW': {} }, single: null }
+        ]
+      }) };
+    }
+    if (u.includes('/api/generate/')) {
+      generaty.push(JSON.parse(opts.body).sheetName);
+      return { ok: true, json: async () => ({ ok: true }) };
+    }
+    if (u.includes('/api/job/')) return { ok: true, json: async () => ({ ok: true, status: 'done', result: { created: [{ file: 'a.pdf' }] } }) };
+    if (u.includes('/api/download/')) { pobraniaZip.push(String(u)); return { ok: true, arrayBuffer: async () => pustyZipBuffer.buffer.slice(pustyZipBuffer.byteOffset, pustyZipBuffer.byteOffset + pustyZipBuffer.byteLength) }; }
+    throw new Error('nieoczekiwane wywolanie: ' + u);
+  };
+  t.after(() => { global.fetch = oryginalFetch; });
+
+  const stagingDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pipeline-ds-multi-'));
+  t.after(() => fsp.rm(stagingDir, { recursive: true, force: true }));
+
+  const { krokDokumentySeryjne } = require('../apps/pipeline/src/steps');
+  const wynik = await krokDokumentySeryjne({
+    baseUrl: 'http://ds',
+    excelPath: file,
+    templatePaths: [templatePath],
+    stagingDir
+  });
+
+  assert.deepEqual(generaty, ['8kW', '10kW'], 'generate dla KAZDEJ mocy z para arkusz+szablon, w kolejnosci arkuszy');
+  assert.equal(pobraniaZip.length, 2, 'ZIP pobrany PO kazdej mocy (zanim nastepna skasuje outputDir)');
+  assert.deepEqual(wynik.moce, ['8kW', '10kW']);
+  assert.deepEqual(wynik.pominieteArkusze, ['12kW'], 'arkusz tabeli bez szablonu -> pominiety');
+  assert.deepEqual(wynik.pominieteMoce, ['20kW'], 'szablon bez arkusza w tabeli -> pominiety');
+  assert.ok(fs.existsSync(path.join(stagingDir, '8kW')) && fs.existsSync(path.join(stagingDir, '10kW')), 'wyniki rozpakowane do osobnych podfolderow per moc');
+  assert.equal(wynik.plikiRazem, 2);
+});
+
+test('krokDokumentySeryjne: status "interrupted" (restart apki w trakcie) konczy pollowanie bledem, nie zawieszeniem', async (t) => {
+  const { dir, file } = await napiszArkusze([['szablon.docx', [['x']]]]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const templatePath = path.join(dir, 'szablon.docx');
+  await fsp.writeFile(templatePath, 'x');
+
+  const oryginalFetch = global.fetch;
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/api/upload')) return { ok: true, json: async () => ({ ok: true, jobId: 'job-i', workbook: { sheetNames: ['8kW'] }, templateGroups: [{ name: 'A', hasVariants: false, variants: { '8kW': {} }, single: null }] }) };
+    if (u.includes('/api/generate/')) return { ok: true, json: async () => ({ ok: true }) };
+    if (u.includes('/api/job/')) return { ok: true, json: async () => ({ ok: true, status: 'interrupted' }) };
+    throw new Error('nieoczekiwane wywolanie: ' + u);
+  };
+  t.after(() => { global.fetch = oryginalFetch; });
+
+  const stagingDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pipeline-ds-int-'));
+  t.after(() => fsp.rm(stagingDir, { recursive: true, force: true }));
+
+  const { krokDokumentySeryjne } = require('../apps/pipeline/src/steps');
+  await assert.rejects(
+    krokDokumentySeryjne({ baseUrl: 'http://ds', excelPath: file, templatePaths: [templatePath], stagingDir }),
+    /Zadanie zakonczylo sie bledem/
+  );
 });
 
 // =====================================================================
