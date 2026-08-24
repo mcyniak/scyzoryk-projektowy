@@ -32,14 +32,31 @@ async function zaladujOstatniePrzebiegi() {
           <span>Przebieg z ${new Date(r.createdAt).toLocaleString('pl-PL')}</span>
           <span class="badge ${badgeDlaStatusu(r.status)}">${escapeHtml(STATUS_LABELS[r.status] || r.status)}</span>
         </div>
-        <div class="actions"><button type="button" class="secondary" data-otworz-run="${r.id}">Otwórz ten przebieg</button></div>
+        <div class="actions">
+          <button type="button" class="secondary" data-otworz-run="${r.id}">Otwórz ten przebieg</button>
+          <button type="button" class="secondary" data-usun-run="${r.id}">Usuń</button>
+        </div>
       </div>`).join('');
     list.querySelectorAll('[data-otworz-run]').forEach(btn => {
       btn.addEventListener('click', () => otworzPrzebieg(btn.dataset.otworzRun));
     });
+    list.querySelectorAll('[data-usun-run]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Usunąć ten przebieg z historii? Pobrane dobory/dokumenty w jego folderze roboczym też znikną.')) return;
+        await fetch(`/api/pipeline/${btn.dataset.usunRun}`, { method: 'DELETE', headers: { 'X-Scyzoryk-Request': '1' } }).catch(() => {});
+        zaladujOstatniePrzebiegi();
+      });
+    });
     panel.classList.remove('hidden');
   } catch (_) { /* brak polaczenia - panel po prostu nie pokaze historii */ }
 }
+
+document.querySelector('#wyczyscHistorieBtn').addEventListener('click', async () => {
+  if (!confirm('Usunąć całą historię przebiegów? Tego nie da się cofnąć.')) return;
+  await fetch('/api/pipeline/runs', { method: 'DELETE', headers: { 'X-Scyzoryk-Request': '1' } }).catch(() => {});
+  document.querySelector('#ostatniePrzebiegiPanel').classList.add('hidden');
+  document.querySelector('#ostatniePrzebiegiList').innerHTML = '';
+});
 
 function otworzPrzebieg(runId) {
   currentRunId = runId;
@@ -302,12 +319,16 @@ function fileField(id, label, help) {
 // niektorych inwestycji glowna tabela adresowa juz ma kolumne Beneficjenta i
 // spokojnie wystarcza, dla innych potrzebna jest osobna tabela z folderu
 // "wzor". Domyslnie "glowna" (prostszy przypadek, zero dodatkowego pliku).
-function dokSeryjneZrodloPola(sufiks, excelFieldId) {
+function dokSeryjneZrodloPola(sufiks, excelFieldId, templatesFieldId) {
   const radioName = `dokSeryjneZrodlo_${sufiks}`;
   return `
     <label><input type="radio" name="${radioName}" value="glowna" checked data-dok-seryjne-radio="${sufiks}" /> Użyj głównej tabeli adresowej</label>
     <label><input type="radio" name="${radioName}" value="osobna" data-dok-seryjne-radio="${sufiks}" /> Użyj osobnej tabeli (z folderu wzoru)</label>
     <div class="hidden" data-dok-seryjne-plik="${sufiks}">${fileField(excelFieldId, 'Tabela Excel dla dokumentów seryjnych', 'Z folderu "wzór" tej gałęzi - inna niż główna tabela adresowa.')}</div>
+    <label>Szablony Word (.docx)
+      <input type="file" id="${templatesFieldId}" accept=".docx" multiple required />
+      <span class="field-help">Wybierz konkretne szablony z folderu "wzór" - tak samo jak w samych Dokumentach seryjnych, nie cały folder naraz.</span>
+    </label>
   `;
 }
 
@@ -350,28 +371,31 @@ function renderKrokiForm(analiza) {
   const grupy = [];
   if (majaSolary) {
     grupy.push(`<div class="typ-grupa" data-typ-grupa="solary">
-      <h3 class="typ-grupa-tytul">Solary</h3>
+      <label class="typ-grupa-tytul"><input type="checkbox" data-typ-master="solary" checked /> Solary</label>
+      <div data-typ-grupa-body="solary">
       ${pathField('pole_rootPathSolary', 'Główny folder Solary/Kolektory', 'np. ...\\Kolektory')}
       <div class="krok-fields" style="margin:12px 0 0">
         <label><input type="checkbox" data-krok-checkbox="solary" /> Przypisywanie kart katalogowych</label>
         <label><input type="checkbox" data-krok-checkbox="audytySolary" /> Dołącz audyty</label>
         <div>
           <label><input type="checkbox" data-krok-checkbox="dokSeryjneSolary" /> Dokumenty seryjne</label>
-          <div class="krok-fields hidden" data-krok-fields="dokSeryjneSolary" style="margin-left:0">${dokSeryjneZrodloPola('solary', 'pole_dokSeryjneExcelSolary')}</div>
+          <div class="krok-fields hidden" data-krok-fields="dokSeryjneSolary" style="margin-left:0">${dokSeryjneZrodloPola('solary', 'pole_dokSeryjneExcelSolary', 'pole_dokSeryjneTemplatesSolary')}</div>
         </div>
+      </div>
       </div>
     </div>`);
   }
   if (majaPompy) {
     grupy.push(`<div class="typ-grupa" data-typ-grupa="pompy">
-      <h3 class="typ-grupa-tytul">Pompy</h3>
+      <label class="typ-grupa-tytul"><input type="checkbox" data-typ-master="pompy" checked /> Pompy</label>
+      <div data-typ-grupa-body="pompy">
       ${pathField('pole_rootPathPompy', 'Główny folder inwestycji (z podfolderem PC powietrzne/gruntowe)')}
       <div class="krok-fields" style="margin:12px 0 0">
         <label><input type="checkbox" data-krok-checkbox="pompy" /> Przypisywanie kart katalogowych</label>
         <label><input type="checkbox" data-krok-checkbox="audytyPompy" /> Dołącz audyty</label>
         <div>
           <label><input type="checkbox" data-krok-checkbox="dokSeryjnePompy" /> Dokumenty seryjne</label>
-          <div class="krok-fields hidden" data-krok-fields="dokSeryjnePompy" style="margin-left:0">${dokSeryjneZrodloPola('pompy', 'pole_dokSeryjneExcelPompy')}</div>
+          <div class="krok-fields hidden" data-krok-fields="dokSeryjnePompy" style="margin-left:0">${dokSeryjneZrodloPola('pompy', 'pole_dokSeryjneExcelPompy', 'pole_dokSeryjneTemplatesPompy')}</div>
         </div>
       </div>
       ${!majaPompyPowietrzne && (p.pompyGrunt > 0 || p.pompyNieznane > 0) ? `
@@ -381,7 +405,6 @@ function renderKrokiForm(analiza) {
       <div class="krok-fields">
         <div>
           <label><input type="checkbox" data-krok-checkbox="gen_myEcodan" /> Dobór myEcodan</label>
-          <div class="krok-fields hidden" data-krok-fields="gen_myEcodan" style="margin-left:0">${textField('pole_gen_myEcodan_investmentName', 'Nazwa inwestycji (myEcodan)')}</div>
         </div>
         <div>
           <label><input type="checkbox" data-krok-checkbox="gen_varmero" /> Dobór Varmero</label>
@@ -392,11 +415,16 @@ function renderKrokiForm(analiza) {
           </div>
         </div>
       </div>` : ''}
+      </div>
     </div>`);
   }
 
   const kontener = document.querySelector('#grupaTypowKontener');
   kontener.innerHTML = grupy.join('');
+  kontener.querySelectorAll('[data-typ-master]').forEach(cb => {
+    const body = kontener.querySelector(`[data-typ-grupa-body="${cb.dataset.typMaster}"]`);
+    cb.addEventListener('change', () => body.classList.toggle('hidden', !cb.checked));
+  });
   kontener.querySelectorAll('[data-browse-for]').forEach(btn => {
     btn.addEventListener('click', () => openFolderBrowser(document.querySelector(`#${btn.dataset.browseFor}`)));
   });
@@ -438,22 +466,28 @@ document.querySelector('#startBtn').addEventListener('click', async () => {
   hideTopNotice();
   if (!currentExcelFile) { showTopNotice('Najpierw wgraj tabelę adresową.'); return; }
 
+  // Glowny przelacznik typu (audyt 2026-08-24 - wlasciciel: "nie mam
+  // prostego wyboru czy robie pompy czy solary") - odznaczenie calej grupy
+  // musi wygaszac wszystkie jej kroki, nawet jesli user zdazyl cos zaznaczyc
+  // przed zwinieciem sekcji.
+  const solaryWlaczone = document.querySelector('[data-typ-master="solary"]')?.checked !== false;
+  const pompyWlaczone = document.querySelector('[data-typ-master="pompy"]')?.checked !== false;
   const kroki = {
     tworzenieFolderow: krokZaznaczony('tworzenieFolderow'),
-    solary: krokZaznaczony('solary'),
-    pompy: krokZaznaczony('pompy'),
-    audytySolary: krokZaznaczony('audytySolary'),
-    audytyPompy: krokZaznaczony('audytyPompy'),
-    dokSeryjneSolary: krokZaznaczony('dokSeryjneSolary'),
-    dokSeryjnePompy: krokZaznaczony('dokSeryjnePompy')
+    solary: solaryWlaczone && krokZaznaczony('solary'),
+    pompy: pompyWlaczone && krokZaznaczony('pompy'),
+    audytySolary: solaryWlaczone && krokZaznaczony('audytySolary'),
+    audytyPompy: pompyWlaczone && krokZaznaczony('audytyPompy'),
+    dokSeryjneSolary: solaryWlaczone && krokZaznaczony('dokSeryjneSolary'),
+    dokSeryjnePompy: pompyWlaczone && krokZaznaczony('dokSeryjnePompy')
   };
   const generatory = {
-    myEcodan: krokZaznaczony('gen_myEcodan'),
-    varmero: krokZaznaczony('gen_varmero')
+    myEcodan: pompyWlaczone && krokZaznaczony('gen_myEcodan'),
+    varmero: pompyWlaczone && krokZaznaczony('gen_varmero')
   };
   const lokalizacja = wartoscPola('pole_lokalizacja');
   const opcjeDoboru = {
-    myEcodan: { investmentName: wartoscPola('pole_gen_myEcodan_investmentName'), location: lokalizacja },
+    myEcodan: { investmentName: lokalizacja, location: lokalizacja },
     varmero: {
       gminaName: lokalizacja,
       postalCode: wartoscPola('pole_gen_varmero_postalCode'),
@@ -472,6 +506,14 @@ document.querySelector('#startBtn').addEventListener('click', async () => {
   }
   if (kroki.dokSeryjnePompy && dokSeryjneUzywaOsobnejTabeli('pompy') && !document.querySelector('#pole_dokSeryjneExcelPompy')?.files?.[0]) {
     showTopNotice('Wybrano "osobną tabelę" dla dokumentów seryjnych (Pompy), ale nie wskazano pliku.');
+    return;
+  }
+  if (kroki.dokSeryjneSolary && !document.querySelector('#pole_dokSeryjneTemplatesSolary')?.files?.length) {
+    showTopNotice('Dokumenty seryjne (Solary): wybierz przynajmniej jeden szablon .docx.');
+    return;
+  }
+  if (kroki.dokSeryjnePompy && !document.querySelector('#pole_dokSeryjneTemplatesPompy')?.files?.length) {
+    showTopNotice('Dokumenty seryjne (Pompy): wybierz przynajmniej jeden szablon .docx.');
     return;
   }
   const zadenKrok = !Object.values(kroki).some(Boolean) && !Object.values(generatory).some(Boolean);
@@ -496,6 +538,12 @@ document.querySelector('#startBtn').addEventListener('click', async () => {
   if (dokSeryjneUzywaOsobnejTabeli('pompy')) {
     const plik = document.querySelector('#pole_dokSeryjneExcelPompy')?.files?.[0];
     if (plik) data.append('dokSeryjneExcelPompy', plik);
+  }
+  if (kroki.dokSeryjneSolary) {
+    for (const plik of document.querySelector('#pole_dokSeryjneTemplatesSolary')?.files || []) data.append('dokSeryjneTemplatesSolary', plik);
+  }
+  if (kroki.dokSeryjnePompy) {
+    for (const plik of document.querySelector('#pole_dokSeryjneTemplatesPompy')?.files || []) data.append('dokSeryjneTemplatesPompy', plik);
   }
 
   const btn = document.querySelector('#startBtn');

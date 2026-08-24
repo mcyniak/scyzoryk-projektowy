@@ -32,10 +32,12 @@ async function krokPrzypisywanie({ baseUrl, excelPath, rootPath, typ, sheetName,
 // --- Dokumenty seryjne (job-based: upload -> generate -> poll -> download zip) ---
 // excelPath: tabela Excel OSOBNA od glownej tabeli adresowej pipeline'u -
 // dokumenty seryjne potrzebuja wlasnych kolumn (np. "Beneficjent"), ktorych
-// glowna tabela adresowa nie ma (audyt 2026-08-21). templatesDir: folder z
-// gotowymi szablonami Worda - w praktyce ten sam folder "wzor", co karty
-// katalogowe (patrz lib/wzorFolderResolve.js, wolane przez wywolujacego w
-// src/runs.js). Kazdy .docx w tym folderze idzie jako osobny "templates"
+// glowna tabela adresowa nie ma (audyt 2026-08-21). templatePaths: KONKRETNE
+// pliki .docx WYBRANE PRZEZ UZYTKOWNIKA w UI pipeline'u (audyt 2026-08-24 -
+// wczesniej ta funkcja sama czytala caly folder "wzor" przez fs.readdir, co
+// bylo niezgodne z ustaleniem, ze dokumenty seryjne dzialaja na wybranych
+// plikach, nie na calym folderze - patrz ten sam multi-file input, co w
+// samej apce dokumenty-seryjne). Kazdy z nich idzie jako osobny "templates"
 // wpis multipart.
 //
 // sheetName: OPCJONALNE - jesli podane, jedno konkretne wywolanie generuje
@@ -48,14 +50,13 @@ async function krokPrzypisywanie({ baseUrl, excelPath, rootPath, typ, sheetName,
 // wynikow miedzy proba), wiec DWA wywolania generate na TYM SAMYM jobId dla
 // dwoch roznych arkuszy tej samej tabeli skasowalyby sobie wzajemnie wyniki
 // - kazdy taki arkusz potrzebowalby WLASNEGO uploadu+jobId.
-async function krokDokumentySeryjne({ baseUrl, excelPath, templatesDir, sheetName, stagingDir, onProgress = () => {} }) {
-  const templatePliki = (await fs.readdir(templatesDir)).filter(n => n.toLowerCase().endsWith('.docx'));
-  if (!templatePliki.length) throw new Error(`Brak plikow .docx w folderze wzorow: ${templatesDir}`);
+async function krokDokumentySeryjne({ baseUrl, excelPath, templatePaths, sheetName, stagingDir, onProgress = () => {} }) {
+  if (!templatePaths?.length) throw new Error('Nie wybrano żadnego szablonu .docx dla Dokumentów seryjnych.');
 
   const form = new FormData();
   form.append('excel', new Blob([await fs.readFile(excelPath)]), path.basename(excelPath));
-  for (const nazwa of templatePliki) {
-    form.append('templates', new Blob([await fs.readFile(path.join(templatesDir, nazwa))]), nazwa);
+  for (const templatePath of templatePaths) {
+    form.append('templates', new Blob([await fs.readFile(templatePath)]), path.basename(templatePath));
   }
   const uploadRes = await fetch(`${baseUrl}/api/upload`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
   const uploadData = await uploadRes.json();

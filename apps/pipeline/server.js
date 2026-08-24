@@ -79,14 +79,26 @@ const upload = multer({
   fileFilter: xlsxFileFilter
 });
 
-// /api/pipeline/start moze przyjac az 3 pliki xlsx naraz - glowna tabele
-// adresowa + osobne tabele Excel do dokumentow seryjnych per typ (Solary/
-// Pompy, INNE niz glowna tabela - audyt 2026-08-21, patrz komentarz przy
-// samej trasie).
+// /api/pipeline/start przyjmuje az 3 pliki xlsx (glowna tabela adresowa +
+// osobne tabele do dokumentow seryjnych per typ, audyt 2026-08-21) oraz
+// wybrane przez uzytkownika szablony .docx dla Dokumentow seryjnych (audyt
+// 2026-08-24 - wczesniej pipeline sam czytal CALY folder "wzor", wbrew
+// ustaleniu z wlascicielem, ze narzedzie ma dzialac na wybranych plikach,
+// nie na calym folderze) - filtr rozstrzyga po nazwie pola, nie jednym
+// wspolnym rozszerzeniu.
+const templatesFileFilter = (req, file, cb) => {
+  if (/^dokSeryjneTemplates/.test(file.fieldname)) {
+    const originalName = decodeOriginalName(String(file.originalname || ''));
+    if (/\.docx$/i.test(originalName)) return cb(null, true);
+    return cb(new Error('Szablony dla Dokumentów seryjnych muszą być plikami .docx.'));
+  }
+  return xlsxFileFilter(req, file, cb);
+};
+
 const uploadWieloplikowy = multer({
   dest: UPLOAD_DIR,
-  limits: { fileSize: 20 * 1024 * 1024, files: 3, fieldNestingDepth: 2 },
-  fileFilter: xlsxFileFilter
+  limits: { fileSize: 20 * 1024 * 1024, files: 23, fieldNestingDepth: 2 },
+  fileFilter: templatesFileFilter
 });
 
 async function validateXlsxFile(file) {
@@ -166,6 +178,16 @@ app.get('/api/pipeline/list', (req, res) => {
   res.json({ ok: true, runs: runsStore.list ? runsStore.list() : [] });
 });
 
+app.delete('/api/pipeline/runs', (req, res) => {
+  runsStore.removeAll();
+  res.json({ ok: true });
+});
+
+app.delete('/api/pipeline/:runId', (req, res) => {
+  runsStore.remove(req.params.runId);
+  res.json({ ok: true });
+});
+
 app.get('/api/pipeline/status/:runId', (req, res) => {
   const run = runsStore.get(req.params.runId);
   if (!run) return res.status(404).json({ ok: false, error: 'Nie znaleziono przebiegu o tym identyfikatorze.' });
@@ -187,11 +209,15 @@ app.get('/api/pipeline/status/:runId', (req, res) => {
 app.post('/api/pipeline/start', withUploadFields([
   { name: 'excel', maxCount: 1 },
   { name: 'dokSeryjneExcelSolary', maxCount: 1 },
-  { name: 'dokSeryjneExcelPompy', maxCount: 1 }
+  { name: 'dokSeryjneExcelPompy', maxCount: 1 },
+  { name: 'dokSeryjneTemplatesSolary', maxCount: 20 },
+  { name: 'dokSeryjneTemplatesPompy', maxCount: 20 }
 ]), async (req, res) => {
   const excelFile = req.files?.excel?.[0];
   const dokSeryjneExcelSolaryFile = req.files?.dokSeryjneExcelSolary?.[0] || null;
   const dokSeryjneExcelPompyFile = req.files?.dokSeryjneExcelPompy?.[0] || null;
+  const dokSeryjneTemplatesSolaryFiles = req.files?.dokSeryjneTemplatesSolary || [];
+  const dokSeryjneTemplatesPompyFiles = req.files?.dokSeryjneTemplatesPompy || [];
   if (!excelFile) return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
   try {
     await validateXlsxFile(excelFile);
@@ -252,8 +278,25 @@ app.post('/api/pipeline/start', withUploadFields([
       await fsp.copyFile(dokSeryjneExcelPompyFile.path, dokSeryjneExcelPompy);
     }
 
+    // Szablony .docx wybrane przez uzytkownika (nie caly folder "wzor" -
+    // audyt 2026-08-24) - kopiowane do wlasnego folderu roboczego przebiegu
+    // z tego samego powodu co pliki Excel wyzej.
+    async function skopiujSzablony(pliki, podfolder) {
+      const dir = path.join(runStagingDir, podfolder);
+      await fsp.mkdir(dir, { recursive: true });
+      const sciezki = [];
+      for (const plik of pliki) {
+        const docelowa = path.join(dir, decodeOriginalName(plik.originalname));
+        await fsp.copyFile(plik.path, docelowa);
+        sciezki.push(docelowa);
+      }
+      return sciezki;
+    }
+    const dokSeryjneTemplatesSolary = await skopiujSzablony(dokSeryjneTemplatesSolaryFiles, 'szablony-solary');
+    const dokSeryjneTemplatesPompy = await skopiujSzablony(dokSeryjneTemplatesPompyFiles, 'szablony-pompy');
+
     runsStore.update(run.id, r => {
-      r.input = { excelPath, investmentFolder, rootPathSolary, rootPathPompy, audytyPath, dokSeryjneExcelSolary, dokSeryjneExcelPompy, kroki, generatory, opcjeDoboru };
+      r.input = { excelPath, investmentFolder, rootPathSolary, rootPathPompy, audytyPath, dokSeryjneExcelSolary, dokSeryjneExcelPompy, dokSeryjneTemplatesSolary, dokSeryjneTemplatesPompy, kroki, generatory, opcjeDoboru };
     });
 
     res.json({ ok: true, runId: run.id });
@@ -272,6 +315,9 @@ app.post('/api/pipeline/start', withUploadFields([
     if (excelFile?.path) fsp.unlink(excelFile.path).catch(() => {});
     if (dokSeryjneExcelSolaryFile?.path) fsp.unlink(dokSeryjneExcelSolaryFile.path).catch(() => {});
     if (dokSeryjneExcelPompyFile?.path) fsp.unlink(dokSeryjneExcelPompyFile.path).catch(() => {});
+    for (const plik of [...dokSeryjneTemplatesSolaryFiles, ...dokSeryjneTemplatesPompyFiles]) {
+      if (plik?.path) fsp.unlink(plik.path).catch(() => {});
+    }
   }
 });
 

@@ -330,6 +330,7 @@ test('wykonajPrzebieg: dokumenty seryjne wysylaja WLASNA, oddzielna tabele Excel
     excelPath,
     rootPathPompy,
     dokSeryjneExcelPompy,
+    dokSeryjneTemplatesPompy: [path.join(wzorDir, 'szablon.docx')],
     kroki: { dokSeryjnePompy: true, dokSeryjneSolary: false, audytySolary: false, audytyPompy: false, solary: false, pompy: false, tworzenieFolderow: false },
     generatory: {}
   });
@@ -379,6 +380,7 @@ test('wykonajPrzebieg: dokumenty seryjne BEZ wskazanej osobnej tabeli spadaja na
     excelPath,
     rootPathPompy,
     // dokSeryjneExcelPompy CELOWO pominiete - user wybral "uzyj glownej tabeli".
+    dokSeryjneTemplatesPompy: [path.join(wzorDir, 'szablon.docx')],
     kroki: { dokSeryjnePompy: true, dokSeryjneSolary: false, audytySolary: false, audytyPompy: false, solary: false, pompy: false, tworzenieFolderow: false },
     generatory: {}
   });

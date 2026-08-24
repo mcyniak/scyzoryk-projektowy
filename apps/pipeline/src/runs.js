@@ -8,7 +8,6 @@ const path = require('path');
 const crypto = require('crypto');
 const readXlsxFile = require('read-excel-file/node');
 const { buildTabelaAdresowa, isAirSourcePump } = require('../../../lib/investmentAddressTable');
-const { znajdzFolderZrodlowySolarow, znajdzFolderyPomp } = require('../../../lib/wzorFolderResolve');
 const { buildFilteredWorkbookFile } = require('./filteredWorkbook');
 const { krokTworzenieFolderow, krokPrzypisywanie, krokDokumentySeryjne, krokDoboryBatch, sprawdzStatusBatch, anulujBatch } = require('./steps');
 
@@ -149,7 +148,20 @@ function makeRunsStore({ dataDir, log = () => {} }) {
       .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
   }
 
-  return { create, get, update, upsertKrok, list, stagingRoot: dataDir };
+  // Usuwanie z historii (audyt 2026-08-24: wlasciciel nie mial jak schowac
+  // starych przebiegow z listy "Wczesniej rozpoczete przebiegi") - kasuje
+  // tez folder roboczy tego runId (pobrane dobory, wygenerowane dokumenty).
+  function remove(id) {
+    runs.delete(id);
+    persist();
+    fsSync.rm(path.join(dataDir, id), { recursive: true, force: true }, () => {});
+  }
+
+  function removeAll() {
+    for (const id of runs.keys()) remove(id);
+  }
+
+  return { create, get, update, upsertKrok, list, remove, removeAll, stagingRoot: dataDir };
 }
 
 // Postep z joba dokumentow seryjnych ({phase,percent,message} - patrz
@@ -263,10 +275,11 @@ async function wykonajPrzebieg(store, runId, apps) {
   }
 
   // 5) Dokumenty seryjne - jak audyty, KAZDY typ ma swoj wlasny checkbox.
-  // Folder wzoru (skad brane sa szablony .docx) jest WYLICZANY z
-  // rootPathSolary/rootPathPompy - dokladnie ten sam folder "wzor" co karty
-  // katalogowe, potwierdzone przez wlasciciela 2026-08-21 (patrz
-  // lib/wzorFolderResolve.js). Tabela Excel do mail-merge MOZE byc OSOBNA
+  // Szablony .docx sa te, ktore uzytkownik SAM wybral w UI (audyt
+  // 2026-08-24 - wczesniej folder wzoru byl WYLICZANY automatycznie z
+  // rootPathSolary/rootPathPompy i caly jego zawartosc szla do generowania,
+  // co bylo niezgodne z ustaleniem, ze narzedzie dziala na wybranych plikach,
+  // nie na calym folderze). Tabela Excel do mail-merge MOZE byc OSOBNA
   // (input.dokSeryjneExcel{Typ}, wgrana osobno w /api/pipeline/start), bo
   // glowna tabela adresowa czasem nie ma kolumn typu "Beneficjent", ktorych
   // dokumenty seryjne wymagaja - ALE nie zawsze: wlasciciel potwierdzil, ze
@@ -274,20 +287,19 @@ async function wykonajPrzebieg(store, runId, apps) {
   // spokojnie wystarcza, wiec uzytkownik SAM wybiera w UI, ktorej tabeli
   // uzyc per typ (Solary/Pompy) - brak wgranego pliku = uzyj glownej tabeli
   // adresowej (juz przefiltrowanej wg selekcji adresow, patrz wyzej).
-  for (const [typ, rootPole, checkboxNazwa, excelPole, wyliczFolderWzoru] of [
-    ['solary', 'rootPathSolary', 'dokSeryjneSolary', 'dokSeryjneExcelSolary', znajdzFolderZrodlowySolarow],
-    ['pompy', 'rootPathPompy', 'dokSeryjnePompy', 'dokSeryjneExcelPompy', rootPath => znajdzFolderyPomp(rootPath).wzorDir]
+  for (const [typ, rootPole, checkboxNazwa, excelPole, templatesPole] of [
+    ['solary', 'rootPathSolary', 'dokSeryjneSolary', 'dokSeryjneExcelSolary', 'dokSeryjneTemplatesSolary'],
+    ['pompy', 'rootPathPompy', 'dokSeryjnePompy', 'dokSeryjneExcelPompy', 'dokSeryjneTemplatesPompy']
   ]) {
     if (store.get(runId)?.przerwany) return store.get(runId);
     if (!input.kroki?.[checkboxNazwa] || !input[rootPole]) continue;
     const excelPathDlaDokSeryjnych = input[excelPole] || input.excelPath;
-    const wzorDir = wyliczFolderWzoru(input[rootPole]);
     const krokNazwa = `dokumenty-seryjne-${typ}`;
     const dsStagingDir = path.join(stagingDir, 'dokumenty-seryjne', typ);
     store.upsertKrok(runId, krokNazwa, { status: 'w-toku' });
     try {
       await krokDokumentySeryjne({
-        baseUrl: apps.dokumentySeryjne, excelPath: excelPathDlaDokSeryjnych, templatesDir: wzorDir, stagingDir: dsStagingDir,
+        baseUrl: apps.dokumentySeryjne, excelPath: excelPathDlaDokSeryjnych, templatePaths: input[templatesPole], stagingDir: dsStagingDir,
         onProgress: job => store.upsertKrok(runId, krokNazwa, { status: 'w-toku', ...odczytajPostep(job) })
       });
       const wynikRozdziel = await krokPrzypisywanie({ baseUrl: apps.przypisywanie, excelPath: input.excelPath, rootPath: input[rootPole], typ: 'dokumenty-seryjne', dodatekPath: dsStagingDir, dodatekPole: 'dokumentySeryjnePath' });

@@ -54,7 +54,8 @@ code { background: var(--gray-100); border: 1px solid var(--border-default); pad
 .sekcja-tytul { margin: var(--space-4) 0 0; font-size: var(--text-sm); font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: .04em; }
 
 .typ-grupa { border: 1px solid var(--border-strong); border-radius: var(--radius-lg); padding: 16px; margin-top: var(--space-4); }
-.typ-grupa-tytul { font-size: var(--text-md); font-weight: 800; margin: 0 0 10px; }
+.typ-grupa-tytul { display: flex; align-items: center; gap: 8px; font-size: var(--text-md); font-weight: 800; margin: 0 0 10px; cursor: pointer; }
+.typ-grupa-tytul input { margin: 0; }
 
 /* Podglad adresow - tabela z zaznaczaniem/filtrowaniem (ten sam wzorzec co
    dokumenty-seryjne/formularze-varmero/formularze-ecodan, audyt 2026-08-21:
