@@ -75,7 +75,10 @@ test('pdfStamp: drawStampOnPage trzyma kotwice KAZDEJ linii tekstu w granicach s
 
     pdfStamp.drawStampOnPage(page, font);
 
-    assert.equal(calls.length, 2, `rotacja ${rotation}: powinny byc 2 linie tekstu`);
+    // Zadane na zywo 2026-08-24: napis w JEDNEJ linii ("DOKUMENTACJA
+    // POWYKONAWCZA" obok siebie), wczesniej byly dwie linie jedna nad druga.
+    assert.equal(calls.length, 1, `rotacja ${rotation}: jeden napis w jednej linii`);
+    assert.equal(calls[0].text, 'DOKUMENTACJA POWYKONAWCZA');
     for (const call of calls) {
       assert.ok(call.x >= 0 && call.x <= 595, `rotacja ${rotation}: x=${call.x} poza [0,595] dla "${call.text}"`);
       assert.ok(call.y >= 0 && call.y <= 842, `rotacja ${rotation}: y=${call.y} poza [0,842] dla "${call.text}"`);

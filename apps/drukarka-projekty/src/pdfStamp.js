@@ -9,16 +9,17 @@
 const fs = require("fs/promises");
 const { PDFDocument, StandardFonts, rgb, degrees } = require("pdf-lib");
 
-const STAMP_LINES = ["DOKUMENTACJA", "POWYKONAWCZA"];
+// Zadane na zywo 2026-08-24: napis w JEDNEJ linii ("DOKUMENTACJA
+// POWYKONAWCZA" obok siebie, zamiast jedna nad druga - nic nie zasloni),
+// czcionka 10 pt (wczesniej efektywnie 9) i blizej gornej krawedzi strony.
+const STAMP_TEXT = "DOKUMENTACJA POWYKONAWCZA";
 const STAMP_COLOR = rgb(0, 0, 0); // czarny - drukarka docelowa jest czarno-biala
 // Margines w PUNKTACH (nie w %) - dosuniecie "milimetrowe" do samego rogu ma
 // wygladac tak samo niezaleznie od rozmiaru/proporcji strony (A4, rysunek,
 // karta katalogowa itd.), a % marginesu skalowalby sie z rozmiarem strony.
 // 1mm = 2.83465pt.
 const STAMP_MARGIN_PT = 3; // ok. 1mm
-const STAMP_WIDTH_PCT = 20;
-const STAMP_HEIGHT_PCT = 6;
-const MAX_FONT_SIZE = 9; // maly, nienarzucajacy sie napis - nie ma zasłaniac tresci dokumentu
+const STAMP_FONT_SIZE = 10; // o 1 punkt wiecej niz poprzednie efektywne 9
 
 function visualPageSize(page) {
   const rotation = ((page.getRotation().angle % 360) + 360) % 360;
@@ -49,40 +50,28 @@ async function loadStampFont(doc) {
 
 function drawStampOnPage(page, font) {
   const visual = visualPageSize(page);
-  const stampWidth = Math.max(8, visual.width * STAMP_WIDTH_PCT / 100);
-  const stampHeight = Math.max(8, visual.height * STAMP_HEIGHT_PCT / 100);
-  const visualBoxX = visual.width - STAMP_MARGIN_PT - stampWidth;
-  const visualBoxY = visual.height - STAMP_MARGIN_PT - stampHeight;
+  // Szerokosc napisu liczona z PRAWDZIWEJ metryki czcionki (zamiast boxa
+  // 20% szerokosci strony jak wczesniej) - napis zawsze konczy sie dokladnie
+  // przy STAMP_MARGIN_PT od prawej krawedzi, niezaleznie od rozmiaru strony.
+  const textWidth = font.widthOfTextAtSize(STAMP_TEXT, STAMP_FONT_SIZE);
+  const visualBoxX = visual.width - STAMP_MARGIN_PT - textWidth;
+  // Blizej gornej krawedzi: baseline tekstu tuż pod marginesem (wczesniej
+  // napis byl wycentrowany w pionowym boxie 6% wysokosci strony, przez co
+  // pierwsza linia zaczynala sie ~15 pt nizej).
+  const visualY = visual.height - STAMP_MARGIN_PT - STAMP_FONT_SIZE;
 
-  const fontSize = Math.max(6, Math.min(stampHeight / STAMP_LINES.length * 0.6, stampWidth / 9, MAX_FONT_SIZE));
-  const lineHeight = fontSize * 1.18;
-  const totalHeight = lineHeight * STAMP_LINES.length;
-  const firstVisualY = visualBoxY + (stampHeight - totalHeight) / 2 + totalHeight - fontSize;
-
-  // Stempel jest w rogu, wiec kazda linia jest wyrownana do lewej (do
-  // visualBoxX), NIE centrowana w obrebie stampWidth - wczesniejsze
-  // centrowanie ("Math.max(0, (stampWidth - textWidth) / 2)") dawalo w
-  // praktyce ~20pt dodatkowego odstepu od krawedzi (potwierdzone realnym
-  // wyciagiem pozycji tekstu z PDF-a przez pdfjs-dist: x=25pt mimo
-  // STAMP_MARGIN_PT=3), bo box byl szerszy niz sam tekst.
-  //
   // WAZNE: dla stron obroconych (90/270 st.) "prawo"/"dol" w ukladzie
   // wizualnym NIE sa tym samym co +x/-y w ukladzie PDF-a (patrz
   // mapVisualBottomLeftToPdf) - mapowanie na PDF robimy jako ostatni krok,
-  // osobno dla kazdej linii, na wspolrzednych policzonych w ukladzie
-  // WIZUALNYM (visualX/visualY).
-  STAMP_LINES.forEach((line, li) => {
-    const lineVisualX = visualBoxX;
-    const lineVisualY = firstVisualY - li * lineHeight;
-    const mapped = mapVisualBottomLeftToPdf(page, lineVisualX, lineVisualY);
-    page.drawText(line, {
-      x: mapped.x,
-      y: mapped.y,
-      size: fontSize,
-      font,
-      color: STAMP_COLOR,
-      rotate: degrees(mapped.rotation),
-    });
+  // na wspolrzednych policzonych w ukladzie WIZUALNYM (visualX/visualY).
+  const mapped = mapVisualBottomLeftToPdf(page, visualBoxX, visualY);
+  page.drawText(STAMP_TEXT, {
+    x: mapped.x,
+    y: mapped.y,
+    size: STAMP_FONT_SIZE,
+    font,
+    color: STAMP_COLOR,
+    rotate: degrees(mapped.rotation),
   });
 }
 
