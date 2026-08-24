@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc — Zdjęcia do PDF Protokołów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+  <script src="/shared/theme.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-file-pdf"/></svg>
+          <strong>Pomoc — Zdjęcia do PDF Protokołów</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Zbiera zdjęcia protokołów z folderów adresów w podanej lokalizacji i składa je w gotowe do druku PDF-y (czarno-białe, bez tła i cieni) — po podglądzie, na Twoje potwierdzenie.</p>
+      <div class="help-chips"><span class="help-chip">JPG/PNG</span><span class="help-chip">PDF</span><span class="help-chip">Podgląd przed zapisem</span></div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Wpisz ścieżkę folderu bazowego z adresami (ten sam układ folderów co w Drukarce projektów) albo kliknij <strong>Przeglądaj...</strong> i wybierz folder z listy.</li>
+        <li>Kliknij <strong>Skanuj</strong> — narzędzie wejdzie w każdy folder adresu i poszuka zdjęć protokołu.</li>
+        <li>Sprawdź tabelę wyników: ile adresów ma zdjęcia, które zostały już wcześniej zapisane, a które nie mają nic.</li>
+        <li>Kliknij <strong>Podgląd</strong> przy adresie, żeby zobaczyć gotowy PDF. Jeśli któreś zdjęcie jest do góry nogami, kliknij <strong>Obróć</strong> pod jego miniaturą — podgląd odświeży się automatycznie.</li>
+        <li>Kliknij <strong>Zapisz ten PDF do folderu</strong> w podglądzie albo <strong>Zapisz</strong> przy adresie w tabeli. PDF trafia do podfolderu adresu, w którym leżały zdjęcia.</li>
+        <li>Chcesz zapisać wszystko naraz? Zaznacz „Nadpisz też już zapisane” tylko jeśli celowo chcesz zastąpić istniejące pliki, i kliknij <strong>Zapisz wszystkie</strong>.</li>
+      </ol>
+
+      <div class="help-callout good">
+        <span class="help-callout-label">Nic nie trafia na dysk automatycznie</span>
+        <p>Narzędzie tylko skanuje i pokazuje podgląd — PDF zostanie zapisany dopiero po kliknięciu „Zapisz” albo „Zapisz wszystkie”. Już zapisane adresy są oznaczone, żeby przypadkiem ich nie nadpisać.</p>
+      </div>
+
+      <h3>Możliwe problemy i co zrobić</h3>
+      <dl class="help-errors">
+        <div><dt>„Podaj ścieżkę folderu bazowego.”</dt><dd>Pole ścieżki jest puste — wpisz folder z adresami albo wybierz go przez „Przeglądaj...”.</dd></div>
+        <div><dt>Błąd podczas skanowania (np. ścieżka nie istnieje)</dt><dd>Komunikat pojawi się czerwonym tekstem pod przyciskiem „Skanuj”. Sprawdź, czy ścieżka jest poprawna i czy dysk sieciowy jest podłączony.</dd></div>
+        <div><dt>Adres ma status „brak zdjęć”</dt><dd>W folderze tego adresu nie znaleziono zdjęć protokołu — dodaj zdjęcia do podfolderu i przeskanuj ponownie.</dd></div>
+        <div><dt>Status „pominięto N nieczytelnych”</dt><dd>Część plików nie dała się przetworzyć (uszkodzony format). Najedź na badge, żeby zobaczyć nazwy pominiętych plików — reszta zdjęć i tak trafi do PDF-u.</dd></div>
+        <div><dt>Zdjęcie do góry nogami albo bokiem w podglądzie</dt><dd>Kliknij „Obróć” pod miniaturą zdjęcia — każde kliknięcie obraca o 90°. Poprawki obowiązują w bieżącym skanowaniu i są uwzględnione w zapisywanym PDF-ie.</dd></div>
+        <div><dt>Miniatura z komunikatem „Nie można wczytać - plik pominięty w PDF”</dt><dd>Tego pliku dekoder nie potrafi otworzyć — strona zostanie pominięta także w zapisanym PDF-ie. Otwórz zdjęcie u źródła i zapisz je ponownie jako JPG/PNG.</dd></div>
+        <div><dt>„Nie udało się zapisać: …”</dt><dd>Sprawdź, czy folder adresu nadal istnieje i czy nie jest otwarty/wyłączony do zapisu (np. synchronizacja dysku sieciowego).</dd></div>
+      </dl>
+    </div>
+  </main>
+
+  <script src="pomoc.js"></script>
+</body>
+</html>

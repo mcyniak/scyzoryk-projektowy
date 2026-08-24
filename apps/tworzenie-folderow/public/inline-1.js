@@ -99,6 +99,9 @@ function showTopNotice(message, tone = '') {
   const el = document.querySelector('#topNotice');
   el.textContent = message;
   el.className = `panel notice ${tone}`.trim();
+  // Formularz jest nizej strony - bez tego komunikat (glownie blad walidacji)
+  // zostawal poza ekranem i uzytkownik nie widzial, co poprawic.
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function resetPlanUi() {

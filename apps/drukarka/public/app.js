@@ -276,9 +276,9 @@ function render() {
     li.addEventListener("click", () => {
       document
         .querySelectorAll(".file-item")
-        .forEach(x => x.classList.remove("selected"));
+        .forEach(x => x.classList.remove("is-selected"));
 
-      li.classList.add("selected");
+      li.classList.add("is-selected");
 
       if (file.ext === ".pdf") {
         showPdfPreview(file.url);

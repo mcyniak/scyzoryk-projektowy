@@ -68,10 +68,21 @@ let activeJob = null;
       alert('Ustawienia zapisane w tej przeglądarce.');
     });
 
+    function showStartNotice(message) {
+      const notice = document.querySelector('#startNotice');
+      notice.textContent = message;
+      notice.classList.remove('hidden');
+    }
+
+    function hideStartNotice() {
+      document.querySelector('#startNotice')?.classList.add('hidden');
+    }
+
     document.querySelector('#batchForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
       saveSettings();
+      hideStartNotice();
 
       const file = document.querySelector('#excelFile').files && document.querySelector('#excelFile').files[0];
       const fileCheck = validateExcelChoice(file);
@@ -86,13 +97,20 @@ let activeJob = null;
       data.set('concurrency', getFormField(form, 'concurrency').value || '1');
       const chosenRows = previewRecords.length ? Array.from(selectedRows).sort((a, b) => a - b) : [];
       if (previewRecords.length && !chosenRows.length) {
-        alert('Nie zaznaczono żadnego adresu. Zaznacz minimum jeden adres do wygenerowania.');
+        // Audyt UX 2026-08-24: zamiast alert() komunikat inline nad przyciskiem
+        // Start - alert blokowal strone i ginial w natloku okien.
+        showStartNotice('Nie zaznaczono żadnego adresu. Zaznacz minimum jeden adres do wygenerowania.');
         return;
       }
       data.set('selectedRows', JSON.stringify(chosenRows));
       document.querySelector('#selectedRowsInput').value = JSON.stringify(chosenRows);
 
-      const countText = previewRecords.length ? `${chosenRows.length} wybranych raportów` : 'raportów z Excela';
+      // Bez wczytanego podgladu adresow generowanie idzie po CALYM Excelu -
+      // confirm musi to mowic wprost, zeby uzytkownik nie odpalil zadania
+      // dla wszystkich wierszy przez pomylke.
+      const countText = previewRecords.length
+        ? `${chosenRows.length} wybranych raportów`
+        : 'raportów dla WSZYSTKICH wierszy z Excela (adresy nie zostały sprawdzone)';
       if (!confirm(`Uruchomić generowanie ${countText}? Wyniki zostaną zapisane w bezpiecznym folderze zadania.`)) return;
 
       document.querySelector('#startBatch').disabled = true;
@@ -110,7 +128,9 @@ let activeJob = null;
       const res = await fetch('/api/batch/start', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
       const json = await res.json();
       if (!json.ok) {
-        alert(json.error || 'Nie udało się uruchomić zadania.');
+        // Audyt UX 2026-08-24: blad startu inline (zamiast alert) - widac go
+        // obok przycisku Start i nie znika, dopoki uzytkownik nie poprawi.
+        showStartNotice(json.error || 'Nie udało się uruchomić zadania.');
         document.querySelector('#startBatch').disabled = false;
         document.querySelector('#cancelBatch').disabled = true;
         return;

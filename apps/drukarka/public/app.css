@@ -12,14 +12,16 @@
 #pdfPreview { display: none; width: 100%; height: 100%; min-height: 420px; border: 0; border-radius: var(--radius-md); background: #fff; }
 .preview-fallback { display: flex; align-items: center; justify-content: center; height: 100%; min-height: 420px; width: 100%; color: #9aa4b2; font-weight: 700; text-align: center; padding: var(--space-5); }
 
-/* Kolejnosc plikow: strzalki gora/dol zamiast (albo obok) przeciagania */
-.file-item { grid-template-columns: 20px minmax(0, 1fr) auto 34px; }
+/* Kolejnosc plikow: strzalki gora/dol zamiast (albo obok) przeciagania.
+   Ostatnia kolumna "auto" zamiast sztywnych px, zeby zmiescily sie
+   przyciski 40x40 (minimalny wygodny obszar klikalny). */
+.file-item { grid-template-columns: 20px minmax(0, 1fr) auto auto; }
 .move-actions { display: inline-flex; align-items: center; gap: 4px; }
 .move-btn {
-  min-width: 30px; min-height: 30px; padding: 0; border-radius: var(--radius-sm);
-  background: var(--gray-0); color: var(--text-secondary); border: 1px solid var(--border-default);
+  min-width: 40px; min-height: 40px; padding: 0; border-radius: var(--radius-sm);
+  background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border-default);
 }
-.move-btn:hover { background: var(--gray-50); }
+.move-btn:hover { background: var(--bg-hover); }
 .move-btn:disabled { opacity: .35; cursor: not-allowed; }
 
 .job-summary { margin: 2px 0 var(--space-4); }
@@ -29,6 +31,6 @@
 .print { margin-left: auto; }
 
 @media (max-width: 720px) {
-  .file-item { grid-template-columns: 18px minmax(0, 1fr) auto 32px; }
+  .file-item { grid-template-columns: 18px minmax(0, 1fr) auto auto; }
   .move-actions { grid-column: 2 / 4; justify-content: flex-start; }
 }

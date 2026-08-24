@@ -70,16 +70,33 @@ const summaryEl = document.getElementById('kkSummary');
 // powietrzne" DO sciezki juz wskazujacej na "Kolektory", co nigdy nie moglo
 // dzialac. Jawny wybor usuwa te niejednoznacznosc calkowicie - backend
 // przetwarza WYLACZNIE arkusze pasujace do wybranego rodzaju.
+// Opis trybu jest budowany z dwoch czesci: krotkiego zdania wstepnego
+// (descShort) oraz listy punktowanej (points) - patrz odswiezOpisyRodzaju
+// nizej. runLabel/runningStatus to etykieta CTA "Uruchom..." i komunikat
+// statusu przy starcie pracy - tryby "tylko dodatek" NIE kopiuja kart
+// katalogowych, wiec sztywne "Uruchom dobor kart" bylo tam mylace.
 const MODE_COPY = {
   solary: {
-    desc: 'Solary: program sam znajdzie w środku folder „karty” albo „wzór” (źródłowe PDF-y) oraz „Projekty\\{gmina}\\{id} - adres” (bez gminy, jeśli w arkuszu nie ma osobnej kolumny gminy).',
+    descShort: 'Solary: program sam dopasowuje karty katalogowe i kopiuje je do folderów klientów.',
+    points: [
+      'Źródło kart: folder „karty” albo „wzór” znaleziony w środku głównego folderu.',
+      'Folder klienta: „Projekty\\{gmina}\\{id} - adres” (bez gminy, jeśli w arkuszu nie ma osobnej kolumny gminy).'
+    ],
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „karty”/„wzór” i „Projekty”)',
-    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory',
+    runLabel: 'Uruchom dobór kart',
+    runningStatus: 'Kopiuję karty katalogowe...'
   },
   pompy: {
-    desc: 'Pompy powietrzne Varmero: program sam znajdzie „PC powietrzne\\wzór\\{model}\\Karty katalogowe.pdf” oraz „PC powietrzne\\Projekty\\{id} - adres”. Kolumna „Model pompy”.',
+    descShort: 'Pompy powietrzne Varmero: program sam dopasowuje karty katalogowe i kopiuje je do folderów klientów.',
+    points: [
+      'Źródło kart: „PC powietrzne\\wzór\\{model}\\Karty katalogowe.pdf”, wg kolumny „Model pompy”.',
+      'Folder klienta: „PC powietrzne\\Projekty\\{id} - adres”.'
+    ],
     rootPathLabel: 'Ścieżka do głównego folderu INWESTYCJI (zawiera podfolder „PC powietrzne”)',
-    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\20. Zagórów'
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\20. Zagórów',
+    runLabel: 'Uruchom dobór kart',
+    runningStatus: 'Kopiuję karty katalogowe...'
   },
   // Te cztery tryby NIE dobieraja/kopiuja kart katalogowych w ogole - kazdy
   // dodaje TYLKO swoj jeden rodzaj pliku do folderu klienta, wg tego samego
@@ -87,24 +104,44 @@ const MODE_COPY = {
   // jednego wspolnego formularza z wieloma zipami naraz - wlasciciel chcial
   // dodawac kazdy dodatek osobno, tak jak wybiera sie Solary/Pompy.
   audyty: {
-    desc: 'Audyty: dopasowuje pliki z audytami do adresu z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    descShort: 'Audyty: dopasowuje pliki z audytami do adresu z wybranego arkusza i dokleja je do istniejących folderów klientów.',
+    points: [
+      'Karty katalogowe NIE są w tym trybie dobierane.'
+    ],
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
-    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory',
+    runLabel: 'Rozpocznij kopiowanie audytów',
+    runningStatus: 'Kopiuję audyty...'
   },
   schematy: {
-    desc: 'Dodaj schematy elektryczne: dopasowuje pliki schematów do mocy zestawu (i fazy, gdy trzeba) z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    descShort: 'Dodaj schematy elektryczne: dopasowuje pliki schematów do mocy zestawu (i fazy, gdy trzeba) z wybranego arkusza i dokleja je do istniejących folderów klientów.',
+    points: [
+      'Karty katalogowe NIE są w tym trybie dobierane.'
+    ],
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
-    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory',
+    runLabel: 'Rozpocznij kopiowanie schematów',
+    runningStatus: 'Kopiuję schematy...'
   },
   'dokumenty-seryjne': {
-    desc: 'Dodaj dokumenty seryjne: dopasowuje pliki po adresie z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    descShort: 'Dodaj dokumenty seryjne: dopasowuje pliki po adresie z wybranego arkusza i dokleja je do istniejących folderów klientów.',
+    points: [
+      'Karty katalogowe NIE są w tym trybie dobierane.'
+    ],
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
-    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory',
+    runLabel: 'Rozpocznij kopiowanie dokumentów seryjnych',
+    runningStatus: 'Kopiuję dokumenty seryjne...'
   },
   dobory: {
-    desc: 'Dobory: dopasowuje pliki doboru (np. z Dobory Varmero/myEcodan, nazwy z przedrostkiem „Dob_”) do adresu z wybranego arkusza i dokleja je do istniejących folderów klientów. Karty katalogowe NIE są w tym trybie dobierane.',
+    descShort: 'Dobory: dopasowuje pliki doboru (np. z Dobory Varmero/myEcodan, nazwy z przedrostkiem „Dob_”) do adresu z wybranego arkusza i dokleja je do istniejących folderów klientów.',
+    points: [
+      'Karty katalogowe NIE są w tym trybie dobierane.'
+    ],
     rootPathLabel: 'Ścieżka do głównego folderu (zawiera „Projekty”)',
-    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory'
+    placeholder: 'G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\6. Paradyż Żarnów\\Kolektory',
+    runLabel: 'Rozpocznij kopiowanie doborów',
+    runningStatus: 'Kopiuję dobory...'
   }
 };
 
@@ -124,9 +161,14 @@ function aktualnyRodzajKart() {
 function odswiezOpisyRodzaju() {
   const tryb = aktualnyRodzajKart();
   const copy = MODE_COPY[tryb];
-  document.getElementById('kkModeDesc').textContent = copy.desc;
+  // Krotkie zdanie wstepne + lista punktowana zamiast jednego gestego
+  // akapitu - sciezki typu "Projekty\{gmina}\{id} - adres" ginialy w tekście.
+  document.getElementById('kkModeDesc').innerHTML =
+    `<p>${escapeHtml(copy.descShort)}</p><ul>${copy.points.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul>`;
   document.getElementById('kkRootPathLabel').textContent = copy.rootPathLabel;
   document.getElementById('rootPath').placeholder = copy.placeholder;
+  // Etykieta CTA zalezy od trybu - tryby dodatku nie "dobieraja kart".
+  runBtn.textContent = copy.runLabel;
   // Dokladnie jedna z trzech sekcji dodatku widoczna naraz (albo zadna, dla
   // solary/pompy) - patrz DODATEK_SECTION_ID powyzej.
   for (const id of Object.values(DODATEK_SECTION_ID)) {
@@ -227,7 +269,7 @@ async function runJob(dryRun) {
 
   checkBtn.disabled = true;
   runBtn.disabled = true;
-  statusEl.textContent = dryRun ? 'Sprawdzam tabelę (bez kopiowania)...' : 'Kopiuję karty katalogowe...';
+  statusEl.textContent = dryRun ? 'Sprawdzam tabelę (bez kopiowania)...' : MODE_COPY[tryb].runningStatus;
 
   try {
     const resp = await fetch('/api/run', { method: 'POST', body: formData, headers: { 'X-Scyzoryk-Request': '1' } });

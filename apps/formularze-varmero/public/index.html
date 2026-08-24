@@ -64,7 +64,7 @@
       <form id="batchForm">
         <label>Plik Excel tabeli adresowej
           <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
-          <span class="field-help">Adresy sprawdzają się automatycznie po wybraniu pliku. Karty wynikowe wrócą na skrzynkę skonfigurowaną w Scyzoryku (nie trzeba jej tu podawać) - każde zgłoszenie dostaje własny, unikalny wariant tego adresu, więc karty nigdy się nie pomylą między wierszami.</span>
+          <span class="field-help">Adresy sprawdzają się automatycznie po wybraniu pliku, a karty wynikowe wrócą na skrzynkę pocztową skonfigurowaną w Scyzoryku.</span>
         </label>
 
         <label style="margin-top: var(--space-4);">Nazwa inwestycji
@@ -80,17 +80,6 @@
         </label>
 
         <div class="grid four">
-          <label>Strefa klimatyczna
-            <select name="zone" id="zone" required>
-              <option value="">— wybierz —</option>
-              <option value="1">Strefa I</option>
-              <option value="2">Strefa II</option>
-              <option value="3">Strefa III</option>
-              <option value="4">Strefa IV</option>
-              <option value="5">Strefa V</option>
-            </select>
-            <span class="field-help">Po wyborze województwa podpowiadamy typową strefę - sprawdź ją dla terenów górskich/nadmorskich.</span>
-          </label>
           <label>Województwo
             <select name="wojewodztwo" id="wojewodztwo">
               <option value="">— wybierz —</option>
@@ -111,6 +100,18 @@
               <option>Wielkopolskie</option>
               <option>Zachodniopomorskie</option>
             </select>
+            <span class="field-help">Po wyborze podpowiadamy typową strefę klimatyczną.</span>
+          </label>
+          <label>Strefa klimatyczna
+            <select name="zone" id="zone" required>
+              <option value="">— wybierz —</option>
+              <option value="1">Strefa I</option>
+              <option value="2">Strefa II</option>
+              <option value="3">Strefa III</option>
+              <option value="4">Strefa IV</option>
+              <option value="5">Strefa V</option>
+            </select>
+            <span class="field-help">Sprawdź ją dla terenów górskich/nadmorskich.</span>
           </label>
           <label>Gmina
             <input name="gminaName" id="gminaName" placeholder="np. Zagórów" />
@@ -137,14 +138,12 @@
           </div>
           <div class="selector-tools">
             <input id="addressSearch" type="search" placeholder="Szukaj adresu, osoby albo wiersza..." />
-            <button type="button" class="ghost" id="selectAllRecords">Zaznacz wszystkie</button>
-            <button type="button" class="ghost" id="clearRecords">Odznacz wszystkie</button>
             <button type="button" class="ghost" id="reloadPreview">Odśwież listę</button>
           </div>
           <p class="selector-summary" id="selectedSummary">Zaznaczono: 0</p>
           <div class="address-table-wrap">
             <table>
-              <thead><tr><th class="record-check"></th><th>Wiersz</th><th>Osoba</th><th>Adres</th><th>OZC / urządzenie</th></tr></thead>
+              <thead><tr><th class="record-check"><input type="checkbox" id="recordCheckAll" checked title="Zaznacz/odznacz wszystkie widoczne" /></th><th>Wiersz</th><th>Osoba</th><th>Adres</th><th>OZC / urządzenie</th></tr></thead>
               <tbody id="addressRows"></tbody>
             </table>
           </div>

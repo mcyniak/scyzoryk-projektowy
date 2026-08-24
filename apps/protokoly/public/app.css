@@ -13,9 +13,26 @@
 .folder-row.clickable:hover { background: var(--bg-surface-muted); }
 .folder-row.up-nav { color: var(--text-secondary); font-weight: 700; font-family: inherit; }
 
-.error-hint { color: var(--danger-600, #dc2626); }
+/* Blad skanu ma byc widoczny na pierwszy rzut oka - sam czerwony tekst
+   13px ginal na tle reszty strony, wiec dostaje tlo/ramke jak alert. */
+.error-hint {
+  color: var(--danger-600, #dc2626);
+  background: var(--danger-50);
+  border: 1px solid var(--danger-100);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+/* .error-hint bez tresci nie powinien zajmowac miejsca (element #scanError
+   stoi zawsze w open-folder-row) */
+.error-hint:empty { display: none; }
 
 .option-field-inline { display: flex; flex-direction: row; align-items: center; gap: 6px; margin-right: 8px; }
+
+/* Klasy layoutu uzywane w index.html, wczesniej bez definicji
+   (intro-panel dziedziczy tlo/ramke/padding z klasy .panel) */
+.nav-actions { display: flex; align-items: center; gap: var(--space-3); }
+.open-folder-row { display: flex; align-items: center; gap: var(--space-3); }
+.intro-text { display: block; max-width: 72ch; }
 
 #scanProgress { margin-top: var(--space-3); }
 
@@ -41,5 +58,5 @@
   position: absolute; top: var(--space-2); left: var(--space-2); width: 76px; height: 96px;
   display: flex; align-items: center; justify-content: center; text-align: center;
   font-size: 11px; padding: 6px; box-sizing: border-box; color: var(--danger-600, #dc2626);
-  background: #fff2f2; border: 1px solid var(--danger-600, #dc2626); border-radius: var(--radius-sm);
+  background: var(--danger-50); border: 1px solid var(--danger-600, #dc2626); border-radius: var(--radius-sm);
 }

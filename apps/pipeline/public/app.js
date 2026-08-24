@@ -76,6 +76,9 @@ function showTopNotice(message, tone = '') {
   const el = document.querySelector('#topNotice');
   el.textContent = message;
   el.className = `panel notice ${tone}`.trim();
+  // Formularz jest nizej strony - bez tego komunikat (glownie blad walidacji)
+  // zostawal poza ekranem i uzytkownik nie widzial, co poprawic.
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // --- Przegladarka folderow w stronie (ten sam wzorzec co Tworzenie folderow -
@@ -324,7 +327,7 @@ function dokSeryjneZrodloPola(sufiks, excelFieldId, templatesFieldId) {
   return `
     <label><input type="radio" name="${radioName}" value="glowna" checked data-dok-seryjne-radio="${sufiks}" /> Użyj głównej tabeli adresowej</label>
     <label><input type="radio" name="${radioName}" value="osobna" data-dok-seryjne-radio="${sufiks}" /> Użyj osobnej tabeli (z folderu wzoru)</label>
-    <div class="hidden" data-dok-seryjne-plik="${sufiks}">${fileField(excelFieldId, 'Tabela Excel dla dokumentów seryjnych', 'Z folderu "wzór" tej gałęzi - inna niż główna tabela adresowa.')}</div>
+    <div class="hidden" data-dok-seryjne-plik="${sufiks}">${fileField(excelFieldId, 'Tabela Excel dla dokumentów seryjnych', 'Z folderu "wzór" tej gałęzi. Wygenerowane zostaną TYLKO adresy zaznaczone w kroku 1 - dopasowanie po kolumnie ID (musi zawierać LP/ID z głównej tabeli).')}</div>
     <label>Szablony Word (.docx)
       <input type="file" id="${templatesFieldId}" accept=".docx" multiple required />
       <span class="field-help">Wybierz konkretne szablony z folderu "wzór" - tak samo jak w samych Dokumentach seryjnych, nie cały folder naraz.</span>
@@ -358,7 +361,10 @@ function renderKrokiForm(analiza) {
   if (majaCokolwiek) {
     wspolneBox.classList.remove('hidden');
     document.querySelector('#danaWspolnePola').innerHTML = [
-      pathField('pole_audytyPath', 'Folder z gotowymi audytami (PDF)'),
+      // Zadane na zywo 2026-08-24: folder audytow ma sens TYLKO gdy uzytkownik
+      // zaznaczy "Dołącz audyty" (w grupie Solary lub Pompy) - pole pojawia sie
+      // dopiero wtedy (logika nizej, przy podpieciu handlerow checkboxow).
+      `<div data-audyty-path-box class="hidden">${pathField('pole_audytyPath', 'Folder z gotowymi audytami (PDF)')}</div>`,
       majaPompyPowietrzne ? textField('pole_lokalizacja', 'Lokalizacja / gmina inwestycji') : ''
     ].join('');
     document.querySelectorAll('#danaWspolnePola [data-browse-for]').forEach(btn => {
@@ -404,9 +410,6 @@ function renderKrokiForm(analiza) {
       <h4 style="margin:16px 0 8px">Dobory (tylko pompy powietrzne)</h4>
       <div class="krok-fields">
         <div>
-          <label><input type="checkbox" data-krok-checkbox="gen_myEcodan" /> Dobór myEcodan</label>
-        </div>
-        <div>
           <label><input type="checkbox" data-krok-checkbox="gen_varmero" /> Dobór Varmero</label>
           <div class="krok-fields hidden" data-krok-fields="gen_varmero" style="margin-left:0">
             ${textField('pole_gen_varmero_postalCode', 'Kod pocztowy')}
@@ -414,6 +417,10 @@ function renderKrokiForm(analiza) {
             ${textField('pole_gen_varmero_wojewodztwo', 'Województwo')}
           </div>
         </div>
+        <div>
+          <label><input type="checkbox" data-krok-checkbox="gen_myEcodan" /> Dobór myEcodan</label>
+        </div>
+      </div>
       </div>` : ''}
       </div>
     </div>`);
@@ -432,6 +439,18 @@ function renderKrokiForm(analiza) {
     const fields = kontener.querySelector(`[data-krok-fields="${cb.dataset.krokCheckbox}"]`);
     if (!fields) return;
     cb.addEventListener('change', () => fields.classList.toggle('hidden', !cb.checked));
+  });
+
+  // Folder audytow widoczny tylko gdy co najmniej jedno "Dołącz audyty"
+  // (Solary albo Pompy) jest zaznaczone - zadane na zywo 2026-08-24.
+  const audytyPathBox = document.querySelector('[data-audyty-path-box]');
+  const odswiezAudytyPathBox = () => {
+    const jakiekolwiekAudyty = krokZaznaczony('audytySolary') || krokZaznaczony('audytyPompy');
+    audytyPathBox.classList.toggle('hidden', !jakiekolwiekAudyty);
+  };
+  ['audytySolary', 'audytyPompy'].forEach(id => {
+    const cb = document.querySelector(`[data-krok-checkbox="${id}"]`);
+    if (cb) cb.addEventListener('change', odswiezAudytyPathBox);
   });
   kontener.querySelectorAll('[data-dok-seryjne-radio]').forEach(radio => {
     radio.addEventListener('change', () => {
@@ -591,7 +610,13 @@ async function refreshStatus() {
       return;
     }
     renderRun(json.run);
-    if (json.run.status === 'skonczony' || json.run.status === 'blad') {
+    // Zadane na zywo 2026-08-24: po zakonczeniu przebiegu przycisk "Uruchom"
+    // zostawal na zawsze w stanie "Uruchamiam..." (disabled) - polling sie
+    // konczyl, ale nikt nie przywracal stanu przycisku.
+    if (STATUSY_ZAKONCZONE.includes(json.run.status)) {
+      const btn = document.querySelector('#startBtn');
+      btn.disabled = false;
+      btn.textContent = 'Uruchom pipeline';
       clearInterval(pollTimer);
       pollTimer = null;
     }

@@ -48,6 +48,15 @@
     el.innerHTML = `<div class="error-box">${escapeHtml(message)}${extraHtml}</div>`;
   }
 
+  // Sukces do tego samego kontenera co showError, ale zielonym stylem -
+  // komunikaty "Kolejka została utworzona..." nie sa bledem i nie powinny
+  // wygladac jak alert-danger.
+  function showSuccess(containerId, message) {
+    const el = $(containerId);
+    if (!message) { el.innerHTML = ""; return; }
+    el.innerHTML = `<div class="success-box">${escapeHtml(message)}</div>`;
+  }
+
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
@@ -466,7 +475,11 @@
       const readWarningHtml = (r.folderReadWarnings && r.folderReadWarnings.length)
         ? `<div class="help-note" style="color:#b45309;">⚠️ Nie udało się w pełni odczytać folderu z dysku (możliwa chwilowa usterka dysku sieciowego) - dopasowanie może być niepełne. Spróbuj dopasować ten adres jeszcze raz.</div>`
         : "";
-      const collapsedClass = " collapsed";
+      // Grupy z plikami do sprawdzenia (status inny niz SETTLED, badge guess/
+      // unknown) startuja rozwiniete - od razu widac co wymaga recznej decyzji.
+      // Kompletne/pewne (ok) startuja zwiniete. Reczne klikniecie naglowka
+      // dalej zwija/rozwija kazda grupę (handler ponizej).
+      const collapsedClass = needsReview ? "" : " collapsed";
       return `
       <div class="address-group${collapsedClass}" data-gidx="${gIdx}">
         <div class="address-group-header" data-toggle="${gIdx}">
@@ -639,7 +652,7 @@
       if (data.missing?.length) {
         showError("orderError", `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie zostal" : "plikow nie zostalo"} dodanych (zniknely albo przestaly pasowac): ${data.missing.join(", ")}`);
       } else {
-        showError("orderError", "Kolejka została utworzona. Możesz teraz kliknąć DRUKUJ.");
+        showSuccess("orderError", "Kolejka została utworzona. Możesz teraz kliknąć DRUKUJ.");
       }
     } catch (err) {
       showError("orderError", err.message);
@@ -696,7 +709,7 @@
       </div>
       <div id="wmGroupsContainer"></div>
       <div style="margin-top:16px;">
-        <button id="wmAddToQueueBtn" type="button">Dodaj zaznaczone do kolejki druku →</button>
+        <button id="wmAddToQueueBtn" type="button" class="btn btn-primary">Dodaj zaznaczone do kolejki druku →</button>
       </div>
     `;
     renderWmGroups();
@@ -841,9 +854,11 @@
       setStep(3, "stepperWm");
       window.scrollTo({ top: document.querySelector("#panelPrint").offsetTop, behavior: "smooth" });
       // Audyt 2026-08-21: patrz komentarz przy poprzednim wywolaniu set-merged.
-      showError("wmError", data.missing?.length
-        ? `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie zostal" : "plikow nie zostalo"} dodanych (zniknely albo przestaly pasowac): ${data.missing.join(", ")}`
-        : "");
+      if (data.missing?.length) {
+        showError("wmError", `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie zostal" : "plikow nie zostalo"} dodanych (zniknely albo przestaly pasowac): ${data.missing.join(", ")}`);
+      } else {
+        showSuccess("wmError", "Kolejka została utworzona. Możesz teraz kliknąć DRUKUJ.");
+      }
     } catch (err) {
       showError("wmError", err.message);
     } finally {

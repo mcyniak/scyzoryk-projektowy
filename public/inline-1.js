@@ -59,7 +59,7 @@ async function refreshStatus() {
       if (meta) meta.textContent = appMeta(app);
     }
   } catch (error) {
-    setText('#lastRefresh', 'Nie udało się sprawdzić statusu.');
+    // Brak #lastRefresh w HTML - o bledzie sieci informuja same badge na kartach.
     for (const card of cards.values()) {
       const badge = card.querySelector('.badge');
       if (!badge) continue;
@@ -96,7 +96,7 @@ async function openTool(event) {
       } catch (_) { /* przejsciowy blad sieci - kolejna proba za chwile */ }
       await new Promise(resolve => setTimeout(resolve, 700));
     }
-    if (badge) badge.textContent = 'nie udało się uruchomić — spróbuj ponownie';
+    if (badge) badge.textContent = 'awaria — spróbuj ponownie';
   } catch (error) {
     if (badge) badge.textContent = originalBadgeText || 'błąd uruchamiania';
   }
@@ -105,7 +105,7 @@ for (const card of cards.values()) {
   card.querySelector('a.button-link')?.addEventListener('click', openTool);
 }
 
-document.querySelector('#refreshBtn')?.addEventListener('click', refreshStatus);
+// #refreshBtn nie istnieje w HTML - odswiezanie jest tylko automatyczne.
 refreshStatus();
 // Audyt zuzycia RAM/CPU 2026-08-21: 10s bylo czesciej niz potrzeba dla
 // samego "czy apka zyje" (status apek nie zmienia sie co kilka sekund w

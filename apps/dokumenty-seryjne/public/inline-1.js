@@ -369,7 +369,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       const rows = selectedRows();
       if (!rows.length) return status($('recordsStatus'), 'Zaznacz przynajmniej jeden rekord.', 'err');
       const uidBoxVisible = $('uidColumnBox') && !$('uidColumnBox').classList.contains('hidden');
-      if (uidBoxVisible && !$('uidColumn').value) return status($('recordsStatus'), 'Wybierz kolumnę UID (potrzebna do rozpoznania wariantu mocy) zanim uruchomisz generowanie.', 'err');
+      if (uidBoxVisible && !$('uidColumn').value) return status($('recordsStatus'), 'Wybierz kolumnę wariantu (rozmiar zasobnika / moc pompy) zanim uruchomisz generowanie.', 'err');
       setBusy(true); hide($('resultPanel')); show($('cancelBtn'));
       status($('recordsStatus'), `Rozpoczynam tworzenie ${rows.length} PDF-ów...`, 'warn');
       updateProgress({ phase: 'queued', percent: 0, message: 'Przygotowuję generowanie...' });

@@ -240,7 +240,10 @@ function clamp(n, min, max) {
 
 function setStatus(msg, error = false) {
   statusEl.textContent = msg || '';
-  statusEl.classList.toggle('error', Boolean(error));
+  // error=true -> czerwony (.status.error), error='ok' -> zielony (.status.ok),
+  // false/brak -> neutralny. Istniejace wywolania z true/false dzialaja bez zmian.
+  statusEl.classList.toggle('error', error === true);
+  statusEl.classList.toggle('ok', error === 'ok');
 }
 
 function canvasPageRect() {
@@ -470,8 +473,8 @@ function renderActiveEditor() {
           <span>Nazwa</span>
           <input id="stampNameInput" type="text" value="${escapeAttr(stamp.name)}" />
         </label>
-        <button type="button" id="duplicateStampBtn" class="ghost smallBtn">Duplikuj</button>
-        <button type="button" id="deleteStampBtn" class="ghost dangerBtn smallBtn" ${stamps.length === 1 ? 'disabled' : ''}>Usuń</button>
+        <button type="button" id="duplicateStampBtn" class="btn btn-ghost btn-sm smallBtn">Duplikuj</button>
+        <button type="button" id="deleteStampBtn" class="btn btn-danger-ghost btn-sm smallBtn" ${stamps.length === 1 ? 'disabled' : ''}>Usuń</button>
       </div>
 
       <div id="textEditor" class="tabContent">
@@ -513,8 +516,8 @@ function renderActiveEditor() {
         ${appliesHere ? 'Pieczątka jest widoczna na tej stronie.' : 'Pieczątka nie pojawi się na tej stronie.'}
       </p>
       <div class="pageActionRow">
-        <button type="button" id="excludeCurrentPageBtn" class="ghost dangerBtn smallBtn">Usuń tylko z tej strony</button>
-        <button type="button" id="restoreCurrentPageBtn" class="ghost smallBtn">Przywróć na tej stronie</button>
+        <button type="button" id="excludeCurrentPageBtn" class="btn btn-danger-ghost btn-sm smallBtn">Usuń tylko z tej strony</button>
+        <button type="button" id="restoreCurrentPageBtn" class="btn btn-ghost btn-sm smallBtn">Przywróć na tej stronie</button>
       </div>
 
       <h3>Ustawienie</h3>
@@ -1233,7 +1236,7 @@ form.addEventListener('submit', async event => {
     // pieczatki stracil polskie znaki w wynikowym pliku, patrz server.js#loadTextFont.
     setStatus(fontFallback
       ? 'Gotowe, ale brakowało czcionki z polskimi znakami na serwerze - sprawdź, czy tekst pieczatki w pobranym pliku wygląda poprawnie.'
-      : 'Gotowe. Plik powinien się pobrać.', fontFallback);
+      : 'Gotowe. Plik powinien się pobrać.', fontFallback ? true : 'ok');
   } catch (err) {
     console.error(err);
     setStatus(err.message, true);

@@ -48,27 +48,27 @@
         <div id="pdfPreviewList" class="pdfPreviewList" hidden></div>
 
         <div class="presetBox">
-          <div class="sectionHeader compactSectionHeader">
-            <h2>2. Presety pieczątek</h2>
-          </div>
-          <label class="field">
-            <span>Zapisany zestaw</span>
-            <select id="presetSelect">
-              <option value="">Brak zapisanych presetów</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>Nazwa presetu</span>
-            <input id="presetNameInput" type="text" placeholder="np. Projektant - rysunki" />
-          </label>
-          <div class="presetActions">
-            <button type="button" id="loadPresetBtn" class="btn btn-secondary smallBtn">Wczytaj</button>
-            <button type="button" id="savePresetBtn" class="btn btn-secondary smallBtn">Zapisz obecny</button>
-            <button type="button" id="deletePresetBtn" class="btn btn-danger-ghost smallBtn">Usuń</button>
-            <button type="button" id="exportPresetsBtn" class="btn btn-secondary smallBtn">Eksport</button>
-            <label class="btn btn-secondary smallBtn fileImportLabel">Import<input id="importPresetsInput" type="file" accept="application/json,.json" hidden /></label>
-          </div>
-          <small class="presetHint">Preset zapamiętuje pieczątki, strony, pozycje i ustawienia. Przy dużym pliku pieczątki może być potrzebne ponowne wybranie pliku.</small>
+          <details class="presetFold">
+            <summary>2. Presety (opcjonalne)</summary>
+            <label class="field">
+              <span>Zapisany zestaw</span>
+              <select id="presetSelect">
+                <option value="">Brak zapisanych presetów</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Nazwa presetu</span>
+              <input id="presetNameInput" type="text" placeholder="np. Projektant - rysunki" />
+            </label>
+            <div class="presetActions">
+              <button type="button" id="loadPresetBtn" class="btn btn-secondary smallBtn">Wczytaj</button>
+              <button type="button" id="savePresetBtn" class="btn btn-secondary smallBtn">Zapisz obecny</button>
+              <button type="button" id="deletePresetBtn" class="btn btn-danger-ghost smallBtn">Usuń</button>
+              <button type="button" id="exportPresetsBtn" class="btn btn-secondary smallBtn">Eksport</button>
+              <label class="btn btn-secondary smallBtn fileImportLabel">Import<input id="importPresetsInput" type="file" accept="application/json,.json" hidden /></label>
+            </div>
+            <small class="presetHint">Preset zapamiętuje pieczątki, strony, pozycje i ustawienia. Przy dużym pliku pieczątki może być potrzebne ponowne wybranie pliku.</small>
+          </details>
         </div>
 
         <div class="sectionHeader">
@@ -81,8 +81,8 @@
         <div id="stampList" class="stampList"></div>
         <div id="activeEditor" class="activeEditor"></div>
 
-        <button id="submitBtn" class="btn btn-primary btn-lg primary" type="submit">Dodaj pieczątki i pobierz</button>
         <p id="status" class="status"></p>
+        <button id="submitBtn" class="btn btn-primary btn-lg primary" type="submit">Dodaj pieczątki i pobierz</button>
       </section>
 
       <section class="panel previewPanel">

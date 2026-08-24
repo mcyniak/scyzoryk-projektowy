@@ -65,9 +65,9 @@
             <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
             <span class="field-help">Wybierz plik .xlsx z inwestycją, potem kliknij "Sprawdź adresy".</span>
           </label>
-          <label style="align-self:end;">
+          <div style="align-self:end;">
             <button type="button" class="secondary" id="checkAddresses">Sprawdź adresy</button>
-          </label>
+          </div>
           <label>Nazwa inwestycji
             <input name="investmentName" id="investmentName" placeholder="np. Ślesin 2026" />
           </label>
@@ -82,8 +82,9 @@
             </div>
             <span class="field-help">Gotowe raporty PDF zapiszą się bezpośrednio w tym folderze. Opcja „Pomiń już gotowe raporty” sprawdzi właśnie tę lokalizację.</span>
           </label>
-          <label>Lokalizacja / kod pocztowy (tylko dla wierszy bez własnej kolumny lokalizacji)
+          <label>Lokalizacja / kod pocztowy
             <input name="location" id="location" value="" placeholder="np. 62-561 Ślesin" />
+            <span class="field-help">Używane tylko dla wierszy bez własnej kolumny lokalizacji.</span>
           </label>
         </div>
 
@@ -116,7 +117,9 @@
 
         <div class="actions">
           <button type="submit" id="startBatch">Start generowania PDF</button>
+          <span class="field-help">Bez wcześniejszego sprawdzenia użyte zostaną wszystkie wiersze z Excela.</span>
         </div>
+        <p id="startNotice" class="panel notice hidden" role="alert"></p>
       </form>
     </section>
 

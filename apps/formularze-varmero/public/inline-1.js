@@ -104,12 +104,18 @@ document.querySelector('#wojewodztwo').addEventListener('change', (event) => {
 document.querySelector('#excelFile').addEventListener('change', () => loadAddressPreview());
 document.querySelector('#reloadPreview').addEventListener('click', () => loadAddressPreview());
 document.querySelector('#addressSearch').addEventListener('input', () => renderAddressRows());
-// "Zaznacz/Odznacz wszystkie" dziala TYLKO na aktualnie widocznych (po
-// filtrze "#addressSearch") wierszach - audyt 2026-08-21, wczesniej
-// dzialalo na calym previewRecords, wiec po przefiltrowaniu klikniecie
-// "zaznacz wszystkie" po cichu zaznaczalo tez adresy spoza filtra.
-document.querySelector('#selectAllRecords').addEventListener('click', () => { filteredPreviewRecords().forEach(row => selectedRows.add(row.rowNumber)); renderAddressRows(); });
-document.querySelector('#clearRecords').addEventListener('click', () => { filteredPreviewRecords().forEach(row => selectedRows.delete(row.rowNumber)); renderAddressRows(); });
+// Audyt UX 2026-08-24: dwa osobne przyciski "Zaznacz wszystkie"/"Odznacz
+// wszystkie" zamienione na jeden checkbox w naglowku tabeli - ten sam wzorzec
+// co formularze-ecodan/inline-1.js (wlasciciel zglosil, ze uzytkownik ma za
+// duzo przyciskow naraz). Dziala TYLKO na aktualnie widocznych (po filtrze
+// "#addressSearch") wierszach - audyt 2026-08-21, wczesniej dzialalo na calym
+// previewRecords, wiec po przefiltrowaniu klikniecie "zaznacz wszystkie" po
+// cichu zaznaczalo tez adresy spoza filtra.
+document.querySelector('#recordCheckAll').addEventListener('change', (event) => {
+  const checked = event.target.checked;
+  filteredPreviewRecords().forEach(row => { if (checked) selectedRows.add(row.rowNumber); else selectedRows.delete(row.rowNumber); });
+  renderAddressRows();
+});
 document.querySelector('#browseOutputFolder')?.addEventListener('click', () => {
   openFolderBrowser(document.querySelector('#outputPath').value.trim() || null);
 });
@@ -156,10 +162,10 @@ document.querySelector('#batchForm').addEventListener('submit', async (event) =>
     alert(fileCheck.message);
     return;
   }
-  if (!getFormField(form, 'zone').value) {
-    alert('Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga.');
-    return;
-  }
+  // Puste pole strefy lapie natywna walidacja `required` na selekcie
+  // (przegladarka pokazuje dymek PRZED odpaleniem submit handlera) - dawny
+  // zapasowy alert() tu nie mial kiedy sie odpalic i zostal usuniety
+  // (audyt UX 2026-08-24).
 
   const data = new FormData(form);
   data.set('concurrency', getFormField(form, 'concurrency').value || '1');
@@ -378,6 +384,15 @@ function renderAddressRows() {
       + `</tr>`;
   }).join('') || '<tr><td colspan="5">Brak adresów dla obecnego filtra.</td></tr>';
   updateSelectedSummary();
+  // Synchronizacja checkboxa "Zaznacz wszystkie" z widocznym stanem (w tym
+  // indeterminate przy zaznaczeniu czesciowym) - ten sam wzorzec co
+  // formularze-ecodan/inline-1.js.
+  const checkAll = document.querySelector('#recordCheckAll');
+  if (checkAll) {
+    const zaznaczoneWidoczne = rows.filter(row => selectedRows.has(row.rowNumber)).length;
+    checkAll.indeterminate = zaznaczoneWidoczne > 0 && zaznaczoneWidoczne < rows.length;
+    if (!checkAll.indeterminate) checkAll.checked = rows.length > 0 && zaznaczoneWidoczne === rows.length;
+  }
 }
 
 // Polska liczba mnoga ma 3 formy (1 / 2-4 poza 12-14 / reszta), nie 2 -

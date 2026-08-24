@@ -28,7 +28,7 @@
 .file-row:last-child { border-bottom: 0; }
 .file-row .grow { flex: 1; min-width: 0; }
 .file-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-remove { border: 1px solid var(--border-default); background: var(--bg-surface); border-radius: var(--radius-sm); padding: 7px 10px; font-weight: 700; cursor: pointer; color: var(--danger-600); }
+.file-remove { border: 1px solid var(--border-default); background: var(--bg-surface); border-radius: var(--radius-sm); padding: 10px 14px; min-width: 40px; min-height: 40px; font-weight: 700; cursor: pointer; color: var(--danger-600); }
 
 .result-list { margin-top: var(--space-4); display: grid; gap: var(--space-3); }
 .result-item { padding: var(--space-4); border-radius: var(--radius-lg); border: 1px solid var(--border-default); background: var(--bg-surface); }
@@ -44,6 +44,16 @@
 
 .empty { color: var(--text-tertiary); font-weight: 600; padding: var(--space-4); text-align: center; }
 
+/* Komunikat bledu wstawiany innerHTML-em przez app.js (klasa .error-box) -
+   wzor .alert-danger z shared-styles/components.css (tlo/ramka), tekst w
+   kolorze glownym, zeby byl czytelny w jasnym i ciemnym motywie. */
+.error-box {
+  margin-top: var(--space-3); padding: var(--space-4);
+  background: var(--danger-50); border: 1px solid var(--danger-100); border-radius: var(--radius-lg);
+  color: var(--text-primary); font-weight: 600;
+}
+.error-box + .error-box { margin-top: 8px; }
+
 /* Ekran przegladu/potwierdzenia podzialu na adresy */
 .review-file { padding: var(--space-4); border-radius: var(--radius-lg); border: 1px solid var(--border-default); background: var(--bg-surface); margin-bottom: var(--space-3); }
 .review-file:last-child { margin-bottom: 0; }
@@ -58,7 +68,9 @@
 .thumb-cell img, .thumb-placeholder { width: 80px; height: 104px; object-fit: contain; border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: var(--bg-surface-muted); }
 .thumb-placeholder { display: grid; place-items: center; color: var(--text-tertiary); font-size: 10px; text-align: center; padding: 4px; }
 .page-no { font-size: 11px; color: var(--text-tertiary); font-weight: 700; }
-.split-btn { flex: 0 0 auto; width: 24px; height: 24px; padding: 0; border-radius: 999px; background: var(--bg-surface); color: var(--text-tertiary); border: 1px solid var(--border-default); font-weight: 800; font-size: 12.5px; align-self: center; }
+/* Kluczowy przycisk podzialu pliku - wczesniej 24x24 byl praktycznie
+   nietrafialny; min 32x32 + padding daja wiekszy obszar klikalny. */
+.split-btn { flex: 0 0 auto; width: 36px; height: 36px; min-width: 32px; min-height: 32px; padding: 0 10px; border-radius: 999px; background: var(--bg-surface); color: var(--text-tertiary); border: 1px solid var(--border-default); font-weight: 800; font-size: 12.5px; align-self: center; cursor: pointer; }
 .split-btn.active { background: var(--brand-500); color: #fff; border-color: transparent; }
 
 .block-list { margin-top: var(--space-3); display: grid; gap: 8px; }

@@ -10,7 +10,7 @@
 .tool-search kbd {
   position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
   font-size: 11px; font-weight: 700; color: var(--text-tertiary);
-  background: var(--gray-100); border: 1px solid var(--border-default); border-radius: 6px; padding: 2px 7px;
+  background: var(--bg-sunken); border: 1px solid var(--border-default); border-radius: 6px; padding: 2px 7px;
 }
 .tool-search-empty { display: none; }
 .tool-search-empty.is-visible { display: block; }
@@ -49,14 +49,17 @@
 .tool-card h3 { font-size: var(--text-md); }
 .tool-card p { color: var(--text-secondary); font-size: var(--text-sm); line-height: var(--leading-snug); flex: 1; }
 .tool-card .card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; }
-.tool-card .btn { padding: 0 16px; min-height: 38px; font-size: var(--text-sm); flex: none; }
+.tool-card .btn { padding: 0 16px; min-height: 42px; font-size: var(--text-sm); flex: none; }
 .tool-card .card-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 12px; }
 .tool-card.is-offline { opacity: .62; }
 .tool-card.is-hidden-by-search { display: none; }
 .tool-card.disabled { opacity: .58; }
 .tool-card.warn { border-color: var(--danger-100); }
 .badge.online { background: var(--success-50); color: var(--success-600); }
-.badge.offline { background: var(--gray-100); color: var(--text-tertiary); }
+.badge.offline { background: var(--bg-sunken); color: var(--text-tertiary); }
+/* Dluzsze statusy (np. "awaria - sprobuj ponownie") nie moga lamac layoutu
+   karty - nadpisujemy nowrap ze wspolnego .badge i pozwalamy na zawijanie. */
+.tool-card .badge { white-space: normal; text-align: left; }
 .tool-category.is-empty-by-search { display: none; }
 .tool-search-empty { margin-top: var(--space-6); }
 .tool-search-empty:not(.is-visible) { display: none; }

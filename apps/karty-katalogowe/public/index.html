@@ -56,7 +56,19 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title">Ustawienia</h2>
-          <p class="panel-desc" id="kkModeDesc">Solary: program sam znajdzie w środku folder „karty” albo „wzór” (źródłowe PDF-y) oraz „Projekty\{gmina}\{id} - adres” (bez gminy, jeśli arkusz nazywa się po prostu „Solary”). Arkusz w Excelu: „Solary” (z albo bez nazwy gminy).</p>
+          <div class="panel-desc" id="kkModeDesc"><p>Solary: program sam dopasowuje karty katalogowe i kopiuje je do folderów klientów.</p><ul><li>Źródło kart: folder „karty” albo „wzór” znaleziony w środku głównego folderu.</li><li>Folder klienta: „Projekty\{gmina}\{id} - adres” (bez gminy, jeśli w arkuszu nie ma osobnej kolumny gminy).</li></ul></div>
+        </div>
+      </div>
+
+      <div class="kk-field">
+        <label>Rodzaj</label>
+        <div class="kk-mode-row">
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="solary" id="kkModeSolary" checked> Solary (karty katalogowe)</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="pompy" id="kkModePompy"> Pompy powietrzne Varmero (karty katalogowe)</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="audyty" id="kkModeAudyty"> Audyty</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="schematy" id="kkModeSchematy"> Dodaj schematy elektryczne</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="dokumenty-seryjne" id="kkModeDokumentySeryjne"> Dodaj dokumenty seryjne</label>
+          <label class="kk-mode-option"><input type="radio" name="kkMode" value="dobory" id="kkModeDobory"> Dobory</label>
         </div>
       </div>
 
@@ -70,18 +82,6 @@
         <label for="sheetSelect">Arkusz</label>
         <select id="sheetSelect"></select>
         <p class="kk-hint">Wybierz arkusz, który zawiera dane (kolumny: LP gminy, Adres, UID/Rodzaj zestawu...) - nazwa arkusza może być dowolna, program już jej nie zgaduje.</p>
-      </div>
-
-      <div class="kk-field">
-        <label>Rodzaj</label>
-        <div class="kk-mode-row">
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="solary" id="kkModeSolary" checked> Solary (karty katalogowe)</label>
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="pompy" id="kkModePompy"> Pompy powietrzne Varmero (karty katalogowe)</label>
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="audyty" id="kkModeAudyty"> Audyty</label>
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="schematy" id="kkModeSchematy"> Dodaj schematy elektryczne</label>
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="dokumenty-seryjne" id="kkModeDokumentySeryjne"> Dodaj dokumenty seryjne</label>
-          <label class="kk-mode-option"><input type="radio" name="kkMode" value="dobory" id="kkModeDobory"> Dobory</label>
-        </div>
       </div>
 
       <div class="kk-field">

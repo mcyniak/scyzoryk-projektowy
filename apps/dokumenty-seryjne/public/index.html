@@ -66,7 +66,7 @@
             <input id="templateFile" type="file" accept=".docx" multiple>
             <div class="hint" style="margin-top:6px">Kliknij i wybierz pliki szablonów (można zaznaczyć kilka naraz) - wykryte typy pojawią się poniżej po wczytaniu.</div>
           </div>
-          <div id="templateGroupsBox" class="hidden" style="margin-top:12px"><div class="marker-head" style="margin-bottom:6px">Ktore dokumenty wygenerowac</div><div id="templateGroupsList"></div></div>
+          <div id="templateGroupsBox" class="hidden" style="margin-top:12px"><div class="marker-head" style="margin-bottom:6px">Które dokumenty wygenerować</div><div id="templateGroupsList"></div></div>
           <div class="hint">Plik z korespondencją seryjną, format DOCX.</div>
         </div>
         <div class="field drop">
@@ -92,7 +92,7 @@
 
       <div class="power-panel">
         <div class="field">
-          <label for="sheetSelect">Moc / arkusz z Excela</label>
+          <label for="sheetSelect">Moc pompy / rozmiar zasobnika</label>
           <select id="sheetSelect" class="select"></select>
           <div class="hint">Wybierz arkusz z odpowiednią mocą, np. 8kW, 10kW albo 12kW.</div>
         </div>
@@ -116,10 +116,6 @@
         <div id="fileNamePreview" class="sheet-note">Podgląd nazwy pliku pojawi się po wybraniu adresów.</div>
       </div>
 
-      <div class="actions">
-        <button id="generateBtn" class="button">Utwórz PDF-y</button>
-        <button id="cancelBtn" class="button danger hidden">Przerwij</button>
-      </div>
       <!-- Pola techniczne wymagane przez skrypt formularza. Nie sa widoczne dla uzytkownika. -->
       <div class="hidden" aria-hidden="true">
         <select id="addressColumn"></select>
@@ -171,6 +167,11 @@
 
       <div class="records-wrap" style="margin-top:16px">
         <table class="records" id="recordsTable"></table>
+      </div>
+
+      <div class="actions">
+        <button id="generateBtn" class="button">Utwórz PDF-y</button>
+        <button id="cancelBtn" class="button danger hidden">Przerwij</button>
       </div>
     </section>
 

@@ -17,8 +17,8 @@
 .button { border: 0; border-radius: var(--radius-md); min-height: var(--hit-min); padding: 0 20px; font: inherit; font-weight: 700; cursor: pointer; }
 .button.primary { background: var(--brand-500); color: #fff; }
 .button.primary:hover { background: var(--brand-600); }
-.button.secondary { background: var(--gray-0); border: 1px solid var(--border-strong); color: var(--text-primary); }
-.button.secondary:hover { background: var(--gray-50); }
+.button.secondary { background: var(--bg-surface); border: 1px solid var(--border-strong); color: var(--text-primary); }
+.button.secondary:hover { background: var(--bg-hover); }
 .button:disabled { opacity: .55; cursor: not-allowed; }
 .button.mode-active { outline: 2px solid var(--brand-500); outline-offset: 2px; }
 .actions { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; margin-top: var(--space-5); }
@@ -51,6 +51,9 @@
 .check input { width: 18px; height: 18px; }
 .empty { color: var(--text-tertiary); font-weight: 600; padding: var(--space-4); }
 .mini { font-size: 12.5px; color: var(--text-tertiary); font-weight: 600; }
+/* Drobny tekst pomocniczy (uzuwany w inline-1.js przy podsumowaniu zmian),
+   wzor: apps/pipeline/public/app.css */
+.small { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.35; }
 .envwarn { margin: var(--space-4) 0; padding: 13px; border-radius: var(--radius-md); background: var(--danger-50); border: 1px solid var(--danger-100); color: var(--danger-600); font-weight: 600; line-height: 1.45; }
 .file-state { font-size: 12px; font-weight: 700; color: var(--text-tertiary); min-width: 90px; text-align: right; }
 .hidden { display: none !important; }

@@ -29,19 +29,21 @@
 .mode-card:not(.ghost) { border-color: var(--brand-500); background: var(--brand-50); box-shadow: 0 0 0 1px var(--brand-500) inset; }
 .mode-card:not(.ghost) .mode-card-icon { background: var(--brand-500); color: #fff; }
 
-/* Stepper: widoczny caly czas podczas pracy, kroki ukonczone klikalne */
+/* Stepper: widoczny caly czas podczas pracy. Etykiety min. 12px (czyelnosc),
+   brak cursor:pointer na ukonczonych krokach - nie ma handlera klikniecia,
+   wiec pointer bylby martwa affordancja. */
 .stepper {
   display: flex; align-items: center; gap: 4px; margin-bottom: var(--space-5);
   padding: var(--space-3) var(--space-4); background: var(--bg-surface); border: 1px solid var(--border-default);
   border-radius: var(--radius-lg); position: sticky; top: 12px; z-index: 30; box-shadow: var(--shadow-sm);
 }
 .step-dot { display: flex; flex-direction: column; align-items: center; gap: 4px; opacity: .5; transition: opacity var(--duration-base); flex: 1; }
-.step-dot .dot { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 12.5px; background: var(--gray-100); color: var(--text-tertiary); border: 2px solid var(--border-default); }
-.step-dot .step-label { font-size: 10.5px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
+.step-dot .dot { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 12.5px; background: var(--bg-sunken); color: var(--text-tertiary); border: 2px solid var(--border-default); }
+.step-dot .step-label { font-size: 12px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
 .step-dot.active { opacity: 1; }
 .step-dot.active .dot { background: var(--brand-500); color: #fff; border-color: var(--brand-500); }
 .step-dot.active .step-label { color: var(--text-primary); }
-.step-dot.done { opacity: 1; cursor: pointer; }
+.step-dot.done { opacity: 1; }
 .step-dot.done .dot { background: var(--success-50); color: var(--success-600); border-color: var(--success-100); font-size: 0; }
 .step-dot.done .dot::after { content: ""; width: 11px; height: 8px; border-left: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg) translate(1px, -1px); }
 .step-dot.done:hover .step-label { color: var(--brand-600); }
@@ -54,7 +56,7 @@
 .candidate-item { display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 12px; background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-md); padding: 10px 14px; cursor: pointer; transition: border-color var(--duration-fast), box-shadow var(--duration-fast); }
 .candidate-item:hover { border-color: var(--border-strong); box-shadow: var(--shadow-xs); }
 .candidate-item.selected { background: var(--brand-50); border-color: var(--brand-100); }
-.candidate-lp { width: 36px; height: 36px; border-radius: var(--radius-sm); background: var(--gray-100); color: var(--text-secondary); display: grid; place-items: center; font-weight: 800; font-size: 12.5px; }
+.candidate-lp { width: 36px; height: 36px; border-radius: var(--radius-sm); background: var(--bg-sunken); color: var(--text-secondary); display: grid; place-items: center; font-weight: 800; font-size: 12.5px; }
 .candidate-info strong { display: block; color: var(--text-primary); font-size: var(--text-sm); }
 .candidate-info span { color: var(--text-tertiary); font-size: 12.5px; }
 .candidate-arrow { color: var(--brand-500); font-weight: 800; font-size: 16px; }
@@ -98,6 +100,23 @@
 
 .success-panel { text-align: center; padding: var(--space-5); border-radius: var(--radius-lg); background: var(--success-50); border: 1px solid var(--success-100); color: var(--success-600); font-weight: 700; margin-top: var(--space-4); }
 .success-panel .big-check { font-size: 32px; display: block; margin-bottom: 6px; }
+
+/* Komunikaty i statusy renderowane z app.js, ktorych nie ma w /shared/components.css.
+   .error-box wzorowany na alert-danger, .badge.ok/.guess/.unknown na badge-success /
+   badge-warning / badge-neutral z tamtego pliku. */
+.error-box {
+  padding: var(--space-4); border-radius: var(--radius-lg); margin-bottom: var(--space-3);
+  background: var(--danger-50); border: 1px solid var(--danger-100); color: var(--danger-600); font-weight: 600;
+}
+.error-box strong { font-weight: 800; }
+.success-box {
+  padding: var(--space-4); border-radius: var(--radius-lg); margin-bottom: var(--space-3);
+  background: var(--success-50); border: 1px solid var(--success-100); color: var(--success-600); font-weight: 700;
+}
+.help-note { color: var(--text-secondary); font-size: 13px; line-height: var(--leading-snug, 1.5); margin: var(--space-2) 0; }
+.badge.ok { background: var(--success-50); color: var(--success-600); }
+.badge.guess { background: var(--warning-50); color: var(--warning-600); }
+.badge.unknown { background: var(--bg-sunken); color: var(--text-secondary); }
 
 /* Blad "dokumentacji powykonawczej" (audyt v1.0.8 P1) wysyla liste WSZYSTKICH
    niepowodzen (plik + etap), jedno na linie - bez pre-wrap #statusText

@@ -8,13 +8,14 @@ input, select { width: 100%; margin-top: 8px; min-height: var(--hit-min); paddin
 
 .button, button:not(.btn), a.button-link { border: 0; border-radius: var(--radius-md); min-height: var(--hit-min); padding: 0 18px; font: inherit; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--brand-500); color: #fff; transition: background var(--duration-fast); text-decoration: none; }
 .button:hover, button:not(.btn):hover, a.button-link:hover { background: var(--brand-600); text-decoration: none; }
-button.secondary, .button-link.secondary { background: var(--gray-800); }
+button.secondary, .button-link.secondary { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-strong); }
+button.secondary:hover, .button-link.secondary:hover { background: var(--bg-hover); }
 button:disabled { opacity: .55; cursor: not-allowed; }
 
 .notice { padding: 12px 14px; border-radius: var(--radius-md); border: 1px solid var(--danger-100); background: var(--danger-50); color: var(--danger-600); font-size: var(--text-sm); line-height: 1.45; margin-top: var(--space-4); }
 .notice.blue { border-color: var(--info-100); background: var(--info-50); color: var(--info-600); }
 .notice.ok { border-color: var(--success-100); background: var(--success-50); color: var(--success-600); }
-code { background: var(--gray-100); border: 1px solid var(--border-default); padding: 2px 7px; border-radius: 6px; color: var(--text-primary); word-break: break-all; }
+code { background: var(--bg-sunken); border: 1px solid var(--border-default); padding: 2px 7px; border-radius: 6px; color: var(--text-primary); word-break: break-all; }
 
 .status-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-3); margin-top: var(--space-4); }
 .metric { background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: var(--radius-lg); padding: 14px; min-width: 0; }

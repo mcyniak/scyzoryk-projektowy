@@ -6,6 +6,11 @@
 .kk-field input[type=file] { padding: 10px 0; }
 .kk-hint { font-size: var(--text-sm); color: var(--text-tertiary); margin-top: 8px; }
 
+/* Opis trybu: krotkie zdanie wstepne + lista punktowana (budowane przez
+   odswiezOpisyRodzaju w app.js zamiast jednego gestego akapitu). */
+#kkModeDesc p { margin: 0 0 8px; }
+#kkModeDesc ul { margin: 0; padding-left: 22px; display: grid; gap: 4px; }
+
 .kk-mode-row { display: flex; gap: var(--space-4); flex-wrap: wrap; }
 .kk-mode-option { display: flex; align-items: center; gap: 8px; font-weight: 500; color: var(--text-primary); cursor: pointer; }
 
@@ -24,13 +29,13 @@
 .kk-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: var(--space-4); }
 .kk-chip { padding: 7px 13px; border-radius: 999px; font-weight: 700; font-size: 12.5px; border: 1px solid var(--border-default); background: var(--bg-surface-muted); color: var(--text-secondary); }
 .kk-chip.ok { background: var(--success-50); color: var(--success-600); border-color: var(--success-100); }
-.kk-chip.skip { background: var(--gray-100); color: var(--text-secondary); border-color: var(--border-default); }
+.kk-chip.skip { background: var(--bg-sunken); color: var(--text-secondary); border-color: var(--border-default); }
 .kk-chip.warn { background: var(--warning-50); color: var(--warning-600); border-color: var(--warning-100); }
 .kk-chip.err { background: var(--danger-50); color: var(--danger-600); border-color: var(--danger-100); }
 
 .kk-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 86px; border-radius: 999px; padding: 5px 10px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
 .kk-badge.ok { color: var(--success-600); background: var(--success-50); border: 1px solid var(--success-100); }
-.kk-badge.skip { color: var(--text-secondary); background: var(--gray-100); border: 1px solid var(--border-default); }
+.kk-badge.skip { color: var(--text-secondary); background: var(--bg-sunken); border: 1px solid var(--border-default); }
 .kk-badge.warn { color: var(--warning-600); background: var(--warning-50); border: 1px solid var(--warning-100); }
 .kk-badge.err { color: var(--danger-600); background: var(--danger-50); border: 1px solid var(--danger-100); }
 

@@ -29,6 +29,7 @@ h2 { font-size: var(--text-md); margin: var(--space-4) 0 8px; }
 .primary { width: 100%; margin-top: var(--space-3); }
 .status { min-height: 20px; margin: 10px 0 0; font-size: var(--text-sm); font-weight: 600; color: var(--text-secondary); }
 .status.error { color: var(--danger-600); }
+.status.ok { color: var(--success-600); }
 .status:empty { display: none; }
 
 .previewHeader { display: flex; justify-content: space-between; gap: 12px; align-items: start; margin-bottom: var(--space-3); }
@@ -67,11 +68,11 @@ h2 { font-size: var(--text-md); margin: var(--space-4) 0 8px; }
 .stampBoxContent { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; overflow: hidden; }
 
 .stampTrash {
-  position: absolute; top: 5px; right: 5px; z-index: 8; min-width: 28px; width: 28px; height: 28px; padding: 0;
+  position: absolute; top: 5px; right: 5px; z-index: 8; min-width: 40px; width: 40px; height: 40px; padding: 0;
   border-radius: 999px; border: 1px solid rgba(207,23,31,.3); background: rgba(255,255,255,.96); color: var(--danger-600);
   box-shadow: var(--shadow-sm); display: none; align-items: center; justify-content: center; cursor: pointer;
 }
-.stampTrash::before { content: ""; width: 14px; height: 14px; background-color: currentColor; -webkit-mask: url('/shared/icons.svg#i-trash') center / contain no-repeat; mask: url('/shared/icons.svg#i-trash') center / contain no-repeat; }
+.stampTrash::before { content: ""; width: 16px; height: 16px; background-color: currentColor; -webkit-mask: url('/shared/icons.svg#i-trash') center / contain no-repeat; mask: url('/shared/icons.svg#i-trash') center / contain no-repeat; }
 .stampTrash:hover { background: var(--danger-50); }
 .stampBox:hover .stampTrash, .stampBox.active .stampTrash { display: inline-flex; }
 .stampBox.isMoving .stampTrash, .stampBox.isResizing .stampTrash { display: none; }
@@ -122,6 +123,25 @@ h2 { font-size: var(--text-md); margin: var(--space-4) 0 8px; }
 .presetHint { display: block; color: var(--text-tertiary); }
 .fileImportLabel { cursor: pointer; }
 
+/* Presety zwiniete w <details> (index.html) - nie przerywaja przeplywu
+   pliki -> pieczatki; summary gra role dawnego naglowka sekcji. */
+.presetFold > summary { cursor: pointer; font-size: var(--text-md); font-weight: 800; color: var(--text-primary); list-style-position: outside; user-select: none; }
+.presetFold[open] > summary { margin-bottom: 10px; }
+
+/* CTA stemplowania - sticky na dole scrollowanej lewej kolumny, zawsze
+   widoczne; nieprzezroczyste tlo + cień z góry odcinają je od przewijanej
+   listy pieczątek. Status (#status) siedzi tuż nad przyciskiem (index.html). */
+.primary {
+  position: sticky; bottom: 0; z-index: 5;
+  background: var(--bg-surface);
+  padding-top: var(--space-3);
+  box-shadow: 0 -10px 14px -12px rgba(0,0,0,.35);
+}
+
+/* Maly szary hint uzywany przez app.js w edytorze pieczatki (.simpleHint) -
+   ten sam wzor co .presetHint wyzej. */
+.simpleHint { display: block; margin-top: 6px; color: var(--text-tertiary); }
+
 /* Przelaczanie podgladu miedzy wieloma PDF-ami */
 .pdfPreviewList { display: grid; gap: 7px; margin: -2px 0 var(--space-4); padding: 10px; border: 1px solid var(--border-default); background: var(--bg-surface-muted); border-radius: var(--radius-lg); }
 .pdfPreviewList[hidden] { display: none; }
@@ -129,7 +149,7 @@ h2 { font-size: var(--text-md); margin: var(--space-4) 0 8px; }
 .pdfPreviewItem { width: 100%; min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md); border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-primary); text-align: left; }
 .pdfPreviewItem:hover { border-color: var(--border-strong); }
 .pdfPreviewItem.active { border-color: var(--brand-500); background: var(--brand-50); }
-.pdfPreviewItem strong { width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center; background: var(--gray-100); color: var(--text-secondary); font-size: 11.5px; }
+.pdfPreviewItem strong { width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center; background: var(--bg-sunken); color: var(--text-secondary); font-size: 11.5px; }
 .pdfPreviewItem.active strong { background: var(--brand-500); color: #fff; }
 .pdfPreviewItem span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; }
 

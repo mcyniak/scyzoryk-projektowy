@@ -185,6 +185,9 @@
   function setStatus(text, percent) {
     statusBox.hidden = false;
     statusText.textContent = text;
+    // components.css ukrywa .progress, dopoki #statusBox (.status-box) nie ma
+    // klasy .is-printing - bez tego pasek postepu bylby trwale niewidoczny.
+    statusBox.classList.add('is-printing');
     progressBar.style.width = `${percent}%`;
   }
 

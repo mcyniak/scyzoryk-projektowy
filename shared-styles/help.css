@@ -9,7 +9,7 @@
   --help-line:var(--border-strong);--help-line-soft:var(--border-default);
   --help-accent:var(--brand-500);--help-accent-tint:var(--brand-50);
   --help-bg-raised:var(--bg-surface);
-  --help-mono-bg:var(--gray-100);
+  --help-mono-bg:var(--bg-sunken);
   --help-info:var(--info-600);--help-info-tint:var(--info-50);
   --help-warn:var(--warning-600);--help-warn-tint:var(--warning-50);
   --help-good:var(--success-600);--help-good-tint:var(--success-50);
