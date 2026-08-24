@@ -15,6 +15,16 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // Audyt na zywo 2026-08-21: bez tego caly proces (WLACZNIE z oknem
+        // postepu na wlasnym watku, patrz StartupProgressPresenter.cs) renderuje
+        // sie jako DPI-nieswiadomy - na przeskalowanym ekranie (125%/150%/200%,
+        // norma na dzisiejszych laptopach) Windows bitmapowo rozciaga cale okno,
+        // co wyglada jak rozmyty/"niewyrazny" tekst. Musi byc wywolane PRZED
+        // jakimkolwiek oknem/kontrolka w calym procesie - stad pierwsza linia Main.
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+
         var initialPaths = InstallPaths.FromBaseDirectory();
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0.0";
         var logger = new LauncherLogger(initialPaths.LogFilePath, version);

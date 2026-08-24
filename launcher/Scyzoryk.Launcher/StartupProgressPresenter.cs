@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
 namespace Scyzoryk.Launcher;
@@ -32,19 +33,113 @@ public sealed class NullStartupProgressPresenter : IStartupProgressPresenter
 }
 
 /// <summary>
+/// Wlasny, recznie rysowany pasek postepu (zamiast natywnego ProgressBar) -
+/// natywna kontrolka Win32 daje kolor TYLKO po wylaczeniu jej motywu
+/// (SetWindowTheme(hwnd,"","") + PBM_SETBARCOLOR), a bez motywu wraca do
+/// starego, "klasycznego" wygladu Windows z widoczna ramka/segmentami - zlapane
+/// na zywo 2026-08-21 ("głupia ramka"). Rysowanie samemu (GDI+, wygladzanie
+/// wlaczone) daje pelna kontrole: zaokraglone rogi, brak ramki, dokladny kolor
+/// marki, dowolna wysokosc.
+/// </summary>
+internal sealed class FilledProgressBar : Control
+{
+    private double _valuePercent;
+    public double ValuePercent
+    {
+        get => _valuePercent;
+        set
+        {
+            _valuePercent = Math.Clamp(value, 0, 100);
+            Invalidate();
+        }
+    }
+
+    public Color FillColor { get; set; } = Color.FromArgb(0xCF, 0x17, 0x1F);
+    public Color TrackColor { get; set; } = Color.FromArgb(0xEC, 0xEC, 0xEF);
+
+    public FilledProgressBar()
+    {
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
+            | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        var rect = ClientRectangle;
+        if (rect.Width <= 0 || rect.Height <= 0) return;
+
+        var radius = rect.Height / 2;
+        using (var trackPath = RoundedRect(rect, radius))
+        using (var trackBrush = new SolidBrush(TrackColor))
+        {
+            g.FillPath(trackBrush, trackPath);
+        }
+
+        var fillWidth = (int)Math.Round(rect.Width * (_valuePercent / 100.0));
+        if (fillWidth <= 0) return;
+        // Minimalna szerokosc = pelna wysokosc (srednica) - zeby przy niskich
+        // procentach wypelnienie zawsze wygladalo jak "pigulka", nie plaski,
+        // obciety prostokat.
+        fillWidth = Math.Max(fillWidth, Math.Min(rect.Height, rect.Width));
+
+        var fillRect = new Rectangle(rect.X, rect.Y, fillWidth, rect.Height);
+        using var clipPath = RoundedRect(rect, radius);
+        var oldClip = g.Clip;
+        g.SetClip(clipPath, CombineMode.Replace);
+        using (var fillPath = RoundedRect(fillRect, radius))
+        using (var fillBrush = new SolidBrush(FillColor))
+        {
+            g.FillPath(fillBrush, fillPath);
+        }
+        g.Clip = oldClip;
+    }
+
+    private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
+    {
+        var path = new GraphicsPath();
+        var d = radius * 2;
+        if (d <= 0 || d >= bounds.Width || d >= bounds.Height)
+        {
+            path.AddRectangle(bounds);
+            return path;
+        }
+        path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
+        path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
+        path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
+        path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+}
+
+/// <summary>
 /// Prawdziwa implementacja WinForms. Formularz zyje na WLASNYM, dedykowanym
 /// watku STA z wlasna petla komunikatow (Application.Run) - watek wywolujacy
 /// (LauncherApp.RunEnsureAndReportAsync) jest w trakcie asynchronicznego
 /// oczekiwania na proby sieciowe i nie moze sam pompowac komunikatow Windows.
 /// Wszystkie operacje po starcie (UpdateMessage/Close) marshaluja przez
 /// Control.BeginInvoke z dowolnego watku wywolujacego.
+///
+/// Pasek postepu jest CELOWO "falszywy" (determinate, ale nie liczony z
+/// realnego postepu startu) - nie ma tu zadnego wiarygodnego zrodla procentu
+/// (czekamy na health-check, nie na policzalne kroki), wiec plynnie zblizamy
+/// sie do ~92% i dopiero Close() domyka go do 100% - czytelniejsze dla oka niz
+/// pasek "w nieskonczonosc" (marquee), a jednoczesnie nie klamie, ze cos jest
+/// dokladnie w polowie.
 /// </summary>
 public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
 {
+    private const double FakeProgressCeiling = 92.0;
+
     private readonly object _gate = new();
     private Thread? _uiThread;
     private Form? _form;
-    private Label? _label;
+    private Label? _statusLabel;
+    private FilledProgressBar? _progressBar;
+    private System.Windows.Forms.Timer? _progressTimer;
+    private double _fakeProgress;
 
     public void Show(string message)
     {
@@ -59,11 +154,19 @@ public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
             var ready = new ManualResetEventSlim(false);
             _uiThread = new Thread(() =>
             {
-                var (form, label) = BuildForm(message);
-                _form = form;
-                _label = label;
-                form.Shown += (_, _) => ready.Set();
-                Application.Run(form);
+                var built = BuildForm(message);
+                _form = built.Form;
+                _statusLabel = built.StatusLabel;
+                _progressBar = built.ProgressBar;
+
+                _fakeProgress = 0;
+                _progressTimer = new System.Windows.Forms.Timer { Interval = 60 };
+                _progressTimer.Tick += (_, _) => AdvanceFakeProgress();
+                _progressTimer.Start();
+
+                built.Form.FormClosed += (_, _) => _progressTimer?.Stop();
+                built.Form.Shown += (_, _) => ready.Set();
+                Application.Run(built.Form);
             })
             {
                 IsBackground = true,
@@ -78,10 +181,21 @@ public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
         }
     }
 
+    // Plynne, asymptotyczne zblizanie do sufitu - nigdy go nie osiaga samo z
+    // siebie (imituje "wciaz pracujemy" bez klamania, ze zaraz sie skonczy).
+    private void AdvanceFakeProgress()
+    {
+        var bar = _progressBar;
+        if (bar is null || bar.IsDisposed) return;
+        _fakeProgress += (FakeProgressCeiling - _fakeProgress) * 0.045;
+        try { bar.ValuePercent = _fakeProgress; }
+        catch (ObjectDisposedException) { }
+    }
+
     public void UpdateMessage(string message)
     {
         var form = _form;
-        var label = _label;
+        var label = _statusLabel;
         if (form is null || label is null) return;
         try
         {
@@ -105,14 +219,28 @@ public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
             {
                 if (!form.IsDisposed)
                 {
-                    if (form.InvokeRequired) form.BeginInvoke(new Action(form.Close));
-                    else form.Close();
+                    // Domykamy pasek do pelna TUZ przed zamknieciem - czytelny
+                    // sygnal "gotowe", zamiast po prostu znikniecia w polowie.
+                    if (form.InvokeRequired)
+                    {
+                        form.BeginInvoke(new Action(() =>
+                        {
+                            if (_progressBar is { IsDisposed: false }) _progressBar.ValuePercent = 100;
+                            form.Close();
+                        }));
+                    }
+                    else
+                    {
+                        if (_progressBar is { IsDisposed: false }) _progressBar.ValuePercent = 100;
+                        form.Close();
+                    }
                 }
             }
             catch (ObjectDisposedException) { }
             catch (InvalidOperationException) { }
             _form = null;
-            _label = null;
+            _statusLabel = null;
+            _progressBar = null;
             _uiThread = null;
         }
         // Poza lockiem - Join czeka na zakonczenie watku UI, ktory sam nie
@@ -120,51 +248,117 @@ public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
         uiThread?.Join(TimeSpan.FromSeconds(2));
     }
 
-    private static (Form Form, Label Label) BuildForm(string message)
+    private static (Form Form, Label StatusLabel, FilledProgressBar ProgressBar) BuildForm(string message)
     {
-        var label = new Label
+        var titleFont = TryCreateFont("Segoe UI Semibold", 13.5F) ?? new Font("Segoe UI", 13.5F, FontStyle.Bold);
+        var statusFont = new Font("Segoe UI", 9.5F);
+
+        Icon? appIcon = null;
+        try { appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
+        catch { /* logo ponizej po prostu nie zajmie miejsca */ }
+
+        // Uklad "splash" - logo + tytul wysrodkowane razem w jednym wierszu,
+        // status wysrodkowany pod spodem, pasek postepu na samym dole.
+        var headerPanel = new TableLayoutPanel
+        {
+            ColumnCount = 2,
+            RowCount = 1,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        };
+        headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+        Control? iconBox = null;
+        if (appIcon is not null)
+        {
+            iconBox = new PictureBox
+            {
+                Image = appIcon.ToBitmap(),
+                SizeMode = PictureBoxSizeMode.Zoom,
+                Size = new Size(32, 32),
+                Margin = new Padding(0, 4, 10, 0),
+            };
+        }
+        var titleLabel = new Label
+        {
+            Text = "Scyzoryk Projektowy",
+            AutoSize = true,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = titleFont,
+            ForeColor = Color.FromArgb(0x1A, 0x1A, 0x1E),
+            Margin = new Padding(0),
+        };
+        if (iconBox is not null) headerPanel.Controls.Add(iconBox, 0, 0);
+        headerPanel.Controls.Add(titleLabel, iconBox is not null ? 1 : 0, 0);
+
+        var statusLabel = new Label
         {
             Text = message,
             AutoSize = false,
             TextAlign = ContentAlignment.MiddleCenter,
             Dock = DockStyle.Fill,
-            Font = new Font("Segoe UI", 9.5F),
-            Padding = new Padding(16, 8, 16, 0),
+            Font = statusFont,
+            ForeColor = Color.FromArgb(0x66, 0x66, 0x6E),
         };
-        var progressBar = new ProgressBar
+
+        var progressBar = new FilledProgressBar
         {
-            Style = ProgressBarStyle.Marquee,
-            MarqueeAnimationSpeed = 30,
-            Dock = DockStyle.Bottom,
-            Height = 18,
-            Margin = new Padding(16, 0, 16, 12),
+            Dock = DockStyle.Fill,
         };
-        var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 0, 12) };
-        panel.Controls.Add(label);
+        var progressHost = new Panel { Dock = DockStyle.Bottom, Height = 12 + 26, Padding = new Padding(28, 0, 28, 26) };
+        progressHost.Controls.Add(progressBar);
+
+        var headerHost = new Panel { Dock = DockStyle.Top, Height = 62, Padding = new Padding(0, 20, 0, 0) };
+        headerHost.Resize += (_, _) => CenterHorizontally(headerPanel, headerHost);
+        headerPanel.SizeChanged += (_, _) => CenterHorizontally(headerPanel, headerHost);
+        headerHost.Controls.Add(headerPanel);
+
+        var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(24, 0, 24, 0) };
+        body.Controls.Add(statusLabel);
 
         var form = new Form
         {
             Text = "Scyzoryk Projektowy",
             FormBorderStyle = FormBorderStyle.FixedDialog,
             StartPosition = FormStartPosition.CenterScreen,
-            ClientSize = new Size(380, 120),
+            ClientSize = new Size(440, 172),
             MaximizeBox = false,
             MinimizeBox = false,
             ControlBox = false,
             ShowInTaskbar = true,
             TopMost = true,
+            BackColor = Color.White,
+            AutoScaleMode = AutoScaleMode.Font,
         };
-        form.Controls.Add(panel);
-        form.Controls.Add(progressBar);
+        form.Controls.Add(body);
+        form.Controls.Add(headerHost);
+        form.Controls.Add(progressHost);
+        if (appIcon is not null) form.Icon = appIcon;
+
+        return (form, statusLabel, progressBar);
+    }
+
+    private static void CenterHorizontally(Control child, Control host)
+    {
+        child.Left = Math.Max(0, (host.ClientSize.Width - child.Width) / 2);
+        child.Top = 0;
+    }
+
+    // "Segoe UI Semibold" jest osobna, prawdziwie zainstalowana rodzina na
+    // Windows (nie kazdy System.Drawing.Font wariant FontStyle.Bold), ale
+    // teoretycznie mogloby jej brakowac na jakiejs maszynie - stad proba z
+    // bezpiecznym fallbackiem (zwykle Segoe UI Bold) w BuildForm powyzej.
+    private static Font? TryCreateFont(string family, float size)
+    {
         try
         {
-            var icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-            if (icon is not null) form.Icon = icon;
+            var font = new Font(family, size, FontStyle.Bold);
+            return string.Equals(font.Name, family, StringComparison.OrdinalIgnoreCase) ? font : null;
         }
         catch
         {
-            // Brak ikony okna nie moze zablokowac pokazania samego okna.
+            return null;
         }
-        return (form, label);
     }
 }

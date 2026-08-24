@@ -15,6 +15,7 @@
     <RootNamespace>Scyzoryk.Launcher</RootNamespace>
     <AssemblyName>Scyzoryk</AssemblyName>
     <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
 
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
