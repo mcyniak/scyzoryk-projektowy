@@ -6,6 +6,7 @@
 const readXlsxFile = require("read-excel-file/node");
 const AdmZip = require("adm-zip");
 const { isAffirmativeFlag } = require("../../../lib/businessFlags");
+const { toAsciiSafe } = require("../../../lib/diacritics");
 
 // read-excel-file NIE gwarantuje kolejnosci arkuszy zgodnej z prawdziwym
 // xl/workbook.xml (zweryfikowane empirycznie w tej samej sesji na pliku
@@ -109,10 +110,7 @@ function getWorkbook(token) {
 }
 
 function normalizeHeader(text) {
-  return String(text || "")
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
+  return toAsciiSafe(String(text || "").toLowerCase())
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }

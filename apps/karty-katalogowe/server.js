@@ -10,6 +10,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup, createSemaphore } = require('../../lib/hardening');
+const { toAsciiSafe } = require('../../lib/diacritics');
 const { getAppDataDir } = require('../../lib/appPaths');
 const { isAffirmativeFlag } = require('../../lib/businessFlags');
 const { browseFolder } = require('../../lib/folderBrowse');
@@ -164,10 +165,7 @@ function normalizujTekst(value) {
 }
 
 function normalizeHeader(text) {
-  return String(text || '')
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
+  return toAsciiSafe(String(text || '').toLowerCase())
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 }

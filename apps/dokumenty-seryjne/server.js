@@ -28,6 +28,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
+const { toAsciiSafe } = require('../../lib/diacritics');
 const { getAppDataDir } = require('../../lib/appPaths');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 const { detectMailMergeSheetBinding, getDocxModifiedTime } = require('./src/mailMergeSheetBinding');
@@ -156,9 +157,7 @@ function safeName(name, fallback = 'plik') {
 // klientow) i poprawnie zakodowana pelna nazwa w filename*=UTF-8''...
 function contentDispositionHeader(disposition, filename) {
   const raw = String(filename || 'plik').replace(/"/g, '');
-  const asciiFallback = raw
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
+  const asciiFallback = toAsciiSafe(raw)
     .replace(/[^\x20-\x7E]/g, '_') || 'plik';
   const encoded = encodeURIComponent(raw).replace(/[!'()*]/g, c => '%' + c.charCodeAt(0).toString(16).toUpperCase());
   return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
@@ -615,7 +614,7 @@ const REQUIRED_REFERENCE_COLUMNS = [
   { label: 'Beneficjent', candidates: ['Beneficjent', 'Imię i Nazwisko', 'Imie i Nazwisko', 'Inwestor'] }
 ];
 function findExactColumn(columns, name) {
-  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(new RegExp('[\\u0300-\\u036f]', 'g'), '').trim();
+  const norm = s => toAsciiSafe(String(s || '').toLowerCase()).trim();
   const target = norm(name);
   return (columns || []).find(c => norm(c) === target) || null;
 }

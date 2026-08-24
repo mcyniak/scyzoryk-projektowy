@@ -27,6 +27,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
+const { toAsciiSafe } = require('../../lib/diacritics');
 const { getAppDataDir } = require('../../lib/appPaths');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 
@@ -66,9 +67,8 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const original = decodeOriginalName(file.originalname || '');
     const ext = path.extname(original).toLowerCase();
-    const safeBase = path.basename(original || 'plik', ext)
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '')
+    // toAsciiSafe: najpierw jawne "l"->"l" (nie rozklada sie pod NFKD), potem reszta diakrytykow
+    const safeBase = toAsciiSafe(path.basename(original || 'plik', ext))
       .replace(/[^a-zA-Z0-9._-]+/g, '_')
       .replace(/^_+|_+$/g, '')
       .slice(0, 80) || 'plik';

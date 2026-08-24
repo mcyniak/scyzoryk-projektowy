@@ -93,6 +93,12 @@ function Release-ComObject($obj) {
 function Normalize-Name([string]$text) {
   if ($null -eq $text) { return "" }
   $s = [string]$text
+  # "l" (U+0142) nie rozklada sie pod normalizacja Unicode FormD tak jak
+  # pozostale polskie znaki - bez tej zamiany "Dzialka" wychodzilo jako
+  # "dzia_ka" zamiast "dzialka". Zamiana przez [char], NIE przez literal
+  # diakrytyczny w kodzie: plik jest trzymany bez BOM i literaly UTF-8
+  # wielobajtowe psuja parser PowerShell 5.1.
+  $s = $s.Replace([string][char]0x0142, 'l').Replace([string][char]0x0141, 'L')
   try {
     $s = $s.Normalize([System.Text.NormalizationForm]::FormD)
     $sb = New-Object System.Text.StringBuilder

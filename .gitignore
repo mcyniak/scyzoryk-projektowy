@@ -72,3 +72,9 @@ release/
 # zadne z nich nie jest zrodlem, nie powinny trafiac do historii repo.
 graphify-out/
 .claude/settings.json.graphify-bak
+
+# Notatki sesyjne agentow/usera - wewnetrzne, nie dla publicznego repo.
+/HANDOFF-NASTEPNA-SESJA.md
+
+# Scratch-demo paska postepu launchera (zostaje lokalnie wg decyzji wlasciciela).
+launcher/_Demo/
