@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace Scyzoryk.Launcher;
@@ -251,7 +252,9 @@ public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
     private static (Form Form, Label StatusLabel, FilledProgressBar ProgressBar) BuildForm(string message)
     {
         var titleFont = TryCreateFont("Segoe UI Semibold", 13.5F) ?? new Font("Segoe UI", 13.5F, FontStyle.Bold);
-        var statusFont = new Font("Segoe UI", 9.5F);
+        // Status lekko pogrubiony (waga polgruba zamiast zwyklej) - zadane po
+        // pierwszym pokazaniu okna na zywo 2026-08-24 ("troche grubsza czcionka").
+        var statusFont = TryCreateStatusFont();
 
         Icon? appIcon = null;
         try { appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
@@ -320,7 +323,10 @@ public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
         var form = new Form
         {
             Text = "Scyzoryk Projektowy",
-            FormBorderStyle = FormBorderStyle.FixedDialog,
+            // Bezramkowe okno splasu: zadnego paska tytulu ani ramki - tylko
+            // bialy kartelusz z logo, statusem i paskiem postepu. Obecnosc w
+            // pasku zadan (ShowInTaskbar) zostaje, zeby dało sie go znalezc.
+            FormBorderStyle = FormBorderStyle.None,
             StartPosition = FormStartPosition.CenterScreen,
             ClientSize = new Size(440, 172),
             MaximizeBox = false,
@@ -335,8 +341,46 @@ public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
         form.Controls.Add(headerHost);
         form.Controls.Add(progressHost);
         if (appIcon is not null) form.Icon = appIcon;
+        ApplyRoundedCorners(form);
 
         return (form, statusLabel, progressBar);
+    }
+
+    // DWMWA_WINDOW_CORNER_PREFERENCE - prosba do systemu o zaokraglone rogi.
+    // Windows 11 zaokragla natywnie, z wygladzaniem i poprawnym cieniem;
+    // na starszych systemach API po prostu nic nie zrobi, stad dodatkowy
+    // fallback przez Region (GraphicsPath) ponizej - mniej ladne krawedzie,
+    // ale ten sam efekt "okno bez ostrych rogów".
+    private const int DwmwaWindowCornerPreference = 33;
+    private const int DwmwcpRound = 2;
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int sizeOfValue);
+
+    private static void ApplyRoundedCorners(Form form)
+    {
+        try
+        {
+            var preference = DwmwcpRound;
+            if (Environment.OSVersion.Version.Build >= 22000)
+            {
+                DwmSetWindowAttribute(form.Handle, DwmwaWindowCornerPreference, ref preference, sizeof(int));
+                return;
+            }
+        }
+        catch { /* fallback ponizej */ }
+
+        // Fallback (Win10 i starsze): reczne obciecie rog Regionem. Promien
+        // ~22 px przy oknie 440x172 czyta sie jak "karta", nie jak "pole tekstowe".
+        const int radius = 22;
+        var size = form.ClientSize;
+        using var path = new GraphicsPath();
+        path.AddArc(0, 0, radius * 2, radius * 2, 180, 90);
+        path.AddArc(size.Width - radius * 2, 0, radius * 2, radius * 2, 270, 90);
+        path.AddArc(size.Width - radius * 2, size.Height - radius * 2, radius * 2, radius * 2, 0, 90);
+        path.AddArc(0, size.Height - radius * 2, radius * 2, radius * 2, 90, 90);
+        path.CloseFigure();
+        form.Region = new Region(path);
     }
 
     private static void CenterHorizontally(Control child, Control host)
@@ -360,5 +404,20 @@ public sealed class WinFormsStartupProgressPresenter : IStartupProgressPresenter
         {
             return null;
         }
+    }
+
+    // Czcionka statusu: "Regular" rodziny "Segoe UI Semibold" daje juz wage
+    // polgruba (Bold nalozony na nia bylby za ciezki). Fallback: Segoe UI
+    // z jawnym Bold - zawsze cos pogrubionego, nigdy kosmetycznie cienkie.
+    private static Font TryCreateStatusFont()
+    {
+        try
+        {
+            var font = new Font("Segoe UI Semibold", 9.75F, FontStyle.Regular);
+            if (string.Equals(font.Name, "Segoe UI Semibold", StringComparison.OrdinalIgnoreCase)) return font;
+            font.Dispose();
+        }
+        catch { /* fallback ponizej */ }
+        return new Font("Segoe UI", 9.75F, FontStyle.Bold);
     }
 }

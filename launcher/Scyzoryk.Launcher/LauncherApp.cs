@@ -117,7 +117,7 @@ public sealed class LauncherApp
         // pliku, ktory instalator zaraz bedzie probowal nadpisac - musi przestac
         // go trzymac otwartym, zanim ktokolwiek inny sprobuje go zastapic.
         // Dotyczy zarowno zwyklego startu, jak i --autostart.
-        if (await ApplyPendingUpdateIfAnyAsync().ConfigureAwait(false))
+        if (await ApplyPendingUpdateIfAnyAsync(showProgress: openBrowserOnSuccess).ConfigureAwait(false))
         {
             return ExitCodes.Ok;
         }
@@ -421,7 +421,7 @@ public sealed class LauncherApp
     /// (StartDetached) sie nie udalo - w kazdym z tych przypadkow znacznik jest
     /// kasowany, zeby jeden zepsuty wpis nie blokowal startu w nieskonczonosc.
     /// </summary>
-    private async Task<bool> ApplyPendingUpdateIfAnyAsync()
+    private async Task<bool> ApplyPendingUpdateIfAnyAsync(bool showProgress = false)
     {
         var pendingPath = Path.Combine(_paths.UpdateRoot, "pending-update.json");
         if (!File.Exists(pendingPath)) return false;
@@ -499,6 +499,43 @@ public sealed class LauncherApp
         {
             _logger.Log(LogLevel.Error, "Nie udalo sie odpalic oczekujacej aktualizacji.", new Dictionary<string, string> { ["error"] = spawn.ErrorMessage ?? string.Empty });
             return false;
+        }
+
+        // Reczny start uzytkownika z oczekujaca aktualizacja (zimny start po
+        // pobraniu release'u): cicha instalacja moze trwac dlugo (kopiowanie
+        // node_modules 14 apek + Chromium + Ghostscript), a do tej pory ten
+        // proces konczyl sie OD RAZU po odpaleniu --apply-update - uzytkownik
+        // widzial "nic sie nie dzieje". Zadane na zywo 2026-08-24: przy recznym
+        // starcie pokaz okno postepu i CZEKAJ az proces aktualizacji sie skonczy
+        // (on sam potem restartuje serwer). Tryb cichy (--autostart) bez zmian -
+        // tam okno ma nigdy nie wyskakiwac.
+        if (showProgress)
+        {
+            _startupProgress.Show("Instalowanie aktualizacji Scyzoryka Projektowego - to moze potrwac chwile...");
+            try
+            {
+                var deadline = DateTime.UtcNow.AddMinutes(20);
+                while (DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(500).ConfigureAwait(false);
+                    bool stillRunning;
+                    try
+                    {
+                        using var proc = System.Diagnostics.Process.GetProcessById(spawn.Pid);
+                        stillRunning = !proc.HasExited;
+                    }
+                    catch
+                    {
+                        // Proces juz nie istnieje (GetProcessById rzuca) - skonczyl sie.
+                        stillRunning = false;
+                    }
+                    if (!stillRunning) break;
+                }
+            }
+            finally
+            {
+                _startupProgress.Close();
+            }
         }
 
         return true;

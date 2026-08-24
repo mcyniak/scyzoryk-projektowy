@@ -134,8 +134,18 @@ public sealed class UpdateApplier : IUpdateApplier
                 WriteLog($"Nie udalo sie uruchomic ponownie Scyzoryka: {ex.Message}");
             }
 
-            WriteLog("Sprawdzam /api/health po restarcie...");
-            var healthy = await _health.IsRespondingOnceAsync(_paths.HealthUrl, TimeSpan.FromSeconds(60)).ConfigureAwait(false);
+            // Zlapane na zywo 2026-08-24 (update-20260824T093429.log): pojedynczy
+            // IsRespondingOnceAsync zadawany NATYCHMIAST po starcie node.exe
+            // konczyl sie w ~2s ("connection refused" nie czeka na timeout) i
+            // ogłaszal porazke aktualizacji, podczas gdy serwer po prostu jeszcze
+            // sie nie podniosl. Teraz probujemy wielokrotnie: 30 prob co 2 s
+            // (probe 3 s kazda) = okno ~90 s na zimny start, zamiast 1 strzalu.
+            WriteLog("Sprawdzam /api/health po restarcie (do ~90 s, probe co 2 s)...");
+            var healthy = await _health.ProbeAlreadyRunningAsync(
+                _paths.HealthUrl,
+                attempts: 30,
+                attemptTimeout: TimeSpan.FromSeconds(3),
+                delayBetween: TimeSpan.FromSeconds(2)).ConfigureAwait(false);
             string? runningVersion = null;
             if (healthy)
             {

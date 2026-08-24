@@ -72,7 +72,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
@@ -105,7 +105,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 5);
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.0.0" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.0.0" };
         // installRetryDelay skrocone - ten fake installer ZAWSZE zwraca 5, wiec
         // retry (patrz RunInstallerWithRetryAsync) i tak wyczerpie obie proby.
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
@@ -156,7 +156,7 @@ public sealed class UpdateApplierTests
             ")\r\n");
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
             installRetryDelay: TimeSpan.FromMilliseconds(10));
 
@@ -186,7 +186,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
             installRetryDelay: TimeSpan.FromMilliseconds(10));
 
@@ -226,7 +226,7 @@ public sealed class UpdateApplierTests
             ")\r\n");
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
             installRetryDelay: TimeSpan.FromMilliseconds(10));
 
@@ -249,7 +249,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.1.0" }; // stara wersja
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.1.0" }; // stara wersja
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
@@ -295,7 +295,7 @@ public sealed class UpdateApplierTests
         File.WriteAllText(Path.Combine(lockDir, "active.lock"), "{\"pid\": 999999}");
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
@@ -326,7 +326,7 @@ public sealed class UpdateApplierTests
         File.WriteAllText(Path.Combine(lockDir, "active.lock"), $"{{\"pid\": {Environment.ProcessId}}}");
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
             printWaitTimeout: TimeSpan.FromMilliseconds(50), printPollInterval: TimeSpan.FromMilliseconds(10));
 
@@ -354,7 +354,7 @@ public sealed class UpdateApplierTests
         File.WriteAllText(Path.Combine(lockDir, "active.lock"), "{niepoprawny json");
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
             printWaitTimeout: TimeSpan.FromMilliseconds(50), printPollInterval: TimeSpan.FromMilliseconds(10));
 
@@ -404,7 +404,7 @@ public sealed class UpdateApplierTests
         {
             StopResultSequence = new Queue<IReadOnlyList<int>>(new IReadOnlyList<int>[] { new[] { 4242 }, Array.Empty<int>() })
         };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
             stopConfirmTimeout: TimeSpan.FromSeconds(5), stopConfirmPollInterval: TimeSpan.FromMilliseconds(10));
 
@@ -431,7 +431,7 @@ public sealed class UpdateApplierTests
 
         // Proces "wiecznie uparty" - kazda proba wciaz go znajduje.
         var process = new FakeProcessManager { StopResultToReturn = new[] { 4242 } };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
             stopConfirmTimeout: TimeSpan.FromMilliseconds(50), stopConfirmPollInterval: TimeSpan.FromMilliseconds(10));
 
@@ -453,7 +453,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager();
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = null };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = null };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
@@ -478,7 +478,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager { ProcessAliveResult = true, KillProcessByIdResult = true };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3", parentPid: "4242");
@@ -497,7 +497,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager { ProcessAliveResult = false };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3", parentPid: "4242");
@@ -515,7 +515,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager { ProcessAliveResult = true };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
@@ -550,7 +550,7 @@ public sealed class UpdateApplierTests
             ProcessAliveResult = true,
             KillProcessByIdIfPathMatchesResult = true
         };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3", residentTrayPid: "16204");
@@ -572,7 +572,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager { ProcessAliveResult = false };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3", residentTrayPid: "16204");
@@ -590,7 +590,7 @@ public sealed class UpdateApplierTests
         var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
 
         var process = new FakeProcessManager { ProcessAliveResult = true };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
 
         var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
@@ -621,7 +621,7 @@ public sealed class UpdateApplierTests
             ProcessAliveResult = true,
             KillProcessByIdIfPathMatchesResult = true
         };
-        var health = new FakeHealthChecker { RespondOnceResult = true, RunningVersionResult = "1.2.3" };
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
         var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
             installRetryDelay: TimeSpan.FromMilliseconds(1));
 
