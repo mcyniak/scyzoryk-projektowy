@@ -1,0 +1,20 @@
+name: Test Discord build-log
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-discord:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Wyslij test do Discord
+        env:
+          DISCORD_BUILD_WEBHOOK: ${{ secrets.DISCORD_BUILD_WEBHOOK }}
+        run: |
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          curl -sS \
+            -H "Content-Type: application/json" \
+            -d "{\"content\":\"🧪 **Scyzoryk Build Log — TEST**\n\n✅ GitHub Actions → Discord działa.\n\n${RUN_URL}\"}" \
+            "$DISCORD_BUILD_WEBHOOK"
