@@ -5,15 +5,13 @@ name: Opublikuj publiczny instalator (GitHub Release)
 # ktorego korzysta wbudowany mechanizm aktualizacji Scyzoryka
 # (lib/updateService.js) - GET /repos/{repo}/releases/latest.
 #
-# Wyzwalane tagiem w formacie SemVer "vMAJOR.MINOR.PATCH" (patrz
-# lib/updateVersion.js dla dokladnego formatu porownywanego przez sama
-# aplikacje). Recznie (workflow_dispatch) rowniez mozliwe - walidacja wersji
-# jest IDENTYCZNA w obu przypadkach, nie da sie jej obejsc.
+# Wyzwalane tagiem w formacie SemVer "vMAJOR.MINOR.PATCH".
+# Recznie (workflow_dispatch) rowniez mozliwe.
 #
-# Instalator nie zawiera zadnych wbudowanych sekretow (od 2026-08-12 OCR
-# audytow korzysta z Google Gemini, ktorego klucz API uzytkownik wpisuje
-# recznie w aplikacji - zaden instalator, publiczny ani wewnetrzny, nigdy go
-# nie bakuje) - budowany tak samo jak w build-internal-installer.yml.
+# Status release jest raportowany do Discord #build-log:
+# - statusy posrednie: bez linkow
+# - sukces: link do GitHub Release
+# - blad: link do konkretnego GitHub Actions run
 
 on:
   push:
@@ -68,7 +66,7 @@ jobs:
           $packageVersion = (Get-Content -Raw 'package.json' | ConvertFrom-Json).version
 
           if ($tagVersion -ne $packageVersion) {
-            throw "Tag Git ($tagRef -> wersja $tagVersion) nie zgadza sie z package.json (wersja $packageVersion). Publikacja przerwana PRZED zbudowaniem instalatora - popraw jedno albo drugie i utworz tag ponownie."
+            throw "Tag Git ($tagRef -> wersja $tagVersion) nie zgadza sie z package.json (wersja $packageVersion). Publikacja przerwana PRZED zbudowaniem instalatora."
           }
 
           Write-Host "Wersja zgodna: tag=$tagRef, package.json=$packageVersion"
@@ -108,7 +106,7 @@ jobs:
             -Status "✅ **CHECK PASS**" `
             -Details "Kontrola składni i struktury projektu zakończona poprawnie."
 
-      - name: Zainstaluj zaleznosci wszystkich aplikacji (wymagane przez testy jednostkowe)
+      - name: Zainstaluj zaleznosci wszystkich aplikacji
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -160,14 +158,22 @@ jobs:
 
           if (-not $found) {
             choco install innosetup --no-progress -y
+
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Instalacja Inno Setup nie powiodla sie.'
+            }
           }
 
-      - name: Zbuduj publiczne instalatory (pelny + aktualizacyjny, bez OCR, wersja z package.json)
+      - name: Zbuduj publiczne instalatory
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
           npm run build-installer
+
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Budowanie instalatorow nie powiodlo sie.'
+          }
 
           $fullPath = Join-Path 'release' "ScyzorykProjektowy-Setup-$env:RELEASE_VERSION.exe"
           $updatePath = Join-Path 'release' "ScyzorykProjektowy-Update-$env:RELEASE_VERSION.exe"
@@ -299,6 +305,10 @@ jobs:
             -InstallDir $installDir `
             -LogsDir $logsDir
 
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Test instalatorow nie powiodl sie.'
+          }
+
       - name: Discord - test instalatorow OK
         shell: pwsh
         run: |
@@ -357,7 +367,7 @@ jobs:
             -Status "🔐 **SHA-256 READY**" `
             -Details "Sumy kontrolne obu instalatorów zostały wygenerowane."
 
-      - name: Utworz GitHub Release i dodaj oba instalatory + sumy kontrolne + fingerprint runtime
+      - name: Utworz GitHub Release i dodaj oba instalatory
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -382,12 +392,14 @@ jobs:
         run: |
           & '.\scripts\ci\discord-build-log.ps1' `
             -Status "🎉 **SCYZORYK $env:RELEASE_TAG RELEASED**" `
-            -Details "GitHub Release został utworzony poprawnie. Nowa wersja jest opublikowana."
+            -Details "Wszystkie testy przeszły poprawnie. Nowa wersja Scyzoryka została opublikowana." `
+            -LinkType "release"
 
       - name: Discord - release FAILED
         if: failure()
         shell: pwsh
         run: |
           & '.\scripts\ci\discord-build-log.ps1' `
-            -Status "❌ **RELEASE $env:RELEASE_TAG FAILED**" `
-            -Details "Workflow zakończył się błędem. Otwórz GitHub Actions, aby sprawdzić dokładny krok i pełny log."
+            -Status "❌ **RELEASE FAILED**" `
+            -Details "Workflow zakończył się błędem. Otwórz GitHub Actions, aby zobaczyć dokładny krok i pełny log." `
+            -LinkType "action"

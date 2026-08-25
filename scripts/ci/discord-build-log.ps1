@@ -2,7 +2,10 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Status,
 
-    [string]$Details = ""
+    [string]$Details = "",
+
+    [ValidateSet("none", "action", "release")]
+    [string]$LinkType = "none"
 )
 
 $webhook = $env:DISCORD_BUILD_WEBHOOK
@@ -12,15 +15,25 @@ if ([string]::IsNullOrWhiteSpace($webhook)) {
     exit 0
 }
 
-$runUrl = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+$message = $Status
 
-$message = @"
-$Status
+if (-not [string]::IsNullOrWhiteSpace($Details)) {
+    $message += "`n`n$Details"
+}
 
-$Details
+switch ($LinkType) {
+    "action" {
+        $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+        $message += "`n`n🔗 **GitHub Actions:** $url"
+    }
 
-🔗 $runUrl
-"@
+    "release" {
+        if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) {
+            $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$env:RELEASE_TAG"
+            $message += "`n`n🔗 **GitHub Release:** $url"
+        }
+    }
+}
 
 $payload = @{
     content = $message
@@ -31,9 +44,11 @@ try {
         -Uri $webhook `
         -Method Post `
         -ContentType "application/json" `
-        -Body $payload | Out-Null
+        -Body $payload |
+        Out-Null
 }
 catch {
+    # Powiadomienie Discord nigdy nie może zepsuć właściwego release.
     Write-Warning "Discord notification failed: $($_.Exception.Message)"
 }
 
