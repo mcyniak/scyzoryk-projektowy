@@ -5,16 +5,46 @@ on:
 
 jobs:
   test-discord:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+
+    env:
+      DISCORD_BUILD_WEBHOOK: ${{ secrets.DISCORD_BUILD_WEBHOOK }}
 
     steps:
-      - name: Wyslij test do Discord
-        env:
-          DISCORD_BUILD_WEBHOOK: ${{ secrets.DISCORD_BUILD_WEBHOOK }}
-        run: |
-          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+      - name: Pobierz repo
+        uses: actions/checkout@v4
 
-          curl -sS \
-            -H "Content-Type: application/json" \
-            -d "{\"content\":\"🧪 **Scyzoryk Build Log — TEST**\n\n✅ GitHub Actions → Discord działa.\n\n${RUN_URL}\"}" \
-            "$DISCORD_BUILD_WEBHOOK"
+      - name: Test START
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "🚀 **TEST RELEASE v9.9.9 — START**" `
+            -Details "Test właściwego systemu powiadomień release."
+
+      - name: Test CHECK
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "✅ **CHECK PASS**" `
+            -Details "Test komunikatu po sprawdzeniu projektu."
+
+      - name: Test REGRESSIONS
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "✅ **REGRESSION TESTS PASS**" `
+            -Details "Test komunikatu po regresjach."
+
+      - name: Test BUILD
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "🔨 **INSTALLERS BUILT**" `
+            -Details "Test komunikatu po zbudowaniu instalatorów."
+
+      - name: Test FINAL
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "🎉 **SCYZORYK v9.9.9 TEST COMPLETED**" `
+            -Details "System powiadomień GitHub Actions → Discord działa poprawnie."
