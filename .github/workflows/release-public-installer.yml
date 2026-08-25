@@ -19,6 +19,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+
   workflow_dispatch:
     inputs:
       tag:
@@ -37,6 +38,10 @@ jobs:
     name: Zbuduj, przetestuj i opublikuj publiczny instalator
     runs-on: windows-latest
     timeout-minutes: 90
+
+    env:
+      DISCORD_BUILD_WEBHOOK: ${{ secrets.DISCORD_BUILD_WEBHOOK }}
+
     steps:
       - name: Pobierz kod repozytorium (dokladnie ten tag)
         uses: actions/checkout@v4
@@ -48,32 +53,40 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
           $tagRef = '${{ github.event.inputs.tag }}'
-          if ([string]::IsNullOrWhiteSpace($tagRef)) { $tagRef = '${{ github.ref_name }}' }
+
+          if ([string]::IsNullOrWhiteSpace($tagRef)) {
+            $tagRef = '${{ github.ref_name }}'
+          }
+
           if ($tagRef -notmatch '^v(\d+\.\d+\.\d+)$') {
             throw "Tag '$tagRef' nie ma formatu SemVer 'vMAJOR.MINOR.PATCH' (np. v1.2.0)."
           }
+
           $tagVersion = $Matches[1]
           $packageVersion = (Get-Content -Raw 'package.json' | ConvertFrom-Json).version
+
           if ($tagVersion -ne $packageVersion) {
             throw "Tag Git ($tagRef -> wersja $tagVersion) nie zgadza sie z package.json (wersja $packageVersion). Publikacja przerwana PRZED zbudowaniem instalatora - popraw jedno albo drugie i utworz tag ponownie."
           }
+
           Write-Host "Wersja zgodna: tag=$tagRef, package.json=$packageVersion"
+
           "RELEASE_VERSION=$tagVersion" >> $env:GITHUB_ENV
           "RELEASE_TAG=$tagRef" >> $env:GITHUB_ENV
+
+      - name: Discord - release rozpoczęty
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "🚀 **RELEASE $env:RELEASE_TAG — START**" `
+            -Details "GitHub Actions rozpoczął budowanie nowego wydania Scyzoryka."
 
       - name: Przygotuj Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # Audyt v1.1.7: cache npm keyowany hashem WSZYSTKICH lockfilow w
-          # repo (root + kazda apps/*) - kiedy zaden lockfile sie nie zmienil
-          # (typowy przypadek dla releasu, ktory zmienia tylko kod aplikacji),
-          # `npm ci` w install-all.js ciagnie paczki z lokalnego cache
-          # zamiast na nowo z sieci. Nie przyspiesza samego pobrania Chromium
-          # przez Playwright (PLAYWRIGHT_BROWSERS_PATH=0 wiazie je wewnatrz
-          # node_modules, ktore `npm ci` i tak zawsze czysci i buduje od
-          # nowa) - to zostaje najwiekszym pojedynczym kosztem czasowym.
           cache: 'npm'
           cache-dependency-path: |
             package-lock.json
@@ -88,114 +101,210 @@ jobs:
         shell: pwsh
         run: npm run check
 
+      - name: Discord - check OK
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "✅ **CHECK PASS**" `
+            -Details "Kontrola składni i struktury projektu zakończona poprawnie."
+
       - name: Zainstaluj zaleznosci wszystkich aplikacji (wymagane przez testy jednostkowe)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Niektore istniejace testy (np. test/group3-ocr.test.js,
-          # test/group4-ecodan.test.js) require() bezposrednio wlasny
-          # node_modules danej aplikacji (np. pdf-lib z apps/ocr-audytow) -
-          # bez tego kroku failowaly na swiezym checkoucie z MODULE_NOT_FOUND,
-          # mimo ze kod byl poprawny (zlapane realnie w tym workflow).
+
           npm run install-all
-          if ($LASTEXITCODE -ne 0) { throw 'Instalacja zaleznosci aplikacji nie powiodla sie.' }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Instalacja zaleznosci aplikacji nie powiodla sie.'
+          }
+
+      - name: Discord - zaleznosci gotowe
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "📦 **DEPENDENCIES READY**" `
+            -Details "Zależności wszystkich aplikacji zostały poprawnie zainstalowane."
 
       - name: Uruchom testy regresyjne
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Audyt v1.1.7: ten krok kiedys szedl PO osobnej petli "npm run
-          # test:groupN" dla kazdej grupy z osobna - test:regressions
-          # (scripts/run-regression-tests.js) i tak automatycznie odkrywa i
-          # uruchamia WSZYSTKIE test/group*.test.js (plus dodatkowo
-          # regresje sortowania drukarki-projekty), wiec caly zestaw
-          # testow byl uruchamiany DWA RAZY z rzedu bez zadnej dodatkowej
-          # wartosci - czysta strata czasu w kazdym releasie.
+
           npm run test:regressions
-          if ($LASTEXITCODE -ne 0) { throw 'Testy regresyjne nie powiodly sie.' }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Testy regresyjne nie powiodly sie.'
+          }
+
+      - name: Discord - regresje OK
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "✅ **REGRESSION TESTS PASS**" `
+            -Details "Wszystkie testy regresyjne Scyzoryka zakończyły się poprawnie."
 
       - name: Upewnij sie, ze Inno Setup jest dostepne
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
           $candidates = @(
             "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
             "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
           )
-          $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $found) { choco install innosetup --no-progress -y }
+
+          $found = $candidates |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+
+          if (-not $found) {
+            choco install innosetup --no-progress -y
+          }
 
       - name: Zbuduj publiczne instalatory (pelny + aktualizacyjny, bez OCR, wersja z package.json)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
           npm run build-installer
 
-          # Audyt 2026-08-06: od teraz DWA pliki .exe - pelny (offline, z
-          # node_modules/Chromium) i maly aktualizacyjny (bez nich, patrz
-          # scripts\build-installer.ps1/installer\scyzoryk.iss). Nazwy
-          # znajdujemy jawnie, nigdy przez "pierwszy pasujacy plik" - kolejnosc
-          # alfabetyczna to przypadek, nie kontrakt.
           $fullPath = Join-Path 'release' "ScyzorykProjektowy-Setup-$env:RELEASE_VERSION.exe"
           $updatePath = Join-Path 'release' "ScyzorykProjektowy-Update-$env:RELEASE_VERSION.exe"
           $fingerprintPath = Join-Path 'release' 'runtime-fingerprint.txt'
-          if (-not (Test-Path $fullPath)) { throw "Brak pelnego instalatora: $fullPath" }
-          if (-not (Test-Path $updatePath)) { throw "Brak instalatora aktualizacyjnego: $updatePath" }
-          if (-not (Test-Path $fingerprintPath)) { throw "Brak runtime-fingerprint.txt: $fingerprintPath" }
+
+          if (-not (Test-Path $fullPath)) {
+            throw "Brak pelnego instalatora: $fullPath"
+          }
+
+          if (-not (Test-Path $updatePath)) {
+            throw "Brak instalatora aktualizacyjnego: $updatePath"
+          }
+
+          if (-not (Test-Path $fingerprintPath)) {
+            throw "Brak runtime-fingerprint.txt: $fingerprintPath"
+          }
 
           "FULL_INSTALLER_PATH=$((Resolve-Path $fullPath).Path)" >> $env:GITHUB_ENV
           "FULL_INSTALLER_NAME=$(Split-Path -Leaf $fullPath)" >> $env:GITHUB_ENV
+
           "UPDATE_INSTALLER_PATH=$((Resolve-Path $updatePath).Path)" >> $env:GITHUB_ENV
           "UPDATE_INSTALLER_NAME=$(Split-Path -Leaf $updatePath)" >> $env:GITHUB_ENV
+
           "FINGERPRINT_PATH=$((Resolve-Path $fingerprintPath).Path)" >> $env:GITHUB_ENV
+
+      - name: Discord - instalatory zbudowane
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "🔨 **INSTALLERS BUILT**" `
+            -Details "Pełny instalator oraz instalator aktualizacyjny zostały poprawnie zbudowane."
 
       - name: Sprawdz, ze ZADEN publiczny instalator nie zawiera konfiguracji OCR
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          function Test-NoOcrSecret([string]$InstallerPath, [string]$Label) {
+          function Test-NoOcrSecret(
+            [string]$InstallerPath,
+            [string]$Label
+          ) {
             $installDir = Join-Path $env:RUNNER_TEMP "Scyzoryk Sprawdzenie Sekretow $Label"
-            $proc = Start-Process -FilePath $InstallerPath -ArgumentList @(
-              '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', '/MERGETASKS=!autostart', "/DIR=`"$installDir`""
-            ) -Wait -PassThru
-            if ($proc.ExitCode -ne 0) { throw "Instalacja testowa ($Label, sprawdzenie sekretow) zakonczyla sie kodem $($proc.ExitCode)." }
 
-            $forbidden = @(Get-ChildItem -Path $installDir -Recurse -File -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -eq 'service-account.json' -or $_.Name -eq 'document-ai.json' })
+            $proc = Start-Process `
+              -FilePath $InstallerPath `
+              -ArgumentList @(
+                '/VERYSILENT',
+                '/SUPPRESSMSGBOXES',
+                '/NORESTART',
+                '/CURRENTUSER',
+                '/MERGETASKS=!autostart',
+                "/DIR=`"$installDir`""
+              ) `
+              -Wait `
+              -PassThru
+
+            if ($proc.ExitCode -ne 0) {
+              throw "Instalacja testowa ($Label, sprawdzenie sekretow) zakonczyla sie kodem $($proc.ExitCode)."
+            }
+
+            $forbidden = @(
+              Get-ChildItem `
+                -Path $installDir `
+                -Recurse `
+                -File `
+                -ErrorAction SilentlyContinue |
+              Where-Object {
+                $_.Name -eq 'service-account.json' -or
+                $_.Name -eq 'document-ai.json'
+              }
+            )
 
             if (Test-Path (Join-Path $installDir 'Scyzoryk.exe')) {
               & (Join-Path $installDir 'Scyzoryk.exe') --stop
             }
+
             if (Test-Path (Join-Path $installDir 'unins000.exe')) {
-              Start-Process -FilePath (Join-Path $installDir 'unins000.exe') -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -Wait -PassThru | Out-Null
+              Start-Process `
+                -FilePath (Join-Path $installDir 'unins000.exe') `
+                -ArgumentList @(
+                  '/VERYSILENT',
+                  '/SUPPRESSMSGBOXES',
+                  '/NORESTART'
+                ) `
+                -Wait `
+                -PassThru |
+                Out-Null
             }
 
             if ($forbidden.Count -gt 0) {
               throw "Publiczny instalator ($Label) zawiera zabronione pliki sekretne: $($forbidden.FullName -join ', ')"
             }
+
             Write-Host "Potwierdzono ($Label): brak konfiguracji OCR."
           }
 
-          # Wariant "update" NIE ma node_modules, ale konfiguracja OCR (jesli
-          # w ogole by trafila do stagingu) idzie przez ta sama, wspolna
-          # sekcje [Files] co reszta kodu aplikacji - musi byc sprawdzony
-          # rownie dokladnie jak pelny.
-          Test-NoOcrSecret -InstallerPath $env:FULL_INSTALLER_PATH -Label 'full'
-          Test-NoOcrSecret -InstallerPath $env:UPDATE_INSTALLER_PATH -Label 'update'
+          Test-NoOcrSecret `
+            -InstallerPath $env:FULL_INSTALLER_PATH `
+            -Label 'full'
+
+          Test-NoOcrSecret `
+            -InstallerPath $env:UPDATE_INSTALLER_PATH `
+            -Label 'update'
+
+      - name: Discord - security check OK
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "🔒 **SECURITY CHECK PASS**" `
+            -Details "Potwierdzono brak niedozwolonej konfiguracji OCR w publicznych instalatorach."
 
       - name: Zainstaluj i w pelni przetestuj oba publiczne instalatory na swiezym Windows
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
           $installDir = Join-Path $env:RUNNER_TEMP 'Scyzoryk Release Test'
           $logsDir = Join-Path $env:RUNNER_TEMP 'scyzoryk-release-logs'
-          New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $logsDir |
+            Out-Null
+
           & '.\scripts\ci\test-installed-scyzoryk.ps1' `
             -InstallerPath $env:FULL_INSTALLER_PATH `
             -UpdateInstallerPath $env:UPDATE_INSTALLER_PATH `
             -InstallDir $installDir `
             -LogsDir $logsDir
+
+      - name: Discord - test instalatorow OK
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "✅ **INSTALLER TEST PASS**" `
+            -Details "Pełny oraz aktualizacyjny instalator przeszły test na świeżym Windows."
 
       - name: Przeslij raport testu instalatora
         if: always()
@@ -211,19 +320,42 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          function New-ShaFile([string]$InstallerPath, [string]$InstallerName) {
+          function New-ShaFile(
+            [string]$InstallerPath,
+            [string]$InstallerName
+          ) {
             $hash = (Get-FileHash -Algorithm SHA256 -Path $InstallerPath).Hash
             $shaLine = "$hash  $InstallerName"
             $shaPath = "$InstallerPath.sha256"
-            [IO.File]::WriteAllText($shaPath, "$shaLine`n", [Text.ASCIIEncoding]::new())
+
+            [IO.File]::WriteAllText(
+              $shaPath,
+              "$shaLine`n",
+              [Text.ASCIIEncoding]::new()
+            )
+
             Write-Host $shaLine
+
             return $shaPath
           }
 
-          $fullSha = New-ShaFile -InstallerPath $env:FULL_INSTALLER_PATH -InstallerName $env:FULL_INSTALLER_NAME
-          $updateSha = New-ShaFile -InstallerPath $env:UPDATE_INSTALLER_PATH -InstallerName $env:UPDATE_INSTALLER_NAME
+          $fullSha = New-ShaFile `
+            -InstallerPath $env:FULL_INSTALLER_PATH `
+            -InstallerName $env:FULL_INSTALLER_NAME
+
+          $updateSha = New-ShaFile `
+            -InstallerPath $env:UPDATE_INSTALLER_PATH `
+            -InstallerName $env:UPDATE_INSTALLER_NAME
+
           "FULL_SHA_PATH=$fullSha" >> $env:GITHUB_ENV
           "UPDATE_SHA_PATH=$updateSha" >> $env:GITHUB_ENV
+
+      - name: Discord - sumy SHA gotowe
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "🔐 **SHA-256 READY**" `
+            -Details "Sumy kontrolne obu instalatorów zostały wygenerowane."
 
       - name: Utworz GitHub Release i dodaj oba instalatory + sumy kontrolne + fingerprint runtime
         shell: pwsh
@@ -231,13 +363,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # runtime-fingerprint.txt jako WLASNY, maly asset - lib/updateService.js
-          # go pobiera osobno, zeby zdecydowac czy wystarczy maly instalator
-          # aktualizacyjny, bez pobierania ktoregokolwiek z duzych plikow .exe.
+
           gh release create "$env:RELEASE_TAG" `
-            "$env:FULL_INSTALLER_PATH" "$env:FULL_SHA_PATH" `
-            "$env:UPDATE_INSTALLER_PATH" "$env:UPDATE_SHA_PATH" `
+            "$env:FULL_INSTALLER_PATH" `
+            "$env:FULL_SHA_PATH" `
+            "$env:UPDATE_INSTALLER_PATH" `
+            "$env:UPDATE_SHA_PATH" `
             "$env:FINGERPRINT_PATH" `
             --title "Scyzoryk $env:RELEASE_VERSION" `
             --generate-notes
-          if ($LASTEXITCODE -ne 0) { throw "gh release create zakonczylo sie kodem $LASTEXITCODE." }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "gh release create zakonczylo sie kodem $LASTEXITCODE."
+          }
+
+      - name: Discord - release opublikowany
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "🎉 **SCYZORYK $env:RELEASE_TAG RELEASED**" `
+            -Details "GitHub Release został utworzony poprawnie. Nowa wersja jest opublikowana."
+
+      - name: Discord - release FAILED
+        if: failure()
+        shell: pwsh
+        run: |
+          & '.\scripts\ci\discord-build-log.ps1' `
+            -Status "❌ **RELEASE $env:RELEASE_TAG FAILED**" `
+            -Details "Workflow zakończył się błędem. Otwórz GitHub Actions, aby sprawdzić dokładny krok i pełny log."
