@@ -18,6 +18,20 @@ if ($UpdateInstallerPath) { $UpdateInstallerPath = (Resolve-Path $UpdateInstalle
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:TaskName = 'Scyzoryk CI test instalatora'
 
+# Ten skrypt uruchamia PRAWDZIWA, zainstalowana aplikacje (root + do 8 dzieci)
+# na swiezym runnerze GitHub Actions przy KAZDYM przebiegu - bez tego
+# wylaczenia kazdy przebieg CI rejestrowalby sie jako nowa "instalacja" w
+# prawdziwym monitorze telemetrii (scyzoryk-monitor.scyzoryk.workers.dev),
+# zawyzajac liczniki instalacji/uzycia widoczne wlascicielowi na Discordzie
+# (zaobserwowane na zywo - liczba "instalacji" nie mialo zwiazku z realna
+# liczba maszyn). Ustawiamy zarowno w biezacej sesji (obejmuje kazdy
+# Start-Process nizej, w tym --apply-update) jak i w rejestrze na poziomie
+# Machine (obejmuje zadanie Harmonogramu Zadan uruchamiane przez
+# Scyzoryk.exe --autostart, ktore NIE dziedziczy zmiennych z tej sesji
+# PowerShell - Task Scheduler odczytuje srodowisko z rejestru przy starcie).
+$env:SCYZORYK_TELEMETRY_ENABLED = '0'
+[Environment]::SetEnvironmentVariable('SCYZORYK_TELEMETRY_ENABLED', '0', 'Machine')
+
 foreach ($sub in 'install','app-logs','reports','input','screenshots') {
   New-Item -ItemType Directory -Force -Path (Join-Path $LogsDir $sub) | Out-Null
 }

@@ -1012,13 +1012,24 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
       const result = await startGeneration(job, taskOptions);
       if (result && Array.isArray(result.created)) allCreated.push(...result.created);
       if (result && Array.isArray(result.errors)) allErrors.push(...result.errors);
-      if (result && result.ok === false && (!result.created || !result.created.length)) {
+      if (result && result.ok === false && (!result.created || !result.created.length) && !job.cancelRequested) {
         allErrors.push({ file: task.templateOriginalName, message: result.message || 'Błąd generowania.' });
       }
     } catch (err) {
-      allErrors.push({ file: task.templateOriginalName, message: err.message || String(err) });
+      if (!job.cancelRequested) allErrors.push({ file: task.templateOriginalName, message: err.message || String(err) });
     }
     first = false;
+    // /api/cancel/:jobId zabija job.child W TRAKCIE await startGeneration() powyzej -
+    // ten sam Word/PowerShell proces konczy sie wtedy bez wyniku JSON (status='error'),
+    // a jesli to byl OSTATNI szablon w paczce, petla juz nigdy nie wroci na gore, wiec
+    // sam warunek na poczatku petli by tego nie zlapal - cancelledEarly zostalby false
+    // i job trafilby do telemetrii jako prawdziwy blad ("generation-failed"), mimo ze to
+    // bylo celowe przerwanie przez uzytkownika (zglosil to realny przypadek).
+    if (job.cancelRequested) {
+      cancelledEarly = true;
+      appendLog(job, 'warn', `Anulowano - pominieto ${tasks.length - i - 1} z ${tasks.length} pozostalych szablonow.`);
+      break;
+    }
   }
   if (!cancelledEarly) {
     for (const skipped of (skippedGroups || [])) {

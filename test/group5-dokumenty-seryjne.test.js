@@ -55,6 +55,35 @@ test('anulowanie zatrzymuje CALA paczke szablonow, nie tylko biezacy proces (aud
   assert.match(loopFn[0], /job\.status = cancelledEarly \? 'cancelled'/);
 });
 
+test('anulowanie OSTATNIEGO/jedynego szablonu w paczce nie ląduje jako "error" (i nie leci jako fałszywe zdarzenie telemetryczne generation-failed)', async () => {
+  const source = await fsp.readFile(serverPath, 'utf8');
+  // Realny przypadek zgloszony przez wlasciciela: /api/cancel/:jobId zabija
+  // job.child W TRAKCIE await startGeneration(). Jesli to byl OSTATNI
+  // (albo jedyny) szablon w paczce, petla juz nigdy nie wraca na gore, wiec
+  // sam warunek na POCZATKU petli nigdy by tego nie zlapal - cancelledEarly
+  // zostawaloby false, job konczylby jako status='error', a telemetria
+  // wysylalaby prawdziwe zdarzenie 'failed'/'generation-failed' mimo ze to
+  // bylo celowe przerwanie przez uzytkownika, nie realny blad.
+  const loopFn = source.match(/async function runMultiTemplateGeneration[\s\S]*?\n\}/);
+  assert.ok(loopFn, 'nie znaleziono runMultiTemplateGeneration');
+  const body = loopFn[0];
+
+  // Musi istniec DRUGIE sprawdzenie job.cancelRequested, PO await
+  // startGeneration(...) (a wiec i po "first = false;", ktore nastepuje
+  // zaraz po try/catch), nie tylko na poczatku petli.
+  const firstFalseIndex = body.indexOf('first = false;');
+  const afterFirstFalse = body.slice(firstFalseIndex);
+  assert.ok(firstFalseIndex >= 0, 'nie znaleziono "first = false;" w petli');
+  assert.match(afterFirstFalse, /if \(job\.cancelRequested\) \{\s*\n\s*cancelledEarly = true;/);
+
+  // Wynik nieudanego/zabitego zadania (result.ok===false / rzucony wyjatek)
+  // NIE moze byc dopisany do allErrors, gdy to anulowanie - inaczej job
+  // konczylby sie jako status='error' (allCreated.length===0) zamiast
+  // 'cancelled', mimo poprawionej flagi cancelledEarly.
+  assert.match(body, /result\.created \|\| !result\.created\.length\) && !job\.cancelRequested\) \{/);
+  assert.match(body, /catch \(err\) \{\s*\n\s*if \(!job\.cancelRequested\) allErrors\.push/);
+});
+
 test('generate: wpisany przez uzytkownika przedrostek nazwy pliku faktycznie trafia do wygenerowanych plikow (nie tylko do podgladu)', async () => {
   const source = await fsp.readFile(serverPath, 'utf8');
   // Zlapane realnie: pole "Przedrostek nazwy pliku" w UI pokazywalo zywy
