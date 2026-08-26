@@ -40,9 +40,13 @@ async function buildFormData(multipartFields) {
 // tym samym przebiegu.
 const PANEL_BASE_URL = process.env.SCYZORYK_PANEL_URL || `http://127.0.0.1:${process.env.SCYZORYK_PANEL_PORT || 3000}`;
 const PORT_TO_PANEL_SLUG = {
-  3001: 'drukarka', 3002: 'pieczatki-pdf', 3003: 'formularze-ecodan', 3004: 'dokumenty-seryjne',
-  3005: 'wnioski-powykonawcze', 3006: 'karty-katalogowe', 3007: 'nazywarka-skanow', 3010: 'drukarka-projekty',
-  3011: 'ocr-audytow', 3012: 'formularze-varmero', 3013: 'tworzenie-folderow', 3014: 'protokoly'
+  [Number(process.env.TWORZENIE_FOLDEROW_PORT || 3013)]: 'tworzenie-folderow',
+  [Number(process.env.KARTY_PORT || 3006)]: 'karty-katalogowe',
+  [Number(process.env.SERYJNE_PORT || 3004)]: 'dokumenty-seryjne',
+  [Number(process.env.FORMULARZE_PORT || 3003)]: 'formularze-ecodan',
+  [Number(process.env.FORMULARZE_VARMERO_PORT || 3012)]: 'formularze-varmero',
+  3001: 'drukarka', 3002: 'pieczatki-pdf', 3005: 'wnioski-powykonawcze', 3007: 'nazywarka-skanow',
+  3010: 'drukarka-projekty', 3011: 'ocr-audytow', 3014: 'protokoly'
 };
 const ensuredSlugs = new Set();
 

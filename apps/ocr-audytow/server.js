@@ -670,7 +670,13 @@ app.post('/api/ocr/finalize', heavyJobLimiter, async (req, res) => {
       // zostawaloby tam na zawsze i blokowaloby pobranie kazdego pliku (real bug
       // zgloszony na zywo 2026-08-19, patrz komentarz przy isFieldApplicable).
       const unresolved = excelPath && fileEntry.resolvedBlocks.some((b) =>
-        Object.entries(b.fields).some(([key, f]) => isFieldApplicable(b.fields, key) && (f.needsReview || !f.resolved)));
+        Object.entries(b.fields).some(([key, f]) => {
+          if (key === 'ocieplenieScianyZewnGrubosc') {
+            const parentVal = b.fields['ocieplenieScianyZewn']?.value;
+            return parentVal && parentVal !== 'Brak' && (f.needsReview || !f.resolved);
+          }
+          return isFieldApplicable(b.fields, key) && (f.needsReview || !f.resolved);
+        }));
       if (unresolved) {
         results.push({ ok: false, originalName: fileEntry.originalName, error: 'Ten plik ma jeszcze nieuzupełnione pola - dokończ "Uzupełnij dane" przed pobraniem.' });
         continue;

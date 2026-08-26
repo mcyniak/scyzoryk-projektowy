@@ -351,6 +351,12 @@ const FIELD_DEFS = [
     ]
   },
   {
+    key: 'ocieplenieScianyZewnGrubosc',
+    columnLabel: 'Ocieplenie ściany zewnętrznej - grubość',
+    kind: 'text',
+    valueKind: 'numeric'
+  },
+  {
     key: 'scianaFundamentowaMaterial',
     columnLabel: 'Ściana fundamentowa (materiał, grubość)',
     kind: 'material',
@@ -421,6 +427,13 @@ const FIELD_DEFS = [
     ]
   },
   {
+    key: 'izolacjaScianyFundamentowejGrubosc',
+    columnLabel: 'Izolacja ściany fundamentowej - grubość',
+    kind: 'text',
+    valueKind: 'numeric',
+    dependsOn: { key: 'izolacjaScianyFundamentowej', equals: 'Tak' }
+  },
+  {
     key: 'izolacjaDachu',
     columnLabel: 'Izolacja dachu (grubość)',
     kind: 'material',
@@ -432,6 +445,13 @@ const FIELD_DEFS = [
         label: 'Nie'
       }
     ]
+  },
+  {
+    key: 'izolacjaDachuGrubosc',
+    columnLabel: 'Izolacja dachu - grubość',
+    kind: 'text',
+    valueKind: 'numeric',
+    dependsOn: { key: 'izolacjaDachu', equals: 'Tak' }
   },
   {
     key: 'dlugoscBudynku',

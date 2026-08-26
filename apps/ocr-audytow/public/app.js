@@ -721,12 +721,24 @@
   // needsReview (patrz toFieldResult), wiec dropdown od razu wymusza
   // poprawna wartosc zamiast literowek. "Źródło ciepła - opis Inny" jest
   // widoczne TYLKO gdy "Źródło ciepła" ma zaznaczone "Inny".
-  const CONDITIONAL_FIELDS = { zrodloCieplaInnyOpis: { whenKey: 'zrodloCiepla', equalsValue: 'Inny' } };
+  const CONDITIONAL_FIELDS = {
+    zrodloCieplaInnyOpis: { whenKey: 'zrodloCiepla', equalsValue: 'Inny' },
+    ocieplenieScianyZewnGrubosc: { whenKey: 'ocieplenieScianyZewn', equalsValue: '__hide_when_brak__' },
+    izolacjaScianyFundamentowejGrubosc: { whenKey: 'izolacjaScianyFundamentowej', equalsValue: 'Tak' },
+    izolacjaDachuGrubosc: { whenKey: 'izolacjaDachu', equalsValue: 'Tak' }
+  };
+
+  function rowHiddenByValue(rule, parentValue) {
+    if (rule.equalsValue === '__hide_when_brak__') {
+      return !parentValue || parentValue === 'Brak';
+    }
+    return parentValue !== rule.equalsValue;
+  }
 
   function fieldRowHidden(block, key) {
     const rule = CONDITIONAL_FIELDS[key];
     if (!rule) return false;
-    return block.fields[rule.whenKey]?.value !== rule.equalsValue;
+    return rowHiddenByValue(rule, block.fields[rule.whenKey]?.value);
   }
 
   function renderFieldValueControl(fileId, block, key, field) {
@@ -851,7 +863,7 @@
     for (const [depKey, rule] of Object.entries(CONDITIONAL_FIELDS)) {
       if (rule.whenKey !== select.dataset.key) continue;
       const row = table?.querySelector(`tr[data-row-key="${depKey}"]`);
-      if (row) row.hidden = select.value !== rule.equalsValue;
+      if (row) row.hidden = rowHiddenByValue(rule, select.value);
     }
     saveFieldValue(select);
   });
