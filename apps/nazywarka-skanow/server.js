@@ -5,15 +5,23 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const { setupProcessDiagnostics, applyHttpTimeouts } = require("../../lib/hardening");
-const { getAppDataDir } = require("../../lib/appPaths");
+const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const { browseFolder } = require("../../lib/folderBrowse");
 const { contentDispositionHeader } = require("../../lib/printing");
 const { sessionMiddleware } = require("./lib/sessionStore");
 const { applySecurityHeaders, applyMutationGuard } = require("../../lib/localRequestSecurity");
+const { createTelemetryService } = require('../../lib/telemetry');
+const { estimateManualMs } = require('../../lib/timeBenchmarks');
 
 const app = express();
 const APP_DATA_ROOT = getAppDataDir("nazywarka-skanow");
 setupProcessDiagnostics("nazywarka-skanow", APP_DATA_ROOT);
+const telemetryService = createTelemetryService({
+  dataRoot: getDataRoot(),
+  endpoint: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev',
+  getVersion: () => process.env.SCYZORYK_MAIN_VERSION || 'unknown',
+  enabled: process.env.SCYZORYK_TELEMETRY_ENABLED === '1'
+});
 const PORT = Number(process.env.PORT || 3007);
 const HOST = process.env.SCYZORYK_HOST || "127.0.0.1";
 
@@ -38,7 +46,7 @@ app.use("/api", apiLimiter);
 app.use("/shared", express.static(path.join(__dirname, "..", "..", "shared-styles")));
 app.use(express.static(path.join(__dirname, "public")));
 
-app.use(sessionMiddleware(() => ({ folderPath: null, files: [], currentIndex: 0, previewToken: null })));
+app.use(sessionMiddleware(() => ({ folderPath: null, files: [], currentIndex: 0, previewToken: null, operationStartedAt: null, telemetryCompleted: false })));
 
 // Windows-zabronione znaki w nazwie pliku + znaki kontrolne. Kropka NIE jest
 // tu zabroniona (zakaz w CLAUDE.md przeciwko obcinaniu kropek z poprawnych
@@ -151,8 +159,10 @@ app.post("/api/open-folder", (req, res) => {
   }
 
   req.session.folderPath = folderPath;
-  req.session.files = names.map(name => ({ originalName: name, currentName: name, renamed: false }));
+  req.session.files = names.map(name => ({ originalName: name, currentName: name, renamed: false, processed: false }));
   req.session.currentIndex = 0;
+  req.session.operationStartedAt = Date.now();
+  req.session.telemetryCompleted = false;
   // Nowy token przy kazdym otwarciu folderu - podglady nizej dostaja
   // Cache-Control pozwalajacy przegladarce trzymac je w cache (potrzebne
   // do prefetchowania sasiednich plikow w app.js), a token w URL-u
@@ -257,13 +267,33 @@ app.post("/api/rename", (req, res) => {
     try {
       fs.renameSync(oldPath, newPath);
     } catch (err) {
+      telemetryService.recordEvent({
+        tool: 'nazywarka-skanow',
+        eventType: 'failed',
+        durationMs: req.session.operationStartedAt ? Math.max(0, Date.now() - req.session.operationStartedAt) : 0,
+        success: false,
+        errorCode: 'rename-failed'
+      });
       return res.status(500).json({ ok: false, message: `Nie udalo sie zmienic nazwy: ${err.message || err}` });
     }
     entry.currentName = newName;
     entry.renamed = true;
   }
 
+  entry.processed = true;
   if (req.session.currentIndex < req.session.files.length - 1) req.session.currentIndex += 1;
+  const processedCount = req.session.files.filter(file => file.processed).length;
+  if (!req.session.telemetryCompleted && req.session.files.length > 0 && processedCount === req.session.files.length) {
+    req.session.telemetryCompleted = true;
+    const durationMs = req.session.operationStartedAt ? Math.max(0, Date.now() - req.session.operationStartedAt) : 0;
+    telemetryService.recordEvent({
+      tool: 'nazywarka-skanow',
+      eventType: 'completed',
+      durationMs,
+      estimatedManualMs: estimateManualMs('nazywarka-skanow', req.session.files.length),
+      success: true
+    });
+  }
   res.json({ ok: true, ...sessionSummary(req.session) });
 });
 

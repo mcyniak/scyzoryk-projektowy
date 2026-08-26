@@ -16,18 +16,69 @@ import { readTabelaAdresowa } from './src/excel.js';
 import { calculate } from './src/rules.js';
 import { createJob, jobs, runBatchJob, cancelJob, cancelAllJobs } from './src/jobs.js';
 import appPaths from '../../lib/appPaths.js';
+import telemetryLib from '../../lib/telemetry.js';
+import timeBenchmarks from '../../lib/timeBenchmarks.js';
 import hardening from '../../lib/hardening.js';
 import folderBrowse from '../../lib/folderBrowse.js';
 import localRequestSecurity from '../../lib/localRequestSecurity.js';
 
-const { getAppDataDir } = appPaths;
+const { getDataRoot, getAppDataDir } = appPaths;
 const { runPowerShell } = hardening;
 const { browseFolder } = folderBrowse;
 const { applySecurityHeaders, applyMutationGuard } = localRequestSecurity;
+const { createTelemetryService } = telemetryLib;
+const { estimateManualMs } = timeBenchmarks;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const APP_DATA_ROOT = getAppDataDir('formularze-varmero');
 const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
+const telemetryService = createTelemetryService({
+  dataRoot: getDataRoot(),
+  endpoint: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev',
+  getVersion: () => process.env.SCYZORYK_MAIN_VERSION || APP_VERSION,
+  enabled: process.env.SCYZORYK_TELEMETRY_ENABLED === '1'
+});
+
+function operationDurationMs(job) {
+  const start = Date.parse(job?.startedAt || job?.createdAt || "");
+  const end = Date.parse(job?.finishedAt || "");
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return 0;
+  return end - start;
+}
+
+function reportBatchTelemetry(job) {
+  if (!job || job.monitorTelemetryReported) return;
+  const status = String(job.status || "");
+  const successfulItems = Math.max(0, Number(job.ok || 0));
+  const durationMs = operationDurationMs(job);
+  if ((status === 'finished' || status === 'finished-with-errors') && successfulItems > 0) {
+    telemetryService.recordEvent({
+      tool: 'formularze-varmero',
+      eventType: 'completed',
+      durationMs,
+      estimatedManualMs: estimateManualMs('formularze-varmero', successfulItems),
+      success: true
+    });
+  }
+  if (status === 'finished-with-errors') {
+    telemetryService.recordEvent({
+      tool: 'formularze-varmero',
+      eventType: 'failed',
+      durationMs,
+      success: false,
+      errorCode: 'partial-failure'
+    });
+  } else if (status === 'fatal-error') {
+    telemetryService.recordEvent({
+      tool: 'formularze-varmero',
+      eventType: 'failed',
+      durationMs,
+      success: false,
+      errorCode: 'batch-fatal-error'
+    });
+  }
+  job.monitorTelemetryReported = true;
+}
 
 const app = express();
 const diagnosticsDir = path.join(APP_DATA_ROOT, 'logs');
@@ -278,10 +329,14 @@ app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
     // trwac minuty).
     setImmediate(() => {
       runBatchJob(job, req.file.path, { email, imapConfig, gminaName, postalCode, zone, wojewodztwo, outputPath, skipExisting, selectedRows, selectAll })
+        .then(() => {
+          reportBatchTelemetry(job);
+        })
         .catch(error => {
           job.status = 'fatal-error';
           job.fatalReason = String(error?.message || error);
           job.finishedAt = new Date().toISOString();
+          reportBatchTelemetry(job);
         })
         .finally(() => { fs.unlink(req.file.path).catch(() => {}); });
     });

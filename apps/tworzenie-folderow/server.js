@@ -13,11 +13,13 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const { setupProcessDiagnostics, scheduleCleanup } = require('../../lib/hardening');
-const { getAppDataDir } = require('../../lib/appPaths');
+const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const { browseFolder } = require('../../lib/folderBrowse');
 const { readTabelaAdresowa } = require('./src/excel.js');
 const { buildFolderPlan } = require('./src/folderPlan.js');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
+const { createTelemetryService } = require('../../lib/telemetry');
+const { estimateManualMs } = require('../../lib/timeBenchmarks');
 
 const APP_VERSION = require('./package.json').version;
 const app = express();
@@ -26,6 +28,12 @@ const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 const ROOT = __dirname;
 const APP_DATA_ROOT = getAppDataDir('tworzenie-folderow');
 setupProcessDiagnostics('tworzenie-folderow', APP_DATA_ROOT);
+const telemetryService = createTelemetryService({
+  dataRoot: getDataRoot(),
+  endpoint: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev',
+  getVersion: () => process.env.SCYZORYK_MAIN_VERSION || APP_VERSION,
+  enabled: process.env.SCYZORYK_TELEMETRY_ENABLED === '1'
+});
 
 const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -104,6 +112,19 @@ function cleanText(value, max = 500) {
   return String(value || '').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+function countUniqueAddresses(excelResult) {
+  const keys = new Set();
+  for (const sheet of (excelResult?.sheets || [])) {
+    for (const record of (sheet.records || [])) {
+      const address = String(record.address || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      if (!address) continue;
+      const gmina = String(record.gmina || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      keys.add(gmina + '|' + address);
+    }
+  }
+  return keys.size;
+}
+
 async function readPlanFromUpload(req) {
   const investmentFolder = cleanText(req.body.investmentFolder, 500);
   if (!investmentFolder) throw new Error('Podaj ścieżkę do folderu inwestycji.');
@@ -128,7 +149,7 @@ async function readPlanFromUpload(req) {
     powietrznaCount: sheet.records.filter(r => r.pumpType === 'powietrzna').length
   }));
 
-  return { investmentFolder, withStatus, sheetSummary, sheetNames: excelResult.sheetNames };
+  return { investmentFolder, withStatus, sheetSummary, sheetNames: excelResult.sheetNames, addressCount: countUniqueAddresses(excelResult) };
 }
 
 app.get('/api/health', (req, res) => {
@@ -185,8 +206,9 @@ app.post('/api/create', (req, res, next) => {
   });
 }, async (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
+  const operationStartedAt = Date.now();
   try {
-    const { investmentFolder, withStatus } = await readPlanFromUpload(req);
+    const { investmentFolder, withStatus, addressCount } = await readPlanFromUpload(req);
     const created = [];
     const alreadyExisted = [];
     const rejected = [];
@@ -206,8 +228,23 @@ app.post('/api/create', (req, res, next) => {
       await fsp.mkdir(folder.fullPath, { recursive: true });
       created.push(folder.relativePath);
     }
+    const durationMs = Date.now() - operationStartedAt;
+    telemetryService.recordEvent({
+      tool: 'tworzenie-folderow',
+      eventType: 'completed',
+      durationMs,
+      estimatedManualMs: estimateManualMs('tworzenie-folderow', addressCount),
+      success: true
+    });
     res.json({ ok: true, investmentFolder, created, alreadyExisted, rejected });
   } catch (error) {
+    telemetryService.recordEvent({
+      tool: 'tworzenie-folderow',
+      eventType: 'failed',
+      durationMs: Date.now() - operationStartedAt,
+      success: false,
+      errorCode: 'create-failed'
+    });
     res.status(400).json({ ok: false, error: String(error?.message || error) });
   } finally {
     if (req.file?.path) fsp.unlink(req.file.path).catch(() => {});

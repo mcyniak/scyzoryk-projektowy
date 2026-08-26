@@ -29,8 +29,10 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
 const { toAsciiSafe } = require('../../lib/diacritics');
-const { getAppDataDir } = require('../../lib/appPaths');
+const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
+const { createTelemetryService } = require('../../lib/telemetry');
+const { estimateManualMs } = require('../../lib/timeBenchmarks');
 const { detectMailMergeSheetBinding, getDocxModifiedTime } = require('./src/mailMergeSheetBinding');
 const AdmZip = require('adm-zip');
 
@@ -40,6 +42,12 @@ const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 const ROOT = __dirname;
 const APP_DATA_ROOT = getAppDataDir('dokumenty-seryjne');
 setupProcessDiagnostics('dokumenty-seryjne', APP_DATA_ROOT);
+const telemetryService = createTelemetryService({
+  dataRoot: getDataRoot(),
+  endpoint: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev',
+  getVersion: () => process.env.SCYZORYK_MAIN_VERSION || 'unknown',
+  enabled: process.env.SCYZORYK_TELEMETRY_ENABLED === '1'
+});
 const wordQueue = createSerialQueue('dokumenty-seryjne-word');
 const DATA_DIR = path.join(APP_DATA_ROOT, 'data');
 const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
@@ -1026,6 +1034,33 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
   job.endedAt = Date.now();
   setProgress(job, { phase: job.status === 'done' ? 'done' : job.status, percent: 100, message });
   persistJobsIndex();
+  const telemetryDurationMs = Math.max(0, job.endedAt - (job.startedAt || job.createdAt || job.endedAt));
+  if (job.status === 'done') {
+    telemetryService.recordEvent({
+      tool: 'dokumenty-seryjne',
+      eventType: 'completed',
+      durationMs: telemetryDurationMs,
+      estimatedManualMs: estimateManualMs('dokumenty-seryjne', allCreated.length),
+      success: true
+    });
+    if (allErrors.length > 0) {
+      telemetryService.recordEvent({
+        tool: 'dokumenty-seryjne',
+        eventType: 'failed',
+        durationMs: telemetryDurationMs,
+        success: false,
+        errorCode: 'partial-failure'
+      });
+    }
+  } else if (job.status === 'error') {
+    telemetryService.recordEvent({
+      tool: 'dokumenty-seryjne',
+      eventType: 'failed',
+      durationMs: telemetryDurationMs,
+      success: false,
+      errorCode: 'generation-failed'
+    });
+  }
   return job.result;
 }
 
@@ -1206,10 +1241,18 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
     setProgress(job, { phase: 'queued', message: 'Zadanie czeka w kolejce Word. Word robi tylko jeden dokument naraz.', queue: wordQueue.getState() });
     wordQueue.run(() => runMultiTemplateGeneration(job, tasks, body, skippedGroups)).catch(err => {
       job.status = 'error';
+      job.endedAt = Date.now();
       job.result = { ok: false, message: err.message || 'Nie udało się uruchomić generowania.', created: [], errors: [] };
       persistJobsIndex();
       setProgress(job, { phase: 'error', percent: 100, message: job.result.message });
       appendLog(job, 'error', job.result.message);
+      telemetryService.recordEvent({
+        tool: 'dokumenty-seryjne',
+        eventType: 'failed',
+        durationMs: Math.max(0, job.endedAt - (job.startedAt || job.createdAt || job.endedAt)),
+        success: false,
+        errorCode: 'queue-failed'
+      });
     });
     res.status(202).json({ ok: true, jobId: job.id, status: job.status, progress: job.progress, queue: wordQueue.getState(), message: 'Dodano do kolejki. Word przetwarza zadania pojedynczo.' });
   } catch (err) {

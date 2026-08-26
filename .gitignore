@@ -78,3 +78,5 @@ graphify-out/
 
 # Scratch-demo paska postepu launchera (zostaje lokalnie wg decyzji wlasciciela).
 launcher/_Demo/
+
+.hermes/

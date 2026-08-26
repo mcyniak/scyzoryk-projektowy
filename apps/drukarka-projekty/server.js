@@ -7,7 +7,7 @@ const fs = require("fs");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 const { setupProcessDiagnostics, applyHttpTimeouts, readJsonFileNoBom, writeJsonFileNoBom } = require("../../lib/hardening");
-const { getAppDataDir } = require("../../lib/appPaths");
+const { getDataRoot, getAppDataDir } = require("../../lib/appPaths");
 const { applySecurityHeaders, applyMutationGuard } = require("../../lib/localRequestSecurity");
 const { browseFolder } = require("../../lib/folderBrowse");
 const { sessionMiddleware } = require("./lib/sessionStore");
@@ -18,10 +18,27 @@ const printService = require("../../lib/printing");
 const { withPrintLease, PrintLeaseBusyError } = require("../../lib/printCoordinator");
 const pdfMerge = require("./src/pdfMerge");
 const pdfStamp = require("./src/pdfStamp");
+const { createTelemetryService } = require("../../lib/telemetry");
+const { estimateManualMs } = require("../../lib/timeBenchmarks");
 
 const app = express();
 const APP_DATA_ROOT = getAppDataDir("drukarka-projekty");
 setupProcessDiagnostics("drukarka-projekty", APP_DATA_ROOT);
+const telemetryService = createTelemetryService({
+  dataRoot: getDataRoot(),
+  endpoint: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev',
+  getVersion: () => process.env.SCYZORYK_MAIN_VERSION || require("./package.json").version,
+  enabled: process.env.SCYZORYK_TELEMETRY_ENABLED === '1'
+});
+
+function countProjectAddresses(queue) {
+  const labels = new Set();
+  for (const item of (Array.isArray(queue) ? queue : [])) {
+    const label = String(item?.groupLabel || "").trim();
+    if (label) labels.add(label);
+  }
+  return labels.size;
+}
 const PORT = Number(process.env.PORT || 3010);
 const HOST = process.env.SCYZORYK_HOST || "127.0.0.1";
 // Brak takiego limitu bylo niespojnoscia wobec apps/drukarka (MAX_QUEUE=200) -
@@ -967,6 +984,26 @@ app.post("/api/print", async (req, res) => {
 
   if (!session.queue.length) return res.status(400).json({ ok: false, message: "Brak plikow w kolejce" });
 
+  const telemetryStartedAt = Date.now();
+  const telemetryAddressCount = countProjectAddresses(session.queue);
+  const telemetryVariant = Boolean(req.body?.stampPowykonawcza) ? "stamps" : "noStamps";
+  const telemetryManualMs = copies === 2 && telemetryAddressCount > 0
+    ? estimateManualMs("drukarka-projekty", telemetryAddressCount, telemetryVariant)
+    : null;
+  let telemetryReported = false;
+  function reportPrintOperation(eventType, success, estimatedManualMs = null, errorCode = null) {
+    if (telemetryReported) return;
+    telemetryReported = true;
+    telemetryService.recordEvent({
+      tool: "drukarka-projekty",
+      eventType,
+      durationMs: Math.max(0, Date.now() - telemetryStartedAt),
+      ...(estimatedManualMs == null ? {} : { estimatedManualMs }),
+      success,
+      ...(errorCode ? { errorCode } : {})
+    });
+  }
+
   // Checkbox "Drukuj jako dokumentacje powykonawcza" zyje na tym kroku (PO
   // zbudowaniu kolejki), dlatego transformacja dziala na juz-gotowych
   // pozycjach session.queue, a nie na surowych grupach w buildQueueFromGroups.
@@ -982,6 +1019,7 @@ app.post("/api/print", async (req, res) => {
   if (Boolean(req.body?.stampPowykonawcza) && !session.queuePowykonawczaDone) {
     const prepared = await prepareStampedQueue(req, session.queue);
     if (!prepared.ok) {
+      reportPrintOperation("failed", false, null, "stamp-preparation-failed");
       const details = prepared.errors.map(e => `- ${e.label} [${e.stage}]: ${e.message}`).join("\n");
       return res.status(400).json({
         ok: false,
@@ -1026,9 +1064,11 @@ app.post("/api/print", async (req, res) => {
       session.status.percent = 100;
       session.status.done = true;
       session.status.savedFolder = SAVE_AS_PDF_OUTPUT_DIR;
+      reportPrintOperation("completed", true, null);
     } catch (err) {
       session.status.error = String(err.message || err);
       session.status.message = "❌ Blad zapisu PDF: " + session.status.error;
+      reportPrintOperation("failed", false, null, "save-pdf-failed");
     } finally {
       session.queue = [];
       session.printing = false;
@@ -1087,9 +1127,11 @@ app.post("/api/print", async (req, res) => {
         session.status.message = `✅ Wszystkie zadania wyslane do kolejki drukowania (${printJobs.length})`;
         session.status.percent = 100;
         session.status.done = true;
+        reportPrintOperation("completed", true, telemetryManualMs);
       } catch (err) {
         session.status.error = String(err.message || err);
         session.status.message = "❌ Blad drukowania: " + session.status.error;
+        reportPrintOperation("failed", false, null, "print-failed");
       } finally {
         // Kolejka NIE czyscila sie nigdy po druku (ani tu, ani we froncie) - drugi
         // klik DRUKUJ po prostu wysylal cala kolejke jeszcze raz. Czyscimy JEJ
@@ -1115,6 +1157,7 @@ app.post("/api/print", async (req, res) => {
       });
     }
     if (!res.headersSent) {
+      reportPrintOperation("failed", false, null, "print-start-failed");
       return res.status(500).json({ ok: false, message: err.message || "Nie udalo sie rozpoczac drukowania." });
     }
     session.status.error = String(err.message || err);

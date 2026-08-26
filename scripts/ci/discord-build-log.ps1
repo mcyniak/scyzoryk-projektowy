@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$Status,
 
@@ -24,13 +24,13 @@ if (-not [string]::IsNullOrWhiteSpace($Details)) {
 switch ($LinkType) {
     "action" {
         $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
-        $message += "`n`n🔗 **GitHub Actions:** $url"
+        $message += "`n`nGitHub Actions: $url"
     }
 
     "release" {
         if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) {
             $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$env:RELEASE_TAG"
-            $message += "`n`n🔗 **GitHub Release:** $url"
+            $message += "`n`nGitHub Release: $url"
         }
     }
 }
@@ -48,7 +48,7 @@ try {
         Out-Null
 }
 catch {
-    # Powiadomienie Discord nigdy nie może zepsuć właściwego release.
+    # Discord notification must never break the actual release.
     Write-Warning "Discord notification failed: $($_.Exception.Message)"
 }
 

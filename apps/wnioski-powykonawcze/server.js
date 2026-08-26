@@ -24,9 +24,11 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
-const { getAppDataDir } = require('../../lib/appPaths');
+const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const wmFolderScan = require('./src/wmFolderScan');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
+const { createTelemetryService } = require('../../lib/telemetry');
+const { estimateManualMs } = require('../../lib/timeBenchmarks');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3005);
@@ -34,6 +36,12 @@ const HOST = process.env.SCYZORYK_HOST || '127.0.0.1';
 const ROOT = __dirname;
 const APP_DATA_ROOT = getAppDataDir('wnioski-powykonawcze');
 setupProcessDiagnostics('wnioski-powykonawcze', APP_DATA_ROOT);
+const telemetryService = createTelemetryService({
+  dataRoot: getDataRoot(),
+  endpoint: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev',
+  getVersion: () => process.env.SCYZORYK_MAIN_VERSION || 'unknown',
+  enabled: process.env.SCYZORYK_TELEMETRY_ENABLED === '1'
+});
 const wordQueue = createSerialQueue('wnioski-word');
 const DATA_DIR = path.join(APP_DATA_ROOT, 'data');
 const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
@@ -357,11 +365,35 @@ app.post('/api/jobs', heavyJobLimiter, upload.array('files', MAX_FILES), async (
           }
         }
         persistJobsIndex();
+        const telemetryDurationMs = Math.max(0, Date.now() - job.createdAt);
+        telemetryService.recordEvent({
+          tool: 'wnioski-powykonawcze',
+          eventType: 'completed',
+          durationMs: telemetryDurationMs,
+          estimatedManualMs: estimateManualMs('wnioski-powykonawcze', okFiles.length),
+          success: true
+        });
+        if (failed.length || job.zipError) {
+          telemetryService.recordEvent({
+            tool: 'wnioski-powykonawcze',
+            eventType: 'failed',
+            durationMs: telemetryDurationMs,
+            success: false,
+            errorCode: failed.length ? 'partial-failure' : 'zip-failed'
+          });
+        }
       } catch (error) {
         if (job.status !== 'cancelled') {
           job.status = 'fatal-error';
           job.error = error.message;
           persistJobsIndex();
+          telemetryService.recordEvent({
+            tool: 'wnioski-powykonawcze',
+            eventType: 'failed',
+            durationMs: Math.max(0, Date.now() - job.createdAt),
+            success: false,
+            errorCode: 'conversion-failed'
+          });
         }
       }
     });

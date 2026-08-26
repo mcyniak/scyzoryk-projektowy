@@ -13,6 +13,7 @@ const { hasDependencies } = require('./lib/dependencyCheck');
 const { getInstalledVersion } = require('./lib/updateBuildInfo');
 const { createUpdateService } = require('./lib/updateService');
 const { securityHeaders } = require('./lib/localRequestSecurity');
+const { createTelemetryService } = require('./lib/telemetry');
 
 const ROOT = __dirname;
 const PANEL_DATA_ROOT = getAppDataDir('panel');
@@ -69,6 +70,17 @@ const updateService = createUpdateService({
   enabled: UPDATE_ENABLED,
   apiBaseUrl: process.env.SCYZORYK_UPDATE_API_BASE_URL || undefined,
   log: diagnostics.log
+});
+
+// --- Anonimowa telemetria Scyzoryk Monitor ---
+const TELEMETRY_ENABLED = process.env.SCYZORYK_TELEMETRY_ENABLED != null
+  ? process.env.SCYZORYK_TELEMETRY_ENABLED !== '0'
+  : process.env.SCYZORYK_SKIP_CHILD_START !== '1';
+const telemetryService = createTelemetryService({
+  dataRoot: getDataRoot(),
+  endpoint: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev',
+  getVersion: () => getInstalledVersion(ROOT).version,
+  enabled: TELEMETRY_ENABLED
 });
 
 const SECURITY_HEADERS = securityHeaders("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
@@ -203,7 +215,7 @@ function startChild(app, attempt = 0) {
   const meta = getChildMeta(app.slug);
   meta.startedAt = Date.now();
   meta.nextRestartAt = null;
-  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_TELEMETRY_ENABLED: TELEMETRY_ENABLED ? '1' : '0', SCYZORYK_TELEMETRY_URL: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev', SCYZORYK_MAIN_VERSION: getInstalledVersion(ROOT).version }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.on('error', err => {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
     appendJsonLine(CHILDREN_LOG_FILE, { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
@@ -218,6 +230,12 @@ function startChild(app, attempt = 0) {
     meta.lastExit = { at: Date.now(), code: code ?? null, signal: signal ?? null };
     console.log(`[${app.slug}] Proces zakonczony. code=${code ?? 'null'} signal=${signal ?? 'null'}`);
     if (code === 0 && signal === null) return;
+    telemetryService.recordEvent({
+      tool: app.slug,
+      eventType: 'failed',
+      success: false,
+      errorCode: `child-exit-${code ?? 'null'}-${signal ?? 'none'}`
+    });
 
     if (recordChildFailure(meta)) {
       appendJsonLine(CHILDREN_LOG_FILE, { level: 'error', app: app.slug, event: 'circuit-open', reason: meta.circuitReason });
@@ -494,6 +512,7 @@ const server = http.createServer(async (req, res) => {
     if (!requireTrustedMutation(req, res)) return;
     const targetApp = apps.find(a => a.slug === startMatch[1]);
     if (!targetApp) return sendJson(res, 404, { ok: false, message: 'Nieznane narzedzie.' });
+    telemetryService.recordEvent({ tool: targetApp.slug, eventType: 'started' });
     ensureChildStarted(targetApp);
     return sendJson(res, 202, { ok: true, message: 'Uruchamianie rozpoczete.' });
   }
@@ -566,5 +585,6 @@ if (process.env.SCYZORYK_SKIP_DATA_MIGRATION !== '1') {
 // scheduleAutoChecks) i NIE blokuje startu panelu - awaria GitHuba/brak
 // internetu nie moze zatrzymac Scyzoryka.
 updateService.scheduleAutoChecks(UPDATE_CHECK_INTERVAL_MS);
+telemetryService.start();
 
 server.listen(PORT, HOST, () => { console.log('Scyzoryk Projektowy dziala tylko lokalnie:'); console.log(`http://${HOST}:${PORT}`); for (const app of apps) console.log(`- ${app.name}: http://${HOST}:${app.port}`); });
