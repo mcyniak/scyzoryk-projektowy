@@ -186,6 +186,11 @@ test('obsluga zdjec: galeria Zdjecia_pomontazowe - PowerShell podmienia pole prz
   assert.ok(indexGallery >= 0 && indexMerge >= 0 && indexGallery < indexMerge, 'galeria musi byc obsluzona przed polami tekstowymi');
   // Plan sect. 14: zwykla podmiana tekstowa MUSI ignorowac pole galerii.
   assert.match(source, /if \(Test-GalleryFieldName \$name\) \{ continue \}/);
+  // Real bug 2026-08-27: klucz galerii zhardkodowany z podkreslnikiem
+  // ("zdjecia_pomontazowe") nigdy nie pasowal do Normalize-Address (ktory
+  // zamienia "_" na spacje) - pole cicho znikalo po zwyklej podmianie MERGEFIELD,
+  // dokument wychodzil z pustym naglowkiem "Zdjecia pomontazowe:" i bez zdjec.
+  assert.match(source, /\$script:GalleryFieldKey = \(Normalize-Address 'Zdjecia_pomontazowe'\)/);
   // Brak zdjec -> pole usuwane, dokument generuje sie normalnie (plan sect. 13).
   assert.match(source, /function Remove-GalleryFieldSafely/);
   // Stara logika per-pozycyjnych pol nie wraca.
