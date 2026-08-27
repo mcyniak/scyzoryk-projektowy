@@ -187,6 +187,15 @@ function decodeOriginalName(name) {
   try { return Buffer.from(name, 'latin1').toString('utf8'); } catch { return name; }
 }
 
+// Sciezki zdjec z webkitRelativePath przychodza pola multipart - charset po
+// drodze bywa nietrafiony (busboy latin1 vs utf8), co dwa razy spalilo polskie
+// znaki w folderach adresowych ("Po\ufffdudniowa", potem "Aaszew"). Frontend
+// wysyla je teraz encodeURIComponent (czysty ASCII), tu tylko bezpieczne
+// odwrotnie dekodowanie; wszystko poza ASCII i tak nie ma prawa przyjsc.
+function decodeURIComponentSafe(value) {
+  try { return decodeURIComponent(String(value)); } catch { return value; }
+}
+
 function readHeader(filePath, length = 8) {
   const fd = fs.openSync(filePath, 'r');
   try {
@@ -229,13 +238,10 @@ async function storeUploadedImages(jobId, files, imagePaths) {
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     validateImageFile(file);
-    // Sciezki z webkitRelativePath przychodza polem tekstowym multipart - busboy
-    // dekoduje je latin1, wiec polskie znaki ("Wierzchlas Południowa 126")
-    // wychodzily jako mojibake/U+FFFD i dopasowanie adresu w PowerShelli
-    // NIGDY nie trafialo (real bug 2026-08-27: "Po�udniowa" w manifeście).
-    // Ta sama naprawa co dla nazw plikow: latin1 -> utf8.
+    // Frontend wysyla sciezki encodeURIComponent (czysty ASCII, patrz komentarz
+    // przy decodeURIComponentSafe) - tu je dekodujemy z powrotem do polskich znakow.
     const rawPath = imagePaths[i] || file.originalname;
-    const relPath = typeof rawPath === 'string' ? decodeOriginalName(rawPath) : rawPath;
+    const relPath = typeof rawPath === 'string' ? decodeURIComponentSafe(rawPath) : rawPath;
     const parsed = parseImageRelativePath(relPath);
     if (!parsed.addressFolder || !parsed.originalName) {
       await fsp.rm(file.path, { force: true }).catch(() => {});
