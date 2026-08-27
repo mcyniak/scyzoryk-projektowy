@@ -1342,7 +1342,9 @@ app.post('/api/run', uploadWieloplikowy.fields([
       const zrodlo = await rozstrzygnijZrodloDodatku(req, cfg.etykieta, cfg.zip, cfg.sciezka);
       if (!zrodlo) throw new Error(`Dodaj plik .zip albo podaj sciezke do folderu z: ${cfg.etykieta}.`);
       if (zrodlo.wyczysc) doWyczyszczenia.push(zrodlo.dir);
-      const pliki = await zbierzPlikiPdf(zrodlo.dir);
+      const pliki = (typ === 'schematy')
+        ? await zbierzPlikiPdf(zrodlo.dir)
+        : await zbierzPliki(zrodlo.dir, ['.pdf', '.docx']);
       if (typ === 'audyty') audytyPliki = pliki;
       else if (typ === 'dokumenty-seryjne') dokumentySeryjnePliki = pliki;
       else if (typ === 'dobory') doboryPliki = pliki;
