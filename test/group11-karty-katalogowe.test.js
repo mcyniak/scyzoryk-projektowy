@@ -928,6 +928,64 @@ test('dopasujISkopiujDodatek: brak/niejednoznaczne/juz-jest/podglad/kopiowanie',
   assert.deepEqual(jużJest, { status: 'pominieto-juz-sa', plik: 'audyt.pdf' });
 });
 
+test('dopasujISkopiujDodatek: .pdf+.docx o tej samej nazwie bazowej to JEDEN dokument - kopiuje oba warianty (zgloszenie wlasciciela: "Przycłapy 11")', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-para-pdf-docx-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const zrodloDir = path.join(dir, 'zrodlo');
+  const folderKlienta = path.join(dir, 'klient');
+  await fsp.mkdir(zrodloDir, { recursive: true });
+  await fsp.mkdir(folderKlienta, { recursive: true });
+  const pdf = path.join(zrodloDir, 'Przycłapy 11.pdf');
+  const docx = path.join(zrodloDir, 'Przycłapy 11.docx');
+  await fsp.writeFile(pdf, 'pdf-tresc');
+  await fsp.writeFile(docx, 'docx-tresc');
+
+  const trafienia = [
+    { nazwa: 'Przycłapy 11.pdf', sciezka: pdf, nazwaBezRozszerzenia: 'Przycłapy 11' },
+    { nazwa: 'Przycłapy 11.docx', sciezka: docx, nazwaBezRozszerzenia: 'Przycłapy 11' },
+  ];
+
+  // Nie jest to wieloznaczne - para wariantow jednego dokumentu.
+  const wynik = await dopasujISkopiujDodatek({ trafienia, folderKlienta, istniejace: new Set(), dryRun: false });
+  assert.equal(wynik.status, 'skopiowano');
+  assert.deepEqual(wynik.pliki.sort(), ['Przycłapy 11.docx', 'Przycłapy 11.pdf']);
+  assert.equal(await fsp.readFile(path.join(folderKlienta, 'Przycłapy 11.pdf'), 'utf8'), 'pdf-tresc');
+  assert.equal(await fsp.readFile(path.join(folderKlienta, 'Przycłapy 11.docx'), 'utf8'), 'docx-tresc');
+
+  // Podglad pokazuje oba; nic nie kopiuje.
+  const klient2 = path.join(dir, 'klient2');
+  await fsp.mkdir(klient2);
+  const podglad = await dopasujISkopiujDodatek({ trafienia, folderKlienta: klient2, istniejace: new Set(), dryRun: true });
+  assert.equal(podglad.status, 'do-skopiowania');
+  assert.deepEqual(podglad.pliki.sort(), ['Przycłapy 11.docx', 'Przycłapy 11.pdf']);
+  assert.deepEqual(await fsp.readdir(klient2), []);
+
+  // Gdy jeden wariant juz jest - kopiuje TYLKO brakujacy.
+  const klient3 = path.join(dir, 'klient3');
+  await fsp.mkdir(klient3);
+  await fsp.writeFile(path.join(klient3, 'Przycłapy 11.pdf'), 'stary');
+  const drugi = await dopasujISkopiujDodatek({ trafienia, folderKlienta: klient3, istniejace: new Set(['przycłapy 11.pdf']), dryRun: false });
+  assert.equal(drugi.status, 'skopiowano');
+  // pojedynczy wariant -> stary ksztalt wyniku (samo "plik"), bez tablicy "pliki"
+  assert.equal(drugi.plik, 'Przycłapy 11.docx');
+  assert.equal(drugi.pliki, undefined);
+  assert.equal(await fsp.readFile(path.join(klient3, 'Przycłapy 11.docx'), 'utf8'), 'docx-tresc');
+
+  // Oba sa -> pominieto.
+  const trzeci = await dopasujISkopiujDodatek({ trafienia, folderKlienta: klient3, istniejace: new Set(['przycłapy 11.pdf', 'przycłapy 11.docx']), dryRun: false });
+  assert.equal(trzeci.status, 'pominieto-juz-sa');
+
+  // Rozne nazwy bazowe to NADAL wieloznaczne (dwa rozne dokumenty).
+  const rozneBazy = await dopasujISkopiujDodatek({
+    trafienia: [
+      { nazwa: 'audyt A.pdf', nazwaBezRozszerzenia: 'audyt A' },
+      { nazwa: 'audyt B.pdf', nazwaBezRozszerzenia: 'audyt B' },
+    ],
+    folderKlienta, istniejace: new Set(), dryRun: false
+  });
+  assert.equal(rozneBazy.status, 'wieloznaczne');
+});
+
 const HEADER_PV = ['LP gminy', 'Adres', 'UID', 'Rezygnacja', 'Moc zestawu uwzględniająca moc modułów (biuro)', 'Instalacja 3 fazowa'];
 async function napiszArkuszPV(sheetName, rows) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-xlsx-pv-'));

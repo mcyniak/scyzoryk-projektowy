@@ -90,13 +90,15 @@ test('generate: wpisany przez uzytkownika przedrostek nazwy pliku faktycznie tra
   // podglad, ale runMultiTemplateGeneration ZAWSZE nadpisywala filePrefix
   // wartoscia task.groupName (automatycznie wykryta nazwa typu dokumentu) -
   // to, co uzytkownik wpisal, nigdy nie trafialo do prawdziwej nazwy pliku.
-  // Teraz niepusty wpis uzytkownika ma pierwszenstwo przed automatyczna
-  // nazwa (dla wszystkich wybranych dokumentow naraz) - puste pole dalej
-  // daje dawne zachowanie (automatyczna nazwa typu per dokument).
   assert.match(source, /const userFilePrefix = cleanFilePrefix\(options\.filePrefix \|\| ''\);/);
   const loopFn = source.match(/async function runMultiTemplateGeneration[\s\S]*?\n\}/);
   assert.ok(loopFn, 'nie znaleziono runMultiTemplateGeneration');
-  assert.match(loopFn[0], /filePrefix: userFilePrefix \|\| task\.groupName/);
+  // Realny przypadek 2026-08-27 (Wierzchlas): przy JEDNYM szablonie
+  // automatyczna nazwa grupy = cala nazwa pliku szablonu doklejana przed
+  // kazdym adresem. Przy jednym szablonie ma byc czysty <adres>; automatyczne
+  // nazwy zostaja tylko przy kilku szablonach naraz (rozroznienie typow).
+  assert.match(loopFn[0], /const autoPrefix = tasks\.length > 1 \? task\.groupName : '';/);
+  assert.match(loopFn[0], /filePrefix: userFilePrefix \|\| autoPrefix/);
 });
 
 test('generate: kazde uruchomienie czysci poprzedni katalog wyjsciowy PO walidacji, przed faktycznym startem (audyt rozdz. 12, P0/P1)', async () => {
@@ -138,15 +140,16 @@ test('frontend pobiera wszystkie strony rekordów przed renderowaniem', async ()
   assert.match(source, /const limit = 500/);
 });
 
-test('obsluga zdjec: backend ma endpointy uploadu, podsumowania i walidacji w generate', async () => {
+test('obsluga zdjec: endpointy istnieja, manifest ma oryginalne nazwy plikow, generate NIE blokuje brakiem zdjec', async () => {
   const source = await fsp.readFile(serverPath, 'utf8');
   assert.match(source, /app\.post\('\/api\/images\/:jobId'/);
   assert.match(source, /app\.post\('\/api\/images\/:jobId\/summary'/);
+  // Plan sect. 9: originalName to oryginalna nazwa uzytkownika, nie uuid.
+  assert.match(source, /originalName: parsed\.originalName/);
   const generateRoute = source.match(/app\.post\('\/api\/generate\/:jobId'[\s\S]*?\n\}\);/);
   assert.ok(generateRoute, 'nie znaleziono trasy /api/generate/:jobId');
-  assert.match(generateRoute[0], /detectImageMergeFields\(task\.templatePath\)/);
-  assert.match(generateRoute[0], /summarizeImages\(/);
-  assert.match(generateRoute[0], /summary\.status !== 'complete'/);
+  // Plan sect. 20: zdjecia opcjonalne - generate nie moze zwracac 400 przez brak zdjec.
+  assert.ok(!generateRoute[0].includes('Szablon wymaga zdjęć'), 'generate nie moze blokowac przez zdjecia');
   assert.match(source, /'-ImageManifestJson', job\.imageManifestPath/);
 });
 
@@ -169,37 +172,64 @@ test('saveWord: opcja "Zapisuj takze do Word (.docx)" jest przekazywana przez UI
   assert.ok(psSource.includes('if ($SaveWord)'));
 });
 
-test('obsluga zdjec: PowerShell wczytuje manifest i wstawia obrazy przed tekstem', async () => {
+test('obsluga zdjec: galeria Zdjecia_pomontazowe - PowerShell podmienia pole przed tekstem i chroni je przed Replace-MergeFieldsInRange', async () => {
   const psPath = path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1');
   const source = await fsp.readFile(psPath, 'utf8');
   assert.match(source, /\[string\]\$ImageManifestJson/);
   assert.match(source, /function Load-ImageManifest/);
-  assert.match(source, /function Replace-AllImageMergeFields/);
-  assert.match(source, /Replace-AllImageMergeFields \$mergedDoc \$record \$imageFieldDebug/);
+  // Plan sect. 15: nowa funkcja galerii.
+  assert.match(source, /function Replace-PhotoGalleryMergeField/);
+  assert.match(source, /Replace-PhotoGalleryMergeField \$mergedDoc \$record \$imageFieldDebug/);
   assert.match(source, /\$fieldDebug = Replace-AllMergeFields \$mergedDoc \$record/);
-  const indexImage = source.indexOf('Replace-AllImageMergeFields $mergedDoc $record $imageFieldDebug');
+  const indexGallery = source.indexOf('Replace-PhotoGalleryMergeField $mergedDoc $record $imageFieldDebug');
   const indexMerge = source.indexOf('$fieldDebug = Replace-AllMergeFields $mergedDoc $record');
-  assert.ok(indexImage >= 0 && indexMerge >= 0 && indexImage < indexMerge, 'obrazy musza byc wstawiane przed polami tekstowymi');
+  assert.ok(indexGallery >= 0 && indexMerge >= 0 && indexGallery < indexMerge, 'galeria musi byc obsluzona przed polami tekstowymi');
+  // Plan sect. 14: zwykla podmiana tekstowa MUSI ignorowac pole galerii.
+  assert.match(source, /if \(Test-GalleryFieldName \$name\) \{ continue \}/);
+  // Brak zdjec -> pole usuwane, dokument generuje sie normalnie (plan sect. 13).
+  assert.match(source, /function Remove-GalleryFieldSafely/);
+  // Stara logika per-pozycyjnych pol nie wraca.
+  assert.ok(!source.includes('function Replace-AllImageMergeFields'), 'stara funkcja Replace-AllImageMergeFields powinna zniknac');
 });
 
-test('imageMatching.js: dopasowanie zdjec do adresow i pol szablonu', async () => {
+test('imageMatching.js: model folderow adresowych (dowolna liczba zdjec, natural sort, ambiguity)', async () => {
   const im = require('../apps/dokumenty-seryjne/src/imageMatching.js');
   assert.strictEqual(im.normalizeAddress('Krążkowice 14A'), 'krazkowice 14a');
 
   const manifest = {
     root: '/tmp',
     files: [
-      { relativePath: 'Adresy/Kraszkowice 14/1.jpg', addressFolder: 'Kraszkowice 14', storedPath: '/tmp/1.jpg', originalName: '1.jpg' },
-      { relativePath: 'Adresy/Kraszkowice 14/Zdjecie_2.png', addressFolder: 'Kraszkowice 14', storedPath: '/tmp/2.png', originalName: 'Zdjecie_2.png' }
+      { relativePath: 'Kraszkowice 14/10.jpg', addressFolder: 'Kraszkowice 14', storedPath: '/tmp/10.jpg', originalName: '10.jpg' },
+      { relativePath: 'Kraszkowice 14/2.jpg', addressFolder: 'Kraszkowice 14', storedPath: '/tmp/2.jpg', originalName: '2.jpg' },
+      { relativePath: 'Kraszkowice 14/1.jpg', addressFolder: 'Kraszkowice 14', storedPath: '/tmp/1.jpg', originalName: '1.jpg' }
     ]
   };
-  const resolved = im.resolveImagesForAddress('Kraszkowice 14', ['Zdjecie_1', 'Zdjecie_2'], manifest);
-  assert.strictEqual(resolved.status, 'complete');
-  assert.ok(resolved.matches.Zdjecie_1);
-  assert.ok(resolved.matches.Zdjecie_2);
+  // Plan sect. 5: normalizacja adresu - "kraszkowice 14" == "Kraszkowice 14".
+  const resolved = im.findPhotosForAddress('kraszkowice  14', manifest);
+  assert.strictEqual(resolved.status, 'ok');
+  // Plan sect. 10: naturalne sortowanie 1,2,10.
+  assert.deepStrictEqual(resolved.photos.map(p => p.originalName), ['1.jpg', '2.jpg', '10.jpg']);
 
-  const missing = im.resolveImagesForAddress('Kraszkowice 14', ['Zdjecie_1'], { root: '/tmp', files: [] });
-  assert.strictEqual(missing.status, 'missing');
+  // Plan sect. 2: brak zdjec = ok z zerem zdjec, nigdy blad/blokada.
+  const missing = im.findPhotosForAddress('Kraszkowice 14', { root: '/tmp', files: [] });
+  assert.strictEqual(missing.status, 'ok');
+  assert.strictEqual(missing.photos.length, 0);
+
+  // Plan sect. 21: dwa rozne fizyczne foldery o tym samym znormalizowanym adresie
+  // -> ambiguous, zero zdjec (nigdy zdjecia innego adresu).
+  const ambiguous = im.findPhotosForAddress('Laszew 5A', {
+    root: '/tmp',
+    files: [
+      { relativePath: 'Laszew 5A/a.jpg', addressFolder: 'Laszew 5A', storedPath: '/tmp/a.jpg', originalName: 'a.jpg' },
+      { relativePath: 'Łaszew 5A/b.jpg', addressFolder: 'Łaszew 5A', storedPath: '/tmp/b.jpg', originalName: 'b.jpg' }
+    ]
+  });
+  assert.strictEqual(ambiguous.status, 'ambiguous');
+  assert.strictEqual(ambiguous.photos.length, 0);
+
+  // Plan sect. 11: rozpoznawanie wylacznie pola galerii.
+  assert.ok(im.isGalleryFieldName('Zdjecia_pomontazowe'));
+  assert.ok(!im.isGalleryFieldName('Zdjecie_1'));
 });
 
 // =====================================================================

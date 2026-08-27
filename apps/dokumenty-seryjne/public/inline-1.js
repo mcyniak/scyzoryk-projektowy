@@ -156,17 +156,22 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       if (!box) return;
       if (!summary || !summary.total) { hide(box); return; }
       show(box);
-      const statusClass = summary.status === 'complete' ? 'ok' : (summary.status === 'ambiguous' ? 'warn' : 'err');
-      const statusText = summary.status === 'complete' ? 'kompletne' : (summary.status === 'ambiguous' ? 'niejednoznaczne' : 'brakuje');
-      let html = `<div class="status ${statusClass}">Zdjęcia: ${statusText} — ${summary.complete}/${summary.total} adresów gotowych`;
-      if (summary.ambiguous) html += `, ${summary.ambiguous} niejednoznacznych`;
-      if (summary.missing) html += `, ${summary.missing} z brakami`;
-      html += '.</div>';
-      if (summary.status !== 'complete') {
-        html += '<ul style="margin:8px 0 0;padding-left:18px;font-size:13px">' + summary.rows.filter(r => r.status !== 'complete').map(r => {
-          const missing = Object.entries(r.matches).filter(([_, v]) => !v).map(([k]) => k).join(', ');
-          return `<li><strong>${esc(r.address)}</strong> — ${r.status}${missing ? ` (brakuje: ${esc(missing)})` : ''}</li>`;
-        }).join('') + '</ul>';
+      // Zdjecia sa opcjonalne (plan sect. 20): podsumowanie TYLKO informuje,
+      // nigdy nie koloruje na czerwono z powodu braku zdjec.
+      let html;
+      if (!summary.hasGalleryField) {
+        html = '<div class="status ok">Szablony nie mają pola <code>Zdjecia_pomontazowe</code> — wygenerują się bez zdjęć.</div>';
+      } else {
+        const cls = summary.ambiguous ? 'warn' : 'ok';
+        html = `<div class="status ${cls}">Zdjęcia: ${summary.withImages} z ${summary.total} adresów ze zdjęciami`;
+        if (summary.withoutImages) html += `, ${summary.withoutImages} bez zdjęć (wygenerują się normalnie)`;
+        if (summary.ambiguous) html += `, ${summary.ambiguous} niejednoznacznych (zdjęcia pominięto — sprawdź nazwy folderów)`;
+        html += '.</div>';
+        if (summary.ambiguous) {
+          html += '<ul style="margin:8px 0 0;padding-left:18px;font-size:13px">' + summary.rows.filter(r => r.status === 'ambiguous').map(r =>
+            `<li><strong>${esc(r.address)}</strong> — kilka folderów pasuje do tego adresu: ${(r.folders || []).map(f => esc(f)).join(', ')}</li>`
+          ).join('') + '</ul>';
+        }
       }
       box.innerHTML = html;
     }
@@ -425,17 +430,12 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       const uidBoxVisible = $('uidColumnBox') && !$('uidColumnBox').classList.contains('hidden');
       if (uidBoxVisible && !$('uidColumn').value) return status($('recordsStatus'), 'Wybierz kolumnę wariantu (rozmiar zasobnika / moc pompy) zanim uruchomisz generowanie.', 'err');
       setBusy(true); hide($('resultPanel')); show($('cancelBtn'));
-      status($('recordsStatus'), `Sprawdzam dopasowanie zdjęć...`, 'warn');
+      // Podsumowanie zdjec jest wyłącznie INFORMACYJNE (plan sect. 20) -
+      // brak/niejednoznacznosc zdjec nie blokuje generowania.
       try {
         const summary = await fetchImageSummary();
         renderImageSummary(summary);
-        if (summary && summary.total > 0 && summary.status !== 'complete') {
-          throw new Error(`Zdjęcia nie są gotowe: ${summary.missing + summary.ambiguous} z ${summary.total} adresów ma braki lub jest niejednoznacznych.`);
-        }
-      } catch (e) {
-        setBusy(false); hide($('cancelBtn')); status($('recordsStatus'), e.message, 'err');
-        return;
-      }
+      } catch (_) {}
       status($('recordsStatus'), `Rozpoczynam tworzenie ${rows.length} PDF-ów...`, 'warn');
       updateProgress({ phase: 'queued', percent: 0, message: 'Przygotowuję generowanie...' });
       renderLogs([]);

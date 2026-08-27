@@ -179,6 +179,10 @@ function Replace-MergeFieldsInRange($range, $record, [System.Collections.Generic
     try { $field = $range.Fields.Item($i) } catch { continue }
     $name = Get-MergeFieldName $field
     if ([string]::IsNullOrWhiteSpace($name)) { continue }
+    # Pole galerii Zdjecia_pomontazowe obsluguje wylacznie Replace-PhotoGalleryMergeField
+    # (dziala Wczesniej); zwykla podmiana na tekst z Excela nigdy nie moze go dotknac,
+    # zeby nie zamienic galerii na pusty tekst (plan sect. 14).
+    if (Test-GalleryFieldName $name) { continue }
     $value = Get-RecordValue $record $name
     if ($DebugMode) { $fieldDebug.Add([pscustomobject]@{ field = $name; value = $value }) | Out-Null }
     try {
@@ -665,6 +669,10 @@ function Fill-NarrativeBlanks($doc, $record, [System.Collections.Generic.List[ob
 }
 
 $script:ImageManifest = $null
+# Specjalne pole galerii zdjec (plan PLAN_dokumenty_seryjne_tylko_zdjecia.md):
+# MERGEFIELD Zdjecia_pomontazowe jest podmieniane na WSZYSTKIE zdjecia folderu
+# adresu. To NIE jest pole z Excela - Replace-MergeFieldsInRange musi je ignorowac.
+$script:GalleryFieldKey = 'zdjecia_pomontazowe'
 
 function Load-ImageManifest([string]$path) {
   if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) { return }
@@ -677,107 +685,137 @@ function Load-ImageManifest([string]$path) {
   }
 }
 
-function Get-ImageFieldAliases([string]$fieldName) {
-  $aliases = New-Object System.Collections.Generic.HashSet[string]
-  $normalized = Normalize-Name $fieldName
-  [void]$aliases.Add($normalized)
-  [void]$aliases.Add(($normalized -replace '_', ''))
-  if ($fieldName -match '(\d+)$') {
-    $num = $matches[1]
-    [void]$aliases.Add($num)
-    [void]$aliases.Add($num.PadLeft(2, '0'))
-    [void]$aliases.Add(($normalized -replace '_?\d+$', '') + $num)
-  }
-  return $aliases
+function Test-GalleryFieldName([string]$fieldName) {
+  if ([string]::IsNullOrWhiteSpace($fieldName)) { return $false }
+  return ((Normalize-Address $fieldName) -eq $script:GalleryFieldKey)
 }
 
-function Find-ImagesForAddress([string]$address, [string[]]$fieldNames) {
-  $result = @{}
+# Naturalny klucz sortowania: cyfry w nazwie padowane do 8 znakow, wiec
+# "1.jpg","2.jpg","10.jpg" sortuje jako 1,2,10 a nie 1,10,2.
+function Get-NaturalSortKey([string]$name) {
+  $lower = [string]$name
+  try { $lower = $lower.ToLowerInvariant() } catch {}
+  return [Regex]::Replace($lower, '(\d+)', { param($m) $m.Value.PadLeft(8, '0') })
+}
+
+# Znajduje zdjecia adresu w manifeście (plan sect. 5/21):
+#   ok        -> photos = wszystkie zdjecia podfolderu adresu (moze byc 0),
+#                posortowane naturalnie po oryginalnej nazwie pliku;
+#   ambiguous -> kilka roznych fizycznych folderow daje ten sam znormalizowany
+#                adres (np. "Laszew 5A" i "Łaszew 5A") -> photos = [], NIGDY
+#                nie uzywamy zdjec innego adresu; wywolujacy loguje WARN.
+function Find-PhotosForAddress([string]$address) {
+  $result = @{ status = 'ok'; photos = @(); folders = @() }
   if ($null -eq $script:ImageManifest) { return $result }
   $key = Normalize-Address $address
-  $files = $script:ImageManifest.files | Where-Object { (Normalize-Address $_.addressFolder) -eq $key }
-  $imageFiles = @($files | Where-Object {
-    $ext = [System.IO.Path]::GetExtension($_.originalName).ToLowerInvariant()
-    $ext -in @('.jpg', '.jpeg', '.png')
-  })
+  if ([string]::IsNullOrWhiteSpace($key)) { return $result }
 
-  $directMatches = @{}
-  foreach ($field in $fieldNames) {
-    $aliases = Get-ImageFieldAliases $field
-    foreach ($file in $imageFiles) {
-      $base = Normalize-Name ([System.IO.Path]::GetFileNameWithoutExtension($file.originalName))
-      if ($aliases.Contains($base)) {
-        $directMatches[$field] = $file.storedPath
-        break
-      }
-    }
+  # Grupujemy po RAW nazwie folderu zeby wykryc niejednoznacznosc.
+  $groups = @{}
+  foreach ($file in @($script:ImageManifest.files)) {
+    if ($null -eq $file) { continue }
+    $ext = [System.IO.Path]::GetExtension([string]$file.originalName).ToLowerInvariant()
+    if (@('.jpg', '.jpeg', '.png') -notcontains $ext) { continue }
+    if ((Normalize-Address [string]$file.addressFolder) -ne $key) { continue }
+    $rawFolder = [string]$file.addressFolder
+    if (-not $groups.ContainsKey($rawFolder)) { $groups[$rawFolder] = New-Object System.Collections.Generic.List[object] }
+    $groups[$rawFolder].Add($file)
   }
 
-  $unmatchedFields = @($fieldNames | Where-Object { -not $directMatches.ContainsKey($_) })
-  $usedPaths = @($directMatches.Values)
-  $unusedFiles = @($imageFiles | Where-Object { $usedPaths -notcontains $_.storedPath })
-  if ($unusedFiles.Count -eq $unmatchedFields.Count -and $unmatchedFields.Count -gt 0) {
-    $sortedFields = $unmatchedFields | Sort-Object
-    $sortedFiles = $unusedFiles | Sort-Object originalName
-    for ($i = 0; $i -lt $sortedFields.Count; $i++) {
-      $directMatches[$sortedFields[$i]] = $sortedFiles[$i].storedPath
-    }
+  if ($groups.Count -eq 0) { return $result }
+  if ($groups.Count -gt 1) {
+    $result.status = 'ambiguous'
+    $result.folders = @($groups.Keys | Sort-Object)
+    return $result
   }
 
-  return $directMatches
+  $files = @($groups.Values[0])
+  $sorted = $files | Sort-Object -Property @{ Expression = { Get-NaturalSortKey ([string]$_.originalName) } }
+  $result.photos = @($sorted)
+  return $result
 }
 
-function Get-ImageMergeFields($doc) {
-  $names = New-Object System.Collections.Generic.List[string]
-  $seen = New-Object System.Collections.Generic.HashSet[string]
-  foreach ($field in $doc.Fields) {
+function Resize-InlinePicture($shape) {
+  if ($null -eq $shape) { return }
+  try { $shape.LockAspectRatio = $true } catch {}
+  # A4 z uzyciem strony: max szerokosc ~15 cm, wysokosc ~11 cm (plan sect. 17).
+  $maxWidthPt = 425
+  $maxHeightPt = 311
+  try { if ($shape.Width -gt $maxWidthPt) { $shape.Width = $maxWidthPt } } catch {}
+  try { if ($shape.Height -gt $maxHeightPt) { $shape.Height = $maxHeightPt } } catch {}
+}
+
+# Bezpieczne usuniecie pola galerii (gdy brak zdjec / niejednoznaczne):
+# czyscimy wynik, potem rozwiazemy pole do tekstu (Unlink); fallback Delete.
+function Remove-GalleryFieldSafely($field) {
+  try { $field.Result.Text = "" } catch {}
+  try { $field.Unlink() | Out-Null; return } catch {}
+  try { $field.Delete() } catch {}
+}
+
+# Zwraca pierwszy znaleziony MERGEFIELD galerii albo $null.
+function Find-GalleryField($doc) {
+  foreach ($field in @($doc.Fields)) {
     if ($field.Type -ne 59) { continue } # wdFieldMergeField
-    $code = $field.Code.Text
-    if ($code -match 'MERGEFIELD\s+"?([^"\s]+)"?') {
-      $name = $matches[1].Trim()
-      $lower = $name.ToLowerInvariant()
-      if (($lower -match '^zdjecie') -or ($lower -match '^zdjęcie') -or ($lower -match '^foto')) {
-        if ($seen.Add($name)) { $names.Add($name) }
-      }
-    }
+    $code = ""
+    try { $code = $field.Code.Text } catch { continue }
+    $m = [Regex]::Match($code, 'MERGEFIELD\s+(?:"([^"]+)"|([^\s\\]+))', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $m.Success) { continue }
+    if (Test-GalleryFieldName $m.Groups[1].Value.Trim()) { return $field }
+    if ($m.Groups[2].Success -and (Test-GalleryFieldName $m.Groups[2].Value.Trim())) { return $field }
   }
-  return $names
+  return $null
 }
 
-function Insert-ImageAtMergeField($field, [string]$imagePath) {
-  $range = $field.Result
-  if ($null -eq $range) { $range = $field.Code }
-  $shape = $range.InlineShapes.AddPicture($imagePath, $false, $true)
-  $shape.LockAspectRatio = $true
-  $maxWidth = 425
-  if ($shape.Width -gt $maxWidth) { $shape.Width = $maxWidth }
-  $field.Delete()
-}
-
-function Replace-AllImageMergeFields($doc, $record, [System.Collections.Generic.List[object]]$fieldDebug) {
-  if ($null -eq $script:ImageManifest) { return }
+function Replace-PhotoGalleryMergeField($doc, $record, [System.Collections.Generic.List[object]]$fieldDebug) {
   $address = Get-RecordValue $record $AddressColumn
-  if ([string]::IsNullOrWhiteSpace($address)) { return }
-  $fieldNames = Get-ImageMergeFields $doc
-  if ($fieldNames.Count -eq 0) { return }
-  $images = Find-ImagesForAddress $address $fieldNames
-  if ($images.Count -eq 0) { return }
 
-  $fields = @($doc.Fields)
-  for ($i = $fields.Count - 1; $i -ge 0; $i--) {
-    $field = $fields[$i]
-    if ($field.Type -ne 59) { continue }
-    $code = $field.Code.Text
-    if ($code -notmatch 'MERGEFIELD\s+"?([^"\s]+)"?') { continue }
-    $name = $matches[1].Trim()
-    if (-not $images.ContainsKey($name)) { continue }
-    $imagePath = $images[$name]
-    try {
-      Insert-ImageAtMergeField $field $imagePath
-      $fieldDebug.Add([pscustomobject]@{ field = $name; status = 'image_inserted'; path = $imagePath })
-    } catch {
-      Write-Log "warn" "Nie udalo sie wstawic obrazu '$name' dla adresu '$address': $_"
-      $fieldDebug.Add([pscustomobject]@{ field = $name; status = 'image_error'; error = $_.Exception.Message })
+  # Szablony bez pola galerii nie sa ruszane (plan sect. 23).
+  while ($true) {
+    $field = Find-GalleryField $doc
+    if ($null -eq $field) { break }
+
+    $resolved = Find-PhotosForAddress $address
+
+    if ($resolved.status -eq 'ambiguous') {
+      Write-Log "warn" ("Niejednoznaczne foldery zdjec dla adresu '{0}'. Zdjecia pominieto." -f $address) ([pscustomobject]@{ folders = $resolved.folders })
+      Remove-GalleryFieldSafely $field
+      $fieldDebug.Add([pscustomobject]@{ field = 'Zdjecia_pomontazowe'; status = 'ambiguous_skipped'; folders = $resolved.folders })
+      continue
+    }
+
+    if ($resolved.photos.Count -eq 0) {
+      Write-Log "info" ("Brak zdjec dla {0} - generuje dokument bez zdjec." -f $address)
+      Remove-GalleryFieldSafely $field
+      $fieldDebug.Add([pscustomobject]@{ field = 'Zdjecia_pomontazowe'; status = 'no_images_removed' })
+      continue
+    }
+
+    Write-Log "info" ("Zdjecia dla {0}: {1}" -f $address, $resolved.photos.Count)
+
+    try { $field.Result.Text = "" } catch {}
+    $cursor = $field.Result.Duplicate
+    try { $field.Unlink() | Out-Null } catch {}
+
+    $count = $resolved.photos.Count
+    for ($i = 0; $i -lt $count; $i++) {
+      $photo = $resolved.photos[$i]
+      Write-Log "info" ("Wstawiam {0}" -f $photo.originalName)
+      try {
+        $shape = $cursor.InlineShapes.AddPicture([string]$photo.storedPath, $false, $true)
+        Resize-InlinePicture $shape
+        $fieldDebug.Add([pscustomobject]@{ field = 'Zdjecia_pomontazowe'; status = 'image_inserted'; path = [string]$photo.storedPath })
+        if ($i -lt $count - 1) {
+          # Miekkie lamane (Shift+Enter) pod kazdym zdjeciem - kolejne wstawiamy
+          # POD poprzednim, wszystkie inline, jedna kolumna (plan sect. 18).
+          $cursor.SetRange($shape.Range.End, $shape.Range.End) | Out-Null
+          $cursor.InsertAfter([string][char]11) | Out-Null
+        }
+        $cursor.Collapse(0) # wdCollapseEnd
+      } catch {
+        Write-Log "warn" "Nie udalo sie wstawic zdjecia '$($photo.originalName)' dla adresu '$address': $_"
+        $fieldDebug.Add([pscustomobject]@{ field = 'Zdjecia_pomontazowe'; status = 'image_error'; error = $_.Exception.Message })
+      }
     }
   }
 }
@@ -974,9 +1012,9 @@ try {
         # czytaniem Tables, nie tylko na koncu przed eksportem.
         try { $mergedDoc.Repaginate() } catch {}
 
-        Write-Log "info" "Wstawiam obrazy z mergefield." ([pscustomobject]@{ row = $rowNumber; address = $address })
+        Write-Log "info" "Wstawiam zdjecia do pola galerii." ([pscustomobject]@{ row = $rowNumber; address = $address })
         $imageFieldDebug = New-Object System.Collections.Generic.List[object]
-        Replace-AllImageMergeFields $mergedDoc $record $imageFieldDebug
+        Replace-PhotoGalleryMergeField $mergedDoc $record $imageFieldDebug
 
         Write-Log "info" "Wypelniam podswietlone komorki tabeli wg etykiety." ([pscustomobject]@{ row = $rowNumber; address = $address })
         $tableFieldDebug = New-Object System.Collections.Generic.List[object]

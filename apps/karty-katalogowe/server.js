@@ -600,18 +600,51 @@ function znajdzSchemat(moc, faza, indeksSchematow) {
 // przeciwienstwie do kart katalogowych (komplet-albo-nic) kazdy dodatek jest
 // NIEZALEZNY od pozostalych i od kart - brak/niejednoznacznosc jednego
 // dodatku nigdy nie wplywa na inne.
+//
+// Od momentu zbierania .pdf ORAZ .docx ta sama treść dokumentu istnieje jako
+// DWA pliki ("Przycłapy 11.pdf" + "Przycłapy 11.docx") - takie trafienia maja
+// identyczna nazwe bazowa i sa JEDNYM dokumentem do skopiowania w obu
+// wariantach, NIE niejednoznacznoscia. "Wieloznaczne" zostaje zarezerwowane
+// dla faktycznie roznych dokumentow (rozne nazwy bazowe) pasujacych do tego
+// samego adresu.
 async function dopasujISkopiujDodatek({ trafienia, folderKlienta, istniejace, dryRun }) {
-  if (trafienia.length === 0) return { status: 'brak' };
-  if (trafienia.length > 1) return { status: 'wieloznaczne', kandydaci: trafienia.map(p => p.nazwa) };
-  const zrodlo = trafienia[0];
-  if (istniejace.has(zrodlo.nazwa.toLowerCase())) return { status: 'pominieto-juz-sa', plik: zrodlo.nazwa };
-  if (dryRun) return { status: 'do-skopiowania', plik: zrodlo.nazwa };
-  try {
-    await fsp.copyFile(zrodlo.sciezka, path.join(folderKlienta, zrodlo.nazwa), fs.constants.COPYFILE_EXCL);
-    return { status: 'skopiowano', plik: zrodlo.nazwa };
-  } catch (err) {
-    return { status: 'blad', plik: zrodlo.nazwa, komunikat: err.message };
+  if (!trafienia.length) return { status: 'brak' };
+
+  // Grupowanie po nazwie BAZOWEJ (bez rozszerzenia, case-insensitive).
+  const grupy = new Map();
+  for (const t of trafienia) {
+    const base = String(t.nazwaBezRozszerzenia != null ? t.nazwaBezRozszerzenia : t.nazwa.replace(/\.[^.]+$/, '')).toLowerCase();
+    if (!grupy.has(base)) grupy.set(base, []);
+    grupy.get(base).push(t);
   }
+  if (grupy.size > 1) {
+    return { status: 'wieloznaczne', kandydaci: trafienia.map(p => p.nazwa) };
+  }
+
+  const warianty = [...grupy.values()][0];
+  const brakujace = warianty.filter(w => !istniejace.has(w.nazwa.toLowerCase()));
+  const nazwy = warianty.map(w => w.nazwa);
+  if (!brakujace.length) return { status: 'pominieto-juz-sa', plik: nazwy.join(', ') };
+  if (dryRun) return brakujace.length === 1
+    ? { status: 'do-skopiowania', plik: brakujace[0].nazwa }
+    : { status: 'do-skopiowania', plik: nazwy.join(', '), pliki: brakujace.map(b => b.nazwa) };
+
+  const skopiowane = [];
+  const bledy = [];
+  for (const w of brakujace) {
+    try {
+      await fsp.copyFile(w.sciezka, path.join(folderKlienta, w.nazwa), fs.constants.COPYFILE_EXCL);
+      skopiowane.push(w.nazwa);
+    } catch (err) {
+      bledy.push(`${w.nazwa}: ${err.message}`);
+    }
+  }
+  if (bledy.length === 0) {
+    return skopiowane.length === 1
+      ? { status: 'skopiowano', plik: skopiowane[0] }
+      : { status: 'skopiowano', plik: skopiowane.join(', '), pliki: skopiowane };
+  }
+  return { status: 'blad', plik: nazwy.join(', '), komunikat: bledy.join('; ') };
 }
 
 // Dodatki dopasowywane WYLACZNIE po adresie (audyt/dokument seryjny/dobor) -

@@ -34,7 +34,8 @@ const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localReq
 const { createTelemetryService } = require('../../lib/telemetry');
 const { estimateManualMs } = require('../../lib/timeBenchmarks');
 const { detectMailMergeSheetBinding, getDocxModifiedTime } = require('./src/mailMergeSheetBinding');
-const { detectImageMergeFields, summarizeImages, loadManifest, saveManifest, buildManifestFromDisk } = require('./src/imageMatching');
+const { detectImageMergeFields, summarizeImages, loadManifest, saveManifest } = require('./src/imageMatching');
+
 const AdmZip = require('adm-zip');
 
 const app = express();
@@ -245,7 +246,9 @@ async function storeUploadedImages(jobId, files, imagePaths) {
       relativePath: path.join(parsed.addressFolder, storedName),
       addressFolder: parsed.addressFolder,
       storedPath: destPath,
-      originalName: storedName,
+      // ORYGINALNA nazwa pliku uzytkownika (nie wygenerowany uuid) - sortowanie
+      // naturalne 1.jpg / 2.jpg / 10.jpg ma odpowiadac temu, co on widzi w folderze.
+      originalName: parsed.originalName,
     });
   }
 
@@ -1068,7 +1071,14 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
     const task = tasks[i];
     if (!task.rowRecords.length) continue;
     job.template = { path: task.templatePath, originalName: task.templateOriginalName };
-    const taskOptions = { ...options, selectedRows: task.rowRecords, _keepLog: !first, filePrefix: userFilePrefix || task.groupName };
+    // Realny przypadek 2026-08-27 (Wierzchlas): przy JEDNYM wybranym szablonie
+    // groupName to cala nazwa pliku ("Wzorzec_seryjny_Wierzchlas gotowy (1)"),
+    // ktora doklejala sie przed kazdym adresem. Automatyczny przedrostek ma
+    // sens tylko gdy wybrano WIELEJ niz jeden szablon naraz - wtedy rozroznia
+    // pliki roznych typow dokumentow dla tego samego adresu. Pojedynczy
+    // szablon -> czysta nazwa <adres> (+ opcjonalny wpis uzytkownika).
+    const autoPrefix = tasks.length > 1 ? task.groupName : '';
+    const taskOptions = { ...options, selectedRows: task.rowRecords, _keepLog: !first, filePrefix: userFilePrefix || autoPrefix };
     try {
       const result = await startGeneration(job, taskOptions);
       if (result && Array.isArray(result.created)) allCreated.push(...result.created);
@@ -1300,6 +1310,9 @@ app.post('/api/images/:jobId/summary', async (req, res) => {
     const rowsForMerge = selectedRows.length ? allRows.filter(row => selectedRows.includes(Number(row._record))) : allRows;
     const addresses = rowsForMerge.map(row => row[addressColumn]).filter(Boolean);
 
+    // Informacyjnie: czy choc jeden z wybranych szablonow ma pole galerii
+    // Zdjecia_pomontazowe - UI moze wtedy wyjasnic, ze zdjecia nie trafia
+    // do szablonow bez tego pola (plan sect. 23).
     const selectedGroups = Array.isArray(body.selectedGroups) ? body.selectedGroups.filter(Boolean) : null;
     let taskTemplates = [];
     if (selectedGroups && selectedGroups.length && job.templateGroups && job.templateGroups.length) {
@@ -1308,16 +1321,15 @@ app.post('/api/images/:jobId/summary', async (req, res) => {
     } else {
       taskTemplates = [job.template.path];
     }
-
-    const fieldsSet = new Set();
+    let hasGalleryField = false;
     for (const templatePath of taskTemplates) {
-      const fields = detectImageMergeFields(templatePath);
-      fields.forEach(f => fieldsSet.add(f));
+      if (detectImageMergeFields(templatePath).length > 0) { hasGalleryField = true; break; }
     }
 
     const manifest = loadManifest(job.imageManifestPath);
-    const summary = summarizeImages(addresses, Array.from(fieldsSet), manifest);
-    res.json({ ok: true, ...summary });
+    // Zdjecia sa OPCJONALNE: summary tylko raportuje licznikami, nigdy status bledu.
+    const summary = summarizeImages(addresses, manifest);
+    res.json({ ok: true, hasGalleryField, ...summary });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Błąd podsumowania zdjęć.' });
   }
@@ -1351,25 +1363,12 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
       tasks = [{ templatePath: job.template.path, templateOriginalName: job.template.originalName, rowRecords: selectedRowRecords.length ? selectedRowRecords : (selectedSheet.rows || []).map(r => Number(r._record)) }];
     }
 
-    const addressColumn = String(body.addressColumn || guessAddressColumn(selectedSheet?.columns || [])).trim() || 'Adres';
-    const imageFields = new Set();
-    for (const task of tasks) {
-      const fields = detectImageMergeFields(task.templatePath);
-      fields.forEach(f => imageFields.add(f));
-    }
-    if (imageFields.size > 0) {
-      const manifest = loadManifest(job.imageManifestPath);
-      const rowsForMerge = selectedRowRecords.length ? selectedSheet.rows.filter(row => selectedRowRecords.includes(Number(row._record))) : selectedSheet.rows;
-      const addresses = rowsForMerge.map(row => row[addressColumn]).filter(Boolean);
-      const summary = summarizeImages(addresses, Array.from(imageFields), manifest);
-      if (summary.status !== 'complete') {
-        return res.status(400).json({
-          ok: false,
-          message: `Szablon wymaga zdjęć, ale nie wszystkie adresy mają kompletne dopasowanie. Brakuje/niejednoznacznych: ${summary.missing + summary.ambiguous} z ${summary.total}.`,
-          summary
-        });
-      }
-    }
+    // Zdjecia sa OPCJONALNE (plan sect. 2/20): brak folderu adresu lub brak
+    // zdjec NIE blokuje generowania i nigdy nie zwraca 400. Wszystka logika
+    // zdjec dzieje sie per-rekord w mailmerge-to-pdf.ps1 (pole galerii
+    // Zdjecia_pomontazowe jest podmieniane na zdjecia gdy istnieja, a gdy ich
+    // brak - pole jest po prostu usuwane). /api/images/:jobId/summary
+    // raportuje liczniki wyłącznie informacyjnie dla UI.
 
     // Audyt rozdz. 12, P0/P1: kolejne "Generuj" na tym samym jobId pisalo do
     // TEGO SAMEGO job.outputDir - PDF-y z POPRZEDNIEGO uruchomienia
