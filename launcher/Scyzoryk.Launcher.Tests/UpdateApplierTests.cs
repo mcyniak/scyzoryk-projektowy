@@ -631,4 +631,73 @@ public sealed class UpdateApplierTests
         // zabraklo na produkcji.
         Assert.Equal(2, process.KillProcessByIdIfPathMatchesCallCount);
     }
+
+    // =====================================================================
+    // Audyt 2026-08-27: falszywy "aktualizacja sie nie udała" przy recznym
+    // zimnym starcie z oknem postepu - proces czekajacy w LauncherApp.cs
+    // trzymal otwarty installDir\Scyzoryk.exe, przez co instalator Inno Setup
+    // dostawal kod 5 (DeleteFile: plik w uzyciu) i rollbackowal. Rename pliku
+    // .old-* przed instalatorem rozwiazuje problem niezaleznie od tego, kto
+    // trzyma uchwyt. Testy ponizej pokrywaja rename + sprzatanie/przywracanie.
+    // =====================================================================
+
+    private static void CreateDummyScyzorykExe(string installDir)
+    {
+        // Nie potrzebujemy prawdziwego PE - wystarczy plik o tej nazwie,
+        // zeby SwapOutRunningExe mialo cos przeniesc.
+        File.WriteAllText(Path.Combine(installDir, "Scyzoryk.exe"), "dummy");
+    }
+
+    [Fact]
+    public async Task ScyzorykExeExistsAndInUse_RenamedBeforeInstaller_SucceedsAndCleansUpOldCopy()
+    {
+        using var dir = new TempInstallDir();
+        CreateDummyScyzorykExe(dir.Path);
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 0);
+
+        // Symulacja "plik w uzyciu" z jednoczesnym pozwoleniem na rename
+        // (FileShare.Delete) - na Windows uruchomiony .exe da sie zazwyczaj
+        // zmienic nazwe, mimo ze DeleteFile/nadpisanie pada.
+        using var locked = new FileStream(paths.ScyzorykExePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.2.3" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger());
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(0, exitCode);
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.True(result.GetProperty("ok").GetBoolean());
+        // Po sukcesie kopia .old-* powinna zostac posprzatana.
+        Assert.False(Directory.GetFiles(dir.Path, "Scyzoryk.exe.old-*").Any());
+    }
+
+    [Fact]
+    public async Task ScyzorykExeRenamed_InstallerFailsAndDoesNotRecreate_RestoresOriginalExe()
+    {
+        using var dir = new TempInstallDir();
+        CreateDummyScyzorykExe(dir.Path);
+        using var roots = new IsolatedRoots();
+        var paths = InstallPaths.FromInstallDir(dir.Path);
+        var installerPath = WriteFakeInstaller(roots.UpdateRoot, exitCode: 5);
+
+        var process = new FakeProcessManager();
+        var health = new FakeHealthChecker { RespondOnceResult = true, AlreadyRunningResult = true, RunningVersionResult = "1.0.0" };
+        var applier = new UpdateApplier(process, health, paths, new FakeLauncherLogger(),
+            installRetryDelay: TimeSpan.FromMilliseconds(1));
+
+        var exitCode = await applier.ApplyAsync(installerPath, "1.2.3");
+
+        Assert.Equal(5, exitCode);
+        var result = ReadLastResult(roots.UpdateRoot);
+        Assert.False(result.GetProperty("ok").GetBoolean());
+
+        // Instalator (fake) nie odtworzyl Scyzoryk.exe - oryginalny plik
+        // musi byc przywrocony, zeby uzytkownik nie zostal bez launchera.
+        Assert.True(File.Exists(paths.ScyzorykExePath));
+        Assert.False(Directory.GetFiles(dir.Path, "Scyzoryk.exe.old-*").Any());
+    }
 }

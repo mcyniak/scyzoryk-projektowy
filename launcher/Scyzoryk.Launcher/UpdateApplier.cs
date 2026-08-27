@@ -90,6 +90,7 @@ public sealed class UpdateApplier : IUpdateApplier
         var exitCode = -1;
         var ok = false;
         var message = string.Empty;
+        string? swappedOutExePath = null;
 
         try
         {
@@ -102,6 +103,18 @@ public sealed class UpdateApplier : IUpdateApplier
             await StopAllOwnedProcessesUntilConfirmedAsync().ConfigureAwait(false);
             EnsureParentProcessStopped(parentPid);
             EnsureResidentTrayStopped(residentTrayPid);
+
+            // Audyt 2026-08-27: samo zatrzymanie procesow nie wystarcza, jesli
+            // jakis proces (czekajace okno postepu z recznego zimnego startu,
+            // osierocona ikona w zasobniku, antywirus) wciaz trzyma otwarty plik
+            // installDir\Scyzoryk.exe. Inno Setup dostaje wtedy kod 5
+            // (DeleteFile: plik w uzyciu) i rollbackuje, mimo ze reszta plikow
+            // zdazylo sie juz podmienic - stad falszywy komunikat "aktualizacja
+            // sie nie udala" przy realnie udanej wersji. Rename pliku wykonywalnego
+            // z ktorego dziala inny proces jest na Windows klasyczna, sprawdzona
+            // sztuczka self-update - usuwa plik z drogi instalatora, niezaleznie
+            // od tego kto dokladnie trzyma uchwyt.
+            swappedOutExePath = SwapOutRunningExe();
 
             var attempt = await RunInstallerWithRetryAsync(installerPath, residentTrayPid).ConfigureAwait(false);
             exitCode = attempt.ExitCode;
@@ -178,6 +191,8 @@ public sealed class UpdateApplier : IUpdateApplier
                 message = $"Instalator zakonczyl sie bez bledu, ale po restarcie nadal dziala wersja {runningVersion} (oczekiwano {expectedVersion}). Sprobuj ponownie.";
                 WriteLog(message);
             }
+
+            CleanupSwappedOutExe(swappedOutExePath, ok);
 
             WriteLastResult(ok, expectedVersion, exitCode, message);
             WriteLog("=== Koniec aktualizacji ===");
@@ -370,6 +385,84 @@ public sealed class UpdateApplier : IUpdateApplier
 
     private sealed record InstallAttemptResult(int ExitCode, bool Ok, string? FailureReason);
 
+    /// <summary>
+    /// Usuwa istniejacy Scyzoryk.exe z drogi instalatora przez rename na plik
+    /// pomocniczy .old-* (zamiast proby usuniecia/nadpisania, ktora pada gdy
+    /// cokolwiek trzyma plik otwartym). Windows pozwala zazwyczaj zmienic nazwe
+    /// pliku wykonywalnego, z ktorego dziala proces, nawet gdy DeleteFile
+    /// zakonczylby sie bledem "plik w uzyciu". Best-effort: jesli rename tez
+    /// sie nie uda, logujemy i kontynuujemy po staremu (nie wprowadzamy nowego
+    /// twardego punktu awarii).
+    /// </summary>
+    /// <returns>Sciezka do przeniesionego pliku .old-* lub null, gdy nic nie
+    /// przenoszono (plik nie istnial lub rename sie nie powiodl).</returns>
+    private string? SwapOutRunningExe()
+    {
+        if (!File.Exists(_paths.ScyzorykExePath)) return null;
+
+        var backupName = $"Scyzoryk.exe.old-{Environment.ProcessId}-{DateTime.Now:yyyyMMddTHHmmss}";
+        var backupPath = Path.Combine(_paths.InstallDir, backupName);
+
+        try
+        {
+            File.Move(_paths.ScyzorykExePath, backupPath);
+            WriteLog($"Przeniesiono istniejacy Scyzoryk.exe poza sciezke instalacji przed aktualizacja: {backupName}");
+            return backupPath;
+        }
+        catch (Exception ex)
+        {
+            WriteLog($"Nie udalo sie przeniesc Scyzoryk.exe poza sciezke instalacji przed aktualizacja: {ex.Message} - kontynuuje mimo to.");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Posprzatanie kopii zapasowej Scyzoryk.exe przeniesionej przez
+    /// SwapOutRunningExe. Przy sukcesie usuwamy .old-*. Przy porazce:
+    /// jesli instalator nie odtworzyl Scyzoryk.exe pod wlasciwa sciezka,
+    /// przywracamy oryginalny plik, zeby uzytkownik nie zostal bez launchera;
+    /// jesli pod docelowa sciezka juz cos jest (czesciowa instalacja),
+    /// zostawiamy to i tylko usuwamy .old-*.
+    /// </summary>
+    private void CleanupSwappedOutExe(string? swappedOutExePath, bool updateSucceeded)
+    {
+        if (string.IsNullOrEmpty(swappedOutExePath) || !File.Exists(swappedOutExePath)) return;
+
+        if (updateSucceeded)
+        {
+            try
+            {
+                File.Delete(swappedOutExePath);
+            }
+            catch
+            {
+                // Best-effort; osierocony .old-* zostanie posprzatany przy
+                // kolejnym starcie launchera (LauncherApp.cs).
+            }
+            return;
+        }
+
+        if (!File.Exists(_paths.ScyzorykExePath))
+        {
+            try
+            {
+                File.Move(swappedOutExePath, _paths.ScyzorykExePath);
+                WriteLog("Przywrocono oryginalny Scyzoryk.exe po nieudanej aktualizacji.");
+            }
+            catch (Exception ex)
+            {
+                WriteLog($"Nie udalo sie przywrocic oryginalnego Scyzoryk.exe po nieudanej aktualizacji: {ex.Message}");
+            }
+        }
+        else
+        {
+            // Pod docelowa sciezka jest juz plik (prawdopodobnie czesciowo
+            // zainstalowany) - nie nadpisujemy go na sile stara kopia, tylko
+            // usuwamy kopię zapasowa.
+            try { File.Delete(swappedOutExePath); } catch { }
+        }
+    }
+
     // Audyt na zywo 2026-08-10: prawdziwa awaria produkcyjna zlapana przez
     // wlasciciela ("aktualizacja sie wyjebala jak zawsze") - instalator
     // zwrocil kod 5 (Inno Setup: przerwane/nieudane kopiowanie, cicho
@@ -379,9 +472,9 @@ public sealed class UpdateApplier : IUpdateApplier
     // kilka innych plikow zdazyly sie juz podmienic - polowiczna, cicho
     // zepsuta instalacja. Recznie powtorzone URUCHOMIENIE TEGO SAMEGO
     // instalatora chwile pozniej zadzialalo od razu (przejsciowa blokada
-    // pliku/skan antywirusa), wiec zamiast poddawac sie po jednej probie,
+    // pliku/skan antywirus), wiec zamiast poddawac sie po jednej probie,
     // ponawiamy caly krok RAZ automatycznie - i, kluczowe, NIE ufamy juz
-    // samemu kodowi wyjscia 0 jako dowodowi kompletnej kopii (Restart
+    // samemu kodowi wyjscia 0 jako dowodu kompletnej kopii (Restart
     // Manager potrafi po cichu pominac zablokowany plik przy exitCode 0 -
     // patrz komentarz przy koncowej weryfikacji ok/healthy/runningVersion
     // nizej w tym samym duchu) - sprawdzamy realnie na dysku, ze KAZDA

@@ -87,6 +87,12 @@ public sealed class LauncherApp
             ["installDir"] = _paths.InstallDir,
         });
 
+        // Siatka bezpieczenstwa: jesli poprzednia aktualizacja nie posprzatala
+        // kopii .old-* (np. proces czekajacy w oknie postepu wciaz trzymal
+        // uchwyt w momencie sprzatania w UpdateApplier), posprzataj przy
+        // kolejnym starcie. Czysto kosmetyczne, nie krytyczne dla poprawnosci.
+        CleanupOrphanedOldExes();
+
         return args.Mode switch
         {
             LauncherMode.Normal => await RunNormalAsync().ConfigureAwait(false),
@@ -544,6 +550,38 @@ public sealed class LauncherApp
     private void TryDeletePendingUpdateMarker(string pendingPath)
     {
         try { File.Delete(pendingPath); } catch { /* najlepszy mozliwy wysilek */ }
+    }
+
+    /// <summary>
+    /// Best-effort usuwanie osieroconych kopii Scyzoryk.exe.old-* pozostawionych
+    /// po nieudanej lub czesciowo udanej aktualizacji. Nie gwarantuje usuniecia
+    /// kazdego pliku (moze byc wciaz zablokowany), ale zapobiega akumulacji.
+    /// </summary>
+    private void CleanupOrphanedOldExes()
+    {
+        try
+        {
+            if (!Directory.Exists(_paths.InstallDir)) return;
+            foreach (var oldExe in Directory.GetFiles(_paths.InstallDir, "Scyzoryk.exe.old-*"))
+            {
+                try
+                {
+                    File.Delete(oldExe);
+                    _logger.Log(LogLevel.Info, "Posprzatano osierocona kopie Scyzoryk.exe.", new Dictionary<string, string>
+                    {
+                        ["path"] = oldExe,
+                    });
+                }
+                catch
+                {
+                    // Najlepszy mozliwy wysilek - plik moze byc wciaz zablokowany.
+                }
+            }
+        }
+        catch
+        {
+            // Najlepszy mozliwy wysilek - np. brak uprawnien do katalogu.
+        }
     }
 
     private int LogUnknownArgumentAndExit()
