@@ -866,6 +866,15 @@ test('zbierzPlikiPdf: rekurencyjnie zbiera .pdf (dowolna glebokosc), ignoruje in
   assert.ok(pliki.every(p => p.nazwaBezRozszerzenia === p.nazwa.slice(0, -4)));
 });
 
+test('karty-katalogowe: tryb "tylko dodatek" (typ=dokumenty-seryjne/audyty/dobory) tez zbiera .docx, schematy zostaja pdf', async () => {
+  const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'karty-katalogowe', 'server.js'), 'utf8');
+  const standalone = source.match(/\} else if \(DODATEK_ZRODLA\[typ\]\) \{[\s\S]*?\n    \}/);
+  assert.ok(standalone, 'nie znaleziono bloku DODATEK_ZRODLA');
+  assert.match(standalone[0], /typ === 'schematy'/);
+  assert.match(standalone[0], /zbierzPliki\(zrodlo\.dir, \['\.pdf', '\.docx'\]\)/);
+  assert.ok(!/const pliki = await zbierzPlikiPdf\(zrodlo\.dir\);/.test(standalone[0]));
+});
+
 test('karty-katalogowe: dla dodatkow (audyty/dokumenty seryjne/dobory) zbieramy zarowno .pdf jak i .docx', async (t) => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-mixed-scan-'));
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));
