@@ -1,5 +1,16 @@
 'use strict';
 
+// Dopasowanie folderow ze ZDJECIAMI do adresow z Excela (plan
+// PLAN_dokumenty_seryjne_tylko_zdjecia.md). Model: uzytkownik wybiera folder
+// glowny, w ktorym leza PODFOLDERY nazwane adresami; wszystkie zdjecia
+// (.jpg/.jpeg/.png) z podfolderu adresu trafiaja do pola galerii
+// MERGEFIELD Zdjecia_pomontazowe w jego dokumencie. Zdjecia sa OPCJONALNE:
+// brak folderu/puste folder to status 'ok' z zerem zdjec, nigdy blad.
+//
+// Normalizacja adresu jest deterministyczna (brak fuzzy/Levenshtein/typo-tolerance):
+// "Łaszew 5A", "laszew 5a", " LASZEW  5A " -> ten sam klucz;
+// "Laszew 5" vs "Laszew 5A" -> Rozne adresy. Nigdy nie zgadujemy.
+
 const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
@@ -18,190 +29,15 @@ function normalizeAddress(text) {
   return str;
 }
 
-function normalizeFileName(name) {
-  const base = path.basename(name, path.extname(name));
-  return base
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/ł/g, 'l')
-    .replace(/[^a-z0-9]+/g, '');
+// Pola galerii rozpoznajemy po znormalizowanej nazwie - lapie rowniez pisownie
+// z diakrytykami ("Zdjecia_pomontazowe" / "Zdjęcia pomontażowe" itp.), bo
+// normalizeAddress folduje lacinskie rozszerzenia i dowolne separatory.
+function isGalleryFieldName(fieldName) {
+  return normalizeAddress(fieldName) === normalizeAddress('Zdjecia_pomontazowe');
 }
 
-function naturalCompare(a, b) {
-  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
-}
-
-function naturalSort(arr) {
-  return [...arr].sort(naturalCompare);
-}
-
-function extractTrailingNumber(name) {
-  const m = name.match(/(\d+)$/);
-  return m ? parseInt(m[1], 10) : null;
-}
-
-function makeFieldAliases(fieldName) {
-  const aliases = new Set();
-  const normalized = normalizeFileName(fieldName);
-  aliases.add(normalized);
-  aliases.add(normalized.replace(/_/g, ''));
-
-  const num = extractTrailingNumber(fieldName);
-  if (num !== null) {
-    aliases.add(String(num));
-    aliases.add(String(num).padStart(2, '0'));
-    const withoutUnderscoreNum = normalized.replace(/_?\d+$/, '') + String(num);
-    aliases.add(withoutUnderscoreNum);
-  }
-
-  return aliases;
-}
-
-function findBestFileForField(fieldName, files) {
-  const aliases = makeFieldAliases(fieldName);
-  const candidates = files.filter((f) => {
-    const ext = path.extname(f.originalName).toLowerCase();
-    return IMAGE_EXTENSIONS.has(ext);
-  });
-
-  for (const file of candidates) {
-    const baseNorm = normalizeFileName(file.originalName);
-    if (aliases.has(baseNorm)) {
-      return file;
-    }
-  }
-  return null;
-}
-
-function buildManifestFromDisk(imageRoot) {
-  const files = [];
-  if (!fs.existsSync(imageRoot)) return { files, root: imageRoot };
-
-  const entries = fs.readdirSync(imageRoot, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const addressFolder = entry.name;
-    const folderPath = path.join(imageRoot, addressFolder);
-    const folderEntries = fs.readdirSync(folderPath, { withFileTypes: true });
-    for (const fe of folderEntries) {
-      if (fe.isDirectory()) continue;
-      const ext = path.extname(fe.name).toLowerCase();
-      if (!IMAGE_EXTENSIONS.has(ext)) continue;
-      files.push({
-        relativePath: path.join(addressFolder, fe.name),
-        addressFolder,
-        storedPath: path.join(folderPath, fe.name),
-        originalName: fe.name,
-      });
-    }
-  }
-
-  return { files, root: imageRoot };
-}
-
-function loadManifest(manifestPath) {
-  if (!manifestPath || !fs.existsSync(manifestPath)) {
-    return { files: [], root: '' };
-  }
-  return JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-}
-
-function saveManifest(manifestPath, manifest) {
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
-}
-
-function buildFolderMap(manifest) {
-  const map = new Map();
-  for (const file of manifest.files) {
-    const key = normalizeAddress(file.addressFolder);
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(file);
-  }
-  return map;
-}
-
-function resolveImagesForAddress(address, fields, manifest) {
-  const result = {
-    status: 'missing',
-    matches: Object.create(null),
-    errors: [],
-  };
-
-  const folderMap = buildFolderMap(manifest);
-  const key = normalizeAddress(address);
-  const files = folderMap.get(key) || [];
-
-  const imageFiles = files.filter((f) => {
-    const ext = path.extname(f.originalName).toLowerCase();
-    return IMAGE_EXTENSIONS.has(ext);
-  });
-
-  if (imageFiles.length === 0 && fields.length === 0) {
-    result.status = 'complete';
-    return result;
-  }
-
-  if (fields.length === 0 && imageFiles.length > 0) {
-    result.status = 'ambiguous';
-    result.errors.push('Brak pól zdjęciowych w szablonie, ale znaleziono pliki w folderze ze zdjęciami.');
-    return result;
-  }
-
-  const directMatches = Object.create(null);
-  let directCount = 0;
-  for (const field of fields) {
-    const file = findBestFileForField(field, imageFiles);
-    if (file) {
-      directMatches[field] = file;
-      directCount++;
-    }
-  }
-
-  if (directCount === fields.length) {
-    result.status = 'complete';
-    result.matches = directMatches;
-    return result;
-  }
-
-  const unmatchedFields = fields.filter((f) => !directMatches[f]);
-  const usedPaths = new Set(Object.values(directMatches).map((f) => f.storedPath));
-  const unusedFiles = imageFiles.filter((f) => !usedPaths.has(f.storedPath));
-
-  if (unusedFiles.length === unmatchedFields.length && unmatchedFields.length > 0) {
-    const sortedFields = naturalSort(unmatchedFields);
-    const sortedFiles = naturalSort(unusedFiles.map((f) => f.originalName));
-    for (let i = 0; i < sortedFields.length; i++) {
-      const file = unusedFiles.find((f) => f.originalName === sortedFiles[i]);
-      directMatches[sortedFields[i]] = file;
-    }
-  }
-
-  for (const field of fields) {
-    result.matches[field] = directMatches[field] || null;
-  }
-
-  const matchedCount = Object.values(result.matches).filter(Boolean).length;
-  if (matchedCount === fields.length) {
-    result.status = 'complete';
-    return result;
-  }
-
-  if (imageFiles.length > fields.length) {
-    result.status = 'ambiguous';
-    result.errors.push(
-      `W folderze znaleziono ${imageFiles.length} zdjęć, ale szablon wymaga ${fields.length} pól.`
-    );
-  } else {
-    result.status = 'missing';
-    result.errors.push(
-      `Dopasowano ${matchedCount} z ${fields.length} wymaganych zdjęć.`
-    );
-  }
-
-  return result;
-}
-
+// Zwykle pole tekstowe typu "Zdjecie_1"/"Foto_X" NIE jest galeria - stare
+// szablony z per-pozycyjnymi polami sa poza zakresem tej wersji (plan sect. 11).
 function detectImageMergeFields(docxPath) {
   const fields = [];
   if (!fs.existsSync(docxPath)) return fields;
@@ -237,12 +73,10 @@ function detectImageMergeFields(docxPath) {
     while ((m = regex.exec(merged)) !== null) {
       const name = (m[1] || m[2]).trim();
       if (!name) continue;
-      const lower = name.toLowerCase();
-      if (lower.startsWith('zdjecie') || lower.startsWith('zdjęcie') || lower.startsWith('foto') || lower.startsWith('zdj_')) {
-        if (!seen.has(name)) {
-          seen.add(name);
-          fields.push(name);
-        }
+      if (!isGalleryFieldName(name)) continue;
+      if (!seen.has(name)) {
+        seen.add(name);
+        fields.push(name);
       }
     }
   }
@@ -250,42 +84,145 @@ function detectImageMergeFields(docxPath) {
   return fields;
 }
 
-function summarizeImages(addresses, fields, manifest) {
-  const rows = [];
-  let complete = 0;
-  let missing = 0;
-  let ambiguous = 0;
+// manifest.files = pliki zdjec; addressFolder to RAW nazwa podfolderu.
+// Klucz mapy to znormalizowany adres folderu; wartość to wpisy POGRUPOWANE
+// po RAW nazwie folderu - potrzebne do wykrycia niejednoznacznosci
+// (dwa rozne fizyczne foldery dajace ten sam klucz, np. "Laszew 5A" i
+// "Łaszew 5A" - plan sect. 21).
+function buildFolderGroups(manifest) {
+  // Map<normalizedKey, Array<{ rawFolder, files: [] }>>
+  const map = new Map();
+  if (!manifest || !Array.isArray(manifest.files)) return map;
 
-  for (const address of addresses) {
-    const resolved = resolveImagesForAddress(address, fields, manifest);
-    rows.push({ address, ...resolved });
-    if (resolved.status === 'complete') complete++;
-    else if (resolved.status === 'ambiguous') ambiguous++;
-    else missing++;
+  for (const file of manifest.files) {
+    const ext = path.extname(String(file.originalName || '')).toLowerCase();
+    if (!IMAGE_EXTENSIONS.has(ext)) continue;
+    const key = normalizeAddress(file.addressFolder);
+    if (!key) continue;
+    if (!map.has(key)) map.set(key, []);
+    const groups = map.get(key);
+    let group = groups.find((g) => g.rawFolder === file.addressFolder);
+    if (!group) {
+      group = { rawFolder: file.addressFolder, files: [] };
+      groups.push(group);
+    }
+    group.files.push(file);
+  }
+  return map;
+}
+
+function naturalCompareByOriginalName(a, b) {
+  return String(a.originalName).localeCompare(String(b.originalName), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
+// Zwraca { status, photos, folders }:
+//   ok        -> photos = wszystkie zdjecia podfolderu adresu (moze byc 0), posortowane naturalnie
+//   ambiguous -> kilka roznych folderow o tym samym znormalizowanym adresie;
+//                photos = [] - NIGDY nie uzywamy zdjec innego adresu
+function findPhotosForAddress(address, manifest) {
+  const emptyOk = { status: 'ok', photos: [], folders: [] };
+  const key = normalizeAddress(address);
+  if (!key) return emptyOk;
+
+  const groupsMap = buildFolderGroups(manifest);
+  const groups = groupsMap.get(key);
+  if (!groups || groups.length === 0) return emptyOk;
+
+  if (groups.length > 1) {
+    return {
+      status: 'ambiguous',
+      photos: [],
+      folders: groups.map((g) => g.rawFolder),
+    };
   }
 
-  let status = 'complete';
-  if (ambiguous > 0) status = 'ambiguous';
-  else if (missing > 0) status = 'missing';
+  return {
+    status: 'ok',
+    photos: [...groups[0].files].sort(naturalCompareByOriginalName),
+    folders: [groups[0].rawFolder],
+  };
+}
+
+function summarizeImages(addresses, manifest) {
+  const rows = [];
+  let withImages = 0;
+  let withoutImages = 0;
+  let ambiguous = 0;
+
+  for (const raw of addresses || []) {
+    const address = String(raw == null ? '' : raw).trim();
+    const resolved = findPhotosForAddress(address, manifest);
+    rows.push({ address, ...resolved });
+    if (resolved.status === 'ambiguous') ambiguous++;
+    else if (resolved.photos.length > 0) withImages++;
+    else withoutImages++;
+  }
 
   return {
-    status,
-    total: addresses.length,
-    complete,
-    missing,
+    total: rows.length,
+    withImages,
+    withoutImages,
     ambiguous,
     rows,
   };
 }
 
+// Manifest budowany tez z dysku - dla zrodla typu sciezka na dysku
+// (ta sama struktura co przy uploadzie: root/adres/zdjecie.ext).
+function buildManifestFromDisk(imageRoot) {
+  const files = [];
+  if (!fs.existsSync(imageRoot)) return { files, root: imageRoot };
+
+  const entries = fs.readdirSync(imageRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const addressFolder = entry.name;
+    const folderPath = path.join(imageRoot, addressFolder);
+    const folderEntries = fs.readdirSync(folderPath, { withFileTypes: true });
+    for (const fe of folderEntries) {
+      if (fe.isDirectory()) continue;
+      const ext = path.extname(fe.name).toLowerCase();
+      if (!IMAGE_EXTENSIONS.has(ext)) continue;
+      files.push({
+        relativePath: path.join(addressFolder, fe.name),
+        addressFolder,
+        storedPath: path.join(folderPath, fe.name),
+        originalName: fe.name,
+      });
+    }
+  }
+
+  return { files, root: imageRoot };
+}
+
+function loadManifest(manifestPath) {
+  if (!manifestPath || !fs.existsSync(manifestPath)) {
+    return { files: [], root: '' };
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (!parsed || !Array.isArray(parsed.files)) return { files: [], root: parsed?.root || '' };
+    return parsed;
+  } catch {
+    return { files: [], root: '' };
+  }
+}
+
+function saveManifest(manifestPath, manifest) {
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+}
+
 module.exports = {
+  IMAGE_EXTENSIONS,
   normalizeAddress,
+  isGalleryFieldName,
+  detectImageMergeFields,
   buildManifestFromDisk,
   loadManifest,
   saveManifest,
-  buildFolderMap,
-  resolveImagesForAddress,
-  detectImageMergeFields,
+  findPhotosForAddress,
   summarizeImages,
-  IMAGE_EXTENSIONS,
 };
