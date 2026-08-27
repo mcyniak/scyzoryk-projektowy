@@ -672,7 +672,11 @@ $script:ImageManifest = $null
 # Specjalne pole galerii zdjec (plan PLAN_dokumenty_seryjne_tylko_zdjecia.md):
 # MERGEFIELD Zdjecia_pomontazowe jest podmieniane na WSZYSTKIE zdjecia folderu
 # adresu. To NIE jest pole z Excela - Replace-MergeFieldsInRange musi je ignorowac.
-$script:GalleryFieldKey = 'zdjecia_pomontazowe'
+# KLUCZ: Normalize-Address zamienia "_" na spacje ("Zdjecia_pomontazowe" ->
+# "zdjecia pomontazowe"), wiec klucz MUSI powstac przez ten sam normalizer -
+# zhardkodowany podkrelnik ("zdjecia_pomontazowe") NIGDY by nie pasowal i pole
+# cicho znikaloby po zwyklej podmianie MERGEFIELD (real bug, 2026-08-27).
+$script:GalleryFieldKey = (Normalize-Address 'Zdjecia_pomontazowe')
 
 function Load-ImageManifest([string]$path) {
   if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) { return }
