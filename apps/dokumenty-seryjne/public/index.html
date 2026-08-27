@@ -75,10 +75,16 @@
           <div class="hint">Tabela z danymi i kolumną z adresem.</div>
         </div>
       </div>
+      <div class="field drop" style="margin-top:14px">
+        <label for="imagesFile">Zdjęcia (opcjonalne)</label>
+        <input id="imagesFile" type="file" accept=".jpg,.jpeg,.png" webkitdirectory multiple>
+        <div class="hint">Folder z podfolderami per adres. Nazwy plików odpowiadają polom MERGEFIELD (np. Zdjecie_1.jpg, 1.jpg).</div>
+      </div>
       <div class="actions">
         <button id="uploadBtn" class="button">Sprawdź dane</button>
       </div>
       <div id="uploadStatus" class="status hidden"></div>
+      <div id="imageSummaryBox" class="hidden" style="margin-top:14px"></div>
     </section>
 
     <section id="recordsPanel" class="panel hidden">
