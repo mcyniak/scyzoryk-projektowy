@@ -229,7 +229,13 @@ async function storeUploadedImages(jobId, files, imagePaths) {
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     validateImageFile(file);
-    const relPath = imagePaths[i] || file.originalname;
+    // Sciezki z webkitRelativePath przychodza polem tekstowym multipart - busboy
+    // dekoduje je latin1, wiec polskie znaki ("Wierzchlas Południowa 126")
+    // wychodzily jako mojibake/U+FFFD i dopasowanie adresu w PowerShelli
+    // NIGDY nie trafialo (real bug 2026-08-27: "Po�udniowa" w manifeście).
+    // Ta sama naprawa co dla nazw plikow: latin1 -> utf8.
+    const rawPath = imagePaths[i] || file.originalname;
+    const relPath = typeof rawPath === 'string' ? decodeOriginalName(rawPath) : rawPath;
     const parsed = parseImageRelativePath(relPath);
     if (!parsed.addressFolder || !parsed.originalName) {
       await fsp.rm(file.path, { force: true }).catch(() => {});

@@ -146,6 +146,10 @@ test('obsluga zdjec: endpointy istnieja, manifest ma oryginalne nazwy plikow, ge
   assert.match(source, /app\.post\('\/api\/images\/:jobId\/summary'/);
   // Plan sect. 9: originalName to oryginalna nazwa uzytkownika, nie uuid.
   assert.match(source, /originalName: parsed\.originalName/);
+  // Real bug 2026-08-27: sciezki webkitRelativePath szly polem multipart
+  // (busboy dekoduje latin1) - polskie znaki w folderze adresowym wychodzily
+  // jako mojibake ("Po\uFFFDudniowa") i dopasowanie w PS nigdy nie trafialo.
+  assert.match(source, /const relPath = typeof rawPath === 'string' \? decodeOriginalName\(rawPath\) : rawPath;/);
   const generateRoute = source.match(/app\.post\('\/api\/generate\/:jobId'[\s\S]*?\n\}\);/);
   assert.ok(generateRoute, 'nie znaleziono trasy /api/generate/:jobId');
   // Plan sect. 20: zdjecia opcjonalne - generate nie moze zwracac 400 przez brak zdjec.
