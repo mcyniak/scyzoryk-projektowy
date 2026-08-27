@@ -492,27 +492,35 @@ async function rozpakujZipDoTemp(zipPath, jobId, etykieta) {
   return destDir;
 }
 
-// Rekurencyjne zebranie wszystkich PDF-ow (audyty/schematy nie maja
-// gwarantowanej, jednolitej glebokosci - zip ma zwykle jeden poziom
-// nadrzednego folderu, jak "PV/plik.pdf", wskazana sciezka na dysku moze
-// wskazywac albo na sam lisc, albo na folder nadrzedny). Ograniczenie
-// glebokosci (podobnie do reszty tego narzedzia) chroni przed przypadkowym
-// przeskanowaniem calego dysku, gdyby ktos wskazal zbyt ogolna sciezke.
+// Rekurencyjne zebranie plikow (audyty/schematy nie maja gwarantowanej,
+// jednolitej glebokosci - zip ma zwykle jeden poziom nadrzednego folderu,
+// jak "PV/plik.pdf", wskazana sciezka na dysku moze wskazywac albo na sam
+// lisc, albo na folder nadrzedny). Ograniczenie glebokosci (podobnie do
+// reszty tego narzedzia) chroni przed przypadkowym przeskanowaniem calego
+// dysku, gdyby ktos wskazal zbyt ogolna sciezke.
 const KK_MAX_GLEBOKOSC_SKANU = 4;
-async function zbierzPlikiPdf(rootDir, glebokosc = 0) {
+async function zbierzPliki(rootDir, rozszerzenia, glebokosc = 0) {
   if (glebokosc > KK_MAX_GLEBOKOSC_SKANU) return [];
   let wpisy;
   try { wpisy = await fsp.readdir(rootDir, { withFileTypes: true }); } catch { return []; }
+  const exts = (rozszerzenia || ['.pdf']).map(e => e.toLowerCase());
   const wyniki = [];
   for (const wpis of wpisy) {
     const pelnaSciezka = path.join(rootDir, wpis.name);
     if (wpis.isDirectory()) {
-      wyniki.push(...await zbierzPlikiPdf(pelnaSciezka, glebokosc + 1));
-    } else if (wpis.isFile() && path.extname(wpis.name).toLowerCase() === '.pdf') {
-      wyniki.push({ nazwa: wpis.name, sciezka: pelnaSciezka, nazwaBezRozszerzenia: wpis.name.slice(0, -4) });
+      wyniki.push(...await zbierzPliki(pelnaSciezka, exts, glebokosc + 1));
+    } else if (wpis.isFile()) {
+      const ext = path.extname(wpis.name).toLowerCase();
+      if (exts.includes(ext)) {
+        wyniki.push({ nazwa: wpis.name, sciezka: pelnaSciezka, nazwaBezRozszerzenia: wpis.name.slice(0, -ext.length) });
+      }
     }
   }
   return wyniki;
+}
+
+async function zbierzPlikiPdf(rootDir, glebokosc = 0) {
+  return zbierzPliki(rootDir, ['.pdf'], glebokosc);
 }
 
 // Dopasowanie PLIKU DO ADRESU ponownie uzywa adresPasujeDoFolderu (ten sam
@@ -1311,17 +1319,17 @@ app.post('/api/run', uploadWieloplikowy.fields([
       const audytyZrodlo = await rozstrzygnijZrodloDodatku(req, 'audyty', 'audytyZip', 'audytyPath');
       if (audytyZrodlo) {
         if (audytyZrodlo.wyczysc) doWyczyszczenia.push(audytyZrodlo.dir);
-        audytyPliki = await zbierzPlikiPdf(audytyZrodlo.dir);
+        audytyPliki = await zbierzPliki(audytyZrodlo.dir, ['.pdf', '.docx']);
       }
       const dokSeryjneZrodlo = await rozstrzygnijZrodloDodatku(req, 'dokumenty-seryjne', 'dokumentySeryjneZip', 'dokumentySeryjnePath');
       if (dokSeryjneZrodlo) {
         if (dokSeryjneZrodlo.wyczysc) doWyczyszczenia.push(dokSeryjneZrodlo.dir);
-        dokumentySeryjnePliki = await zbierzPlikiPdf(dokSeryjneZrodlo.dir);
+        dokumentySeryjnePliki = await zbierzPliki(dokSeryjneZrodlo.dir, ['.pdf', '.docx']);
       }
       const doboryZrodlo = await rozstrzygnijZrodloDodatku(req, 'dobory', 'doboryZip', 'doboryPath');
       if (doboryZrodlo) {
         if (doboryZrodlo.wyczysc) doWyczyszczenia.push(doboryZrodlo.dir);
-        doboryPliki = await zbierzPlikiPdf(doboryZrodlo.dir);
+        doboryPliki = await zbierzPliki(doboryZrodlo.dir, ['.pdf', '.docx']);
       }
       const schematyZrodlo = await rozstrzygnijZrodloDodatku(req, 'schematy', 'schematyZip', 'schematyPath');
       if (schematyZrodlo) {
@@ -1441,6 +1449,7 @@ module.exports = {
   zbudujIndeksSchematow,
   znajdzSchemat,
   rozpoznajFaze,
+  zbierzPliki,
   zbierzPlikiPdf,
   dopasujISkopiujDodatek,
   dopasujFolderPoAdresie,

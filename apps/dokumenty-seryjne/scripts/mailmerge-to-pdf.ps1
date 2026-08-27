@@ -12,7 +12,8 @@ param(
   [string]$FilePrefix = "",
   [string]$ImageManifestJson = "",
   [switch]$VisibleWord,
-  [switch]$DebugMode
+  [switch]$DebugMode,
+  [switch]$SaveWord
 )
 
 Set-StrictMode -Version Latest
@@ -1014,6 +1015,26 @@ try {
           }
         }
 
+        # Zapis do Worda (.docx) obok PDF - wlaczany checkboxem "Zapisuj takze do Word".
+        # Zapisujemy DOCX PRZED PDF, zeby SaveAs2 do PDF nie zmienil formatu dokumentu.
+        if ($SaveWord) {
+          try {
+            $docxPath = Unique-Path $OutputDir $baseName ".docx"
+            $docxPathString = [string]$docxPath
+            Write-Log "info" "Zapisuje takze DOCX obok PDF." ([pscustomobject]@{ row = $rowNumber; docx = $docxPathString })
+            $mergedDoc.SaveAs2($docxPathString, [int]16)
+            $created.Add([pscustomobject]@{
+              row = $rowNumber
+              address = $address
+              file = [System.IO.Path]::GetFileName($docxPath)
+              path = $docxPath
+            }) | Out-Null
+            Write-Event "export-done" "Word zapisany: $($address)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($docxPath) })
+          } catch {
+            Write-Log "warn" "Nie udalo sie zapisac DOCX obok PDF." ([pscustomobject]@{ row = $rowNumber; error = $_.Exception.Message })
+          }
+        }
+
         # Uzywamy SaveAs2 do PDF jako glownej metody.
         # Poprawka: przekazujemy czysty string i int, bez [ref], bo u Ciebie [ref] powodowal blad:
         # "Nie można rzutować obiektu typu System.Management.Automation.PSObject na typ System.String".
@@ -1108,6 +1129,18 @@ try {
 
         $merged = $word.ActiveDocument
         Write-Event "export-start" "Eksportuje do PDF: $($address). To moze potrwac nawet kilka minut przy pierwszym pliku." ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; pdf = $pdfPath })
+        if ($SaveWord) {
+          try {
+            $docxPath = Unique-Path $OutputDir $baseName ".docx"
+            $docxPathString = [string]$docxPath
+            Write-Log "info" "Zapisuje takze DOCX obok PDF." ([pscustomobject]@{ row = $rowNumber; docx = $docxPathString })
+            $merged.SaveAs2($docxPathString, [int]16)
+            $created.Add([pscustomobject]@{ row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($docxPath); path = $docxPath }) | Out-Null
+            Write-Event "export-done" "Word zapisany: $($address)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($docxPath) })
+          } catch {
+            Write-Log "warn" "Nie udalo sie zapisac DOCX obok PDF." ([pscustomobject]@{ row = $rowNumber; error = $_.Exception.Message })
+          }
+        }
         $formatPdf = [int]17
         $pdfPathString = [string]$pdfPath
         Write-Log "info" "Zapisuje PDF metoda SaveAs2 bez ref." ([pscustomobject]@{ row = $rowNumber; pdf = $pdfPathString })

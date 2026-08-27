@@ -150,6 +150,25 @@ test('obsluga zdjec: backend ma endpointy uploadu, podsumowania i walidacji w ge
   assert.match(source, /'-ImageManifestJson', job\.imageManifestPath/);
 });
 
+test('saveWord: opcja "Zapisuj takze do Word (.docx)" jest przekazywana przez UI do PowerShell i zwracana w ZIP-ie', async () => {
+  const serverSource = await fsp.readFile(serverPath, 'utf8');
+  assert.match(serverSource, /const saveWord = options\.saveWord === true;/);
+  assert.match(serverSource, /if \(saveWord\) args\.push\('-SaveWord'\);/);
+  assert.ok(serverSource.includes('(/\\.pdf$/i.test(file) || /\\.docx$/i.test(file))'));
+  assert.ok(serverSource.includes("contentType = /\\.docx$/i.test(file)"));
+
+  const inlineSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'public', 'inline-1.js'), 'utf8');
+  assert.ok(inlineSource.includes("saveWord: $('saveWord') ? $('saveWord').checked : false"));
+
+  const htmlSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'public', 'index.html'), 'utf8');
+  assert.ok(htmlSource.includes('id="saveWord"'));
+  assert.ok(htmlSource.includes('Zapisuj także do Word (.docx)'));
+
+  const psSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1'), 'utf8');
+  assert.ok(psSource.includes('[switch]$SaveWord'));
+  assert.ok(psSource.includes('if ($SaveWord)'));
+});
+
 test('obsluga zdjec: PowerShell wczytuje manifest i wstawia obrazy przed tekstem', async () => {
   const psPath = path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1');
   const source = await fsp.readFile(psPath, 'utf8');

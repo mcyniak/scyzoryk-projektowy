@@ -911,6 +911,7 @@ async function startGeneration(job, options) {
   const rowsCsv = selectedRows.join(',');
   const visibleWord = options.visibleWord === true;
   const debugMode = options.debugMode === true;
+  const saveWord = options.saveWord === true;
   const filePrefix = cleanFilePrefix(options.filePrefix || '');
 
   const allRows = selectedSheet.rows || [];
@@ -945,6 +946,7 @@ async function startGeneration(job, options) {
     outputDir: job.outputDir,
     visibleWord,
     debugMode,
+    saveWord,
     filePrefix,
     textReplacements: textReplacements.map(r => ({ find: r.find, column: r.column, occurrence: r.occurrence || 'all' }))
   });
@@ -964,6 +966,7 @@ async function startGeneration(job, options) {
   if (rowsCsv) args.push('-RowsCsv', rowsCsv);
   if (visibleWord) args.push('-VisibleWord');
   if (debugMode) args.push('-DebugMode');
+  if (saveWord) args.push('-SaveWord');
   if (job.imageManifestPath && fs.existsSync(job.imageManifestPath)) args.push('-ImageManifestJson', job.imageManifestPath);
 
   const exe = process.env.POWERSHELL_EXE || 'powershell.exe';
@@ -1455,7 +1458,10 @@ app.get('/api/job/:jobId', (req, res) => {
 function listJobPdfFiles(job) {
   if (!job || !job.outputDir || !fs.existsSync(job.outputDir)) return [];
   return fs.readdirSync(job.outputDir)
-    .filter(file => /\.pdf$/i.test(file))
+    // Do paczki ZIP bierzemy zarowno PDF-y, jak i pliki Word (.docx) zapisane
+    // obok, gdy uzytkownik zaznaczyl "Zapisuj takze do Word". Robocze
+    // *.debug.docx (tryb debug) sa celowo pomijane - to nie jest wynik.
+    .filter(file => (/\.pdf$/i.test(file) || /\.docx$/i.test(file)) && !/\.debug\.docx$/i.test(file))
     .map(file => ({ file, fullPath: path.join(job.outputDir, file) }))
     .filter(item => fs.existsSync(item.fullPath));
 }
@@ -1552,7 +1558,10 @@ app.get('/api/download/:jobId/:file', (req, res) => {
   const fullPath = path.join(job.outputDir, file);
   const rel = path.relative(job.outputDir, fullPath);
   if (rel.startsWith('..') || path.isAbsolute(rel) || !fs.existsSync(fullPath)) return res.status(404).send('Nie znaleziono pliku.');
-  res.setHeader('Content-Type', 'application/pdf');
+  const contentType = /\.docx$/i.test(file)
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : 'application/pdf';
+  res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', contentDispositionHeader('attachment', file));
   res.sendFile(fullPath);
 });

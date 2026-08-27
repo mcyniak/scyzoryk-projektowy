@@ -442,7 +442,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       try {
         const res = await fetch(`/api/generate/${currentJob}`, {
           method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ selectedRows: rows, selectedGroups: selectedTemplateGroups(), uidColumn: $('uidColumn') ? $('uidColumn').value : '', sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value, filePrefix: $('filePrefix').value.trim(), visibleWord: $('visibleWord').checked, debugMode: $('debugMode').checked })
+          body: JSON.stringify({ selectedRows: rows, selectedGroups: selectedTemplateGroups(), uidColumn: $('uidColumn') ? $('uidColumn').value : '', sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value, filePrefix: $('filePrefix').value.trim(), visibleWord: $('visibleWord').checked, debugMode: $('debugMode').checked, saveWord: $('saveWord') ? $('saveWord').checked : false })
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się rozpocząć generowania.');
