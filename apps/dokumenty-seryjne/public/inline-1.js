@@ -497,7 +497,11 @@ const headers = { 'X-Scyzoryk-Request': '1' };
 
     $('imagesFile')?.addEventListener('change', e => {
       currentImageFiles = [...e.target.files].filter(f => /\.(jpg|jpeg|png)$/i.test(f.name));
-      currentImagePaths = currentImageFiles.map(f => f.webkitRelativePath || f.name);
+      // encodeURIComponent: sciezki jada polem multipart jako CZYSTY ASCII,
+      // odporne na dowolne dekodowanie charsetu po drodze (busboy latin1/utf8) -
+      // dwa razy zlapane na zywo polskie znaki w folderach adresowych
+      // ("Po\ufffdudniowa", "Aaszew"). Serwer robi decodeURIComponent.
+      currentImagePaths = currentImageFiles.map(f => encodeURIComponent(f.webkitRelativePath || f.name));
       imageSummary = null;
       const box = $('imageSummaryBox');
       if (box) {
