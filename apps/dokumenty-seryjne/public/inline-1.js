@@ -10,6 +10,9 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     let currentWorkbook = null;
     let currentAllColumns = [];
     let detectedTemplatePower = '';
+    let currentImageFiles = [];
+    let currentImagePaths = [];
+    let imageSummary = null;
     let pollTimer = null;
     let lastStatus = null;
 
@@ -125,6 +128,49 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       }
     }
 
+    async function uploadImages(jobId) {
+      if (!currentImageFiles.length) return { ok: true, count: 0 };
+      const fd = new FormData();
+      for (const f of currentImageFiles) fd.append('images', f);
+      fd.append('imagePaths', JSON.stringify(currentImagePaths));
+      const res = await fetch(`/api/images/${jobId}`, { method: 'POST', headers, body: fd });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wczytać zdjęć.');
+      return data;
+    }
+
+    async function fetchImageSummary() {
+      if (!currentJob) return null;
+      const res = await fetch(`/api/images/${currentJob}/summary`, {
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selectedRows: selectedRows(), selectedGroups: selectedTemplateGroups(), sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się sprawdzić zdjęć.');
+      imageSummary = data;
+      return data;
+    }
+
+    function renderImageSummary(summary) {
+      const box = $('imageSummaryBox');
+      if (!box) return;
+      if (!summary || !summary.total) { hide(box); return; }
+      show(box);
+      const statusClass = summary.status === 'complete' ? 'ok' : (summary.status === 'ambiguous' ? 'warn' : 'err');
+      const statusText = summary.status === 'complete' ? 'kompletne' : (summary.status === 'ambiguous' ? 'niejednoznaczne' : 'brakuje');
+      let html = `<div class="status ${statusClass}">Zdjęcia: ${statusText} — ${summary.complete}/${summary.total} adresów gotowych`;
+      if (summary.ambiguous) html += `, ${summary.ambiguous} niejednoznacznych`;
+      if (summary.missing) html += `, ${summary.missing} z brakami`;
+      html += '.</div>';
+      if (summary.status !== 'complete') {
+        html += '<ul style="margin:8px 0 0;padding-left:18px;font-size:13px">' + summary.rows.filter(r => r.status !== 'complete').map(r => {
+          const missing = Object.entries(r.matches).filter(([_, v]) => !v).map(([k]) => k).join(', ');
+          return `<li><strong>${esc(r.address)}</strong> — ${r.status}${missing ? ` (brakuje: ${esc(missing)})` : ''}</li>`;
+        }).join('') + '</ul>';
+      }
+      box.innerHTML = html;
+    }
+
     async function uploadFiles() {
       hide($('uploadStatus')); hide($('recordsPanel')); hide($('resultPanel')); hide($('progressPanel')); hide($('logPanel'));
       stopPolling();
@@ -148,12 +194,20 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         currentWorkbook = data.workbook;
         $('filePrefix').value = '';
         renderWorkbook(data.workbook, data.suggestedAddressColumn); refreshUidColumnOptions(data.workbook.columns || []); renderTemplateGroups(data.templateGroups || [], data.workbook.columns || [], data.suggestedUidColumn || '');
+
+        if (currentImageFiles.length) {
+          status($('uploadStatus'), 'Wczytuję zdjęcia...', 'warn');
+          await uploadImages(currentJob);
+        }
+
         const ambiguous = data.ambiguousTemplates || [];
         const ambiguousNote = ambiguous.length
           ? ` Uwaga: w ${ambiguous.length === 1 ? 'folderze' : 'folderach'} znaleziono więcej niż jeden pasujący plik tego samego typu (${ambiguous.map(a => a.resolved ? `"${a.relFolder}": użyto nowszego "${a.keptFile}" (starszy "${a.skippedFile}" zignorowano)` : `"${a.relFolder}": ${a.files.join(' / ')} — pominięto, sprawdź ręcznie`).join('; ')}).`
           : '';
         const ozcNote = data.ozcFoldersFound ? ` Znaleziono dane OZC/audytów — dodatkowe pola w szablonach będą uzupełniane automatycznie tam, gdzie to możliwe.` : '';
-        status($('uploadStatus'), `Wczytano ${data.workbook.totalRows} rekordów.${ambiguousNote}${ozcNote}`, ambiguous.length ? 'warn' : 'ok');
+        const imageNote = currentImageFiles.length ? ` Wczytano ${currentImageFiles.length} zdjęć.` : '';
+        status($('uploadStatus'), `Wczytano ${data.workbook.totalRows} rekordów.${ambiguousNote}${ozcNote}${imageNote}`, ambiguous.length ? 'warn' : 'ok');
+        try { await fetchImageSummary(); renderImageSummary(imageSummary); } catch (_) {}
         show($('recordsPanel')); setJobPill('Gotowe');
         await pollJob();
         $('recordsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -371,13 +425,24 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       const uidBoxVisible = $('uidColumnBox') && !$('uidColumnBox').classList.contains('hidden');
       if (uidBoxVisible && !$('uidColumn').value) return status($('recordsStatus'), 'Wybierz kolumnę wariantu (rozmiar zasobnika / moc pompy) zanim uruchomisz generowanie.', 'err');
       setBusy(true); hide($('resultPanel')); show($('cancelBtn'));
+      status($('recordsStatus'), `Sprawdzam dopasowanie zdjęć...`, 'warn');
+      try {
+        const summary = await fetchImageSummary();
+        renderImageSummary(summary);
+        if (summary && summary.total > 0 && summary.status !== 'complete') {
+          throw new Error(`Zdjęcia nie są gotowe: ${summary.missing + summary.ambiguous} z ${summary.total} adresów ma braki lub jest niejednoznacznych.`);
+        }
+      } catch (e) {
+        setBusy(false); hide($('cancelBtn')); status($('recordsStatus'), e.message, 'err');
+        return;
+      }
       status($('recordsStatus'), `Rozpoczynam tworzenie ${rows.length} PDF-ów...`, 'warn');
       updateProgress({ phase: 'queued', percent: 0, message: 'Przygotowuję generowanie...' });
       renderLogs([]);
       try {
         const res = await fetch(`/api/generate/${currentJob}`, {
           method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ selectedRows: rows, selectedGroups: selectedTemplateGroups(), uidColumn: $('uidColumn') ? $('uidColumn').value : '', sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value, filePrefix: $('filePrefix').value.trim(), visibleWord: $('visibleWord').checked, debugMode: $('debugMode').checked })
+          body: JSON.stringify({ selectedRows: rows, selectedGroups: selectedTemplateGroups(), uidColumn: $('uidColumn') ? $('uidColumn').value : '', sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value, filePrefix: $('filePrefix').value.trim(), visibleWord: $('visibleWord').checked, debugMode: $('debugMode').checked, saveWord: $('saveWord') ? $('saveWord').checked : false })
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się rozpocząć generowania.');
@@ -430,6 +495,21 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       show($('resultPanel'));
     }
 
+    $('imagesFile')?.addEventListener('change', e => {
+      currentImageFiles = [...e.target.files].filter(f => /\.(jpg|jpeg|png)$/i.test(f.name));
+      currentImagePaths = currentImageFiles.map(f => f.webkitRelativePath || f.name);
+      imageSummary = null;
+      const box = $('imageSummaryBox');
+      if (box) {
+        if (currentImageFiles.length) {
+          box.textContent = `Wybrano ${currentImageFiles.length} zdjęć. Dopasowanie sprawdzę po wczytaniu plików.`;
+          box.className = 'status';
+          show(box);
+        } else {
+          hide(box);
+        }
+      }
+    });
     $('uploadBtn')?.addEventListener('click', () => uploadFiles());
     $('generateBtn')?.addEventListener('click', generate);
     $('cancelBtn')?.addEventListener('click', cancelJob);

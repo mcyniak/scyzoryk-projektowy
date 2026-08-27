@@ -10,8 +10,10 @@ param(
   [string]$DebugJsonPath = "",
   [string]$ReplacementJson = "",
   [string]$FilePrefix = "",
+  [string]$ImageManifestJson = "",
   [switch]$VisibleWord,
-  [switch]$DebugMode
+  [switch]$DebugMode,
+  [switch]$SaveWord
 )
 
 Set-StrictMode -Version Latest
@@ -111,6 +113,25 @@ function Normalize-Name([string]$text) {
   $s = $s.ToLowerInvariant()
   $s = [Regex]::Replace($s, "[^a-z0-9]+", "_")
   $s = $s.Trim("_")
+  return $s
+}
+
+function Normalize-Address([string]$text) {
+  if ($null -eq $text) { return "" }
+  $s = [string]$text
+  $s = $s.Replace([string][char]0x0142, 'l').Replace([string][char]0x0141, 'L')
+  try {
+    $s = $s.Normalize([System.Text.NormalizationForm]::FormD)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($ch in $s.ToCharArray()) {
+      $cat = [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($ch)
+      if ($cat -ne [System.Globalization.UnicodeCategory]::NonSpacingMark) { [void]$sb.Append($ch) }
+    }
+    $s = $sb.ToString()
+  } catch {}
+  $s = $s.ToLowerInvariant()
+  $s = [Regex]::Replace($s, "[^a-z0-9]+", " ")
+  $s = $s.Trim()
   return $s
 }
 
@@ -643,6 +664,124 @@ function Fill-NarrativeBlanks($doc, $record, [System.Collections.Generic.List[ob
   return $filledCount
 }
 
+$script:ImageManifest = $null
+
+function Load-ImageManifest([string]$path) {
+  if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) { return }
+  try {
+    $json = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+    $script:ImageManifest = ConvertFrom-Json $json
+  } catch {
+    Write-Log "warn" "Nie udalo sie wczytac manifestu zdjec: $_"
+    $script:ImageManifest = $null
+  }
+}
+
+function Get-ImageFieldAliases([string]$fieldName) {
+  $aliases = New-Object System.Collections.Generic.HashSet[string]
+  $normalized = Normalize-Name $fieldName
+  [void]$aliases.Add($normalized)
+  [void]$aliases.Add(($normalized -replace '_', ''))
+  if ($fieldName -match '(\d+)$') {
+    $num = $matches[1]
+    [void]$aliases.Add($num)
+    [void]$aliases.Add($num.PadLeft(2, '0'))
+    [void]$aliases.Add(($normalized -replace '_?\d+$', '') + $num)
+  }
+  return $aliases
+}
+
+function Find-ImagesForAddress([string]$address, [string[]]$fieldNames) {
+  $result = @{}
+  if ($null -eq $script:ImageManifest) { return $result }
+  $key = Normalize-Address $address
+  $files = $script:ImageManifest.files | Where-Object { (Normalize-Address $_.addressFolder) -eq $key }
+  $imageFiles = @($files | Where-Object {
+    $ext = [System.IO.Path]::GetExtension($_.originalName).ToLowerInvariant()
+    $ext -in @('.jpg', '.jpeg', '.png')
+  })
+
+  $directMatches = @{}
+  foreach ($field in $fieldNames) {
+    $aliases = Get-ImageFieldAliases $field
+    foreach ($file in $imageFiles) {
+      $base = Normalize-Name ([System.IO.Path]::GetFileNameWithoutExtension($file.originalName))
+      if ($aliases.Contains($base)) {
+        $directMatches[$field] = $file.storedPath
+        break
+      }
+    }
+  }
+
+  $unmatchedFields = @($fieldNames | Where-Object { -not $directMatches.ContainsKey($_) })
+  $usedPaths = @($directMatches.Values)
+  $unusedFiles = @($imageFiles | Where-Object { $usedPaths -notcontains $_.storedPath })
+  if ($unusedFiles.Count -eq $unmatchedFields.Count -and $unmatchedFields.Count -gt 0) {
+    $sortedFields = $unmatchedFields | Sort-Object
+    $sortedFiles = $unusedFiles | Sort-Object originalName
+    for ($i = 0; $i -lt $sortedFields.Count; $i++) {
+      $directMatches[$sortedFields[$i]] = $sortedFiles[$i].storedPath
+    }
+  }
+
+  return $directMatches
+}
+
+function Get-ImageMergeFields($doc) {
+  $names = New-Object System.Collections.Generic.List[string]
+  $seen = New-Object System.Collections.Generic.HashSet[string]
+  foreach ($field in $doc.Fields) {
+    if ($field.Type -ne 59) { continue } # wdFieldMergeField
+    $code = $field.Code.Text
+    if ($code -match 'MERGEFIELD\s+"?([^"\s]+)"?') {
+      $name = $matches[1].Trim()
+      $lower = $name.ToLowerInvariant()
+      if (($lower -match '^zdjecie') -or ($lower -match '^zdjęcie') -or ($lower -match '^foto')) {
+        if ($seen.Add($name)) { $names.Add($name) }
+      }
+    }
+  }
+  return $names
+}
+
+function Insert-ImageAtMergeField($field, [string]$imagePath) {
+  $range = $field.Result
+  if ($null -eq $range) { $range = $field.Code }
+  $shape = $range.InlineShapes.AddPicture($imagePath, $false, $true)
+  $shape.LockAspectRatio = $true
+  $maxWidth = 425
+  if ($shape.Width -gt $maxWidth) { $shape.Width = $maxWidth }
+  $field.Delete()
+}
+
+function Replace-AllImageMergeFields($doc, $record, [System.Collections.Generic.List[object]]$fieldDebug) {
+  if ($null -eq $script:ImageManifest) { return }
+  $address = Get-RecordValue $record $AddressColumn
+  if ([string]::IsNullOrWhiteSpace($address)) { return }
+  $fieldNames = Get-ImageMergeFields $doc
+  if ($fieldNames.Count -eq 0) { return }
+  $images = Find-ImagesForAddress $address $fieldNames
+  if ($images.Count -eq 0) { return }
+
+  $fields = @($doc.Fields)
+  for ($i = $fields.Count - 1; $i -ge 0; $i--) {
+    $field = $fields[$i]
+    if ($field.Type -ne 59) { continue }
+    $code = $field.Code.Text
+    if ($code -notmatch 'MERGEFIELD\s+"?([^"\s]+)"?') { continue }
+    $name = $matches[1].Trim()
+    if (-not $images.ContainsKey($name)) { continue }
+    $imagePath = $images[$name]
+    try {
+      Insert-ImageAtMergeField $field $imagePath
+      $fieldDebug.Add([pscustomobject]@{ field = $name; status = 'image_inserted'; path = $imagePath })
+    } catch {
+      Write-Log "warn" "Nie udalo sie wstawic obrazu '$name' dla adresu '$address': $_"
+      $fieldDebug.Add([pscustomobject]@{ field = $name; status = 'image_error'; error = $_.Exception.Message })
+    }
+  }
+}
+
 function Remove-MailMergeFromDocx([string]$src) {
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $tmpRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("scyzoryk_docx_" + [Guid]::NewGuid().ToString("N"))
@@ -704,6 +843,8 @@ if (-not [string]::IsNullOrWhiteSpace($ReplacementJson) -and (Test-Path -Literal
     Write-Log "warn" "Nie udalo sie odczytac zasad zamiany tekstu." ([pscustomobject]@{ error = $_.Exception.Message })
   }
 }
+
+Load-ImageManifest $ImageManifestJson
 
 $word = $null
 $oldSecurity = $null
@@ -833,6 +974,10 @@ try {
         # czytaniem Tables, nie tylko na koncu przed eksportem.
         try { $mergedDoc.Repaginate() } catch {}
 
+        Write-Log "info" "Wstawiam obrazy z mergefield." ([pscustomobject]@{ row = $rowNumber; address = $address })
+        $imageFieldDebug = New-Object System.Collections.Generic.List[object]
+        Replace-AllImageMergeFields $mergedDoc $record $imageFieldDebug
+
         Write-Log "info" "Wypelniam podswietlone komorki tabeli wg etykiety." ([pscustomobject]@{ row = $rowNumber; address = $address })
         $tableFieldDebug = New-Object System.Collections.Generic.List[object]
         $tableFilledCount = Fill-HighlightedTableCells $mergedDoc $record $tableFieldDebug
@@ -845,8 +990,8 @@ try {
         $fieldDebug = Replace-AllMergeFields $mergedDoc $record
         $textDebug = Replace-AllTextMarkers $mergedDoc $record $textReplacementRules
         if ($DebugMode) {
-          Write-Log "info" "Mapa podstawionych pol." ([pscustomobject]@{ row = $rowNumber; tableLabelFilled = $tableFilledCount; tableLabels = $tableFieldDebug; narrativeFilled = $narrativeFilledCount; narrativeLabels = $narrativeFieldDebug; fields = $fieldDebug; textMarkers = $textDebug })
-          Write-JsonLine ([pscustomobject]@{ event = "field-map"; row = $rowNumber; address = $address; tableLabelFilled = $tableFilledCount; tableLabels = $tableFieldDebug; narrativeFilled = $narrativeFilledCount; narrativeLabels = $narrativeFieldDebug; fields = $fieldDebug; textMarkers = $textDebug })
+          Write-Log "info" "Mapa podstawionych pol." ([pscustomobject]@{ row = $rowNumber; tableLabelFilled = $tableFilledCount; tableLabels = $tableFieldDebug; narrativeFilled = $narrativeFilledCount; narrativeLabels = $narrativeFieldDebug; imageFields = $imageFieldDebug; fields = $fieldDebug; textMarkers = $textDebug })
+          Write-JsonLine ([pscustomobject]@{ event = "field-map"; row = $rowNumber; address = $address; tableLabelFilled = $tableFilledCount; tableLabels = $tableFieldDebug; narrativeFilled = $narrativeFilledCount; narrativeLabels = $narrativeFieldDebug; imageFields = $imageFieldDebug; fields = $fieldDebug; textMarkers = $textDebug })
         }
 
         # Nie aktualizujemy wszystkich pol Worda, bo spis tresci / PAGEREF potrafia mocno spowalniac albo zatrzymywac eksport.
@@ -867,6 +1012,26 @@ try {
             $mergedDoc.SaveAs2([string]$debugDocxPath, $formatDocx)
           } catch {
             Write-Log "warn" "Nie udalo sie zapisac roboczego DOCX przed PDF." ([pscustomobject]@{ row = $rowNumber; error = $_.Exception.Message })
+          }
+        }
+
+        # Zapis do Worda (.docx) obok PDF - wlaczany checkboxem "Zapisuj takze do Word".
+        # Zapisujemy DOCX PRZED PDF, zeby SaveAs2 do PDF nie zmienil formatu dokumentu.
+        if ($SaveWord) {
+          try {
+            $docxPath = Unique-Path $OutputDir $baseName ".docx"
+            $docxPathString = [string]$docxPath
+            Write-Log "info" "Zapisuje takze DOCX obok PDF." ([pscustomobject]@{ row = $rowNumber; docx = $docxPathString })
+            $mergedDoc.SaveAs2($docxPathString, [int]16)
+            $created.Add([pscustomobject]@{
+              row = $rowNumber
+              address = $address
+              file = [System.IO.Path]::GetFileName($docxPath)
+              path = $docxPath
+            }) | Out-Null
+            Write-Event "export-done" "Word zapisany: $($address)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($docxPath) })
+          } catch {
+            Write-Log "warn" "Nie udalo sie zapisac DOCX obok PDF." ([pscustomobject]@{ row = $rowNumber; error = $_.Exception.Message })
           }
         }
 
@@ -964,6 +1129,18 @@ try {
 
         $merged = $word.ActiveDocument
         Write-Event "export-start" "Eksportuje do PDF: $($address). To moze potrwac nawet kilka minut przy pierwszym pliku." ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; pdf = $pdfPath })
+        if ($SaveWord) {
+          try {
+            $docxPath = Unique-Path $OutputDir $baseName ".docx"
+            $docxPathString = [string]$docxPath
+            Write-Log "info" "Zapisuje takze DOCX obok PDF." ([pscustomobject]@{ row = $rowNumber; docx = $docxPathString })
+            $merged.SaveAs2($docxPathString, [int]16)
+            $created.Add([pscustomobject]@{ row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($docxPath); path = $docxPath }) | Out-Null
+            Write-Event "export-done" "Word zapisany: $($address)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($docxPath) })
+          } catch {
+            Write-Log "warn" "Nie udalo sie zapisac DOCX obok PDF." ([pscustomobject]@{ row = $rowNumber; error = $_.Exception.Message })
+          }
+        }
         $formatPdf = [int]17
         $pdfPathString = [string]$pdfPath
         Write-Log "info" "Zapisuje PDF metoda SaveAs2 bez ref." ([pscustomobject]@{ row = $rowNumber; pdf = $pdfPathString })

@@ -34,6 +34,7 @@ const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localReq
 const { createTelemetryService } = require('../../lib/telemetry');
 const { estimateManualMs } = require('../../lib/timeBenchmarks');
 const { detectMailMergeSheetBinding, getDocxModifiedTime } = require('./src/mailMergeSheetBinding');
+const { detectImageMergeFields, summarizeImages, loadManifest, saveManifest, buildManifestFromDisk } = require('./src/imageMatching');
 const AdmZip = require('adm-zip');
 
 const app = express();
@@ -107,6 +108,8 @@ function persistJobsIndex() {
       outputDir: job.outputDir,
       logPath: job.logPath,
       debugJsonPath: job.debugJsonPath,
+      imageRoot: job.imageRoot || null,
+      imageManifestPath: job.imageManifestPath || null,
       template: job.template,
       templateGroups: job.templateGroups,
       excel: job.excel,
@@ -138,6 +141,8 @@ function restoreJobsIndex() {
         outputDir: item.outputDir,
         logPath: item.logPath || path.join(item.outputDir, 'log.txt'),
         debugJsonPath: item.debugJsonPath || path.join(item.outputDir, 'debug-events.jsonl'),
+        imageRoot: item.imageRoot || null,
+        imageManifestPath: item.imageManifestPath || null,
         status: interrupted ? 'interrupted' : (item.status || 'restored'),
         interruptedReason: interrupted ? 'process-restarted' : item.interruptedReason,
         progress: item.progress || { phase: 'restored', percent: 100, message: 'Zadanie odtworzone po restarcie.', updatedAt: nowIso() },
@@ -198,6 +203,57 @@ function validateOfficeFile(file, expectedExts) {
   if (!header.startsWith('PK')) throw new Error(`Plik ${original} nie wygląda jak poprawny ${expectedExts.join('/')} .`);
 }
 
+function validateImageFile(file) {
+  const original = decodeOriginalName(file.originalname || '');
+  const ext = path.extname(original).toLowerCase();
+  if (!['.jpg', '.jpeg', '.png'].includes(ext)) throw new Error(`Nieprawidłowy plik: ${original}. Akceptowane są tylko JPG i PNG.`);
+  const header = readHeader(file.path, 12);
+  const isJpeg = header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF;
+  const isPng = header[0] === 0x89 && header[1] === 0x50 && header[2] === 0x4E && header[3] === 0x47;
+  if (!isJpeg && !isPng) throw new Error(`Plik ${original} nie wygląda na poprawne zdjęcie JPG/PNG.`);
+}
+
+function parseImageRelativePath(relPath) {
+  const parts = String(relPath || '').split(/[\\/]/).filter(Boolean);
+  if (parts.length < 2) return { addressFolder: parts[0] || '', originalName: '' };
+  return { addressFolder: parts[1], originalName: parts[parts.length - 1] };
+}
+
+async function storeUploadedImages(jobId, files, imagePaths) {
+  const imageRoot = path.join(UPLOAD_DIR, jobId, 'images');
+  await fsp.rm(imageRoot, { recursive: true, force: true }).catch(() => {});
+  await fsp.mkdir(imageRoot, { recursive: true });
+  const manifest = { root: imageRoot, files: [] };
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    validateImageFile(file);
+    const relPath = imagePaths[i] || file.originalname;
+    const parsed = parseImageRelativePath(relPath);
+    if (!parsed.addressFolder || !parsed.originalName) {
+      await fsp.rm(file.path, { force: true }).catch(() => {});
+      continue;
+    }
+    const destFolder = path.join(imageRoot, parsed.addressFolder);
+    await fsp.mkdir(destFolder, { recursive: true });
+    const ext = path.extname(parsed.originalName).toLowerCase();
+    const base = safeName(parsed.originalName.replace(ext, ''), 'zdjecie');
+    const storedName = `${Date.now()}-${crypto.randomUUID()}-${base}${ext}`;
+    const destPath = path.join(destFolder, storedName);
+    await fsp.rename(file.path, destPath);
+    manifest.files.push({
+      relativePath: path.join(parsed.addressFolder, storedName),
+      addressFolder: parsed.addressFolder,
+      storedPath: destPath,
+      originalName: storedName,
+    });
+  }
+
+  const manifestPath = path.join(UPLOAD_DIR, jobId, 'images-manifest.json');
+  saveManifest(manifestPath, manifest);
+  return { manifest, manifestPath, imageRoot };
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
@@ -214,12 +270,13 @@ const upload = multer({
     const ext = path.extname(decodeOriginalName(file.originalname || '')).toLowerCase();
     if ((file.fieldname === 'template' || file.fieldname === 'templates') && (ext === '.docx' || ext === '.pdf')) return cb(null, true);
     if (file.fieldname === 'excel' && ext === '.xlsx') return cb(null, true);
-    return cb(new Error('Wybierz szablony DOCX i tabelę XLSX.'));
+    if (file.fieldname === 'images' && (ext === '.jpg' || ext === '.jpeg' || ext === '.png')) return cb(null, true);
+    return cb(new Error('Wybierz szablony DOCX, tabelę XLSX lub zdjęcia JPG/PNG.'));
   }
 });
 
 async function purgeJobArtifacts(job) {
-  const paths = [job?.outputDir, job?.template?.path, job?.excel?.path].filter(Boolean);
+  const paths = [job?.outputDir, job?.template?.path, job?.excel?.path, job?.imageRoot].filter(Boolean);
   for (const p of paths) await fsp.rm(p, { recursive: true, force: true }).catch(() => {});
 }
 
@@ -854,6 +911,7 @@ async function startGeneration(job, options) {
   const rowsCsv = selectedRows.join(',');
   const visibleWord = options.visibleWord === true;
   const debugMode = options.debugMode === true;
+  const saveWord = options.saveWord === true;
   const filePrefix = cleanFilePrefix(options.filePrefix || '');
 
   const allRows = selectedSheet.rows || [];
@@ -888,6 +946,7 @@ async function startGeneration(job, options) {
     outputDir: job.outputDir,
     visibleWord,
     debugMode,
+    saveWord,
     filePrefix,
     textReplacements: textReplacements.map(r => ({ find: r.find, column: r.column, occurrence: r.occurrence || 'all' }))
   });
@@ -907,6 +966,8 @@ async function startGeneration(job, options) {
   if (rowsCsv) args.push('-RowsCsv', rowsCsv);
   if (visibleWord) args.push('-VisibleWord');
   if (debugMode) args.push('-DebugMode');
+  if (saveWord) args.push('-SaveWord');
+  if (job.imageManifestPath && fs.existsSync(job.imageManifestPath)) args.push('-ImageManifestJson', job.imageManifestPath);
 
   const exe = process.env.POWERSHELL_EXE || 'powershell.exe';
   const psArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_SCRIPT, ...args];
@@ -1207,6 +1268,61 @@ app.get('/api/jobs/:jobId/sheets/:sheetName/rows', (req, res) => {
   res.json({ ok: true, totalRows: sheet.rows.length, offset, limit, rows: sheet.rows.slice(offset, offset + limit) });
 });
 
+app.post('/api/images/:jobId', heavyJobLimiter, upload.array('images', 400), async (req, res) => {
+  const job = getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania. Wczytaj pliki ponownie.' });
+  try {
+    const files = req.files || [];
+    let imagePaths = [];
+    try { imagePaths = JSON.parse(req.body?.imagePaths || '[]'); } catch (_) { imagePaths = []; }
+    if (!files.length) return res.status(400).json({ ok: false, message: 'Nie wybrano żadnych zdjęć.' });
+    const { manifest, manifestPath, imageRoot } = await storeUploadedImages(job.id, files, imagePaths);
+    job.imageRoot = imageRoot;
+    job.imageManifestPath = manifestPath;
+    persistJobsIndex();
+    appendLog(job, 'info', 'Wczytano zdjęcia.', { count: manifest.files.length });
+    res.json({ ok: true, count: manifest.files.length });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || 'Błąd zapisu zdjęć.' });
+  }
+});
+
+app.post('/api/images/:jobId/summary', async (req, res) => {
+  const job = getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania. Wczytaj pliki ponownie.' });
+  try {
+    const body = req.body || {};
+    const sheetName = String(body.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
+    const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
+    const addressColumn = String(body.addressColumn || guessAddressColumn(selectedSheet?.columns || [])).trim() || 'Adres';
+    const selectedRows = Array.isArray(body.selectedRows) ? body.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
+    const allRows = selectedSheet.rows || [];
+    const rowsForMerge = selectedRows.length ? allRows.filter(row => selectedRows.includes(Number(row._record))) : allRows;
+    const addresses = rowsForMerge.map(row => row[addressColumn]).filter(Boolean);
+
+    const selectedGroups = Array.isArray(body.selectedGroups) ? body.selectedGroups.filter(Boolean) : null;
+    let taskTemplates = [];
+    if (selectedGroups && selectedGroups.length && job.templateGroups && job.templateGroups.length) {
+      const built = buildGenerationTasks(job, selectedGroups, sheetName, selectedSheet, selectedRows);
+      taskTemplates = built.tasks.map(t => t.templatePath);
+    } else {
+      taskTemplates = [job.template.path];
+    }
+
+    const fieldsSet = new Set();
+    for (const templatePath of taskTemplates) {
+      const fields = detectImageMergeFields(templatePath);
+      fields.forEach(f => fieldsSet.add(f));
+    }
+
+    const manifest = loadManifest(job.imageManifestPath);
+    const summary = summarizeImages(addresses, Array.from(fieldsSet), manifest);
+    res.json({ ok: true, ...summary });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || 'Błąd podsumowania zdjęć.' });
+  }
+});
+
 app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
   const job = getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania. Wczytaj pliki ponownie.' });
@@ -1233,6 +1349,26 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
       if (!tasks.length) return res.status(400).json({ ok: false, message: `Nie znaleziono żadnych szablonów korespondencji seryjnej dla arkusza „${sheetName}” wśród wybranych typów dokumentów.` });
     } else {
       tasks = [{ templatePath: job.template.path, templateOriginalName: job.template.originalName, rowRecords: selectedRowRecords.length ? selectedRowRecords : (selectedSheet.rows || []).map(r => Number(r._record)) }];
+    }
+
+    const addressColumn = String(body.addressColumn || guessAddressColumn(selectedSheet?.columns || [])).trim() || 'Adres';
+    const imageFields = new Set();
+    for (const task of tasks) {
+      const fields = detectImageMergeFields(task.templatePath);
+      fields.forEach(f => imageFields.add(f));
+    }
+    if (imageFields.size > 0) {
+      const manifest = loadManifest(job.imageManifestPath);
+      const rowsForMerge = selectedRowRecords.length ? selectedSheet.rows.filter(row => selectedRowRecords.includes(Number(row._record))) : selectedSheet.rows;
+      const addresses = rowsForMerge.map(row => row[addressColumn]).filter(Boolean);
+      const summary = summarizeImages(addresses, Array.from(imageFields), manifest);
+      if (summary.status !== 'complete') {
+        return res.status(400).json({
+          ok: false,
+          message: `Szablon wymaga zdjęć, ale nie wszystkie adresy mają kompletne dopasowanie. Brakuje/niejednoznacznych: ${summary.missing + summary.ambiguous} z ${summary.total}.`,
+          summary
+        });
+      }
     }
 
     // Audyt rozdz. 12, P0/P1: kolejne "Generuj" na tym samym jobId pisalo do
@@ -1322,7 +1458,10 @@ app.get('/api/job/:jobId', (req, res) => {
 function listJobPdfFiles(job) {
   if (!job || !job.outputDir || !fs.existsSync(job.outputDir)) return [];
   return fs.readdirSync(job.outputDir)
-    .filter(file => /\.pdf$/i.test(file))
+    // Do paczki ZIP bierzemy zarowno PDF-y, jak i pliki Word (.docx) zapisane
+    // obok, gdy uzytkownik zaznaczyl "Zapisuj takze do Word". Robocze
+    // *.debug.docx (tryb debug) sa celowo pomijane - to nie jest wynik.
+    .filter(file => (/\.pdf$/i.test(file) || /\.docx$/i.test(file)) && !/\.debug\.docx$/i.test(file))
     .map(file => ({ file, fullPath: path.join(job.outputDir, file) }))
     .filter(item => fs.existsSync(item.fullPath));
 }
@@ -1419,7 +1558,10 @@ app.get('/api/download/:jobId/:file', (req, res) => {
   const fullPath = path.join(job.outputDir, file);
   const rel = path.relative(job.outputDir, fullPath);
   if (rel.startsWith('..') || path.isAbsolute(rel) || !fs.existsSync(fullPath)) return res.status(404).send('Nie znaleziono pliku.');
-  res.setHeader('Content-Type', 'application/pdf');
+  const contentType = /\.docx$/i.test(file)
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : 'application/pdf';
+  res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Disposition', contentDispositionHeader('attachment', file));
   res.sendFile(fullPath);
 });

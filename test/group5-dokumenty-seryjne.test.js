@@ -138,6 +138,70 @@ test('frontend pobiera wszystkie strony rekordów przed renderowaniem', async ()
   assert.match(source, /const limit = 500/);
 });
 
+test('obsluga zdjec: backend ma endpointy uploadu, podsumowania i walidacji w generate', async () => {
+  const source = await fsp.readFile(serverPath, 'utf8');
+  assert.match(source, /app\.post\('\/api\/images\/:jobId'/);
+  assert.match(source, /app\.post\('\/api\/images\/:jobId\/summary'/);
+  const generateRoute = source.match(/app\.post\('\/api\/generate\/:jobId'[\s\S]*?\n\}\);/);
+  assert.ok(generateRoute, 'nie znaleziono trasy /api/generate/:jobId');
+  assert.match(generateRoute[0], /detectImageMergeFields\(task\.templatePath\)/);
+  assert.match(generateRoute[0], /summarizeImages\(/);
+  assert.match(generateRoute[0], /summary\.status !== 'complete'/);
+  assert.match(source, /'-ImageManifestJson', job\.imageManifestPath/);
+});
+
+test('saveWord: opcja "Zapisuj takze do Word (.docx)" jest przekazywana przez UI do PowerShell i zwracana w ZIP-ie', async () => {
+  const serverSource = await fsp.readFile(serverPath, 'utf8');
+  assert.match(serverSource, /const saveWord = options\.saveWord === true;/);
+  assert.match(serverSource, /if \(saveWord\) args\.push\('-SaveWord'\);/);
+  assert.ok(serverSource.includes('(/\\.pdf$/i.test(file) || /\\.docx$/i.test(file))'));
+  assert.ok(serverSource.includes("contentType = /\\.docx$/i.test(file)"));
+
+  const inlineSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'public', 'inline-1.js'), 'utf8');
+  assert.ok(inlineSource.includes("saveWord: $('saveWord') ? $('saveWord').checked : false"));
+
+  const htmlSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'public', 'index.html'), 'utf8');
+  assert.ok(htmlSource.includes('id="saveWord"'));
+  assert.ok(htmlSource.includes('Zapisuj także do Word (.docx)'));
+
+  const psSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1'), 'utf8');
+  assert.ok(psSource.includes('[switch]$SaveWord'));
+  assert.ok(psSource.includes('if ($SaveWord)'));
+});
+
+test('obsluga zdjec: PowerShell wczytuje manifest i wstawia obrazy przed tekstem', async () => {
+  const psPath = path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1');
+  const source = await fsp.readFile(psPath, 'utf8');
+  assert.match(source, /\[string\]\$ImageManifestJson/);
+  assert.match(source, /function Load-ImageManifest/);
+  assert.match(source, /function Replace-AllImageMergeFields/);
+  assert.match(source, /Replace-AllImageMergeFields \$mergedDoc \$record \$imageFieldDebug/);
+  assert.match(source, /\$fieldDebug = Replace-AllMergeFields \$mergedDoc \$record/);
+  const indexImage = source.indexOf('Replace-AllImageMergeFields $mergedDoc $record $imageFieldDebug');
+  const indexMerge = source.indexOf('$fieldDebug = Replace-AllMergeFields $mergedDoc $record');
+  assert.ok(indexImage >= 0 && indexMerge >= 0 && indexImage < indexMerge, 'obrazy musza byc wstawiane przed polami tekstowymi');
+});
+
+test('imageMatching.js: dopasowanie zdjec do adresow i pol szablonu', async () => {
+  const im = require('../apps/dokumenty-seryjne/src/imageMatching.js');
+  assert.strictEqual(im.normalizeAddress('Krążkowice 14A'), 'krazkowice 14a');
+
+  const manifest = {
+    root: '/tmp',
+    files: [
+      { relativePath: 'Adresy/Kraszkowice 14/1.jpg', addressFolder: 'Kraszkowice 14', storedPath: '/tmp/1.jpg', originalName: '1.jpg' },
+      { relativePath: 'Adresy/Kraszkowice 14/Zdjecie_2.png', addressFolder: 'Kraszkowice 14', storedPath: '/tmp/2.png', originalName: 'Zdjecie_2.png' }
+    ]
+  };
+  const resolved = im.resolveImagesForAddress('Kraszkowice 14', ['Zdjecie_1', 'Zdjecie_2'], manifest);
+  assert.strictEqual(resolved.status, 'complete');
+  assert.ok(resolved.matches.Zdjecie_1);
+  assert.ok(resolved.matches.Zdjecie_2);
+
+  const missing = im.resolveImagesForAddress('Kraszkowice 14', ['Zdjecie_1'], { root: '/tmp', files: [] });
+  assert.strictEqual(missing.status, 'missing');
+});
+
 // =====================================================================
 // Realny przypadek (Wierzchlas PV, 2026-08-19): eksport z Google Sheets
 // zostawia w pliku ukryte, technicznie nazwane arkusze (np. losowy ID) -

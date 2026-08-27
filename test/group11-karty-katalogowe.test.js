@@ -29,6 +29,7 @@ const {
   zbudujIndeksSchematow,
   znajdzSchemat,
   rozpoznajFaze,
+  zbierzPliki,
   zbierzPlikiPdf,
   dopasujISkopiujDodatek,
   dopasujFolderPoAdresie,
@@ -863,6 +864,27 @@ test('zbierzPlikiPdf: rekurencyjnie zbiera .pdf (dowolna glebokosc), ignoruje in
   const pliki = await zbierzPlikiPdf(dir);
   assert.deepEqual(pliki.map(p => p.nazwa).sort(), ['a.pdf', 'b.pdf']);
   assert.ok(pliki.every(p => p.nazwaBezRozszerzenia === p.nazwa.slice(0, -4)));
+});
+
+test('karty-katalogowe: dla dodatkow (audyty/dokumenty seryjne/dobory) zbieramy zarowno .pdf jak i .docx', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kk-mixed-scan-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(dir, 'adres_PV.pdf'), 'x');
+  await fsp.writeFile(path.join(dir, 'adres_PV.docx'), 'x');
+  await fsp.writeFile(path.join(dir, 'readme.txt'), 'x');
+
+  const pliki = await zbierzPliki(dir, ['.pdf', '.docx']);
+  assert.deepEqual(pliki.map(p => p.nazwa).sort(), ['adres_PV.docx', 'adres_PV.pdf']);
+  assert.ok(pliki.every(p => p.nazwaBezRozszerzenia === 'adres_PV'));
+});
+
+test('znajdzPlikiPoAdresie: rozpoznaje adres na koncu nazwy pliku .docx mimo prefixu i separatora " - "', async (t) => {
+  const nazwa = 'Wzorzec_seryjny_Wierzchlas gotowy (1) - Bytom Szymały 194_9 _ Mierzyce 23c';
+  const pliki = [{ nazwa: nazwa + '.docx', nazwaBezRozszerzenia: nazwa, sciezka: '/tmp/' + nazwa + '.docx' }];
+  const adres = 'Bytom Szymały 194/9 Mierzyce 23c';
+  const trafienia = znajdzPlikiPoAdresie(adres, pliki);
+  assert.equal(trafienia.length, 1, `oczekiwano 1 trafienia dla adresu "${adres}", otrzymano ${trafienia.length}`);
+  assert.equal(trafienia[0].nazwa, nazwa + '.docx');
 });
 
 test('dopasujISkopiujDodatek: brak/niejednoznaczne/juz-jest/podglad/kopiowanie', async (t) => {
