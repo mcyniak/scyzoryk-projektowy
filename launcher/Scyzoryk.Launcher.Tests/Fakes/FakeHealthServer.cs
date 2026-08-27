@@ -16,12 +16,16 @@ internal sealed class FakeHealthServer : IDisposable
 
     public int Port { get; }
     public int StatusCodeToReturn { get; set; } = 200;
-    public string HealthUrl => $"http://localhost:{Port}/api/health";
+    // Uzywamy literalnego 127.0.0.1 zamiast "localhost" - na niektorych
+    // runnerach CI rozwiazywanie "localhost" do IPv4/IPv6 dual-stack bywa
+    // zauwazalnie wolniejsze lub nieterministyczne, co powodowalo flaky
+    // fail testow HealthChecker (zlapane na zywo przy release v1.3.3).
+    public string HealthUrl => $"http://127.0.0.1:{Port}/api/health";
 
     public FakeHealthServer()
     {
         Port = GetFreePort();
-        _listener.Prefixes.Add($"http://localhost:{Port}/");
+        _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
         _listener.Start();
         _ = Task.Run(AcceptLoopAsync);
     }
