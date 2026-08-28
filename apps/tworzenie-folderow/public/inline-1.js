@@ -78,6 +78,62 @@ document.querySelector('#excelFile').addEventListener('change', () => maybeLoadP
 document.querySelector('#investmentFolder').addEventListener('change', () => maybeLoadPreview());
 document.querySelector('#investmentFolder').addEventListener('blur', () => maybeLoadPreview());
 
+// ---- Drugi tryb: "same foldery z adresow" (2026-08-28) ----------------------
+
+let simpleSheets = null;
+
+function currentMode() {
+  const checked = document.querySelector('input[name="tfMode"]:checked');
+  return checked ? checked.value : 'structure';
+}
+
+document.querySelectorAll('input[name="tfMode"]').forEach(radio => {
+  radio.addEventListener('change', () => {
+    simpleSheets = null;
+    const simple = currentMode() === 'simple';
+    document.querySelector('#pathHelp').textContent = simple
+      ? 'Folder docelowy musi JUŻ istnieć i być PUSTY - w środku powstaną same foldery z adresami.'
+      : 'Folder, w którym leży już skrót .gsheet do tabeli adresowej tej inwestycji.';
+    document.querySelector('#investmentFolder').placeholder = simple
+      ? 'np. G:\\Dyski współdzielone\\INWESTYCJE_3\\WIERZCHLAS 2026 - PV\\Wierzchlas_adresy_druk_powykonawcza'
+      : 'np. G:\\Dyski współdzielone\\Dział Projektowy Sanitarny\\...\\17. Kamieńsk';
+    document.querySelector('#simpleSheetBox').classList.toggle('hidden', !simple);
+    resetPlanUi();
+    maybeLoadPreview();
+  });
+});
+
+document.querySelector('#simpleSheet').addEventListener('change', () => {
+  const select = document.querySelector('#simpleSheet');
+  document.querySelector('#createBtn').disabled = !select.value;
+});
+
+async function loadSimplePreview() {
+  const file = currentFile();
+  if (!file) return;
+  if (isGoogleSheetShortcut(file)) { showTopNotice('Wybrano plik .gsheet - wyeksportuj go do .xlsx i wybierz pobrany plik.'); return; }
+  if (!isRealExcelFile(file)) { showTopNotice('Wybrany plik nie jest Excelem. Wybierz plik z końcówką .xlsx.'); return; }
+  const data = new FormData();
+  data.append('excel', file);
+  try {
+    const res = await fetch('/api/simple-preview', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
+    const json = await res.json().catch(() => null);
+    if (!json || !json.ok) { showTopNotice(json?.error || 'Nie udało się wczytać arkuszy.'); return; }
+    simpleSheets = json;
+    const select = document.querySelector('#simpleSheet');
+    select.innerHTML = json.sheets.map(s =>
+      `<option value="${escapeHtml(s.sheetName)}"${s.sheetName === json.defaultSheet ? ' selected' : ''}>${escapeHtml(s.sheetName)}${s.headerFound ? ` (${s.addressCount} adresów)` : ' - brak kolumny Adres'}</option>`
+    ).join('');
+    document.querySelector('#simpleSheetBox').classList.remove('hidden');
+    const summary = document.querySelector('#sheetSummary');
+    summary.classList.remove('hidden');
+    summary.innerHTML = `<div class="sheet-pill">Tryb "same foldery z adresów": wybierz arkusz, wskaż PUSTY folder docelowy i kliknij "Utwórz foldery".</div>`;
+    document.querySelector('#createBtn').disabled = !select.value;
+  } catch (error) {
+    showTopNotice(String(error.message || error));
+  }
+}
+
 function currentFile() {
   const input = document.querySelector('#excelFile');
   return input.files && input.files[0];
@@ -123,7 +179,9 @@ async function maybeLoadPreview() {
   resetPlanUi();
   const investmentFolder = document.querySelector('#investmentFolder').value.trim();
   const file = currentFile();
-  if (!investmentFolder || !file) return;
+  if (!file) return;
+  if (currentMode() === 'simple') return loadSimplePreview();
+  if (!investmentFolder) return;
 
   if (isGoogleSheetShortcut(file)) {
     showTopNotice('Wybrano plik .gsheet, czyli skrót do Google Sheets, a nie prawdziwy Excel. Otwórz ten arkusz w Google Sheets i wybierz: Plik → Pobierz → Microsoft Excel (.xlsx), a potem wskaż pobrany plik .xlsx.');
@@ -187,11 +245,13 @@ function renderPlan(json) {
 
 document.querySelector('#planForm').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!lastPlan) return;
-
-  const investmentFolder = document.querySelector('#investmentFolder').value.trim();
   const file = currentFile();
-  if (!investmentFolder || !file) return;
+  if (!file) return;
+  if (currentMode() === 'simple') return submitSimple(file);
+
+  if (!lastPlan) return;
+  const investmentFolder = document.querySelector('#investmentFolder').value.trim();
+  if (!investmentFolder) return;
 
   if (!confirm(`Utworzyć ${lastPlan.toCreate} folderów w:\n${investmentFolder}\n\nJuż istniejące foldery zostaną pominięte, nic nie zostanie nadpisane.`)) return;
 
@@ -224,6 +284,48 @@ document.querySelector('#planForm').addEventListener('submit', async (event) => 
     btn.textContent = 'Utwórz foldery';
   }
 });
+
+async function submitSimple(file) {
+  const targetFolder = document.querySelector('#investmentFolder').value.trim();
+  const sheetName = document.querySelector('#simpleSheet').value;
+  if (!targetFolder) return showTopNotice('Podaj ścieżkę do folderu docelowego (musi być pusty).');
+  if (!sheetName) return showTopNotice('Wybierz arkusz z adresami.');
+
+  if (!confirm(`Utworzyć foldery z adresów arkusza "${sheetName}" w:\n${targetFolder}\n\nFolder docelowy musi być pusty - jeśli coś już w nim jest, operacja zostanie odrzucona.`)) return;
+
+  const btn = document.querySelector('#createBtn');
+  btn.disabled = true;
+  btn.textContent = 'Tworzę...';
+
+  const data = new FormData();
+  data.append('excel', file);
+  data.append('targetFolder', targetFolder);
+  data.append('sheetName', sheetName);
+
+  try {
+    const res = await fetch('/api/simple-create', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
+    const json = await res.json().catch(() => null);
+    if (!json || !json.ok) {
+      showTopNotice(json?.error || 'Nie udało się utworzyć folderów.');
+      btn.disabled = false;
+      btn.textContent = 'Utwórz foldery';
+      return;
+    }
+    const extras = [];
+    if (json.duplicates) extras.push(`${json.duplicates} duplikatów pominięto`);
+    if (json.skippedEmpty) extras.push(`${json.skippedEmpty} pustych wierszy pominięto`);
+    document.querySelector('#resultBox').classList.remove('hidden');
+    document.querySelector('#resultInfo').innerHTML =
+      `Utworzono <strong>${json.created.length}</strong> folderów z adresów (arkusz "${escapeHtml(json.sheetName)}") w <code>${escapeHtml(json.targetFolder)}</code>` +
+      (extras.length ? ` <br><span class="small">${escapeHtml(extras.join(' · '))}.</span>` : '.');
+    document.querySelector('#resultBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    btn.textContent = 'Gotowe ✓';
+  } catch (error) {
+    showTopNotice(String(error.message || error));
+    btn.disabled = false;
+    btn.textContent = 'Utwórz foldery';
+  }
+}
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));

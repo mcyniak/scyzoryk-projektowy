@@ -15,8 +15,9 @@ const path = require('path');
 const { setupProcessDiagnostics, scheduleCleanup } = require('../../lib/hardening');
 const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const { browseFolder } = require('../../lib/folderBrowse');
-const { readTabelaAdresowa } = require('./src/excel.js');
+const { readTabelaAdresowa, readAddressSheets } = require('./src/excel.js');
 const { buildFolderPlan } = require('./src/folderPlan.js');
+const { buildSimpleFolderNames } = require('./src/simplePlan.js');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 const { createTelemetryService } = require('../../lib/telemetry');
 const { estimateManualMs } = require('../../lib/timeBenchmarks');
@@ -244,6 +245,99 @@ app.post('/api/create', (req, res, next) => {
       durationMs: Date.now() - operationStartedAt,
       success: false,
       errorCode: 'create-failed'
+    });
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  } finally {
+    if (req.file?.path) fsp.unlink(req.file.path).catch(() => {});
+  }
+});
+
+// =====================================================================
+// DRUGI TRYB ("same foldery z adresow", 2026-08-28): wybor PUSTEGO folderu
+// docelowego + dowolna tabela .xlsx + wybor arkusza -> plaskie foldery
+// nazwane adresami (bez struktury WM/pompy/kolektory/kotly). Istniejace
+// endpointy /api/preview i /api/create sa NIEZMIENIONE - pipeline ich uzywa.
+// =====================================================================
+
+function uploadMiddleware(field) {
+  return (req, res, next) => {
+    upload.single(field)(req, res, error => {
+      if (error) return res.status(400).json({ ok: false, error: String(error?.message || error) });
+      next();
+    });
+  };
+}
+
+app.post('/api/simple-preview', uploadMiddleware('excel'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
+  try {
+    await validateXlsxFile(req.file);
+    const sheets = await readAddressSheets(req.file.path);
+    const usable = sheets.filter(s => s.headerFound);
+    if (!usable.length) {
+      return res.status(400).json({ ok: false, error: 'W żadnym arkuszu nie znaleziono kolumny "Adres". Ta tabela nie nadaje się do tego trybu.' });
+    }
+    res.json({
+      ok: true,
+      sheets: sheets.map(s => ({ sheetName: s.sheetName, addressCount: s.addresses.length, headerFound: s.headerFound })),
+      defaultSheet: usable.find(s => s.addresses.length > 0)?.sheetName || usable[0].sheetName
+    });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: String(error?.message || error) });
+  } finally {
+    if (req.file?.path) fsp.unlink(req.file.path).catch(() => {});
+  }
+});
+
+app.post('/api/simple-create', uploadMiddleware('excel'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'Nie przesłano pliku Excel.' });
+  const operationStartedAt = Date.now();
+  try {
+    const targetFolder = cleanText(req.body.targetFolder, 500);
+    if (!targetFolder) throw new Error('Podaj ścieżkę do folderu docelowego.');
+    if (!fs.existsSync(targetFolder) || !fs.statSync(targetFolder).isDirectory()) {
+      throw new Error(`Folder docelowy nie istnieje: ${targetFolder}. Utwórz go najpierw (ma być pusty).`);
+    }
+    const istniejace = await fsp.readdir(targetFolder);
+    if (istniejace.length > 0) {
+      throw new Error(`Folder docelowy musi być pusty - w środku znaleziono ${istniejace.length} elementów: ${targetFolder}.`);
+    }
+    const sheetName = cleanText(req.body.sheetName, 300);
+    await validateXlsxFile(req.file);
+    const sheets = await readAddressSheets(req.file.path);
+    const chosen = sheets.find(s => s.sheetName === sheetName);
+    if (!chosen || !chosen.headerFound || chosen.addresses.length === 0) {
+      throw new Error(`W arkuszu "${sheetName}" nie znaleziono kolumny "Adres" ani żadnych adresów.`);
+    }
+    const { folders, skippedEmpty, duplicates } = buildSimpleFolderNames(chosen.addresses);
+    if (!folders.length) throw new Error('Z tego arkusza nie wychodzi żaden folder - brak adresów po sanityzacji.');
+
+    const created = [];
+    const alreadyExisted = [];
+    const rejected = [];
+    for (const name of folders) {
+      const fullPath = path.join(targetFolder, name);
+      if (!isPathInsideFolder(fullPath, targetFolder)) { rejected.push(name); continue; }
+      if (fs.existsSync(fullPath)) { alreadyExisted.push(name); continue; }
+      await fsp.mkdir(fullPath, { recursive: true });
+      created.push(name);
+    }
+    const durationMs = Date.now() - operationStartedAt;
+    telemetryService.recordEvent({
+      tool: 'tworzenie-folderow',
+      eventType: 'completed',
+      durationMs,
+      estimatedManualMs: estimateManualMs('tworzenie-folderow', created.length),
+      success: true
+    });
+    res.json({ ok: true, targetFolder, sheetName, created, alreadyExisted, rejected, skippedEmpty, duplicates, total: folders.length });
+  } catch (error) {
+    telemetryService.recordEvent({
+      tool: 'tworzenie-folderow',
+      eventType: 'failed',
+      durationMs: Date.now() - operationStartedAt,
+      success: false,
+      errorCode: 'simple-create-failed'
     });
     res.status(400).json({ ok: false, error: String(error?.message || error) });
   } finally {

@@ -15,8 +15,9 @@ const path = require('node:path');
 // uzywa do odczytu (audyt 2026-08-20: migracja na read-excel-file, patrz
 // komentarz w src/excel.js).
 const XLSX = require('../apps/ocr-audytow/node_modules/xlsx');
-const { readTabelaAdresowa, classifySheetType, normalizeHeader, isAirSourcePump, isGroundSourcePump } = require('../apps/tworzenie-folderow/src/excel.js');
+const { readTabelaAdresowa, readAddressSheets, classifySheetType, normalizeHeader, isAirSourcePump, isGroundSourcePump } = require('../apps/tworzenie-folderow/src/excel.js');
 const { buildFolderPlan, safeSegment, distinctGminas } = require('../apps/tworzenie-folderow/src/folderPlan.js');
+const { buildSimpleFolderNames } = require('../apps/tworzenie-folderow/src/simplePlan.js');
 
 async function napiszArkusze(sheets) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'tf-xlsx-'));
@@ -250,4 +251,60 @@ test('buildFolderPlan: deduplikuje identyczne sciezki (np. dwa wiersze z tym sam
     { lpOrId: '1', address: 'Ta sama', gmina: '', pumpType: 'grunt' }
   ]));
   assert.equal(plan.length, new Set(plan).size);
+});
+
+// =====================================================================
+// DRUGI TRYB ("same foldery z adresow", 2026-08-28)
+// =====================================================================
+
+test('readAddressSheets: zbiera adresy z KAZDEGO arkusza z kolumna "Adres", arkusz bez naglowka dostaje headerFound=false', async (t) => {
+  const { dir, file } = await napiszArkusze([
+    ['PV_ (filtr adresy z zipa)', [['LP', 'Adres', 'UID'], ['1', 'Przycłapy 11', 'X1'], ['2', '', 'X2'], ['3', 'Łaszew Rządowy 98', 'X3']]],
+    ['Notatki', [['cos innego, nie tabela adresowa']]]
+  ]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  const sheets = await readAddressSheets(file);
+  assert.equal(sheets.length, 2);
+
+  const pv = sheets.find(s => s.sheetName === 'PV_ (filtr adresy z zipa)');
+  assert.equal(pv.headerFound, true);
+  assert.deepEqual(pv.addresses, ['Przycłapy 11', 'Łaszew Rządowy 98'], 'pusty adres w komórce jest pomijany');
+
+  const notatki = sheets.find(s => s.sheetName === 'Notatki');
+  assert.equal(notatki.headerFound, false);
+  assert.deepEqual(notatki.addresses, []);
+});
+
+test('readAddressSheets: naglowek "adres" jest case-insensitive i moze byc nie w pierwszym wierszu', async (t) => {
+  const { dir, file } = await napiszArkusze([
+    ['Zestawienie', [['Raport gminy Wierzchlas'], ['', '', ''], ['lp', 'ADRES'], ['a', 'Adres A1']]]
+  ]);
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+
+  const sheets = await readAddressSheets(file);
+  assert.equal(sheets[0].headerFound, true);
+  assert.deepEqual(sheets[0].addresses, ['Adres A1']);
+});
+
+test('buildSimpleFolderNames: sanityzacja, deduplikacja case-insensitive, kolejnosc zachowana, liczniki', () => {
+  const result = buildSimpleFolderNames([
+    'Przycłapy 11',
+    'przycłapy 11',
+    '  Łaszew Rządowy 98  ',
+    '',
+    '   ',
+    '../../Windows',
+    'Przycłapy 11'
+  ]);
+  assert.deepEqual(result.folders, ['Przycłapy 11', 'Łaszew Rządowy 98', 'Windows']);
+  assert.equal(result.duplicates, 2, 'duplikat case-insensitive + powtorka');
+  assert.equal(result.skippedEmpty, 2);
+});
+
+test('buildSimpleFolderNames: pusta lista -> puste foldery, zero bledow', () => {
+  const result = buildSimpleFolderNames([]);
+  assert.deepEqual(result.folders, []);
+  assert.equal(result.duplicates, 0);
+  assert.equal(result.skippedEmpty, 0);
 });

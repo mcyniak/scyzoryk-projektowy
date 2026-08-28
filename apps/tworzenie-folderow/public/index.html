@@ -62,18 +62,36 @@
         </div>
       </div>
       <form id="planForm">
+        <div class="mode-switch" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:var(--space-4);">
+          <label style="display:flex;align-items:center;gap:8px;font-weight:600;">
+            <input type="radio" name="tfMode" value="structure" checked />
+            Struktura inwestycji (WM/pompy/kolektory/kotły)
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;font-weight:600;">
+            <input type="radio" name="tfMode" value="simple" />
+            Same foldery z adresów (dowolna tabela)
+          </label>
+        </div>
+
         <label>Ścieżka folderu inwestycji
           <div class="path-row">
             <input type="text" name="investmentFolder" id="investmentFolder" placeholder="np. G:\Dyski współdzielone\Dział Projektowy Sanitarny\...\17. Kamieńsk" required />
             <button type="button" class="secondary" id="browseFolderBtn">Przeglądaj...</button>
           </div>
-          <span class="field-help">Folder, w którym leży już skrót .gsheet do tabeli adresowej tej inwestycji.</span>
+          <span class="field-help" id="pathHelp">Folder, w którym leży już skrót .gsheet do tabeli adresowej tej inwestycji.</span>
         </label>
 
         <label style="margin-top: var(--space-4);">Tabela adresowa (.xlsx)
           <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
           <span class="field-help">Podgląd wczytuje się automatycznie po wybraniu pliku. Skrót .gsheet w folderze inwestycji trzeba samodzielnie wyeksportować do .xlsx (Plik → Pobierz → Microsoft Excel).</span>
         </label>
+
+        <div id="simpleSheetBox" class="hidden" style="margin-top: var(--space-4);">
+          <label>Arkusz z adresami
+            <select id="simpleSheet" style="width:100%;"></select>
+            <span class="field-help">Z każdego adresu w wybranym arkuszu powstanie jeden folder w folderze docelowym.</span>
+          </label>
+        </div>
 
         <div id="sheetSummary" class="sheet-summary hidden"></div>
 
