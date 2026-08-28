@@ -696,10 +696,22 @@ function Test-GalleryFieldName([string]$fieldName) {
 
 # Naturalny klucz sortowania: cyfry w nazwie padowane do 8 znakow, wiec
 # "1.jpg","2.jpg","10.jpg" sortuje jako 1,2,10 a nie 1,10,2.
+# Recznie przez Matches/StringBuilder - [Regex]::Replace z SKRYPTBLOKIEM jako
+# MatchEvaluator nie dziala w PowerShell 5.1 ("Nie zgodne typy argumentow";
+# delegate-cast scriptblock zadzialal dopiero w PS7 - real bug 2026-08-28).
 function Get-NaturalSortKey([string]$name) {
   $lower = [string]$name
   try { $lower = $lower.ToLowerInvariant() } catch {}
-  return [Regex]::Replace($lower, '(\d+)', { param($m) $m.Value.PadLeft(8, '0') })
+  $sb = New-Object System.Text.StringBuilder
+  $rx = [System.Text.RegularExpressions.Regex]'(\d+)'
+  $pos = 0
+  foreach ($m in $rx.Matches($lower)) {
+    if ($m.Index -gt $pos) { [void]$sb.Append($lower.Substring($pos, $m.Index - $pos)) }
+    [void]$sb.Append($m.Value.PadLeft(8, '0'))
+    $pos = $m.Index + $m.Length
+  }
+  if ($pos -lt $lower.Length) { [void]$sb.Append($lower.Substring($pos)) }
+  return $sb.ToString()
 }
 
 # Znajduje zdjecia adresu w manifeście (plan sect. 5/21):
@@ -715,15 +727,26 @@ function Find-PhotosForAddress([string]$address) {
   if ([string]::IsNullOrWhiteSpace($key)) { return $result }
 
   # Grupujemy po RAW nazwie folderu zeby wykryc niejednoznacznosc.
+  # UWAGA: zwykle tablice PS, NIE Generic.List - na czesci maszyn PS 5.1
+  # @(GenericList) rzuca "Nie zgodne typy argumentow" (real bug 2026-08-28).
   $groups = @{}
+  $firstGroupKey = $null
   foreach ($file in @($script:ImageManifest.files)) {
     if ($null -eq $file) { continue }
     $ext = [System.IO.Path]::GetExtension([string]$file.originalName).ToLowerInvariant()
     if (@('.jpg', '.jpeg', '.png') -notcontains $ext) { continue }
-    if ((Normalize-Address [string]$file.addressFolder) -ne $key) { continue }
+    # UWAGA: bez [string] casta! W trybie argumentow "Funkcja [string]$x.y"
+    # parsuje sie jako ([string]$x).y - rzutowanie lapie CALY obiekt, a
+    # ".addressFolder" ląduje na wyniku wywolania -> Normalizacja dostawala
+    # tekst CALEGO wpisu i dopasowanie adresu NIGDY nie trafialo
+    # ("Brak zdjec dla ..." przy pelnym manifeście; real bug 2026-08-28).
+    if ((Normalize-Address $file.addressFolder) -ne $key) { continue }
     $rawFolder = [string]$file.addressFolder
-    if (-not $groups.ContainsKey($rawFolder)) { $groups[$rawFolder] = New-Object System.Collections.Generic.List[object] }
-    $groups[$rawFolder].Add($file)
+    if (-not $groups.ContainsKey($rawFolder)) {
+      $groups[$rawFolder] = @()
+      if ($null -eq $firstGroupKey) { $firstGroupKey = $rawFolder }
+    }
+    $groups[$rawFolder] = @($groups[$rawFolder]) + $file
   }
 
   if ($groups.Count -eq 0) { return $result }
@@ -733,9 +756,12 @@ function Find-PhotosForAddress([string]$address) {
     return $result
   }
 
-  $files = @($groups.Values[0])
-  $sorted = $files | Sort-Object -Property @{ Expression = { Get-NaturalSortKey ([string]$_.originalName) } }
-  $result.photos = @($sorted)
+  # UWAGA: @($groups.Values[0]) zawijalo Liste jako JEDEN element, a @() wokole
+  # Generic.List rzucalo "Nie zgodne typy argumentow" na czesci maszyn PS 5.1 -
+  # grupe trzymamy jako zwykla tablice PS pod znanym kluczem.
+  $files = [object[]]$groups[$firstGroupKey]
+  $sorted = @($files | Sort-Object -Property @{ Expression = { Get-NaturalSortKey ([string]$_.originalName) } })
+  $result['photos'] = $sorted
   return $result
 }
 
