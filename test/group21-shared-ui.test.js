@@ -48,3 +48,57 @@ test('kazdy przycisk data-theme-toggle w repo ma staly aria-label w HTML (nie ty
   }
   assert.deepEqual(bezAriaLabel, [], `pliki z przyciskiem data-theme-toggle bez statycznego aria-label: ${bezAriaLabel.join(', ')}`);
 });
+
+// =====================================================================
+// Standard UI aplikacji (2026-08-28, "standaryzacja wszystkich apek"):
+// kazda apka w apps/ ma identyczna strukture strony glownej i Pomocy.
+// Test wymusza standard, zeby kolejne apki nie odjezdzaly stylistycznie.
+// =====================================================================
+const APPS_DIR = path.join(ROOT, 'apps');
+
+function readText(p) { return fs.readFileSync(p, 'utf8'); }
+
+test('standard UI: kazda apka - index.html z shared CSS, headerem (Pomoc -> pomoc.html, Panel glowny), hero (kicker/h1/lead)', () => {
+  const apps = fs.readdirSync(APPS_DIR, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name);
+  assert.ok(apps.length >= 10, `oczekiwano co najmniej 10 apek, znaleziono ${apps.length}`);
+  const problems = [];
+  for (const app of apps) {
+    const pub = path.join(APPS_DIR, app, 'public');
+    const idx = path.join(pub, 'index.html');
+    if (!fs.existsSync(idx)) { problems.push(`${app}: brak public/index.html`); continue; }
+    const c = readText(idx);
+    for (const needle of [
+      '/shared/tokens.css',
+      '/shared/components.css',
+      'href="app.css"',
+      '/shared/theme.js',
+      'href="pomoc.html"',
+      'data-main-link',
+      'data-theme-toggle',
+      'class="kicker"',
+      '<h1',
+      'class="lead"'
+    ]) {
+      if (!c.includes(needle)) problems.push(`${app}: index.html brak "${needle}"`);
+    }
+    const pomoc = path.join(pub, 'pomoc.html');
+    if (!fs.existsSync(pomoc)) { problems.push(`${app}: brak public/pomoc.html`); continue; }
+    const p = readText(pomoc);
+    for (const needle of ['/shared/help.css', 'help-tagline', 'Krok po kroku', 'help-callout', 'href="index.html"']) {
+      if (!p.includes(needle)) problems.push(`${app}: pomoc.html brak "${needle}"`);
+    }
+  }
+  assert.deepEqual(problems, [], `apki odstajace od standardu:\n${problems.join('\n')}`);
+});
+
+test('standard UI: zero legacy CSS (base.css/styles.css) i zero martwych stron (folder.html/folder.js) w public apek', () => {
+  const bad = [];
+  for (const app of fs.readdirSync(APPS_DIR, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)) {
+    const pub = path.join(APPS_DIR, app, 'public');
+    if (!fs.existsSync(pub)) continue;
+    for (const f of fs.readdirSync(pub)) {
+      if (/^(base|styles)\.css$/i.test(f) || /^folder\.(html|js)$/i.test(f)) bad.push(`${app}/public/${f}`);
+    }
+  }
+  assert.deepEqual(bad, [], `zbedne pliki w public apek: ${bad.join(', ')}`);
+});
