@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc - OCR audytów</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+  <script src="/shared/theme.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-scan"/></svg>
+          <strong>Pomoc - OCR audytów</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline" style="margin-top:22px">Odczytuje pola ze zeskanowanych audytów (także pismo odręczne) do tabeli do sprawdzenia i pozwala pobrać pliki PDF per adres.</p>
+      <div class="help-chips"><span class="help-chip">PDF (skany)</span><span class="help-chip">Gemini / OpenAI</span><span class="help-chip help-chip-req">Klucz API dla trybu AI</span></div>
+
+      <div class="help-shot-wrap">
+        <img class="help-shot" data-main-asset="/instrukcja-images/09-ocr.png" alt="Aktualny ekran OCR audytów" loading="lazy">
+        <p class="help-shot-cap">Aktualny ekran - wczytanie skanów, analiza pól i tabela do weryfikacji.</p>
+      </div>
+
+      <h3>Krok po kroku</h3>
+      <ol>
+        <li>Wybierz dostawcę rozpoznawania (ikonka klucza w nagłówku): <strong>Gemini</strong>, <strong>OpenAI</strong> albo <strong>Ręczny</strong> i wklej klucz API (tryby AI).</li>
+        <li>Dodaj zeskanowane audyty PDF (możesz kilka naraz) i uruchom analizę.</li>
+        <li>Sprawdź rozpoznane pola w tabeli - każde pole możesz poprawić ręcznie; pola niepewne są oznaczone do przeglądu.</li>
+        <li>Jeśli jeden PDF zawiera wiele adresów - potwierdź podział na osobne pliki (nigdy nie dzieje się to samoistnie).</li>
+        <li>Pobierz wynikowe PDF-y (jeden per adres) i opcjonalnie eksport tabeli do Excela.</li>
+      </ol>
+
+      <div class="help-callout good">
+        <span class="help-callout-label">Tryb Ręczny</span>
+        <p>Działa w pełni offline i bez klucza API - wszystkie pola są puste do wpisania z ręki, na podstawie podglądu skanu.</p>
+      </div>
+
+      <div class="help-callout warn">
+        <span class="help-callout-label">Obrót skanu</span>
+        <p>Aplikacja NIE obraca stron - wgraj skany już prawidłowo ustawione (stroną do góry), inaczej podgląd pól będzie krzywy.</p>
+      </div>
+
+      <h3>Logi i diagnostyka</h3>
+      <div class="help-callout">
+        <span class="help-callout-label">Gdzie szukać pomocy</span>
+        <p>Logi aplikacji: <code>%LOCALAPPDATA%\ScyzorykProjektowy\Data\ocr-audytow\logs</code>. Klucze API trzymane są lokalnie w <code>%LOCALAPPDATA%\Scyzoryk</code> i nigdy nie opuszczają komputera poza zapytania do wybranego dostawcy AI.</p>
+      </div>
+    </div>
+  </main>
+  <script src="pomoc.js"></script>
+</body>
+</html>
