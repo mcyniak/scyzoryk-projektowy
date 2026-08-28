@@ -4,3 +4,25 @@
 .claude/ export-ignore
 .serena/ export-ignore
 .gitattributes export-ignore
+
+# Audyt 2026-08-28: instalator pakuje CELY staging (scyzoryk.iss "{#StagingDir}\*"),
+# wiec wszystko co dev-only musi byc tu wykluczone, zeby nie wjel do ZIP-a
+# ani do gotowego instalatora. Runtime instalatora uzywa wylacznie: apps/,
+# lib/, shared-styles/, public/, scripts/install-all.js + check-project.js +
+# generate-runtime-fingerprint.js, cmd helpers, node-runtime i Scyzoryk.exe
+# (kopiowany osobno z buildu launchera).
+.github/ export-ignore
+docs/ export-ignore
+test/ export-ignore
+launcher/ export-ignore
+installer/ export-ignore
+scripts/ci/ export-ignore
+scripts/build-installer.ps1 export-ignore
+scripts/build-launcher.ps1 export-ignore
+scripts/build-package.js export-ignore
+scripts/defender-scan.ps1 export-ignore
+scripts/security-smoke-test.js export-ignore
+scripts/verify-app-health.js export-ignore
+/CLAUDE.md export-ignore
+/ZBUDUJ-INSTALATOR.cmd export-ignore
+/SPAKUJ-SCYZORYK.cmd export-ignore

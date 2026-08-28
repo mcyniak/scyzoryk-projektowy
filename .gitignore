@@ -9,11 +9,13 @@ yarn-error.log*
 .env.*
 !.env.example
 
-# Lokalne ustawienia Claude i Serena
-.claude/settings.local.json
-.claude/scheduled_tasks.lock
-.serena/cache/
-.serena/project.local.yml
+# Katalogi narzedzi AI/agentowych - wewnetrzne, NIE dla publicznego repo (audyt 2026-08-28).
+# Zostaja lokalnie na dysku, git ich nie sledzi.
+.claude/
+.serena/
+.agents/
+.codex/
+.hermes/
 
 # Logi i raporty diagnostyczne
 *.log
