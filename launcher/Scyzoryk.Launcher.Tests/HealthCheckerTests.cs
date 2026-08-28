@@ -11,7 +11,14 @@ public sealed class HealthCheckerTests
         using var server = new FakeHealthServer { StatusCodeToReturn = 200 };
         var checker = new HealthChecker();
 
-        var result = await checker.IsRespondingOnceAsync(server.HealthUrl, TimeSpan.FromSeconds(2));
+        // Hojny timeout (10 s zamiast 2 s): celem testu jest "200 -> true", nie
+        // pomiar czasu. Pojedyncze zapytanie na loopback potrafi na mocno
+        // obciazonym runnerze CI (tuż po buildzie, JIT, równoległe testy)
+        // przekroczyc krotki limit i test padal jako flaky - zlapane realnie
+        // przy release v1.3.8 (HealthCheckerTests.IsRespondingOnce_Returns200_True,
+        // FAIL po 2 s, 117/118 pozostalych przeszlo). Ten sam rodzaj problemu co
+        // komentarz przy ConnectionRefused nizej.
+        var result = await checker.IsRespondingOnceAsync(server.HealthUrl, TimeSpan.FromSeconds(10));
 
         Assert.True(result);
     }
@@ -22,7 +29,7 @@ public sealed class HealthCheckerTests
         using var server = new FakeHealthServer { StatusCodeToReturn = 500 };
         var checker = new HealthChecker();
 
-        var result = await checker.IsRespondingOnceAsync(server.HealthUrl, TimeSpan.FromSeconds(2));
+        var result = await checker.IsRespondingOnceAsync(server.HealthUrl, TimeSpan.FromSeconds(10));
 
         Assert.False(result);
     }
