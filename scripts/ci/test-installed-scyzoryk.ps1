@@ -1,20 +1,20 @@
 ﻿param(
-  [Parameter(Mandatory = $true)][string]$InstallerPath,
-  [Parameter(Mandatory = $true)][string]$InstallDir,
-  [Parameter(Mandatory = $true)][string]$LogsDir,
-  # Audyt 2026-08-06 - opcjonalny maly instalator aktualizacyjny (bez
-  # node-runtime/node_modules, patrz scripts\build-installer.ps1). Gdy podany,
-  # dodatkowy test naklada go na juz zainstalowana (przez $InstallerPath,
-  # pelna) kopie i sprawdza, ze runtime przetrwal nietkniety. Pominiety, gdy
-  # nie podano - InstallerPath sam w sobie zawsze musi byc PELNYM instalatorem.
-  [string]$UpdateInstallerPath = ''
-)
-
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-
-$InstallerPath = (Resolve-Path $InstallerPath).Path
-if ($UpdateInstallerPath) { $UpdateInstallerPath = (Resolve-Path $UpdateInstallerPath).Path }
+  \ = \
+  if (-not (Test-Path (Join-Path \ 'node_modules'))) {
+    Write-Host 'Instaluję zależności w workspace...'
+    Push-Location \
+    npm ci
+    node scripts/install-all.js
+    Pop-Location
+  }
+  Push-Location \
+  try {
+    npm run test:regressions
+    Assert-True (\ -eq 0) 'Testy regresyjne zainstalowanej wersji nie przeszly.'
+  } finally {
+    Pop-Location
+  }
+}
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:TaskName = 'Scyzoryk CI test instalatora'
 
