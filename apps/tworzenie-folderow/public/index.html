@@ -58,7 +58,7 @@
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">1</span>Dane inwestycji</h2>
-          <p class="panel-desc">Folder inwestycji musi już istnieć - ta appka go NIE zakłada, tylko wypełnia podfoldery w środku. Wszystko poza wymienioną strukturą (WM/pompy/kolektory/kotły) trzeba nadal tworzyć ręcznie.</p>
+          <p class="panel-desc" id="formPanelDesc">Ta appka wypełnia JUŻ ISTNIEJĄCY folder inwestycji - nie zakłada go (szczegóły w Pomocy).</p>
         </div>
       </div>
       <form id="planForm">
@@ -83,7 +83,7 @@
 
         <label style="margin-top: var(--space-4);">Tabela adresowa (.xlsx)
           <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
-          <span class="field-help">Podgląd wczytuje się automatycznie po wybraniu pliku. Skrót .gsheet w folderze inwestycji trzeba samodzielnie wyeksportować do .xlsx (Plik → Pobierz → Microsoft Excel).</span>
+          <span class="field-help">Podgląd po wybraniu pliku. Plik .gsheet wyeksportuj najpierw do .xlsx (szczegóły w Pomocy).</span>
         </label>
 
         <div id="simpleSheetBox" class="hidden" style="margin-top: var(--space-4);">

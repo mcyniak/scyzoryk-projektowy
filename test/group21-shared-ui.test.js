@@ -102,3 +102,25 @@ test('standard UI: zero legacy CSS (base.css/styles.css) i zero martwych stron (
   }
   assert.deepEqual(bad, [], `zbedne pliki w public apek: ${bad.join(', ')}`);
 });
+
+// Dlugie objasnienia naleza do pomoc.html, nie do strony glownej - na stronie
+// tylko krotki hint (max 150 znakow) + wskazanie "szczegoly w Pomocy"
+// (decyzja wlasciciela 2026-08-28: strony main byly gestymi scianami tekstu).
+const MAX_INDEX_HINT_LEN = 150;
+const HINT_CLASSES = /class="(?:field-help|panel-desc|hint|dz-hint)"/g;
+
+test('standard UI: zaden tekst podpowiedzi (field-help/panel-desc/hint) na stronie glownej apki nie przekracza 150 znakow - dlugie opisy zyja w pomoc.html', () => {
+  const tooLong = [];
+  for (const app of fs.readdirSync(APPS_DIR, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name)) {
+    const idx = path.join(APPS_DIR, app, 'public', 'index.html');
+    if (!fs.existsSync(idx)) continue;
+    const c = readText(idx);
+    for (const m of c.matchAll(/class="(?:field-help|panel-desc|hint|dz-hint)"[^>]*>([\s\S]*?)<\//g)) {
+      const text = m[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text.length > MAX_INDEX_HINT_LEN) {
+        tooLong.push(`${app}: ${text.length} zn. - "${text.slice(0, 80)}..."`);
+      }
+    }
+  }
+  assert.deepEqual(tooLong, [], `podpowiedzi przekraczajace ${MAX_INDEX_HINT_LEN} znakow (przenies do pomoc.html):\n${tooLong.join('\n')}`);
+});
