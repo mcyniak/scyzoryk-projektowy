@@ -50,16 +50,16 @@ h2 { font-size: var(--text-md); margin: var(--space-4) 0 8px; }
 /* Ramka pieczatki na podgladzie - musi zostac position:absolute/border/cursor
    dokladnie takie, drag&resize w app.js liczy z tego geometrie w czasie
    rzeczywistym (getBoundingClientRect), wiec kolory mozna bezpiecznie zmienic. */
-.stampBox { position: absolute; display: none; border: 2px dashed rgba(207,23,31,.95); outline: 1px solid rgba(255,255,255,.6); color: rgba(0,0,0,.95); background: rgba(207,23,31,.10); box-shadow: 0 0 0 9999px rgba(207,23,31,.02), 0 0 20px rgba(207,23,31,.22); font-weight: 800; letter-spacing: .04em; flex-direction: column; align-items: center; justify-content: center; text-align: center; cursor: grab; user-select: none; min-width: 32px; min-height: 20px; white-space: pre-wrap; padding: 4px; line-height: 1.15; z-index: 2; }
+.stampBox { position: absolute; display: none; border: 2px dashed rgba(var(--brand-500-rgb),.95); outline: 1px solid rgba(255,255,255,.6); color: rgba(0,0,0,.95); background: rgba(var(--brand-500-rgb),.10); box-shadow: 0 0 0 9999px rgba(var(--brand-500-rgb),.02), 0 0 20px rgba(var(--brand-500-rgb),.22); font-weight: 800; letter-spacing: .04em; flex-direction: column; align-items: center; justify-content: center; text-align: center; cursor: grab; user-select: none; min-width: 32px; min-height: 20px; white-space: pre-wrap; padding: 4px; line-height: 1.15; z-index: 2; }
 .preview.loaded .stampBox { display: flex; }
-.stampBox::before { content: attr(data-frame-label); position: absolute; left: 0; top: -28px; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--danger-600); background: #fff; border: 1px solid rgba(207,23,31,.35); border-radius: 999px; padding: 4px 8px; font-size: 11px; font-weight: 800; letter-spacing: 0; pointer-events: none; box-shadow: var(--shadow-sm); }
+.stampBox::before { content: attr(data-frame-label); position: absolute; left: 0; top: -28px; max-width: 280px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--danger-600); background: #fff; border: 1px solid rgba(var(--brand-500-rgb),.35); border-radius: var(--radius-full); padding: 4px 8px; font-size: 11px; font-weight: 800; letter-spacing: 0; pointer-events: none; box-shadow: var(--shadow-sm); }
 .stampBox::after { content: ""; position: absolute; right: -9px; bottom: -9px; width: 16px; height: 16px; background: var(--brand-500); border: 2px solid #fff; border-radius: 5px; cursor: nwse-resize; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
-.stampBox.isMoving, .stampBox.isResizing { border-style: solid; background: rgba(207,23,31,.16); }
+.stampBox.isMoving, .stampBox.isResizing { border-style: solid; background: rgba(var(--brand-500-rgb),.16); }
 .stampBox.isMoving { cursor: grabbing; }
 .stampBox.isResizing { cursor: nwse-resize; }
-.stampBox.printFrameOn { box-shadow: inset 0 0 0 3px rgba(212,0,0,.8), 0 0 0 9999px rgba(207,23,31,.02), 0 0 20px rgba(207,23,31,.18); }
-.stampBox.printFrameOff { box-shadow: inset 0 0 0 1px rgba(255,255,255,.55), 0 0 0 9999px rgba(207,23,31,.02), 0 0 20px rgba(207,23,31,.18); }
-.stampBox.active { border-style: solid; border-color: rgba(207,23,31,.98); background: rgba(207,23,31,.13); }
+.stampBox.printFrameOn { box-shadow: inset 0 0 0 3px rgba(212,0,0,.8), 0 0 0 9999px rgba(var(--brand-500-rgb),.02), 0 0 20px rgba(var(--brand-500-rgb),.18); }
+.stampBox.printFrameOff { box-shadow: inset 0 0 0 1px rgba(255,255,255,.55), 0 0 0 9999px rgba(var(--brand-500-rgb),.02), 0 0 20px rgba(var(--brand-500-rgb),.18); }
+.stampBox.active { border-style: solid; border-color: rgba(var(--brand-500-rgb),.98); background: rgba(var(--brand-500-rgb),.13); }
 .stampBox.inactive { border-color: rgba(37,99,235,.72); background: rgba(37,99,235,.08); }
 .stampBox.inactive::before { color: var(--info-600); border-color: rgba(37,99,235,.3); }
 .stampBox.inactive::after { background: var(--info-500); }
@@ -69,7 +69,7 @@ h2 { font-size: var(--text-md); margin: var(--space-4) 0 8px; }
 
 .stampTrash {
   position: absolute; top: 5px; right: 5px; z-index: 8; min-width: 40px; width: 40px; height: 40px; padding: 0;
-  border-radius: 999px; border: 1px solid rgba(207,23,31,.3); background: rgba(255,255,255,.96); color: var(--danger-600);
+  border-radius: var(--radius-full); border: 1px solid rgba(var(--brand-500-rgb),.3); background: rgba(255,255,255,.96); color: var(--danger-600);
   box-shadow: var(--shadow-sm); display: none; align-items: center; justify-content: center; cursor: pointer;
 }
 .stampTrash::before { content: ""; width: 16px; height: 16px; background-color: currentColor; -webkit-mask: url('/shared/icons.svg#i-trash') center / contain no-repeat; mask: url('/shared/icons.svg#i-trash') center / contain no-repeat; }
@@ -149,7 +149,7 @@ h2 { font-size: var(--text-md); margin: var(--space-4) 0 8px; }
 .pdfPreviewItem { width: 100%; min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--radius-md); border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-primary); text-align: left; }
 .pdfPreviewItem:hover { border-color: var(--border-strong); }
 .pdfPreviewItem.active { border-color: var(--brand-500); background: var(--brand-50); }
-.pdfPreviewItem strong { width: 26px; height: 26px; border-radius: 999px; display: grid; place-items: center; background: var(--bg-sunken); color: var(--text-secondary); font-size: 11.5px; }
+.pdfPreviewItem strong { width: 26px; height: 26px; border-radius: var(--radius-full); display: grid; place-items: center; background: var(--bg-sunken); color: var(--text-secondary); font-size: var(--text-2xs); }
 .pdfPreviewItem.active strong { background: var(--brand-500); color: #fff; }
 .pdfPreviewItem span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; }
 

@@ -399,7 +399,13 @@ export async function runAutomationInSession(input, session, pdfDir, options = {
       pdfValidation = await validatePdfProduct(downloadedPath, result);
     } catch (validationError) {
       const invalidPdf = await quarantineInvalidPdf(downloadedPath, String(validationError?.message || validationError), outputRoot);
-      throw new Error(`${String(validationError?.message || validationError)}. Błędny PDF przeniesiono do: ${invalidPdf || 'debug/invalid-pdf'}`);
+      // quarantineInvalidPdf zwraca null, gdy przeniesienia NIE udalo sie
+      // wykonac - wtedy bledny plik nadal lezy w miejscu pobrania i trzeba to
+      // powiedziec wprost, zamiast podawac sciezke, ktora nie istnieje.
+      const quarantineNote = invalidPdf
+        ? `Błędny PDF przeniesiono do: ${invalidPdf}`
+        : `UWAGA: nie udalo sie przeniesc blednego PDF do kwarantanny - plik pozostal w: ${downloadedPath}`;
+      throw new Error(`${String(validationError?.message || validationError)}. ${quarantineNote}`);
     }
 
     if (downloadedPath !== desiredPath) {
@@ -774,7 +780,11 @@ export async function runAutomation(input) {
       pdfValidation = await validatePdfProduct(tmpPdf, result);
     } catch (validationError) {
       const invalidPdf = await quarantineInvalidPdf(tmpPdf, String(validationError?.message || validationError), outputRoot);
-      throw new Error(`${String(validationError?.message || validationError)}. Błędny PDF przeniesiono do: ${invalidPdf || 'debug/invalid-pdf'}`);
+      // Jak wyzej: null oznacza nieudana kwarantanne, a nie domyslny katalog.
+      const quarantineNote = invalidPdf
+        ? `Błędny PDF przeniesiono do: ${invalidPdf}`
+        : `UWAGA: nie udalo sie przeniesc blednego PDF do kwarantanny - plik pozostal w: ${tmpPdf}`;
+      throw new Error(`${String(validationError?.message || validationError)}. ${quarantineNote}`);
     }
 
     const pdf = path.join(pdfDir, makePdfName(input));

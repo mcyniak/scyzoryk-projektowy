@@ -19,7 +19,7 @@
         </a>
         <span class="app-divider"></span>
         <div class="app-current-tool">
-          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-table"/></svg>
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-table"/></svg>
           <strong>Dobory myEcodan</strong>
         </div>
       </div>
@@ -65,7 +65,7 @@
             <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
             <span class="field-help">Wybierz plik .xlsx z inwestycją, potem kliknij "Sprawdź adresy".</span>
           </label>
-          <div style="align-self:end;">
+          <div class="u-self-end">
             <button type="button" class="secondary" id="checkAddresses">Sprawdź adresy</button>
           </div>
           <label>Nazwa inwestycji
@@ -96,9 +96,9 @@
         <input type="hidden" name="selectedRows" id="selectedRowsInput" value="[]" />
 
         <div id="recordSelector" class="record-selector hidden">
-          <div class="panel-header" style="margin-bottom:8px;">
+          <div class="panel-header u-mb-2">
             <div>
-              <h3 class="panel-title" style="font-size: var(--text-md);">Wybierz adresy do wygenerowania</h3>
+              <h3 class="panel-title u-text-md">Wybierz adresy do wygenerowania</h3>
               <p class="panel-desc" id="selectorInfo">Po wczytaniu Excela zobaczysz tutaj adresy.</p>
             </div>
           </div>
@@ -128,9 +128,9 @@
         <div>
           <h2 class="panel-title"><span class="step-num">2</span>Postęp generowania</h2>
           <p class="panel-desc" id="finishInfo">Zadanie jest w toku.</p>
-          <p class="panel-desc hidden" id="outputPathWarning" style="color:#b45309;"></p>
+          <p class="panel-desc hidden u-text-warning" id="outputPathWarning"></p>
         </div>
-        <div class="actions" style="margin-top:0;">
+        <div class="actions u-mt-0">
           <button type="button" class="danger" id="cancelBatch" disabled>Przerwij generowanie</button>
         </div>
       </div>

@@ -29,7 +29,7 @@
 .help-doc strong{color:var(--help-ink)}
 .help-tagline{color:var(--help-ink-soft);font-size:1.03rem;margin:6px 0 14px;max-width:62ch}
 .help-chips{display:flex;flex-wrap:wrap;gap:7px;margin:10px 0 6px}
-.help-chip{font-family:var(--help-font-mono);font-size:.78rem;padding:3px 10px;border-radius:999px;border:1px solid var(--help-line);color:var(--help-ink-soft);background:var(--help-bg-raised);white-space:nowrap;display:inline-block}
+.help-chip{font-family:var(--help-font-mono);font-size:.78rem;padding:3px 10px;border-radius: var(--radius-full);border:1px solid var(--help-line);color:var(--help-ink-soft);background:var(--help-bg-raised);white-space:nowrap;display:inline-block}
 .help-chip.help-chip-link{color:var(--help-accent);border-color:var(--help-accent);text-decoration:none}
 .help-chip.help-chip-req{background:var(--help-accent-tint);color:var(--help-accent);border-color:transparent;font-family:var(--font-sans);font-style:italic}
 .help-callout{border-radius:var(--help-radius);padding:13px 16px;margin:14px 0;border:1px solid transparent;font-size:.96rem}

@@ -112,6 +112,7 @@ async function scanWmFolder(wmRootPath, { powykonawczy = false } = {}) {
   const categories = findCategoryFolders(wmRootPath).sort(categorySortComparator);
 
   const items = [];
+  const warnings = [];
   let missingCount = 0;
 
   for (const cat of categories) {
@@ -145,8 +146,15 @@ async function scanWmFolder(wmRootPath, { powykonawczy = false } = {}) {
       try {
         const text = await folderMatch.extractText(cat.folderPath, isDocx ? chosenTitle : null, isDocx ? null : chosenTitle);
         zalacznikiList = extractZalacznikiList(text);
-      } catch (_) {
+      } catch (err) {
+        // Awaria odczytu strony tytulowej (uszkodzony/zabezpieczony PDF, DOCX
+        // chwilowo niedostepny na dysku sieciowym) dawala puste zalacznikiList,
+        // czyli DOKLADNIE to samo co "strona tytulowa nie ma listy Zalacznikow"
+        // - countMatches ponizej sie wylaczal i etykiety cicho spadaly na nazwy
+        // plikow. KOLEJNOSC druku wynika z numeru w nazwie pliku i nie zmienia
+        // sie; degraduje sie wylacznie ETYKIETOWANIE, wiec tylko to sygnalizujemy.
         zalacznikiList = [];
+        warnings.push(`${label}: nie udalo sie odczytac listy Zalacznikow ze strony tytulowej "${chosenTitle}" (${err?.message || err}). Etykiety pochodza z nazw plikow; kolejnosc (wg numeru w nazwie) jest bez zmian.`);
       }
     }
 
@@ -193,7 +201,7 @@ async function scanWmFolder(wmRootPath, { powykonawczy = false } = {}) {
     }
   }
 
-  return { items, missingCount, categoriesFound: categories.length };
+  return { items, missingCount, categoriesFound: categories.length, folderReadWarnings: warnings.length ? warnings : undefined };
 }
 
 module.exports = { scanWmFolder, extractZalacznikiList, parseLeadingNumber, categoryLabel, findCategoryFolders };

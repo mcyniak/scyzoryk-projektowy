@@ -140,8 +140,14 @@ function appHasDependencies(app) {
       const requireFromApp = createRequire(path.join(app.dir, 'server.js'));
       const { chromium } = requireFromApp('playwright');
       if (!fs.existsSync(chromium.executablePath())) return false;
-    } catch (_) {
-      return false;
+    } catch (err) {
+      // "Brak Chromium" wyzwala wielominutowa reinstalacje konczaca sie
+      // process.exit(1) - dlatego tak raportujemy WYLACZNIE faktyczny brak
+      // modulu/pliku. Kazdy inny blad (uszkodzony playwright/index.js, pole
+      // "exports", EPERM) musi byc widoczny w logu, zeby diagnoza nie szla
+      // w zla strone, ale nie moze udawac braku przegladarki.
+      if (err && (err.code === 'MODULE_NOT_FOUND' || err.code === 'ENOENT')) return false;
+      console.error(`[${app.slug}] Nie udalo sie sprawdzic Chromium (Playwright): ${err && err.message ? err.message : String(err)}`);
     }
   }
   return true;
@@ -204,15 +210,28 @@ function getChildMeta(slug) {
       nextRestartAt: null,
       failureTimestamps: [],
       circuitOpen: false,
-      circuitReason: null
+      circuitReason: null,
+      restartTimer: null
     });
   }
   return childMeta.get(slug);
 }
 
 function startChild(app, attempt = 0) {
-  if (!fs.existsSync(path.join(app.dir, 'server.js'))) return console.warn(`[${app.slug}] Brak server.js w: ${app.dir}`);
+  if (!fs.existsSync(path.join(app.dir, 'server.js'))) {
+    console.warn(`[${app.slug}] Brak server.js w: ${app.dir}`);
+    return false;
+  }
+  // Idempotencja: proces dla tego sluga juz zyje - nie spawnujemy drugiego na
+  // tym samym porcie. Bez tego reczny start w oknie backoffu (albo zaplanowany
+  // restart tuz po recznym starcie) tworzyl drugi proces, a children.set
+  // nadpisywal wpis - dzialajace dziecko przestawalo byc sledzone.
+  if (children.has(app.slug)) return true;
   const meta = getChildMeta(app.slug);
+  if (meta.restartTimer) {
+    clearTimeout(meta.restartTimer);
+    meta.restartTimer = null;
+  }
   meta.startedAt = Date.now();
   meta.nextRestartAt = null;
   const child = spawn(process.execPath, ['server.js'], { cwd: app.dir, env: { ...process.env, ...(app.extraEnv || {}), PORT: String(app.port), SCYZORYK_HOST: HOST, SCYZORYK_TELEMETRY_ENABLED: TELEMETRY_ENABLED ? '1' : '0', SCYZORYK_TELEMETRY_URL: process.env.SCYZORYK_TELEMETRY_URL || 'https://scyzoryk-monitor.scyzoryk.workers.dev', SCYZORYK_MAIN_VERSION: getInstalledVersion(ROOT).version }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -220,16 +239,23 @@ function startChild(app, attempt = 0) {
     meta.lastError = { at: Date.now(), message: err.message || String(err) };
     appendJsonLine(CHILDREN_LOG_FILE, { level: 'error', app: app.slug, event: 'child-error', message: err.message, stack: err.stack });
     console.error(`[${app.slug}] Nie udalo sie uruchomic procesu: ${err.message}`);
+    // spawn zawiodl - Node emituje "error" i "close", ale NIE "exit", wiec
+    // handler ponizej (jedyne miejsce z children.delete) nigdy nie wystartuje.
+    // Bez tego martwy uchwyt zostaje w mapie, panel raportuje processAlive:true
+    // do konca sesji, a ensureChildStarted nie ponawia proby.
+    children.delete(app.slug);
   });
   children.set(app.slug, child);
   child.stdout.on('data', data => logLine(app, 'out', data));
   child.stderr.on('data', data => logLine(app, 'err', data));
   child.on('exit', (code, signal) => {
     children.delete(app.slug);
-    meta.failures += 1;
     meta.lastExit = { at: Date.now(), code: code ?? null, signal: signal ?? null };
     console.log(`[${app.slug}] Proces zakonczony. code=${code ?? 'null'} signal=${signal ?? 'null'}`);
     if (code === 0 && signal === null) return;
+    // Licznik awarii dopiero TU - zamierzone zamkniecie dziecka nie moze
+    // podbijac failures ani karmic circuit breakera.
+    meta.failures += 1;
     telemetryService.recordEvent({
       tool: app.slug,
       eventType: 'failed',
@@ -247,8 +273,12 @@ function startChild(app, attempt = 0) {
     meta.restarts += 1;
     meta.nextRestartAt = Date.now() + delay;
     appendJsonLine(CHILDREN_LOG_FILE, { level: 'warn', app: app.slug, event: 'child-restart-scheduled', code, signal, delay });
-    setTimeout(() => startChild(app, attempt + 1), delay).unref();
+    // Uchwyt zapisany w meta, zeby reczny start mogl anulowac zaplanowany
+    // restart zamiast dopuscic do drugiego spawnu na tym samym porcie.
+    meta.restartTimer = setTimeout(() => startChild(app, attempt + 1), delay);
+    meta.restartTimer.unref();
   });
+  return true;
 }
 
 // Audyt zuzycia RAM/CPU 2026-08-21: to jest sedno najwiekszej zmiany w tym
@@ -263,11 +293,19 @@ function startChild(app, attempt = 0) {
 // flage testowa co dawny petla-przy-starcie (SCYZORYK_SKIP_CHILD_START),
 // zeby istniejace testy panelu (fakeHealth, zero prawdziwych dzieci) nie
 // zaczely nagle spawnowac prawdziwych procesow przez ten nowy endpoint.
+// Zwraca false TYLKO gdy start realnie sie nie odbyl z powodu braku
+// apps/<slug>/server.js - wywolujacy moze wtedy odpowiedziec bledem zamiast
+// udawac sukces. Tryb testowy (SCYZORYK_SKIP_CHILD_START) nie jest bledem.
 function ensureChildStarted(app) {
-  if (process.env.SCYZORYK_SKIP_CHILD_START === '1') return false;
+  if (process.env.SCYZORYK_SKIP_CHILD_START === '1') return true;
   if (children.has(app.slug)) return true;
-  startChild(app);
-  return true;
+  const meta = getChildMeta(app.slug);
+  if (meta.restartTimer) {
+    clearTimeout(meta.restartTimer);
+    meta.restartTimer = null;
+    meta.nextRestartAt = null;
+  }
+  return startChild(app) !== false;
 }
 
 function stopChildren() { for (const child of children.values()) { try { child.kill(); } catch (_) {} } }
@@ -513,7 +551,17 @@ const server = http.createServer(async (req, res) => {
     const targetApp = apps.find(a => a.slug === startMatch[1]);
     if (!targetApp) return sendJson(res, 404, { ok: false, message: 'Nieznane narzedzie.' });
     telemetryService.recordEvent({ tool: targetApp.slug, eventType: 'started' });
-    ensureChildStarted(targetApp);
+    // Reczny start to swiadoma decyzja uzytkownika - bezpiecznik startuje od
+    // zera. Bez tego po otwartym circuit breakerze proces owszem wstawal, ale
+    // meta nadal miala >=5 wpisow awarii, wiec pierwsze kolejne wyjscie
+    // natychmiast znowu blokowalo restarty.
+    const targetMeta = getChildMeta(targetApp.slug);
+    targetMeta.circuitOpen = false;
+    targetMeta.circuitReason = null;
+    targetMeta.failureTimestamps = [];
+    if (!ensureChildStarted(targetApp)) {
+      return sendJson(res, 503, { ok: false, message: `Nie mozna uruchomic narzedzia: brak pliku server.js w ${targetApp.dir}.` });
+    }
     return sendJson(res, 202, { ok: true, message: 'Uruchamianie rozpoczete.' });
   }
 
@@ -562,6 +610,13 @@ const server = http.createServer(async (req, res) => {
 });
 
 const instanceLock = acquireSingleInstanceLock();
+if (!instanceLock.acquired && instanceLock.claimError) {
+  // Locka nie trzyma nikt inny - po prostu nie dalo sie go zalozyc.
+  // To awaria startu, wiec konczymy kodem bledu, zeby launcher/autostart
+  // nie udawal, ze panel wstal.
+  console.error(`Nie mozna zalozyc blokady instancji: ${instanceLock.claimError}. Panel NIE zostal uruchomiony.`);
+  process.exit(1);
+}
 if (!instanceLock.acquired) {
   const reason = instanceLock.unreadable
     ? 'blokada instancji jest chwilowo nieczytelna (prawdopodobnie inny proces wlasnie startuje)'

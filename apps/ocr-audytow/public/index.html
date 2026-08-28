@@ -19,7 +19,7 @@
         </a>
         <span class="app-divider"></span>
         <div class="app-current-tool">
-          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-scan"/></svg>
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-scan"/></svg>
           <strong>OCR audytów</strong>
         </div>
       </div>
@@ -57,7 +57,7 @@
             <label class="provider-option"><input type="radio" name="ocrProvider" value="manual" id="ocrProviderManual"> Ręcznie (bez AI)</label>
           </div>
         </div>
-        <div class="option-field" id="ocrApiKeyField" style="margin-top:14px">
+        <div class="option-field u-mt-3" id="ocrApiKeyField">
           <span class="option-label" id="ocrApiKeyLabel">Klucz API Gemini</span>
           <input type="password" id="ocrApiKeyInput" placeholder="AIza..." autocomplete="off" required>
         </div>
@@ -102,7 +102,7 @@
           <option value="kotly">Kotły</option>
         </select>
       </div>
-      <div class="option-field" style="margin-top:18px">
+      <div class="option-field u-mt-4">
         <span class="option-label">Ścieżka do Twojej tabelki Excela (.xlsx)</span>
         <div class="path-row">
           <input type="text" id="tableExcelPathInput" placeholder="G:\Dyski współdzielone\...\Biała tabela adresowa.xlsx">
@@ -137,7 +137,7 @@
           <svg class="icon icon-lg"><use href="/shared/icons.svg#i-upload-cloud"/></svg>
           <strong>Przeciągnij pliki PDF tutaj</strong>
           <span class="dz-hint">albo</span>
-          <div style="margin-top:10px">
+          <div class="u-mt-3">
             <input id="files" name="files" type="file" accept=".pdf" multiple>
           </div>
         </div>
@@ -165,7 +165,7 @@
         </div>
       </div>
       <div id="reviewFiles"></div>
-      <div class="option-field" id="familySelectField" style="margin-top:18px">
+      <div class="option-field u-mt-4" id="familySelectField">
         <span class="option-label">Rodzina protokołu</span>
         <select id="familySelect">
           <option value="">— nie zawężaj (wszystkie pola) —</option>
@@ -173,7 +173,7 @@
           <option value="solary">Solary</option>
           <option value="kotly">Kotły</option>
         </select>
-        <p class="hint" style="margin-top:6px">Zawęża listę pól do uzupełnienia do tych, które faktycznie trafiają do tabelki adresowej tej rodziny.</p>
+        <p class="hint u-mt-2">Zawęża listę pól do uzupełnienia do tych, które faktycznie trafiają do tabelki adresowej tej rodziny.</p>
       </div>
       <div class="hero-actions">
         <button type="button" id="confirmBtn" class="btn btn-primary">Zatwierdź podział</button>
@@ -193,7 +193,7 @@
 
       <div id="excelStep" hidden>
         <p class="hint" id="familyChosenNote"></p>
-        <div class="option-field" id="excelPathField" style="margin-top:18px">
+        <div class="option-field u-mt-4" id="excelPathField">
           <span class="option-label" id="excelPathLabel">Ścieżka do tabelki Excela (.xlsx) - stworzy NOWY plik z wierszami wszystkich przetworzonych adresów (nadpisze, jeśli coś już tam jest)</span>
           <input type="text" id="excelPathInput" placeholder="G:\Dyski współdzielone\...\tabela-audytow.xlsx">
         </div>

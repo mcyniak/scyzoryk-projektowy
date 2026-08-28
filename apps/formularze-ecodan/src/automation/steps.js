@@ -467,6 +467,29 @@ export async function fillLocationField(page, location) {
     await page.keyboard.press('ArrowDown').catch(() => {});
     await page.waitForTimeout(120);
     await page.keyboard.press('Enter').catch(() => {});
+    await page.waitForTimeout(350);
+
+    // ArrowDown+Enter wybiera PIERWSZA podpowiedz z listy, ktora nie musi
+    // odpowiadac lokalizacji z Excela. Zadna pozniejsza bramka tego nie
+    // sprawdza (weryfikuja tylko przejscie na /szacowanie-mocy), wiec raport
+    // powstalby dla zlej miejscowosci i zlej strefy klimatycznej. Lepiej
+    // przerwac niz oddac cichy, bledny wynik.
+    const actual = await field.inputValue().catch(() => '');
+    const actualNorm = normalizeText(actual);
+    const wantedNorm = normalizeText(value);
+    // excel.js przyjmuje jako lokalizacje takze kolumne "Kod pocztowy", a
+    // kalkulator rozwija kod do nazwy miejscowosci - porownanie tekstowe
+    // musialoby wtedy falszywie odrzucic poprawny wybor. Dla kodu pocztowego
+    // wymagamy wiec tylko tego, zeby jakas podpowiedz zostala faktycznie
+    // wybrana (pole nie jest puste i nie zostal w nim sam wpisany kod).
+    const wantedIsPostalCode = /^\d{2}-?\d{3}$/.test(wantedNorm);
+    const matches = wantedIsPostalCode
+      ? Boolean(actualNorm)
+      : Boolean(actualNorm) && (actualNorm.includes(wantedNorm) || wantedNorm.includes(actualNorm));
+    if (!matches) {
+      throw new Error(`Wybrana podpowiedz lokalizacji nie zgadza sie z danymi: oczekiwano "${value}", pole zawiera "${actual}".`);
+    }
+    return field;
   }
 
   await page.waitForTimeout(350);

@@ -19,7 +19,7 @@
         </a>
         <span class="app-divider"></span>
         <div class="app-current-tool">
-          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-refresh"/></svg>
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-refresh"/></svg>
           <strong>Wnioski powykonawcze PDF</strong>
         </div>
       </div>
@@ -156,20 +156,20 @@
         </div>
       </aside>
 
-      <section class="card" id="wmResultsCard" hidden style="grid-column:1 / -1">
+      <section class="card u-span-full" id="wmResultsCard" hidden>
         <h2>2. Znalezione kategorie</h2>
         <p class="hint" id="wmResultsHint"></p>
         <div class="list" id="wmToConvertList"></div>
         <div id="wmAlreadyBlock" hidden>
-          <h2 style="font-size:17px;margin-top:18px">Już mają wersję powykonawczą (pominięte)</h2>
+          <h2 class="u-text-md u-mt-4">Już mają wersję powykonawczą (pominięte)</h2>
           <div class="list" id="wmAlreadyList"></div>
         </div>
         <div id="wmMissingBlock" hidden>
-          <h2 style="font-size:17px;margin-top:18px">Brak pliku źródłowego DOCX (nie da się przerobić)</h2>
+          <h2 class="u-text-md u-mt-4">Brak pliku źródłowego DOCX (nie da się przerobić)</h2>
           <div class="list" id="wmMissingList"></div>
         </div>
         <div id="wmAmbiguousBlock" hidden>
-          <h2 style="font-size:17px;margin-top:18px">Niejednoznaczne - kilka pasujących plików (wymaga ręcznej decyzji)</h2>
+          <h2 class="u-text-md u-mt-4">Niejednoznaczne - kilka pasujących plików (wymaga ręcznej decyzji)</h2>
           <div class="list" id="wmAmbiguousList"></div>
         </div>
         <div class="actions">

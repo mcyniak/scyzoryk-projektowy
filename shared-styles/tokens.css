@@ -17,7 +17,7 @@
   --gray-400: #9aa4b2;
   --gray-500: #6b7684;
   --gray-600: #4b5563;
-  --gray-700: #384152;
+  
   --gray-800: #1f2530;
   --gray-900: #12151c;
 
@@ -25,6 +25,7 @@
   --brand-50: #fdecec;
   --brand-100: #fad2d3;
   --brand-500: #cf171f;
+  --brand-500-rgb: 207, 23, 31;
   --brand-600: #b8141b;
   --brand-700: #971117;
   --brand-contrast: #ffffff;
@@ -35,7 +36,7 @@
   --danger-100: #fbd8de;
   --danger-500: #e11d48;
   --danger-600: #be123c;
-  --danger-700: #9f1239;
+  
 
   /* --- Sukces --- */
   --success-50: #ecfdf5;
@@ -77,7 +78,7 @@
   --space-4: 16px;
   --space-5: 20px;
   --space-6: 24px;
-  --space-7: 28px;
+  
   --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;
@@ -86,14 +87,15 @@
   /* --- Promienie --- */
   --radius-sm: 6px;
   --radius-md: 10px;
+  --radius-full: 999px;
   --radius-lg: 14px;
   --radius-xl: 18px;
-  --radius-full: 999px;
+  
 
   /* --- Cienie: subtelne, nigdy "unoszące pół ekranu" --- */
   --shadow-xs: 0 1px 2px rgba(16, 24, 40, .06);
   --shadow-sm: 0 2px 6px rgba(16, 24, 40, .07);
-  --shadow-md: 0 8px 20px rgba(16, 24, 40, .09);
+  
   --shadow-lg: 0 16px 36px rgba(16, 24, 40, .12);
   --shadow-focus: 0 0 0 4px var(--focus-ring);
 
@@ -102,6 +104,7 @@
     BlinkMacSystemFont, system-ui, "Helvetica Neue", Arial, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", var(--font-sans);
   --text-xs: 12px;
+  --text-2xs: 11.5px;
   --text-sm: 13px;
   --text-base: 14.5px;
   --text-md: 16px;
@@ -121,6 +124,7 @@
 
   /* --- Rozmiar minimalnego obszaru klikalnego (WCAG) --- */
   --hit-min: 42px;
+  --hit-min-compact: 34px;
 
   color-scheme: light;
 }
@@ -165,8 +169,8 @@
   --dark-info-50: rgba(37, 99, 235, .2);
   --dark-info-100: rgba(37, 99, 235, .32);
   --dark-info-600: #60a5fa;
-  --dark-brand-50: rgba(207, 23, 31, .18);
-  --dark-brand-100: rgba(207, 23, 31, .32);
+  --dark-brand-50: rgba(var(--brand-500-rgb), .18);
+  --dark-brand-100: rgba(var(--brand-500-rgb), .32);
 }
 
 @media (prefers-color-scheme: dark) {

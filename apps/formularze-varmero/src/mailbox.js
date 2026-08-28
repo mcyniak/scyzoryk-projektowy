@@ -92,12 +92,18 @@ export async function waitForVarmeroCard({
 }) {
   if (!recipientEmail) throw new Error('waitForVarmeroCard: brak recipientEmail - dopasowanie po odbiorcy jest wymagane.');
   const deadline = Date.now() + timeoutMs;
+  let lastImapError = null;
 
   while (Date.now() < deadline) {
     if (isCancelled()) throw new CancelledWaitError('Oczekiwanie na mail z karta Varmero przerwane na zadanie uzytkownika.');
     const client = createClient();
-    await client.connect();
+    // connect() musi byc W try: wczesniej lezal poza nim, wiec nieudane
+    // polaczenie nie wylogowywalo klienta ORAZ natychmiast wychodzilo z
+    // petli. Po juz wyslanym, nieodwracalnym zgloszeniu do Varmero chwilowy
+    // blad sieci konczyl wiersz bledem, a ponowne uruchomienie wysylalo
+    // DRUGIE realne zgloszenie na ten sam adres.
     try {
+      await client.connect();
       const foldersToSearch = await findFoldersToSearch(client);
       for (const folderPath of foldersToSearch) {
         const lock = await client.getMailboxLock(folderPath);
@@ -116,11 +122,16 @@ export async function waitForVarmeroCard({
           lock.release();
         }
       }
+    } catch (err) {
+      if (err instanceof CancelledWaitError) throw err;
+      lastImapError = err;
+      console.error(`[formularze-varmero] Blad IMAP podczas oczekiwania na karte: ${err?.message || err}. Ponawiam do uplywu limitu.`);
     } finally {
       await client.logout().catch(() => {});
     }
     await sleep(pollIntervalMs);
   }
 
-  throw new NoNewEmailError(`Nie przyszedł mail z kartą Varmero na adres ${recipientEmail} w ciągu ${Math.round(timeoutMs / 1000)}s (sprawdzano INBOX i Spam).`);
+  const imapSuffix = lastImapError ? ` Ostatni blad IMAP: ${lastImapError?.message || lastImapError}.` : '';
+  throw new NoNewEmailError(`Nie przyszedł mail z kartą Varmero na adres ${recipientEmail} w ciągu ${Math.round(timeoutMs / 1000)}s (sprawdzano INBOX i Spam).${imapSuffix}`);
 }

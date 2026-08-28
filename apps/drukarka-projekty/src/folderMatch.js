@@ -89,12 +89,20 @@ function findAddressFolder(baseFolder, lpGmina) {
   const re = new RegExp(`^${escapeRegExp(lpStr)}(?!\\d)`);
   const matches = [];
   const allFolders = [];
+  const warnings = [];
 
   function walk(currentPath, relPath, depth) {
     let entries;
     try {
-      entries = fs.readdirSync(currentPath, { withFileTypes: true }).filter(e => e.isDirectory());
-    } catch (_err) {
+      // Ten sam mechanizm ponowien co w scanFilesRecursive (readDirWithRetry):
+      // chwilowy blad odczytu dysku sieciowego byl tu cicho polykany i konczyl
+      // sie komunikatem "Nie znaleziono folderu...", sugerujacym ze folder
+      // adresu w ogole nie istnieje. Nadal nie przerywamy szukania (nieczytelny
+      // podfolder kategorii nie moze zablokowac calego dopasowania), ale
+      // rejestrujemy to jako ostrzezenie zamiast udawac ze byl pusty.
+      entries = readDirWithRetry(currentPath, depth).filter(e => e.isDirectory());
+    } catch (err) {
+      warnings.push(`Nie udalo sie odczytac folderu "${relPath || currentPath}" mimo ponowien (${err?.message || err}) - pominiety przy szukaniu folderu adresu, mogl zawierac szukany numer. Sprobuj jeszcze raz.`);
       return;
     }
     for (const entry of entries) {
@@ -109,7 +117,7 @@ function findAddressFolder(baseFolder, lpGmina) {
   }
 
   walk(baseFolder, "", 0);
-  return { matches, allFolders };
+  return { matches, allFolders, warnings };
 }
 
 // Skanuje pliki BEZPOSREDNIO w folderze adresu ORAZ jeden poziom w glab
@@ -181,7 +189,7 @@ function pdfSubfolderRank(relPath) {
 // (DWG/TIF/BAK...) ani z plikami innych podfolderow. Gdy sa i "pdf", i
 // "ostemplowane", wygrywa "ostemplowane" (nowszy etap pracy nad dokumentacja).
 // Brak takiego podfolderu = zachowanie jak wczesniej (wszystkie pliki).
-function wybierzPlikiZPodfolderuPdf(results) {
+function wybierzPlikiZPodfolderuPdf(results, warnings) {
   // UWAGA: segment liczymy z dirname, NIE z calej sciezki - plik lezacy luzem
   // w folderze adresu ma jako "pierwszy segment" wlasna nazwe ("opis.pdf"),
   // ktora bez tego trafialaby pod /pdf/i i blednie wlaczala tryb podfolderu.
@@ -194,6 +202,15 @@ function wybierzPlikiZPodfolderuPdf(results) {
   }
   if (!pasujace.size) return results;
   const wybranySegment = [...pasujace].find(s => /ostemplowane/i.test(s)) || [...pasujace][0];
+  // Do wzorca moze pasowac WIECEJ NIZ JEDEN rozny podfolder (np. "PDF" i "PDF
+  // stare", albo "PDF" i "PDF poprawiony") - wtedy bez zadnego sygnalu
+  // brany byl pierwszy z brzegu, a pliki z pozostalych po cichu znikaly z
+  // dopasowania (wygladaly jak "BRAK PLIKU"). Wybor zostaje dokladnie taki
+  // sam, ale zglaszamy go jako ostrzezenie do sprawdzenia recznego.
+  if (pasujace.size > 1 && warnings) {
+    const kandydaci = [...pasujace].map(s => `"${s}"`).join(", ");
+    warnings.push(`Folder adresu ma kilka podfolderow z gotowymi dokumentami (${kandydaci}) - wzieto pliki wylacznie z "${wybranySegment}", pozostale pominieto. Sprawdz recznie, ktory podfolder jest wlasciwy.`);
+  }
   return results.filter(rel => path.dirname(rel).split(path.sep)[0] === wybranySegment);
 }
 
@@ -235,7 +252,7 @@ function scanFilesRecursive(folderPath) {
     }
   }
   walk(folderPath, '', 0);
-  const wybrane = wybierzPlikiZPodfolderuPdf(results);
+  const wybrane = wybierzPlikiZPodfolderuPdf(results, warnings);
   wybrane.sort((a, b) => pdfSubfolderRank(a) - pdfSubfolderRank(b));
   // Audyt na zywo 2026-08-13 (zlapane przez CI, test/group6-workflows.test.js):
   // scanFilesRecursive jest publicznie eksportowana i mial zewnetrzny test
@@ -318,6 +335,7 @@ async function detectByContent(folderPath, classified) {
   const pool = [...classified.pool];
   const stillPool = [];
   const extraDrawings = [];
+  const readWarnings = [];
   let protokolFile = null;
   for (const fileName of pool) {
     if (!fileName.toLowerCase().endsWith(".pdf")) { stillPool.push(fileName); continue; }
@@ -326,13 +344,28 @@ async function detectByContent(folderPath, classified) {
       const buffer = fs.readFileSync(path.join(folderPath, fileName));
       const result = await pdfParse(buffer, { max: 2 });
       text = normalize((result.text || "").slice(0, 3000));
-    } catch (_) { stillPool.push(fileName); continue; }
+    } catch (err) {
+      // Awaria odczytu PDF (plik uszkodzony, zaszyfrowany, chwilowo
+      // niedostepny na dysku sieciowym) dawala DOKLADNIE ten sam skutek co
+      // "za malo tekstu" i "brak dopasowania po tresci" - plik cicho ladowal
+      // w puli niedopasowanych. Zachowanie zostaje bez zmian (plik nadal idzie
+      // do stillPool), ale awarie odczytu sygnalizujemy osobno.
+      readWarnings.push(`Nie udalo sie odczytac pliku PDF "${fileName}" (${err?.message || err}) - nie zostal rozpoznany po tresci, moze byc uszkodzony lub zabezpieczony. Sprawdz recznie.`);
+      stillPool.push(fileName);
+      continue;
+    }
     if (text.length < 20) { stillPool.push(fileName); continue; }
     if (!protokolFile && text.includes("protokol uzgodnien projektowych")) { protokolFile = fileName; continue; }
     if (text.includes("tytul rysunku") || text.includes("nr rysunku")) { extraDrawings.push(fileName); continue; }
     stillPool.push(fileName);
   }
-  return { ...classified, pool: stillPool, drawingLike: [...classified.drawingLike, ...extraDrawings], protokolFileByContent: protokolFile };
+  return {
+    ...classified,
+    pool: stillPool,
+    drawingLike: [...classified.drawingLike, ...extraDrawings],
+    protokolFileByContent: protokolFile,
+    warnings: [...(classified.warnings || []), ...readWarnings]
+  };
 }
 
 function extractAttachmentsList(text) {

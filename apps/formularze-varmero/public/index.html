@@ -19,7 +19,7 @@
         </a>
         <span class="app-divider"></span>
         <div class="app-current-tool">
-          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-table"/></svg>
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-table"/></svg>
           <strong>Dobory Varmero</strong>
         </div>
       </div>
@@ -67,11 +67,11 @@
           <span class="field-help">Adresy sprawdzają się automatycznie po wybraniu pliku, a karty wynikowe wrócą na skrzynkę pocztową skonfigurowaną w Scyzoryku.</span>
         </label>
 
-        <label style="margin-top: var(--space-4);">Nazwa inwestycji
+        <label class="u-mt-4">Nazwa inwestycji
           <input name="investmentName" id="investmentName" placeholder="np. Zagórów 2026" />
         </label>
 
-        <label style="margin-top: var(--space-4);">Folder zapisu kart PDF
+        <label class="u-mt-4">Folder zapisu kart PDF
           <div class="path-row">
             <input name="outputPath" id="outputPath" value="" placeholder="Wybierz folder albo zostaw puste dla folderu Scyzoryka" />
             <button type="button" class="secondary" id="browseOutputFolder">Przeglądaj...</button>
@@ -130,9 +130,9 @@
         </label>
 
         <div id="recordSelector" class="record-selector hidden">
-          <div class="panel-header" style="margin-bottom:8px;">
+          <div class="panel-header u-mb-2">
             <div>
-              <h3 class="panel-title" style="font-size: var(--text-md);">Wybierz adresy do zgłoszenia</h3>
+              <h3 class="panel-title u-text-md">Wybierz adresy do zgłoszenia</h3>
               <p class="panel-desc" id="selectorInfo">Po wczytaniu Excela zobaczysz tutaj adresy.</p>
             </div>
           </div>
@@ -161,7 +161,7 @@
           <h2 class="panel-title"><span class="step-num">2</span>Postęp zgłoszeń</h2>
           <p class="panel-desc" id="finishInfo">Zadanie jest w toku - każdy wiersz to prawdziwe zgłoszenie z oczekiwaniem na maila, może potrwać kilka minut na wiersz.</p>
         </div>
-        <div class="actions" style="margin-top:0;">
+        <div class="actions u-mt-0">
           <button type="button" class="danger" id="cancelBatch" disabled>Przerwij zgłaszanie</button>
         </div>
       </div>
