@@ -1,20 +1,20 @@
 ﻿param(
-  \ = \
-  if (-not (Test-Path (Join-Path \ 'node_modules'))) {
-    Write-Host 'Instaluję zależności w workspace...'
-    Push-Location \
-    npm ci
-    node scripts/install-all.js
-    Pop-Location
-  }
-  Push-Location \
-  try {
-    npm run test:regressions
-    Assert-True (\ -eq 0) 'Testy regresyjne zainstalowanej wersji nie przeszly.'
-  } finally {
-    Pop-Location
-  }
-}
+  [Parameter(Mandatory = $true)][string]$InstallerPath,
+  [Parameter(Mandatory = $true)][string]$InstallDir,
+  [Parameter(Mandatory = $true)][string]$LogsDir,
+  # Audyt 2026-08-06 - opcjonalny maly instalator aktualizacyjny (bez
+  # node-runtime/node_modules, patrz scripts\build-installer.ps1). Gdy podany,
+  # dodatkowy test naklada go na juz zainstalowana (przez $InstallerPath,
+  # pelna) kopie i sprawdza, ze runtime przetrwal nietkniety. Pominiety, gdy
+  # nie podano - InstallerPath sam w sobie zawsze musi byc PELNYM instalatorem.
+  [string]$UpdateInstallerPath = ''
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$InstallerPath = (Resolve-Path $InstallerPath).Path
+if ($UpdateInstallerPath) { $UpdateInstallerPath = (Resolve-Path $UpdateInstallerPath).Path }
 $script:Failures = New-Object System.Collections.Generic.List[string]
 $script:TaskName = 'Scyzoryk CI test instalatora'
 
@@ -244,8 +244,27 @@ Run-Test 'Aktualny panel i instrukcja w instalatorze' {
 }
 
 Run-Test 'Regresje zainstalowanej wersji' {
+  # Regresje wymagaja checkoutu repozytorium: runner wykrywa test/group*.test.js,
+  # a instalator celowo NIE zawiera test/ (export-ignore w .gitattributes).
+  # Audyt 2026-08-28 (release v1.3.10 FAIL): bieganie z $InstallDir dawalo
+  # ENOENT scandir 'installDir\test'. Biegaja z GITHUB_WORKSPACE (checkout
+  # w tym samym jobie), node-runtime bierzac z zainstalowanej aplikacji.
   $npm = Join-Path $InstallDir 'node-runtime\npm.cmd'
-  Push-Location $InstallDir
+  $workspace = $env:GITHUB_WORKSPACE
+  Assert-True ($workspace -and (Test-Path (Join-Path $workspace 'test'))) 'Regresje zainstalowanej wersji: brak checkoutu repozytorium (GITHUB_WORKSPACE z katalogiem test/) - regresje musza biegac z checkoutu, nie z installDir.'
+  if (-not (Test-Path (Join-Path $workspace 'node_modules'))) {
+    Write-Host 'Brak node_modules w workspace - npm ci + install-all...'
+    Push-Location $workspace
+    try {
+      & $npm ci
+      Assert-True ($LASTEXITCODE -eq 0) 'npm ci w workspace nie przeszlo.'
+      & $npm run install-all
+      Assert-True ($LASTEXITCODE -eq 0) 'install-all w workspace nie przeszlo.'
+    } finally {
+      Pop-Location
+    }
+  }
+  Push-Location $workspace
   try {
     & $npm run test:regressions
     Assert-True ($LASTEXITCODE -eq 0) 'Testy regresyjne zainstalowanej wersji nie przeszly.'

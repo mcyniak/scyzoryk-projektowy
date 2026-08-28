@@ -13,6 +13,12 @@ const TEST_DIR = path.join(ROOT, 'test');
 // posortowane numerycznie po numerze grupy, zeby kolejnosc byla stabilna i
 // czytelna w logach.
 function discoverGroupTestFiles() {
+  // Audyt 2026-08-28 (release v1.3.10 FAIL): brak test/ (np. runner uruchomiony
+  // z installDir, gdzie test/ jest wyciety export-ignore) dawal surowy ENOENT
+  // z binding.readdir. Czytelny blad zamiast krachu w glebi Node.
+  if (!fs.existsSync(TEST_DIR)) {
+    throw new Error(`Brak katalogu ${TEST_DIR} - runner uruchomiono poza checkoutem repozytorium (np. w installDir bez test/). Regresje musza biegac z miejsca, ktore ma test/group*.test.js.`);
+  }
   const entries = fs.readdirSync(TEST_DIR).filter(name => /^group\d+.*\.test\.js$/.test(name));
   entries.sort((a, b) => {
     const numA = parseInt(a.match(/^group(\d+)/)[1], 10);
