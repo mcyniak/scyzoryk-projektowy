@@ -75,7 +75,7 @@ export async function createAutomationSession(outputDir) {
 // na zawsze `finally` workera i cancelJob, bo ta funkcja nie miala zadnego
 // limitu czasu. Blad samego close() nadal celowo polykamy - chodzi tylko o to,
 // zeby po CLOSE_TIMEOUT_MS funkcja mimo wszystko wrocila.
-const CLOSE_TIMEOUT_MS = 12000;
+const CLOSE_TIMEOUT_MS = Number(process.env.SCYZORYK_CLOSE_TIMEOUT_MS) || 12000;
 
 async function closeWithTimeout(closable) {
   if (!closable) return;

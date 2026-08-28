@@ -63,7 +63,7 @@ export async function createAutomationSession(outputDir) {
 // Jak w apps/formularze-ecodan/src/automation/session.js: bez limitu czasu
 // zawieszony close() blokowalby zakonczenie i anulowanie zadania na zawsze.
 // Blad samego close() nadal celowo polykamy.
-const CLOSE_TIMEOUT_MS = 12000;
+const CLOSE_TIMEOUT_MS = Number(process.env.SCYZORYK_CLOSE_TIMEOUT_MS) || 12000;
 
 async function closeWithTimeout(closable) {
   if (!closable) return;
