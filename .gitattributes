@@ -1,4 +1,4 @@
-# Pliki/foldery narzedzi deweloperskich (AI, sesje Claude Code/Serena) - trzymane w
+﻿# Pliki/foldery narzedzi deweloperskich (AI, sesje Claude Code/Serena) - trzymane w
 # repo dla przyszlych sesji, ale pomijane w paczce dla koncowego uzytkownika
 # budowanej przez scripts/build-package.js (git archive).
 .claude/ export-ignore
@@ -22,7 +22,6 @@ scripts/build-launcher.ps1 export-ignore
 scripts/build-package.js export-ignore
 scripts/defender-scan.ps1 export-ignore
 scripts/security-smoke-test.js export-ignore
-scripts/verify-app-health.js export-ignore
 /CLAUDE.md export-ignore
 /ZBUDUJ-INSTALATOR.cmd export-ignore
 /SPAKUJ-SCYZORYK.cmd export-ignore
