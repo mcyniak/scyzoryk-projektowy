@@ -71,8 +71,27 @@ export async function createAutomationSession(outputDir) {
   return { browser, context, page, debugDir, runtimeEvents };
 }
 
+// Zawieszony close() (martwy proces Chromium, zablokowany dialog) blokowalby
+// na zawsze `finally` workera i cancelJob, bo ta funkcja nie miala zadnego
+// limitu czasu. Blad samego close() nadal celowo polykamy - chodzi tylko o to,
+// zeby po CLOSE_TIMEOUT_MS funkcja mimo wszystko wrocila.
+const CLOSE_TIMEOUT_MS = 12000;
+
+async function closeWithTimeout(closable) {
+  if (!closable) return;
+  let timer = null;
+  try {
+    await Promise.race([
+      closable.close().catch(() => {}),
+      new Promise(resolve => { timer = setTimeout(resolve, CLOSE_TIMEOUT_MS); })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function closeAutomationSession(session) {
   if (!session) return;
-  await session.context?.close().catch(() => {});
-  await session.browser?.close().catch(() => {});
+  await closeWithTimeout(session.context);
+  await closeWithTimeout(session.browser);
 }

@@ -1,7 +1,6 @@
 /* Dokumenty seryjne PDF - style specyficzne dla tego modulu (reszta: /shared/*.css) */
 
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
-.field { display: grid; gap: 8px; }
 .field label { font-weight: 700; font-size: var(--text-sm); color: var(--text-secondary); }
 .hint, .muted, .small-note { font-size: var(--text-sm); color: var(--text-tertiary); line-height: var(--leading-snug); }
 .select { width: 100%; min-height: var(--hit-min); border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: 0 13px; font: inherit; background: var(--bg-surface); }
@@ -9,7 +8,6 @@
 
 .drop.field { border: 1.5px dashed var(--border-strong); border-radius: var(--radius-lg); padding: var(--space-4); background: var(--bg-surface-muted); min-height: 116px; }
 
-.button, button:not(.btn), .btn { }
 .button, a.button { border: 0; border-radius: var(--radius-md); min-height: var(--hit-min); padding: 0 18px; font: inherit; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: var(--brand-500); color: #fff; transition: background var(--duration-fast); text-decoration: none; }
 .button:hover, a.button:hover { background: var(--brand-600); text-decoration: none; }
 .button.ghost { background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-strong); }
@@ -22,12 +20,11 @@
 .status.ok { border-color: var(--success-100); background: var(--success-50); color: var(--success-600); }
 .status.err { border-color: var(--danger-100); background: var(--danger-50); color: var(--danger-600); }
 .status.warn { border-color: var(--warning-100); background: var(--warning-50); color: var(--warning-600); }
-.hidden { display: none !important; }
 
 .records-wrap { overflow: auto; border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--bg-surface); max-height: 520px; }
 .records { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
-.records th, .records td { border-bottom: 1px solid var(--border-default); padding: 9px 12px; text-align: left; white-space: nowrap; }
-.records th { position: sticky; top: 0; background: var(--bg-surface-muted); z-index: 1; color: var(--text-secondary); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
+.records th, .records td { border-bottom: 1px solid var(--border-default); padding: 9px 12px; text-align: left; overflow-wrap: anywhere; }
+.records th { position: sticky; top: 0; background: var(--bg-surface-muted); z-index: 1; color: var(--text-secondary); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .04em; }
 .records tr:hover td { background: var(--bg-surface-muted); }
 .records tbody tr.is-hidden { display: none; }
 .records tbody tr.is-selected td { background: var(--brand-50); }
@@ -50,10 +47,10 @@
 .progress-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .progress-title { font-weight: 700; font-size: var(--text-sm); }
 .progress-percent { font-weight: 800; color: var(--brand-600); font-variant-numeric: tabular-nums; }
-.bar { height: 10px; border-radius: 999px; background: var(--bg-sunken); overflow: hidden; }
-.bar span { display: block; height: 100%; width: 0; background: var(--brand-500); transition: width .2s; border-radius: 999px; }
+.bar { height: 10px; border-radius: var(--radius-full); background: var(--bg-sunken); overflow: hidden; }
+.bar span { display: block; height: 100%; width: 0; background: var(--brand-500); transition: width .2s; border-radius: var(--radius-full); }
 
-.pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 5px 11px; background: var(--bg-sunken); color: var(--text-secondary); font-size: 12.5px; font-weight: 700; }
+.pill { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-full); padding: 5px 11px; background: var(--bg-sunken); color: var(--text-secondary); font-size: 12.5px; font-weight: 700; }
 
 .summary-card { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: var(--space-3); }
 .metric { border: 1px solid var(--border-default); border-radius: var(--radius-lg); background: var(--bg-surface); padding: 13px; }
@@ -70,7 +67,7 @@
 .selection-counter { border: 1px solid var(--danger-100); background: var(--danger-50); color: var(--danger-600); border-radius: var(--radius-md); padding: 10px 14px; font-weight: 700; white-space: nowrap; }
 
 .marker-grid { display: grid; grid-template-columns: 1.1fr 1.1fr 150px auto; gap: 10px; align-items: end; margin-top: 10px; }
-.marker-head { font-size: 11.5px; color: var(--text-tertiary); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.marker-head { font-size: var(--text-2xs); color: var(--text-tertiary); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .marker-help { border: 1px solid var(--info-100); background: var(--info-50); color: var(--info-600); border-radius: var(--radius-md); padding: 11px 13px; font-weight: 600; line-height: 1.45; margin-bottom: 12px; }
 .marker-help code { background: var(--info-100); border-radius: 5px; padding: 1px 5px; }
 .mini-danger { border: 1px solid var(--danger-100); color: var(--danger-600); background: var(--bg-surface); border-radius: var(--radius-sm); padding: 9px 12px; font-weight: 700; cursor: pointer; }

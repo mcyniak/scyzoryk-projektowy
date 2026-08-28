@@ -1296,14 +1296,27 @@ app.post('/api/images/:jobId', heavyJobLimiter, upload.array('images', 400), asy
   try {
     const files = req.files || [];
     let imagePaths = [];
-    try { imagePaths = JSON.parse(req.body?.imagePaths || '[]'); } catch (_) { imagePaths = []; }
+    // Nieudany JSON.parse NIE gubi plikow (storeUploadedImages ma fallback na
+    // file.originalname), ale gubi STRUKTURE FOLDEROW (sciezki wzgledne), po
+    // ktorej rozpoznawane sa zdjecia per adres - a odpowiedz i tak wygladala
+    // na pelny sukces. Nie zwracamy 400 (pliki sa zapisane, a front na !ok
+    // przerywa caly przeplyw), tylko jawnie oznaczamy degradacje w odpowiedzi
+    // i w logach zadania.
+    let imagePathsWarning = null;
+    try {
+      imagePaths = JSON.parse(req.body?.imagePaths || '[]');
+    } catch (err) {
+      imagePaths = [];
+      imagePathsWarning = `Nie udalo sie odczytac listy sciezek zdjec (${err?.message || err}). Zdjecia zapisano po samych nazwach plikow, bez struktury folderow - dopasowanie zdjec do adresow moze byc niepelne. Wczytaj zdjecia jeszcze raz.`;
+    }
     if (!files.length) return res.status(400).json({ ok: false, message: 'Nie wybrano żadnych zdjęć.' });
     const { manifest, manifestPath, imageRoot } = await storeUploadedImages(job.id, files, imagePaths);
     job.imageRoot = imageRoot;
     job.imageManifestPath = manifestPath;
     persistJobsIndex();
     appendLog(job, 'info', 'Wczytano zdjęcia.', { count: manifest.files.length });
-    res.json({ ok: true, count: manifest.files.length });
+    if (imagePathsWarning) appendLog(job, 'error', imagePathsWarning);
+    res.json({ ok: true, count: manifest.files.length, warning: imagePathsWarning || undefined });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Błąd zapisu zdjęć.' });
   }

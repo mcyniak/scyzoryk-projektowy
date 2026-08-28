@@ -36,11 +36,28 @@ const PROVIDER_CONFIG_PATH = path.join(
 );
 
 function getActiveProvider() {
+  // UWAGA bezpieczenstwo danych: rozrozniamy 'brak pliku' od 'plik jest, ale
+  // nie da sie go odczytac'. Wczesniej kazdy blad (uszkodzony JSON, brak
+  // uprawnien) cicho wracal na 'gemini', wiec uzytkownik ktory swiadomie
+  // wybral tryb offline 'manual' zaczynal wysylac skany audytow do Google
+  // bez zadnego ostrzezenia. Przy nieczytelnej konfiguracji wybieramy
+  // bezpieczniejsza opcje (manual = nic nie opuszcza maszyny).
+  let raw;
   try {
-    const data = JSON.parse(fsSync.readFileSync(PROVIDER_CONFIG_PATH, 'utf8'));
+    raw = fsSync.readFileSync(PROVIDER_CONFIG_PATH, 'utf8');
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return 'gemini'; // nigdy nie konfigurowano
+    console.error(`[ocr-audytow] Nie mozna odczytac ${PROVIDER_CONFIG_PATH}: ${err.message}. Wymuszam tryb 'manual' (offline).`);
+    return 'manual';
+  }
+  try {
+    const data = JSON.parse(raw);
     if (VALID_PROVIDERS.has(data?.provider)) return data.provider;
-  } catch (_) { /* brak pliku/blad odczytu - domyslny nizej */ }
-  return 'gemini';
+    console.error(`[ocr-audytow] Nieznany dostawca w ${PROVIDER_CONFIG_PATH}. Wymuszam tryb 'manual' (offline).`);
+  } catch (err) {
+    console.error(`[ocr-audytow] Uszkodzony ${PROVIDER_CONFIG_PATH}: ${err.message}. Wymuszam tryb 'manual' (offline).`);
+  }
+  return 'manual';
 }
 
 function setActiveProvider(provider) {

@@ -170,10 +170,17 @@ function Get-MergeFieldName($field) {
   return $m.Groups[2].Value.Trim()
 }
 
+# Awarie podmiany MERGEFIELD byly dotad polykane pustym catch: dokument
+# wychodzil z surowym polem albo stara wartoscia, a rekord i tak trafial do
+# $created i job konczyl sie komunikatem "Zakonczono. Utworzono N PDF.".
+$script:mergeFieldFailures = New-Object System.Collections.Generic.List[object]
 function Replace-MergeFieldsInRange($range, $record, [System.Collections.Generic.List[object]]$fieldDebug) {
   if ($null -eq $range) { return }
   $count = 0
-  try { $count = [int]$range.Fields.Count } catch { return }
+  try { $count = [int]$range.Fields.Count } catch {
+    $script:mergeFieldFailures.Add("Nie mozna odczytac pol w zakresie dokumentu (naglowek/stopka/pole tekstowe) - $($_.Exception.Message)") | Out-Null
+    return
+  }
   for ($i = $count; $i -ge 1; $i--) {
     $field = $null
     try { $field = $range.Fields.Item($i) } catch { continue }
@@ -192,7 +199,9 @@ function Replace-MergeFieldsInRange($range, $record, [System.Collections.Generic
       try {
         $field.Select()
         $script:word.Selection.TypeText([string]$value)
-      } catch {}
+      } catch {
+        $script:mergeFieldFailures.Add("Nie udalo sie podmienic pola $name - $($_.Exception.Message)") | Out-Null
+      }
     }
   }
 }
@@ -206,7 +215,10 @@ function Replace-AllMergeFields($doc, $record) {
       try { $story = $story.NextStoryRange } catch { $story = $null }
     }
   } catch {
-    try { Replace-MergeFieldsInRange $doc.Range() $record $fieldDebug } catch {}
+    $script:mergeFieldFailures.Add("Iteracja po StoryRanges zawiodla - podmieniono pola TYLKO w glownym tekscie (bez naglowkow, stopek i pol tekstowych).") | Out-Null
+    try { Replace-MergeFieldsInRange $doc.Range() $record $fieldDebug } catch {
+      $script:mergeFieldFailures.Add("Zapasowa podmiana pol w glownym tekscie rowniez zawiodla - $($_.Exception.Message)") | Out-Null
+    }
   }
 
   try {
@@ -1055,6 +1067,7 @@ try {
         $narrativeFilledCount = Fill-NarrativeBlanks $mergedDoc $record $narrativeFieldDebug
 
         Write-Log "info" "Podmieniam pola MERGEFIELD." ([pscustomobject]@{ row = $rowNumber; address = $address })
+        $script:mergeFieldFailures.Clear()
         $fieldDebug = Replace-AllMergeFields $mergedDoc $record
         $textDebug = Replace-AllTextMarkers $mergedDoc $record $textReplacementRules
         if ($DebugMode) {
@@ -1219,6 +1232,11 @@ try {
         $merged = $null
 
         $created.Add([pscustomobject]@{ row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($pdfPath); path = $pdfPath }) | Out-Null
+        if ($script:mergeFieldFailures.Count -gt 0) {
+          $fieldMsg = "PDF powstal, ale nie wszystkie pola zostaly podmienione: " + ($script:mergeFieldFailures -join "; ")
+          $errors.Add([pscustomobject]@{ row = $rowNumber; message = $fieldMsg }) | Out-Null
+          Write-Event "record-error" "Rekord $($rowNumber): $($fieldMsg)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; error = $fieldMsg })
+        }
         Write-Event "record-done" "Gotowy PDF $($index)/$($total): $($address)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($pdfPath) })
       } catch {
         $msg = $_.Exception.Message

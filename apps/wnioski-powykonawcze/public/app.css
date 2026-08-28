@@ -56,4 +56,3 @@
 .small { font-size: 12px; color: var(--text-tertiary); margin-top: 4px; line-height: 1.35; }
 .envwarn { margin: var(--space-4) 0; padding: 13px; border-radius: var(--radius-md); background: var(--danger-50); border: 1px solid var(--danger-100); color: var(--danger-600); font-weight: 600; line-height: 1.45; }
 .file-state { font-size: 12px; font-weight: 700; color: var(--text-tertiary); min-width: 90px; text-align: right; }
-.hidden { display: none !important; }

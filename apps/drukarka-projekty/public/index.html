@@ -19,7 +19,7 @@
         </a>
         <span class="app-divider"></span>
         <div class="app-current-tool">
-          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-folder"/></svg>
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-folder"/></svg>
           <strong>Drukarka projektów</strong>
         </div>
       </div>
@@ -57,7 +57,7 @@
       <div class="panel-header">
         <div>
           <div class="kicker">Zacznij tutaj</div>
-          <h2 class="panel-title" style="font-size: var(--text-xl); margin-top: 6px;">Co drukujesz?</h2>
+          <h2 class="panel-title u-text-xl u-mt-2">Co drukujesz?</h2>
           <p class="panel-desc">Wybierz tryb pracy — drukarka przeprowadzi Cię przez resztę krok po kroku. Pamięta oba tryby, ale pracujesz zawsze tylko w jednym naraz.</p>
         </div>
       </div>
@@ -123,11 +123,11 @@
           <label class="candidate-select-all">
             <input type="checkbox" id="selectAllCandidates" /> Zaznacz wszystkie
           </label>
-          <span id="selectedCountLabel" class="hint" style="margin:0;">0 zaznaczonych</span>
+          <span id="selectedCountLabel" class="hint u-m-0">0 zaznaczonych</span>
         </div>
         <div id="candidatesSkippedWarning" class="review-summary" hidden></div>
         <ul id="candidateList" class="candidate-list"></ul>
-        <div style="margin-top: var(--space-4);">
+        <div class="u-mt-4">
           <button id="candidatesNextBtn" class="btn btn-primary" type="button" disabled>Dalej →</button>
         </div>
       </section>
@@ -141,7 +141,7 @@
           </div>
         </div>
         <div class="field-row">
-          <label class="option-field" style="grid-column: 1 / -1;">
+          <label class="option-field u-span-full">
             <span class="option-label">Ścieżka folderu bazowego</span>
             <div class="path-row">
               <input id="baseFolderInput" type="text" placeholder="G:\Dyski współdzielone\Dział Projektowy Sanitarny\..." />
@@ -165,7 +165,7 @@
         <div id="missingFoldersBox"></div>
         <div id="orderError"></div>
         <div id="addressGroups"></div>
-        <div style="margin-top: var(--space-4);">
+        <div class="u-mt-4">
           <button id="confirmOrderBtn" class="btn btn-primary btn-lg" type="button">Zatwierdź i dodaj wszystko do kolejki →</button>
         </div>
       </section>
@@ -189,7 +189,7 @@
           </div>
         </div>
         <div class="field-row">
-          <label class="option-field" style="grid-column: 1 / -1;">
+          <label class="option-field u-span-full">
             <span class="option-label">Ścieżka folderu WM</span>
             <div class="path-row">
               <input id="wmFolderInput" type="text" placeholder="G:\Dyski współdzielone\...\Projekty\<adres>\WM" />
@@ -197,7 +197,7 @@
             </div>
           </label>
         </div>
-        <label style="display:flex; align-items:center; gap:8px; font-weight:700; color: var(--text-secondary); cursor:pointer; margin-bottom: var(--space-4);">
+        <label class="u-toggle-row u-mb-4">
           <input type="checkbox" id="wmDokPodCheckbox" /> Wersja powykonawcza (dok.pod)
         </label>
         <button id="wmScanBtn" class="btn btn-primary" type="button">Skanuj folder WM</button>
@@ -215,14 +215,14 @@
         </div>
       </div>
       <div class="field-row">
-        <label class="option-field" style="grid-column: 1 / -1;">
+        <label class="option-field u-span-full">
           <span class="option-label">Drukarka</span>
           <select id="printerSelect">
             <option value="">Ładowanie listy drukarek...</option>
           </select>
         </label>
       </div>
-      <div id="queueStatusText" class="hint" style="margin-bottom: var(--space-3);">Kolejka jest pusta.</div>
+      <div id="queueStatusText" class="hint u-mb-3">Kolejka jest pusta.</div>
       <div class="field-row" id="printOnlyOptionsRow">
         <label class="option-field">
           <span class="option-label">Kopie</span>
@@ -236,12 +236,12 @@
           </select>
         </label>
       </div>
-      <label style="display:flex; align-items:center; gap:8px; font-weight:700; color: var(--text-secondary); cursor:pointer; margin-bottom: var(--space-3);">
+      <label class="u-toggle-row u-mb-3">
         <input type="checkbox" id="stampPowykonawczaCheckbox" /> Drukuj jako dokumentację powykonawczą (stempel na każdej stronie)
       </label>
-      <div style="display:flex; gap: var(--space-3); align-items:center;">
+      <div class="u-row-3">
         <button id="clearBtn" class="btn btn-secondary" type="button">Zacznij od nowa</button>
-        <button id="printBtn" class="btn btn-primary btn-lg print" type="button" style="margin-left:auto;">Drukuj</button>
+        <button id="printBtn" class="btn btn-primary btn-lg print u-ml-auto" type="button">Drukuj</button>
       </div>
       <div class="status-box">
         <div id="statusText">Gotowy</div>

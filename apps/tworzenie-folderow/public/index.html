@@ -19,7 +19,7 @@
         </a>
         <span class="app-divider"></span>
         <div class="app-current-tool">
-          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-table"/></svg>
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-table"/></svg>
           <strong>Tworzenie folderów</strong>
         </div>
       </div>
@@ -62,12 +62,12 @@
         </div>
       </div>
       <form id="planForm">
-        <div class="mode-switch" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:var(--space-4);">
-          <label style="display:flex;align-items:center;gap:8px;font-weight:600;">
+        <div class="mode-switch u-row-wrap u-mb-4">
+          <label class="u-row-600">
             <input type="radio" name="tfMode" value="structure" checked />
             Struktura inwestycji (WM/pompy/kolektory/kotły)
           </label>
-          <label style="display:flex;align-items:center;gap:8px;font-weight:600;">
+          <label class="u-row-600">
             <input type="radio" name="tfMode" value="simple" />
             Same foldery z adresów (dowolna tabela)
           </label>
@@ -81,14 +81,14 @@
           <span class="field-help" id="pathHelp">Folder, w którym leży już skrót .gsheet do tabeli adresowej tej inwestycji.</span>
         </label>
 
-        <label style="margin-top: var(--space-4);">Tabela adresowa (.xlsx)
+        <label class="u-mt-4">Tabela adresowa (.xlsx)
           <input type="file" name="excel" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
           <span class="field-help">Podgląd po wybraniu pliku. Plik .gsheet wyeksportuj najpierw do .xlsx (szczegóły w Pomocy).</span>
         </label>
 
-        <div id="simpleSheetBox" class="hidden" style="margin-top: var(--space-4);">
+        <div id="simpleSheetBox" class="hidden u-mt-4">
           <label>Arkusz z adresami
-            <select id="simpleSheet" style="width:100%;"></select>
+            <select class="u-w-full" id="simpleSheet"></select>
             <span class="field-help">Z każdego adresu w wybranym arkuszu powstanie jeden folder w folderze docelowym.</span>
           </label>
         </div>

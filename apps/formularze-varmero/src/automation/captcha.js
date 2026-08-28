@@ -59,10 +59,18 @@ export async function readCaptchaChallenge(page) {
     const word = match ? match[1].trim() : null;
     const labels = [...document.querySelectorAll('.cf7ic-icon-wrapper label')];
     if (!word || !labels.length) return null;
-    const options = labels.map((label, index) => {
+    // WAZNE: `index` musi byc pozycja radia w kolekcji
+    // '.cf7ic-icon-wrapper input[type=radio]', bo solveCaptcha klika przez
+    // .nth(index). Numerowanie po WSZYSTKICH labelach bylo bledne - jeden
+    // label bez radia przesuwal caly indeks i klikana byla zla ikona.
+    // Labelom bez radia dajemy index -1 (nieklikalne).
+    let radioIndex = 0;
+    const options = labels.map(label => {
       const input = label.querySelector('input[type=radio]');
       const path = label.querySelector('path');
-      return { index, pathPrefix: path ? path.getAttribute('d').slice(0, 60) : null, hasInput: Boolean(input) };
+      const hasInput = Boolean(input);
+      const index = hasInput ? radioIndex++ : -1;
+      return { index, pathPrefix: path ? path.getAttribute('d').slice(0, 60) : null, hasInput };
     });
     return { word, options };
   });
@@ -95,10 +103,11 @@ export async function solveCaptcha(page) {
   if (!catalogEntry) {
     throw new UnknownCaptchaIconError(challenge.word, challenge.options.map(o => o.pathPrefix).filter(Boolean));
   }
-  const matchIndex = challenge.options.findIndex(o => o.pathPrefix && o.pathPrefix.startsWith(catalogEntry.pathPrefix.slice(0, 40)));
-  if (matchIndex < 0) {
+  const matchedOption = challenge.options.find(o => o.hasInput && o.pathPrefix && o.pathPrefix.startsWith(catalogEntry.pathPrefix.slice(0, 40)));
+  if (!matchedOption) {
     throw new UnknownCaptchaIconError(challenge.word, challenge.options.map(o => o.pathPrefix).filter(Boolean));
   }
+  const matchIndex = matchedOption.index;
 
   const radios = page.locator('.cf7ic-icon-wrapper input[type=radio]');
   const target = radios.nth(matchIndex);
@@ -117,6 +126,16 @@ export async function solveCaptcha(page) {
   await page.mouse.move(box.x, box.y);
   await page.mouse.down();
   await page.mouse.up();
+
+  // Klik po wspolrzednych moze chybic (przesuniecie layoutu, nakladka, zmiana
+  // pozycji po scrollu), a bez tego sprawdzenia submitForm wyslalby formularz
+  // z nierozwiazana CAPTCHA i zmarnowal realne zgloszenie. Weryfikujemy wiec,
+  // ze docelowy radio faktycznie jest zaznaczony.
+  await page.waitForTimeout(150);
+  const checked = await target.isChecked().catch(() => false);
+  if (!checked) {
+    throw new Error(`Klik w CAPTCHE nie zaznaczyl opcji "${catalogEntry.label}" (radio nr ${matchIndex + 1}) - przerwano przed wyslaniem formularza.`);
+  }
 
   return catalogEntry.label;
 }

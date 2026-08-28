@@ -357,13 +357,25 @@ export async function runBatchJob(job, excelFilePath, { email: baseEmail, imapCo
   }
 
   const workerCount = Math.max(1, Math.min(job.concurrency, records.length));
-  await Promise.all(Array.from({ length: workerCount }, (_, i) => runWorker(i + 1)));
+  // Awaria workera (np. nieudany restart sesji Chromium) leciala przez
+  // Promise.all i omijala writeResultsCsv/writeSummary ponizej - po serii
+  // realnie wyslanych zgloszen uzytkownik nie dostawal ani CSV, ani
+  // podsumowania. Artefakty zapisujemy zawsze, blad propagujemy dalej.
+  let workerFatalError = null;
+  try {
+    await Promise.all(Array.from({ length: workerCount }, (_, i) => runWorker(i + 1)));
+  } catch (err) {
+    workerFatalError = err;
+    job.fatalError = String(err?.message || err);
+    console.error(`[formularze-varmero] Awaria workera: ${job.fatalError}`);
+  }
 
   job.current = null;
   job.finishedAt = new Date().toISOString();
-  job.status = job.circuitBroken ? 'fatal-error' : job.cancelRequested ? 'cancelled' : job.failed > 0 ? 'finished-with-errors' : 'finished';
+  job.status = (workerFatalError || job.circuitBroken) ? 'fatal-error' : job.cancelRequested ? 'cancelled' : job.failed > 0 ? 'finished-with-errors' : 'finished';
 
   await writeResultsCsv(job);
   await writeSummary(job);
+  if (workerFatalError) throw workerFatalError;
   return job;
 }

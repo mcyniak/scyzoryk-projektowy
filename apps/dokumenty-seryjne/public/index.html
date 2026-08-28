@@ -19,7 +19,7 @@
         </a>
         <span class="app-divider"></span>
         <div class="app-current-tool">
-          <svg class="icon" style="color: var(--text-tertiary)"><use href="/shared/icons.svg#i-file-check"/></svg>
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-file-check"/></svg>
           <strong>Dokumenty seryjne PDF</strong>
         </div>
       </div>
@@ -64,9 +64,9 @@
           <label>Szablony Word</label>
           <div id="templateSourceUpload">
             <input id="templateFile" type="file" accept=".docx" multiple>
-            <div class="hint" style="margin-top:6px">Kliknij i wybierz pliki szablonów (można zaznaczyć kilka naraz) - wykryte typy pojawią się poniżej po wczytaniu.</div>
+            <div class="hint u-mt-2">Kliknij i wybierz pliki szablonów (można zaznaczyć kilka naraz) - wykryte typy pojawią się poniżej po wczytaniu.</div>
           </div>
-          <div id="templateGroupsBox" class="hidden" style="margin-top:12px"><div class="marker-head" style="margin-bottom:6px">Które dokumenty wygenerować</div><div id="templateGroupsList"></div></div>
+          <div id="templateGroupsBox" class="hidden u-mt-3"><div class="marker-head u-mb-2">Które dokumenty wygenerować</div><div id="templateGroupsList"></div></div>
           <div class="hint">Plik z korespondencją seryjną, format DOCX.</div>
         </div>
         <div class="field drop">
@@ -75,7 +75,7 @@
           <div class="hint">Tabela z danymi i kolumną z adresem.</div>
         </div>
       </div>
-      <div class="field drop" style="margin-top:14px">
+      <div class="field drop u-mt-3">
         <label for="imagesFile">Zdjęcia (opcjonalne)</label>
         <input id="imagesFile" type="file" accept=".jpg,.jpeg,.png" webkitdirectory multiple>
         <div class="hint">Opcjonalne. Podfoldery nazwane adresami - zdjęcia JPG/PNG danego adresu trafią na koniec jego dokumentu (szczegóły w Pomocy).</div>
@@ -84,7 +84,7 @@
         <button id="uploadBtn" class="button">Sprawdź dane</button>
       </div>
       <div id="uploadStatus" class="status hidden"></div>
-      <div id="imageSummaryBox" class="hidden" style="margin-top:14px"></div>
+      <div id="imageSummaryBox" class="hidden u-mt-3"></div>
     </section>
 
     <section id="recordsPanel" class="panel hidden">
@@ -102,7 +102,7 @@
           <select id="sheetSelect" class="select"></select>
           <div class="hint">Wybierz arkusz z odpowiednią mocą, np. 8kW, 10kW albo 12kW.</div>
         </div>
-        <div id="uidColumnBox" class="hidden field" style="margin-top:12px"><label for="uidColumn">Kolumna wariantu (rozmiar zasobnika / moc pompy)</label><select id="uidColumn" class="select"></select><div class="hint">Wymagana, jeśli zaznaczone dokumenty mają warianty (np. rozmiar 250/300/400 albo moc pompy).</div></div>
+        <div id="uidColumnBox" class="hidden field u-mt-3"><label for="uidColumn">Kolumna wariantu (rozmiar zasobnika / moc pompy)</label><select id="uidColumn" class="select"></select><div class="hint">Wymagana, jeśli zaznaczone dokumenty mają warianty (np. rozmiar 250/300/400 albo moc pompy).</div></div>
         <div id="sheetHint" class="sheet-note">Po wczytaniu Excela wybierz właściwy arkusz.</div>
       </div>
 
@@ -143,19 +143,19 @@
         <div class="field">
           <label for="recordSearch">Wybierz adresy do zrobienia</label>
           <div id="filterRowsContainer">
-            <div class="filter-row" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+            <div class="filter-row u-row u-mb-2">
               <select id="filterColumn" title="Filtruj dokladnie po tej kolumnie zamiast szukac wszedzie">
                 <option value="">Szukaj we wszystkich kolumnach</option>
               </select>
               <input id="recordSearch" class="search-input" type="search" placeholder="Szukaj po adresie, ID albo beneficjencie...">
             </div>
           </div>
-          <button id="addFilterRowBtn" class="button ghost" type="button" style="margin-bottom:6px">+ Dodaj kolejny warunek</button>
+          <button id="addFilterRowBtn" class="button ghost u-mb-2" type="button">+ Dodaj kolejny warunek</button>
           <div class="small-note" id="recordSearchHint">Zostaw zaznaczone tylko te adresy, dla których chcesz teraz utworzyć PDF. Wybierz kolumnę, żeby filtrować po dokładnej wartości (kilka wartości oddziel przecinkiem, np. "1,2"). Dodaj kolejny warunek, żeby połączyć kilka kolumn naraz (np. Odbiór Gmina = 1,2 ORAZ Powykonawcze = PB) - wszystkie warunki muszą być spełnione równocześnie.</div>
         </div>
         <div>
           <div id="selectionCounter" class="selection-counter">0 zaznaczonych</div>
-          <div class="selection-buttons" style="margin-top:8px">
+          <div class="selection-buttons u-mt-2">
             <button id="selectAllBtn" class="button ghost" type="button">Zaznacz wszystkie</button>
             <button id="selectNoneBtn" class="button ghost" type="button">Odznacz wszystkie</button>
           </div>
@@ -175,7 +175,7 @@
         <div class="bar"><span id="progressBar"></span></div>
       </div>
 
-      <div class="records-wrap" style="margin-top:16px">
+      <div class="records-wrap u-mt-4">
         <table class="records" id="recordsTable"></table>
       </div>
 
@@ -191,7 +191,7 @@
           <h2 class="panel-title"><span class="step-num">3</span>Gotowe PDF-y</h2>
           <p id="resultDesc" class="panel-desc">Każdy adres został zapisany jako osobny PDF.</p>
         </div>
-        <div class="actions" style="margin-top:0">
+        <div class="actions u-mt-0">
           <a id="zipLink" class="button" href="#">Pobierz wszystkie PDF-y</a>
           <a id="resultLogsLink" class="button ghost hidden" href="#">Pobierz logi</a>
         </div>

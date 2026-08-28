@@ -227,7 +227,7 @@ function tylkoKosmetycznaRoznicaNazwy(a, b) {
   return shorter.every((tok, i) => longer[i] === tok);
 }
 
-function resolveAmbiguousMatches(baseFolder, matches, addressHint) {
+function resolveAmbiguousMatches(baseFolder, matches, addressHint, warnings) {
   let candidates = matches;
   if (addressHint?.adres) {
     const tokens = folderMatch.addressTokens(addressHint.adres);
@@ -253,23 +253,38 @@ function resolveAmbiguousMatches(baseFolder, matches, addressHint) {
   }
   let best = candidates[0];
   let bestMtime = -Infinity;
+  let statOk = 0;
   for (const rel of candidates) {
     try {
       const mtime = fs.statSync(path.join(baseFolder, rel)).mtimeMs;
+      statOk += 1;
       if (mtime > bestMtime) { bestMtime = mtime; best = rel; }
     } catch (_err) {}
+  }
+  // Rozstrzygniecie miedzy kosmetycznie roznymi duplikatami opiera sie
+  // WYLACZNIE na dacie modyfikacji. Gdy zaden statSync sie nie powiodl (np.
+  // chwilowa niedostepnosc dysku sieciowego), zwracany byl po prostu pierwszy
+  // kandydat - bez zadnego sygnalu, ze wybor nie mial pod soba dowodu. Wybor
+  // zostaje ten sam, ale zglaszamy go do sprawdzenia recznego.
+  if (statOk === 0 && candidates.length > 1 && warnings) {
+    warnings.push(`Znaleziono kilka kopii tego samego folderu adresu (${candidates.map(c => `"${c}"`).join(", ")}), ale nie udalo sie odczytac daty modyfikacji zadnej z nich - wybrano "${best}" jako pierwsza z brzegu, bez sprawdzenia ktora jest najswiezsza. Sprawdz recznie.`);
   }
   return best;
 }
 
 async function matchOneAddress(baseFolder, lpGmina, addressHint) {
-  const { matches, allFolders } = folderMatch.findAddressFolder(baseFolder, lpGmina);
+  const folderScanWarnings = [];
+  const { matches, allFolders, warnings: searchWarnings } = folderMatch.findAddressFolder(baseFolder, lpGmina);
+  folderScanWarnings.push(...(searchWarnings || []));
   if (matches.length === 0) {
-    return { ok: false, message: `Nie znaleziono folderu zaczynajacego sie od numeru "${lpGmina}".`, allFolders };
+    // Gdy czesc podfolderow byla nieczytelna, "nie znaleziono" moze byc
+    // falszywe - folder adresu moze istniec w pominietej galezi.
+    const suffix = folderScanWarnings.length ? ` UWAGA: czesci folderow nie udalo sie odczytac, wiec folder moze istniec, ale byl niewidoczny - ${folderScanWarnings.join(" ")}` : "";
+    return { ok: false, message: `Nie znaleziono folderu zaczynajacego sie od numeru "${lpGmina}".${suffix}`, allFolders, folderReadWarnings: folderScanWarnings.length ? folderScanWarnings : undefined };
   }
   let resolvedMatch = matches[0];
   if (matches.length > 1) {
-    const resolved = resolveAmbiguousMatches(baseFolder, matches, addressHint);
+    const resolved = resolveAmbiguousMatches(baseFolder, matches, addressHint, folderScanWarnings);
     if (!resolved) {
       return { ok: false, message: `Znaleziono wiecej niz jeden pasujacy folder dla numeru "${lpGmina}".`, matches };
     }
@@ -305,10 +320,18 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
   const classified = await folderMatch.detectByContent(folderPath, classifiedRaw);
 
   let attachmentsList = [];
+  // Awaria odczytu opisu technicznego (uszkodzony DOCX, blokada Google Drive)
+  // nie moze byc nieodroznialna od "OT nie wymienia zadnych zalacznikow" -
+  // kolejnosc cicho degradowala sie do heurystyki z nazw plikow, a endpoint
+  // i tak zwracal ok:true.
+  let attachmentsError = null;
   try {
     const otText = await folderMatch.extractText(folderPath, classified.techDescDocx, classified.techDescPdf);
     attachmentsList = folderMatch.extractAttachmentsList(otText);
-  } catch (err) {}
+  } catch (err) {
+    attachmentsError = `Nie udalo sie odczytac listy zalacznikow z opisu technicznego: ${err?.message || err}. Kolejnosc zalacznikow ustalono wylacznie z nazw plikow.`;
+    console.error(`[drukarka-projekty] ${attachmentsError}`);
+  }
 
   const order = folderMatch.buildOrder(classified, attachmentsList, addressHint);
   const orderWithPaths = order.map((entry, idx) => ({
@@ -327,7 +350,15 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
     attachmentsFound: attachmentsList,
     order: orderWithPaths,
     missingCount,
-    folderReadWarnings: classifiedRaw.warnings && classifiedRaw.warnings.length ? classifiedRaw.warnings : undefined
+    attachmentsError: attachmentsError || undefined,
+    folderReadWarnings: (() => {
+      // classified (po detectByContent) niesie warnings z classifyFiles PLUS
+      // awarie odczytu pojedynczych PDF-ow; folderScanWarnings niesie problemy
+      // z samym szukaniem/rozstrzyganiem folderu adresu.
+      const w = [...folderScanWarnings, ...(classified.warnings || classifiedRaw.warnings || [])];
+      if (attachmentsError) w.push(attachmentsError);
+      return w.length ? w : undefined;
+    })()
   };
 }
 
