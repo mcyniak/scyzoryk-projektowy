@@ -1,6 +1,6 @@
 ﻿{
   "name": "scyzoryk-projektowy",
-  "version": "1.3.10",
+  "version": "1.4.0",
   "private": true,
   "description": "Panel startowy dla lokalnych narzedzi Node.js Scyzoryka Projektowego.",
   "main": "server.js",
