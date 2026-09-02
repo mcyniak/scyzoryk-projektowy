@@ -77,3 +77,9 @@ tr:last-child td { border-bottom: 0; }
   .path-row { align-items: stretch; flex-direction: column; }
   .path-row button { width: 100%; }
 }
+
+/* Ekran ustawien skrzynki pocztowej (1.4.0) - te same klasy statusu co
+   #ocrUnlockStatus w apps/ocr-audytow/public/app.css, ten sam przeplyw. */
+#mailboxStatus { margin-top: var(--space-3); font-weight: 700; font-size: var(--text-sm); }
+#mailboxStatus.ok { color: var(--success-600); }
+#mailboxStatus.err { color: var(--danger-600); }

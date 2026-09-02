@@ -382,3 +382,128 @@ test('mailbox.js waitForVarmeroCard: znajduje karte w folderze Spam, gdy INBOX j
   assert.equal(result.buffer.toString(), 'KARTA-ZE-SPAMU');
   assert.equal(result.folder, '[Gmail]/Spam');
 });
+
+// --- mailboxConfig.js -----------------------------------------------------
+// Konfiguracja skrzynki z interfejsu (1.4.0). Kazdy test dostaje wlasny
+// SCYZORYK_DATA_ROOT i czysci zmienne VARMERO_IMAP_*, bo oba zrodla sa czytane
+// przy KAZDYM wywolaniu (a nie raz przy imporcie modulu) - inaczej testy
+// przeciekalyby na siebie nawzajem i na prawdziwy katalog danych uzytkownika.
+async function withMailboxEnv(t, envOverrides = {}) {
+  const dataRoot = await makeTempDir();
+  const saved = {
+    SCYZORYK_DATA_ROOT: process.env.SCYZORYK_DATA_ROOT,
+    VARMERO_IMAP_HOST: process.env.VARMERO_IMAP_HOST,
+    VARMERO_IMAP_USER: process.env.VARMERO_IMAP_USER,
+    VARMERO_IMAP_PASSWORD: process.env.VARMERO_IMAP_PASSWORD,
+    VARMERO_IMAP_PORT: process.env.VARMERO_IMAP_PORT
+  };
+  process.env.SCYZORYK_DATA_ROOT = dataRoot;
+  for (const key of ['VARMERO_IMAP_HOST', 'VARMERO_IMAP_USER', 'VARMERO_IMAP_PASSWORD', 'VARMERO_IMAP_PORT']) {
+    delete process.env[key];
+  }
+  Object.assign(process.env, envOverrides);
+  t.after(async () => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await fsp.rm(dataRoot, { recursive: true, force: true });
+  });
+  return dataRoot;
+}
+
+test('mailboxConfig.js: zapis z interfejsu i odczyt - haslo wraca do ImapFlow, ale NIGDY do przegladarki', async (t) => {
+  await withMailboxEnv(t);
+  const { saveMailboxConfig, readMailboxConfig, getMailboxStatus } = await importSrc('mailboxConfig.js');
+
+  saveMailboxConfig({ host: 'imap.gmail.com', user: 'biuro@firma.pl', password: 'tajnehaslo', port: 993 });
+
+  const config = readMailboxConfig();
+  assert.equal(config.host, 'imap.gmail.com');
+  assert.equal(config.auth.user, 'biuro@firma.pl');
+  assert.equal(config.auth.pass, 'tajnehaslo');
+  assert.equal(config.port, 993);
+  assert.equal(config.secure, true);
+
+  // To jest cala roznica miedzy tymi dwiema funkcjami - getMailboxStatus()
+  // zasila endpoint HTTP, wiec haslo nie moze sie w nim pojawic w ZADNEJ formie.
+  const status = getMailboxStatus();
+  assert.equal(status.configured, true);
+  assert.equal(status.source, 'file');
+  assert.equal(status.user, 'biuro@firma.pl');
+  assert.equal(JSON.stringify(status).includes('tajnehaslo'), false);
+});
+
+test('mailboxConfig.js: haslo do aplikacji Google wklejone ze spacjami dziala (spacje sa formatowaniem, nie trescia hasla)', async (t) => {
+  await withMailboxEnv(t);
+  const { saveMailboxConfig, readMailboxConfig } = await importSrc('mailboxConfig.js');
+
+  saveMailboxConfig({ host: 'imap.gmail.com', user: 'biuro@firma.pl', password: 'abcd efgh ijkl mnop' });
+  assert.equal(readMailboxConfig().auth.pass, 'abcdefghijklmnop');
+});
+
+test('mailboxConfig.js: zmienne srodowiskowe maja pierwszenstwo przed plikiem (administrator nie zostaje nadpisany klikaniem w interfejsie)', async (t) => {
+  await withMailboxEnv(t);
+  const { saveMailboxConfig, readMailboxConfig, getMailboxStatus } = await importSrc('mailboxConfig.js');
+
+  saveMailboxConfig({ host: 'imap.gmail.com', user: 'z-pliku@firma.pl', password: 'plik' });
+  process.env.VARMERO_IMAP_HOST = 'imap.firma.local';
+  process.env.VARMERO_IMAP_USER = 'ze-srodowiska@firma.pl';
+  process.env.VARMERO_IMAP_PASSWORD = 'srodowisko';
+
+  assert.equal(readMailboxConfig().auth.user, 'ze-srodowiska@firma.pl');
+  assert.equal(getMailboxStatus().source, 'env');
+});
+
+test('mailboxConfig.js: adres bez "@" jest odrzucany przy zapisie, a nie dopiero w trakcie paczki (deriveSubmissionEmail dzieli adres na "@")', async (t) => {
+  await withMailboxEnv(t);
+  const { validateMailboxInput } = await importSrc('mailboxConfig.js');
+  const { deriveSubmissionEmail } = await importSrc('jobs.js');
+
+  assert.throws(() => validateMailboxInput({ host: 'imap.gmail.com', user: 'biuro', password: 'x' }), /pełnym adresem e-mail/);
+  // Kontrakt, ktorego pilnuje powyzsza walidacja: bez "@" generowanie aliasu
+  // plusowego rzuca - czyli PO wyslaniu nieodwracalnego zgloszenia.
+  assert.throws(() => deriveSubmissionEmail('biuro'), /bez "@"/);
+  assert.throws(() => validateMailboxInput({ host: '', user: 'biuro@firma.pl', password: 'x' }), /serwera poczty/);
+  assert.throws(() => validateMailboxInput({ host: 'imap.gmail.com', user: 'biuro@firma.pl', password: '   ' }), /hasło/);
+});
+
+test('mailboxConfig.js: uszkodzony plik konfiguracji nie udaje poprawnej skrzynki', async (t) => {
+  const dataRoot = await withMailboxEnv(t);
+  const { getMailboxConfigPath, readMailboxConfig, getMailboxStatus } = await importSrc('mailboxConfig.js');
+
+  const configPath = getMailboxConfigPath();
+  assert.equal(configPath.startsWith(dataRoot), true, 'plik musi lezec w katalogu danych Scyzoryka, nie obok kodu apki');
+  await fsp.writeFile(configPath, '{ to nie jest json', 'utf8');
+
+  assert.equal(readMailboxConfig(), null);
+  assert.equal(getMailboxStatus().configured, false);
+});
+
+test('mailboxConfig.js describeImapError: odrozniamy zle haslo od braku polaczenia (inna naprawa po stronie uzytkownika)', async (t) => {
+  await withMailboxEnv(t);
+  const { describeImapError } = await importSrc('mailboxConfig.js');
+
+  assert.match(describeImapError(new Error('Invalid credentials (Failure)')), /hasło do aplikacji/);
+  assert.match(describeImapError(Object.assign(new Error('getaddrinfo ENOTFOUND imap.gmial.com'), { code: 'ENOTFOUND' })), /Nie znaleziono takiego serwera/);
+  assert.match(describeImapError(Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' })), /połączyć z serwerem/);
+});
+
+test('mailboxConfig.js testMailboxConnection: wylogowuje sie takze gdy logowanie sie nie powiodlo (bez tego kazda nieudana proba zostawia wiszace polaczenie)', async (t) => {
+  await withMailboxEnv(t);
+  const { testMailboxConnection, validateMailboxInput } = await importSrc('mailboxConfig.js');
+
+  let loggedOut = false;
+  const input = validateMailboxInput({ host: 'imap.gmail.com', user: 'biuro@firma.pl', password: 'zle' });
+  await assert.rejects(
+    () => testMailboxConnection(input, {
+      createClient: () => ({
+        connect: async () => { throw new Error('Invalid credentials'); },
+        list: async () => [],
+        logout: async () => { loggedOut = true; }
+      })
+    }),
+    /Invalid credentials/
+  );
+  assert.equal(loggedOut, true);
+});

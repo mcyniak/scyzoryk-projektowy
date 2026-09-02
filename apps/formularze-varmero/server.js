@@ -15,6 +15,7 @@ import { APP_VERSION, PORT, BATCH_CONCURRENCY_DEFAULT, BATCH_CONCURRENCY_MAX } f
 import { readTabelaAdresowa } from './src/excel.js';
 import { calculate } from './src/rules.js';
 import { createJob, jobs, runBatchJob, cancelJob, cancelAllJobs } from './src/jobs.js';
+import { readMailboxConfig, getMailboxStatus, saveMailboxConfig, validateMailboxInput, testMailboxConnection, describeImapError } from './src/mailboxConfig.js';
 import appPaths from '../../lib/appPaths.js';
 import telemetryLib from '../../lib/telemetry.js';
 import timeBenchmarks from '../../lib/timeBenchmarks.js';
@@ -214,21 +215,13 @@ app.post('/api/batch/preview', heavyJobLimiter, (req, res, next) => {
   }
 });
 
-// Dane skrzynki IMAP - na razie tylko zmienne srodowiskowe (placeholder).
-// Docelowy mechanizm (alias plusowy per instalator, konfiguracja przetrwajaca
-// aktualizacje - patrz plan, wzorowany na lib/ocrConfigMigration.js) NIE jest
-// jeszcze zbudowany, bo nie ma jeszcze prawdziwej skrzynki do skonfigurowania.
+// Dane skrzynki IMAP - zmienne srodowiskowe ALBO plik zapisany z interfejsu,
+// patrz src/mailboxConfig.js (tam pelne uzasadnienie kolejnosci zrodel).
+// Do 1.3.10 byly tu tylko zmienne srodowiskowe, oznaczone wprost jako
+// placeholder - w praktyce oznaczalo to, ze skrzynki nie dalo sie ustawic bez
+// fizycznego dostepu do danego komputera.
 function readImapConfig() {
-  const host = process.env.VARMERO_IMAP_HOST;
-  const user = process.env.VARMERO_IMAP_USER;
-  const pass = process.env.VARMERO_IMAP_PASSWORD;
-  if (!host || !user || !pass) return null;
-  return {
-    host,
-    port: Number(process.env.VARMERO_IMAP_PORT || 993),
-    secure: String(process.env.VARMERO_IMAP_SECURE || 'true').toLowerCase() !== 'false',
-    auth: { user, pass }
-  };
+  return readMailboxConfig();
 }
 
 // 1:1 wzor z apps/formularze-ecodan/server.js#parseSelectedRows.
@@ -250,9 +243,11 @@ function parseSelectedRows(value) {
 // Audyt UX 2026-08-21: tresc widoczna uzytkownikowi nie powinna wymieniac
 // nazw zmiennych srodowiskowych (VARMERO_IMAP_HOST/USER/PASSWORD) - to nic
 // nie znaczy dla nietechnicznego pracownika biura. Pelny szczegol techniczny
-// zostaje w logu serwera (console.error nizej), na ekran idzie tylko
-// wskazowka "zglos do administratora".
-const MAILBOX_NOT_CONFIGURED_MESSAGE = 'Skrzynka pocztowa do odbioru kart Varmero nie jest jeszcze skonfigurowana na tym komputerze - zgłoś to do administratora/IT przed uruchomieniem zgłoszeń.';
+// zostaje w logu serwera, na ekran idzie tylko instrukcja co kliknac.
+// Od 1.4.0 komunikat kieruje do przycisku "Skrzynka pocztowa" w tym samym
+// oknie - wczesniej mowil "zglos do administratora/IT", bo konfiguracja byla
+// mozliwa TYLKO przez zmienne srodowiskowe na danym komputerze.
+const MAILBOX_NOT_CONFIGURED_MESSAGE = 'Skrzynka pocztowa do odbioru kart Varmero nie jest jeszcze skonfigurowana na tym komputerze - kliknij "Skrzynka pocztowa" u góry okna i podaj adres oraz hasło do aplikacji.';
 
 // Audyt UX 2026-08-21: brak konfiguracji skrzynki wczesniej wykrywano
 // dopiero w /api/batch/start (ostatnie kliknieccie, po wgraniu Excela,
@@ -261,7 +256,54 @@ const MAILBOX_NOT_CONFIGURED_MESSAGE = 'Skrzynka pocztowa do odbioru kart Varmer
 // blad, ktory dalo sie wykryc od razu. Ten endpoint pozwala frontendowi
 // sprawdzic to od razu po zaladowaniu strony.
 app.get('/api/mailbox-status', (req, res) => {
-  res.json({ ok: true, configured: Boolean(readImapConfig()) });
+  // getMailboxStatus() NIGDY nie zwraca hasla - tylko serwer, adres i zrodlo
+  // konfiguracji (patrz src/mailboxConfig.js). Adres jest potrzebny na ekranie,
+  // zeby uzytkownik widzial, NA KTORA skrzynke przyjda karty, zanim wysle
+  // nieodwracalne zgloszenia.
+  res.json({ ok: true, ...getMailboxStatus() });
+});
+
+// Zapis danych skrzynki z interfejsu - wzorowany na
+// apps/ocr-audytow/server.js#/api/ocr/setup-api-key (ten sam przeplyw:
+// zablokowany ekran -> jeden formularz -> odblokowanie bez restartu).
+//
+// Roznica wobec OCR, swiadoma: zanim cokolwiek zapiszemy, PROBUJEMY SIE
+// ZALOGOWAC. W OCR bledny klucz kosztuje jedno nieudane zapytanie, tutaj
+// wyszedlby dopiero przy pierwszej paczce - czyli PO wyslaniu prawdziwych,
+// nieodwracalnych zgloszen do kalkulatora Varmero, ktorych nie da sie cofnac
+// ani powtorzyc za darmo. `force` pozwala zapisac mimo nieudanego testu (np.
+// chwilowy brak internetu przy konfiguracji z wyprzedzeniem), ale wymaga
+// swiadomego drugiego klikniecia w interfejsie.
+app.post('/api/mailbox-config', async (req, res) => {
+  let clean;
+  try {
+    clean = validateMailboxInput({
+      host: req.body?.host,
+      user: req.body?.user,
+      password: req.body?.password,
+      port: req.body?.port
+    });
+  } catch (err) {
+    return res.status(400).json({ ok: false, error: String(err?.message || err) });
+  }
+
+  const force = req.body?.force === true || String(req.body?.force || '').toLowerCase() === 'true';
+  if (!force) {
+    try {
+      await testMailboxConnection(clean);
+    } catch (err) {
+      console.error(`[formularze-varmero] Test logowania do skrzynki nie powiodl sie: ${err?.message || err}`);
+      return res.status(400).json({ ok: false, error: describeImapError(err), canForce: true });
+    }
+  }
+
+  try {
+    const status = saveMailboxConfig(clean);
+    return res.json({ ok: true, verified: !force, ...status });
+  } catch (err) {
+    console.error(`[formularze-varmero] Nie udalo sie zapisac konfiguracji skrzynki: ${err?.message || err}`);
+    return res.status(500).json({ ok: false, error: 'Nie udało się zapisać ustawień skrzynki na tym komputerze.' });
+  }
 });
 
 function publicJob(job) {

@@ -25,6 +25,11 @@
       </div>
       <div class="app-header-right">
         <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <span class="hint" id="mailboxActiveNote" hidden></span>
+        <button type="button" id="mailboxSettingsBtn" class="btn btn-ghost btn-sm">
+          <svg class="icon"><use href="/shared/icons.svg#i-inbox"/></svg>
+          Skrzynka pocztowa
+        </button>
         <a class="btn btn-ghost btn-sm" href="pomoc.html">
           <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
           Pomoc
@@ -53,6 +58,46 @@
     </section>
 
     <div id="imapNotice" class="panel notice hidden" role="alert"></div>
+
+    <section class="panel" id="mailboxPanel" hidden>
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title" id="mailboxPanelTitle">Skrzynka pocztowa do odbioru kart</h2>
+          <p class="panel-desc">Karty wynikowe przychodzą mailem - podaj skrzynkę, z której Scyzoryk ma je odebrać. Wpisujesz to raz na tym komputerze.</p>
+        </div>
+      </div>
+
+      <p class="notice blue" id="mailboxEnvNotice" hidden>Na tym komputerze skrzynka jest ustawiona na stałe przez administratora (zmienna środowiskowa) i tego ekranu nie da się nadpisać.</p>
+
+      <form id="mailboxForm">
+        <label>Adres skrzynki (e-mail)
+          <input type="email" id="mailboxUser" placeholder="nazwa@firma.pl" autocomplete="off" required />
+          <span class="field-help">Na ten adres kalkulator Varmero wyśle karty. Każde zgłoszenie dostaje własny wariant tego adresu, więc karty nie mylą się między adresami inwestycji.</span>
+        </label>
+
+        <label class="u-mt-4">Hasło do aplikacji
+          <input type="password" id="mailboxPassword" autocomplete="off" required />
+          <span class="field-help">Dla Gmaila to <strong>hasło do aplikacji</strong> (Konto Google → Bezpieczeństwo → Hasła do aplikacji), a nie zwykłe hasło do poczty - zwykłe zostanie odrzucone. Spacje możesz wkleić, są usuwane automatycznie.</span>
+        </label>
+
+        <label class="u-mt-4">Serwer poczty przychodzącej (IMAP)
+          <input type="text" id="mailboxHost" value="imap.gmail.com" autocomplete="off" required />
+          <span class="field-help">Dla Gmaila zostaw <code>imap.gmail.com</code>. Dla innej poczty zapytaj administratora o adres serwera IMAP.</span>
+        </label>
+
+        <label class="u-mt-4">Port
+          <input type="number" id="mailboxPort" value="993" min="1" max="65535" />
+          <span class="field-help">Prawie zawsze 993 (połączenie szyfrowane).</span>
+        </label>
+
+        <div class="hero-actions u-mt-4">
+          <button type="submit" id="mailboxSaveBtn" class="btn btn-primary">Sprawdź i zapisz</button>
+          <button type="button" id="mailboxForceSaveBtn" class="btn btn-secondary" hidden>Zapisz mimo to</button>
+          <button type="button" id="mailboxCancelBtn" class="btn btn-secondary" hidden>Anuluj</button>
+        </div>
+        <div id="mailboxStatus"></div>
+      </form>
+    </section>
 
     <section class="panel" id="batchPanel">
       <div class="panel-header">

@@ -217,7 +217,11 @@ Klucz API (jeśli go używasz) jest zapisywany lokalnie na Twoim komputerze i ni
 1. Dodaj Excel z tabelą adresową (kolumna „Rodzaj pompy” — tylko wiersze „Powietrze-woda” trafiają do kalkulatora).
 2. Podaj gminę, kod pocztowy, strefę klimatyczną i województwo dla całej paczki.
 3. Zaznacz adresy do zgłoszenia.
-4. Podaj adres e-mail, na który mają przyjść karty wynikowe (Scyzoryk sam odbiera je z poczty i zapisuje jako PDF).
+4. Przy pierwszym uruchomieniu podaj skrzynkę pocztową (przycisk **Skrzynka pocztowa** u góry okna): adres e-mail, hasło do aplikacji i serwer IMAP. Scyzoryk loguje się do niej, żeby odebrać karty wynikowe i zapisać je jako PDF. Ustawienie wpisuje się raz — zostaje w katalogu danych i przeżywa aktualizacje.
+   - Dla Gmaila potrzebne jest **hasło do aplikacji** (Konto Google → Bezpieczeństwo → Hasła do aplikacji), nie zwykłe hasło do poczty. Wymaga włączonej weryfikacji dwuetapowej.
+   - Program próbuje się zalogować, zanim zapisze ustawienia, więc błędne dane wychodzą od razu — a nie dopiero po wysłaniu nieodwracalnych zgłoszeń do kalkulatora.
+   - Skrzynka musi obsługiwać adresy plusowe (`nazwa+cos@domena`) — Scyzoryk nadaje każdemu zgłoszeniu własny wariant adresu, żeby karty nie pomyliły się między adresami inwestycji.
+   - Administrator może zamiast tego ustawić zmienne środowiskowe `VARMERO_IMAP_HOST`/`USER`/`PASSWORD` (opcjonalnie `PORT`, `SECURE`) — mają pierwszeństwo przed ekranem w programie, który wtedy pokazuje, że decyduje ustawienie systemowe.
 5. Kliknij start — narzędzie samo wypełnia kalkulator Varmero dla każdego adresu i pobiera kartę wynikową mailem.
 
 ## 15. Nazywarka skanów

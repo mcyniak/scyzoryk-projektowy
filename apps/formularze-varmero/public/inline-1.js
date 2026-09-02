@@ -93,13 +93,131 @@ document.querySelector('#wojewodztwo').addEventListener('change', (event) => {
 // Excela i wypelnieniu wszystkich pol) - sprawdzamy to od razu po
 // zaladowaniu strony, zeby uzytkownik nie stracil czasu na przygotowanie
 // calej paczki tylko po to, zeby na koncu dostac ten sam blad.
-(async function sprawdzSkrzynkeOdRazu() {
+// Od 1.4.0 brak konfiguracji NIE jest juz slepym zaulkiem ("zglos do
+// administratora") - ten sam ekran pozwala ja od razu uzupelnic, dokladnie jak
+// klucz API w OCR audytow. Panel otwiera sie sam tylko wtedy, gdy skrzynki
+// naprawde nie ma; skonfigurowana skrzynka schodzi do dyskretnej notki w
+// naglowku, zeby nie zabierac miejsca na glownym przeplywie.
+function renderMailboxStatus(status) {
+  const note = document.querySelector('#mailboxActiveNote');
+  const envNotice = document.querySelector('#mailboxEnvNotice');
+  const form = document.querySelector('#mailboxForm');
+  const cancelBtn = document.querySelector('#mailboxCancelBtn');
+
+  if (status?.configured) {
+    note.hidden = false;
+    note.textContent = `Karty przyjdą na: ${status.user}`;
+    cancelBtn.hidden = false;
+    hideImapNotice();
+  } else {
+    note.hidden = true;
+    note.textContent = '';
+    cancelBtn.hidden = true;
+  }
+
+  // Zmienna srodowiskowa przebija plik (patrz src/mailboxConfig.js), wiec
+  // zostawienie klikalnego formularza bylby klamstwem - zapis by sie udal, a
+  // narzedzie i tak uzywaloby dalej wartosci ze srodowiska.
+  const lockedByEnv = status?.source === 'env';
+  envNotice.hidden = !lockedByEnv;
+  Array.from(form.elements).forEach(el => { el.disabled = lockedByEnv; });
+
+  if (status?.configured) {
+    document.querySelector('#mailboxUser').value = status.user || '';
+    document.querySelector('#mailboxHost').value = status.host || 'imap.gmail.com';
+    document.querySelector('#mailboxPort').value = status.port || 993;
+  }
+}
+
+function setMailboxPanelOpen(open) {
+  document.querySelector('#mailboxPanel').hidden = !open;
+  if (open) document.querySelector('#mailboxPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function refreshMailboxStatus({ openIfMissing = false } = {}) {
   try {
     const res = await fetch('/api/mailbox-status');
     const json = await res.json().catch(() => null);
-    if (json?.ok && json.configured === false) showImapNotice('Skrzynka pocztowa do odbioru kart Varmero nie jest jeszcze skonfigurowana na tym komputerze - zgłoś to do administratora/IT przed uruchomieniem zgłoszeń.');
-  } catch (_) { /* brak polaczenia - blad i tak wyjdzie na jaw przy starcie */ }
-})();
+    if (!json?.ok) return null;
+    renderMailboxStatus(json);
+    if (json.configured === false) {
+      showImapNotice('Skrzynka pocztowa do odbioru kart Varmero nie jest jeszcze skonfigurowana na tym komputerze - uzupełnij ją poniżej, zanim uruchomisz zgłoszenia.');
+      if (openIfMissing) setMailboxPanelOpen(true);
+    }
+    return json;
+  } catch (_) {
+    // brak polaczenia - blad i tak wyjdzie na jaw przy starcie paczki
+    return null;
+  }
+}
+
+refreshMailboxStatus({ openIfMissing: true });
+
+document.querySelector('#mailboxSettingsBtn').addEventListener('click', () => {
+  const panel = document.querySelector('#mailboxPanel');
+  setMailboxPanelOpen(panel.hidden);
+});
+
+document.querySelector('#mailboxCancelBtn').addEventListener('click', () => {
+  document.querySelector('#mailboxStatus').textContent = '';
+  document.querySelector('#mailboxStatus').className = '';
+  document.querySelector('#mailboxForceSaveBtn').hidden = true;
+  setMailboxPanelOpen(false);
+});
+
+async function submitMailboxConfig(force) {
+  const statusEl = document.querySelector('#mailboxStatus');
+  const saveBtn = document.querySelector('#mailboxSaveBtn');
+  const forceBtn = document.querySelector('#mailboxForceSaveBtn');
+  const body = {
+    user: document.querySelector('#mailboxUser').value.trim(),
+    password: document.querySelector('#mailboxPassword').value,
+    host: document.querySelector('#mailboxHost').value.trim(),
+    port: Number(document.querySelector('#mailboxPort').value) || 993,
+    force: force === true
+  };
+
+  saveBtn.disabled = true;
+  forceBtn.disabled = true;
+  statusEl.className = '';
+  statusEl.textContent = force ? 'Zapisuję bez sprawdzenia...' : 'Sprawdzam logowanie do skrzynki...';
+  try {
+    const res = await fetch('/api/mailbox-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
+      body: JSON.stringify(body)
+    });
+    const json = await res.json().catch(() => null);
+    if (!json?.ok) {
+      // canForce oznacza "dane wygladaja poprawnie, ale nie udalo sie
+      // zalogowac" - np. chwilowy brak internetu. Blad walidacji (zly adres)
+      // go NIE ustawia, bo tam zapis na sile niczego by nie naprawil.
+      forceBtn.hidden = json?.canForce !== true;
+      throw new Error(json?.error || 'Nie udało się zapisać ustawień skrzynki.');
+    }
+    statusEl.className = 'ok';
+    statusEl.textContent = json.verified
+      ? 'Gotowe - zalogowano do skrzynki i zapisano ustawienia.'
+      : 'Zapisano BEZ sprawdzenia logowania. Jeśli hasło jest błędne, zgłoszenia wyjdą, ale karty nie zostaną odebrane.';
+    forceBtn.hidden = true;
+    document.querySelector('#mailboxPassword').value = '';
+    renderMailboxStatus(json);
+    hideImapNotice();
+  } catch (err) {
+    statusEl.className = 'err';
+    statusEl.textContent = err.message || 'Nie udało się zapisać ustawień skrzynki.';
+  } finally {
+    saveBtn.disabled = false;
+    forceBtn.disabled = false;
+  }
+}
+
+document.querySelector('#mailboxForm').addEventListener('submit', (event) => {
+  event.preventDefault();
+  submitMailboxConfig(false);
+});
+
+document.querySelector('#mailboxForceSaveBtn').addEventListener('click', () => submitMailboxConfig(true));
 
 document.querySelector('#excelFile').addEventListener('change', () => loadAddressPreview());
 document.querySelector('#reloadPreview').addEventListener('click', () => loadAddressPreview());

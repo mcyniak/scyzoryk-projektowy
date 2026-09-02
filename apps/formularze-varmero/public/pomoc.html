@@ -56,7 +56,8 @@
 
       <div class="help-callout good">
         <span class="help-callout-label">Skrzynka pocztowa</span>
-        <p>Karty wynikowe wracają na skrzynkę skonfigurowaną centralnie w Scyzoryku — nie trzeba jej tu podawać. Każde zgłoszenie dostaje własny, unikalny wariant adresu, więc karty nigdy się nie pomylą między wierszami.</p>
+        <p>Skrzynkę podajesz raz, przyciskiem <strong>Skrzynka pocztowa</strong> u góry okna narzędzia — ustawienie zostaje na tym komputerze i przeżywa aktualizacje. Program próbuje się do niej zalogować, zanim cokolwiek zapisze, więc błędne hasło wychodzi od razu, a nie dopiero po wysłaniu prawdziwych zgłoszeń. Dla Gmaila potrzebne jest <strong>hasło do aplikacji</strong> (Konto Google → Bezpieczeństwo → Hasła do aplikacji), nie zwykłe hasło do poczty.</p>
+        <p>W samym formularzu zgłoszeń adresu nie podajesz. Każde zgłoszenie dostaje własny, unikalny wariant adresu skrzynki, więc karty nigdy się nie pomylą między wierszami.</p>
       </div>
 
       <div class="help-callout warn">
@@ -69,7 +70,9 @@
         <div><dt>„Dozwolone są tylko pliki .xlsx. Pliki .xls zapisz najpierw jako .xlsx.”</dt><dd>Otwórz plik w Excelu i zapisz go jako .xlsx (Plik → Zapisz jako → Skoroszyt programu Excel), a dopiero potem wgraj go ponownie.</dd></div>
         <div><dt>„Plik nie wygląda jak poprawny XLSX. Sprawdź, czy to nie jest skrót .gsheet albo stary plik .xls.”</dt><dd>Program sprawdza rzeczywistą zawartość pliku. Jeśli to skrót z Dysku Google (.gsheet), wyeksportuj go najpierw jako .xlsx (Plik → Pobierz → Microsoft Excel).</dd></div>
         <div><dt>„Nie przesłano pliku Excel.”</dt><dd>Wybierz plik w polu „Plik Excel tabeli adresowej”, zanim uruchomisz sprawdzanie albo zgłoszenia.</dd></div>
-        <div><dt>„Skrzynka pocztowa nie jest jeszcze skonfigurowana (brak VARMERO_IMAP_HOST/USER/PASSWORD) - bez niej nie da się odebrać kart.”</dt><dd>Bez skonfigurowanej skrzynki program nie odbierze kart wynikowych z maila. To ustawienie konfiguruje się na poziomie instalacji Scyzoryka — zgłoś to administratorowi środowiska, nie próbuj obejść tego samodzielnie.</dd></div>
+        <div><dt>„Skrzynka pocztowa do odbioru kart Varmero nie jest jeszcze skonfigurowana na tym komputerze…”</dt><dd>Kliknij <strong>Skrzynka pocztowa</strong> u góry okna i podaj adres skrzynki oraz hasło do aplikacji. Bez tego program wyśle zgłoszenia, ale nie odbierze kart wynikowych z maila.</dd></div>
+        <div><dt>„Skrzynka odrzuciła logowanie…”</dt><dd>Najczęściej wpisane zostało zwykłe hasło do poczty zamiast <strong>hasła do aplikacji</strong>. W Gmailu hasła do aplikacji wymagają włączonej weryfikacji dwuetapowej. Jeśli firma używa Microsoft 365, dostęp IMAP bywa wyłączony przez administratora tenanta — wtedy hasło nie jest problemem i trzeba to zgłosić do IT.</dd></div>
+        <div><dt>„Na tym komputerze skrzynka jest ustawiona na stałe przez administratora…”</dt><dd>Na tej maszynie dane skrzynki pochodzą ze zmiennej środowiskowej ustawionej przez IT i mają pierwszeństwo przed tym ekranem. Zmiana wymaga kontaktu z administratorem.</dd></div>
         <div><dt>„Podaj strefę klimatyczną (1-5) - kalkulator Varmero jej wymaga, a nie da się jej wyczytać z tabeli adresowej.”</dt><dd>Wybierz strefę ręcznie z listy przed uruchomieniem zgłoszeń — program nie zgaduje jej z Excela.</dd></div>
         <div><dt>„Nieznana strefa klimatyczna: …” (błąd w trakcie zgłoszenia)</dt><dd>Kalkulator Varmero nie rozpoznał wybranej wartości strefy. Sprawdź, czy w polu Strefa klimatyczna wybrano jedną z wartości I–V, i spróbuj ponownie.</dd></div>
         <div><dt>„CAPTCHA jeszcze się nie załadowała (widget pusty) po odczekaniu.” / „Nie udało się trafić znanej ikony CAPTCHY po kilku próbach…”</dt><dd>Kalkulator producenta chwilowo nie odpowiedział albo captcha zmieniła układ ikon. Zgłoszenie tego wiersza kończy się błędem, ale reszta paczki jest kontynuowana — popraw dane, jeśli to konieczne, i ponów tylko brakujące adresy.</dd></div>
