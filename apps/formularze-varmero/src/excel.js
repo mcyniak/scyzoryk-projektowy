@@ -82,10 +82,24 @@ function buildHeaderIndex(headerRow) {
   return map;
 }
 
+// Audyt: wymagalo DOKLADNEGO dopasowania komorki do "adres" - realny naglowek
+// w produkcyjnym pliku Zagorow to "Adres inwestycji", ktory NIGDY nie rowna sie
+// "adres" (tylko go zawiera). Ta funkcja "dzialala" tam wylacznie przez traf -
+// prawdziwy naglowek byl akurat w wierszu 0, czyli tym samym, na ktory i tak
+// pada domyslny fallback ponizej. Gdyby przed naglowkiem byl chocby jeden
+// dodatkowy wiersz (a w TYM SAMYM pliku wiersz TUZ POD naglowkiem to wlasnie
+// taki dodatkowy podnaglowek "P.C./PANELE FV/MAGAZYNY" - realny, prawdopodobny
+// uklad), funkcja nigdy by go nie znalazla i po cichu wzielaby zly wiersz jako
+// naglowek - kazdy adres w calym pliku zniknalby z podgladu bez zadnego bledu,
+// tylko z myląca liczba "brak adresu" w rozbiciu pominietych wierszy. Uzywamy
+// wiec dokladnie tego samego dopasowania czesciowego co getCell() nizej,
+// zamiast rownosci.
 function findHeaderRowIndex(rows) {
   for (let i = 0; i < Math.min(rows.length, 20); i += 1) {
     const norm = rows[i].map(normalizeHeader);
-    if (norm.includes('adres') && (norm.includes('imie i nazwisko') || norm.includes('lp'))) return i;
+    const hasAdres = norm.some(cell => cell.includes('adres'));
+    const hasNameOrLp = norm.some(cell => cell.includes('imie i nazwisko') || cell === 'lp' || cell === 'l p');
+    if (hasAdres && hasNameOrLp) return i;
   }
   return 0;
 }

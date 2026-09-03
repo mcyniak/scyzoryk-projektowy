@@ -168,6 +168,39 @@ test('excel.js readTabelaAdresowa: kalkulator Varmero jest tylko dla pomp powiet
   await fsp.rm(dir, { recursive: true, force: true });
 });
 
+test('excel.js readTabelaAdresowa: naglowek "Adres inwestycji" (realna nazwa kolumny z produkcyjnego pliku Zagorow, nie samo "Adres") jest znajdowany TAKZE gdy nie lezy w wierszu 0 (audyt: zero adresow zglaszane przez uzytkownika)', async () => {
+  // Realny plik produkcyjny (Zagorow-pompy-powietrzne.xlsx) nazywa kolumne
+  // "Adres inwestycji", nie samo "Adres" - w TYM SAMYM pliku wiersz TUZ POD
+  // naglowkiem to dodatkowy podnaglowek ("P.C." / "PANELE FV" / "MAGAZYNY"),
+  // wiec ukladanie dodatkowego wiersza PRZED naglowkiem (np. tytul arkusza)
+  // jest realistycznym, prawdopodobnym ukladem tego samego typu plikow.
+  // Wczesniej findHeaderRowIndex wymagal, zeby jakas komorka byla DOKLADNIE
+  // rowna "adres" - "adres inwestycji" nigdy tego nie spelnia, wiec funkcja
+  // zawsze wpadala w fallback (wiersz 0) i traktowala tytul arkusza jako
+  // naglowek, gubiac WSZYSTKIE adresy bez zadnego bledu.
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx')); // xlsx tylko do zapisu fixture'ow testowych (bezpieczne) - patrz komentarz w group19-tworzenie-folderow.test.js
+  const dir = await makeTempDir();
+  const fixturePath = path.join(dir, 'fixture-adres-inwestycji.xlsx');
+  const rows = [
+    ['Inwestycja: Zagórów - pompy powietrzne', null, null, null],
+    ['LP', 'Imię i Nazwisko', 'Adres inwestycji', 'Rodzaj pompy', 'Wynik OZC'],
+    [1, 'Jan Testowy', 'Testowa 1', 'Powietrze-woda', '11.27']
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Pompy ciepła');
+  XLSX.writeFile(wb, fixturePath);
+
+  const { readTabelaAdresowa } = await importSrc('excel.js');
+  const result = await readTabelaAdresowa(fixturePath, { zone: '3' });
+
+  assert.equal(result.records.length, 1, `powinien znalezc 1 adres, zamiast tego: ${JSON.stringify(result.skipped)}`);
+  assert.equal(result.records[0].input.address, 'Testowa 1');
+  assert.equal(result.records[0].input.ozcKw, 11.27);
+  assert.equal(result.skipped.missingAddress, 0);
+
+  await fsp.rm(dir, { recursive: true, force: true });
+});
+
 test('excel.js readTabelaAdresowa: bez podanej strefy -> zoneKnown:false, wiersze nadal maja zone:null (nie zgaduje, nie wymyśla domyślnej strefy)', async () => {
   const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx')); // xlsx tylko do zapisu fixture'ow testowych (bezpieczne) - patrz komentarz w group19-tworzenie-folderow.test.js
   const dir = await makeTempDir();
