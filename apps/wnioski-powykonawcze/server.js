@@ -94,7 +94,6 @@ function persistJobsIndex() {
       createdAt: job.createdAt,
       status: job.status,
       pdfDir: job.pdfDir,
-      debugDir: job.debugDir,
       zipPath: job.zipPath,
       files: job.files || [],
       failed: job.failed || [],
@@ -125,7 +124,6 @@ function restoreJobsIndex() {
         status: interrupted ? 'interrupted' : (item.status || 'restored'),
         interruptedReason: interrupted ? 'process-restarted' : item.interruptedReason,
         pdfDir: item.pdfDir,
-        debugDir: item.debugDir || path.join(jobDir, 'docx'),
         zipPath: item.zipPath || null,
         files: item.files || [],
         failed: item.failed || [],
@@ -280,10 +278,8 @@ app.post('/api/jobs', heavyJobLimiter, upload.array('files', MAX_FILES), async (
   const createdAt = Date.now();
   const jobDir = path.join(OUTPUT_DIR, jobId);
   const pdfDir = path.join(jobDir, 'pdf');
-  const debugDir = path.join(jobDir, 'docx');
   await fsp.mkdir(pdfDir, { recursive: true });
-  await fsp.mkdir(debugDir, { recursive: true });
-  const job = { id: jobId, createdAt, status: 'queued', pdfDir, debugDir, files: [], failed: [], uploadPaths: [], total: 0, done: 0, child: null };
+  const job = { id: jobId, createdAt, status: 'queued', pdfDir, files: [], failed: [], uploadPaths: [], total: 0, done: 0, child: null };
   jobs.set(jobId, job);
   persistJobsIndex();
 
@@ -292,16 +288,22 @@ app.post('/api/jobs', heavyJobLimiter, upload.array('files', MAX_FILES), async (
     job.uploadPaths = files.map(file => file.path).filter(Boolean);
     if (!files.length) throw new Error('Dodaj przynajmniej jeden plik DOCX.');
     for (const file of files) validateDocx(file);
-    const dateText = normalizeDate(req.body.date);
+    const noDate = String(req.body.noDate || '').toLowerCase() === 'true';
+    const dateText = normalizeDate(req.body.date, { allowEmpty: noDate });
     const prefix = cleanPrefix(req.body.prefix || 'WM dok.pod');
     const saveDocx = String(req.body.saveDocx || '').toLowerCase() === 'true';
     const visibleWord = String(req.body.visibleWord || '').toLowerCase() === 'true';
 
+    // docxPath lezy w TYM SAMYM folderze co pdfPath (nie w osobnym "debug"
+    // katalogu jak wczesniej) - dzieki temu przy saveDocx=true plik DOCX
+    // automatycznie trafia do ZIP-a (zipDirectory pakuje caly pdfDir) i jest
+    // do pobrania przez juz istniejacy /api/jobs/:id/files/:file (ten route
+    // serwuje kazdy plik z pdfDir po nazwie, bez zmian).
     const manifestFiles = files.map(file => {
       const original = decodeOriginalName(file.originalname || path.basename(file.path));
       const pdfPath = uniquePath(pdfDir, outputFileName(original, prefix));
-      const debugDocxPath = path.join(debugDir, path.basename(pdfPath, '.pdf') + '.docx');
-      return { inputPath: file.path, originalName: original, pdfPath, debugDocxPath };
+      const docxPath = path.join(pdfDir, path.basename(pdfPath, '.pdf') + '.docx');
+      return { inputPath: file.path, originalName: original, pdfPath, docxPath };
     });
 
     const inputJson = path.join(jobDir, 'input.json');
@@ -336,8 +338,11 @@ app.post('/api/jobs', heavyJobLimiter, upload.array('files', MAX_FILES), async (
             // realnego szablonu WM, zeby ja poprawnie ustalic) - dopoki jej nie
             // ma, przynajmniej pokazujemy uzytkownikowi co zostalo zmienione,
             // zeby dalo sie to zauwazyc przed wyslaniem dokumentu dalej.
+            const docxOk = item.docx && fs.existsSync(item.docx);
             okFiles.push({
               file: path.basename(item.pdf), path: item.pdf,
+              docx: docxOk ? path.basename(item.docx) : null,
+              docxPath: docxOk ? item.docx : null,
               deletedSection: Boolean(item.deletedSection),
               deletedCharCount: Number(item.deletedCharCount || 0),
               deletedPreview: item.deletedPreview || '',
@@ -420,7 +425,12 @@ app.get('/api/jobs/:id', (req, res) => {
       failed: job.failed || [],
       zipError: job.zipError || null,
       zipUrl: job.zipPath ? `/api/jobs/${job.id}/zip` : null,
-      files: (job.files || []).map(file => ({ file: file.file, url: `/api/jobs/${job.id}/files/${encodeURIComponent(file.file)}` }))
+      files: (job.files || []).map(file => ({
+        file: file.file,
+        url: `/api/jobs/${job.id}/files/${encodeURIComponent(file.file)}`,
+        docx: file.docx || null,
+        docxUrl: file.docx ? `/api/jobs/${job.id}/files/${encodeURIComponent(file.docx)}` : null
+      }))
     }
   });
 });
@@ -515,11 +525,13 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
   let dateText;
   let prefix;
   try {
-    dateText = normalizeDate(req.body?.date);
+    const noDate = String(req.body?.noDate || '').toLowerCase() === 'true';
+    dateText = normalizeDate(req.body?.date, { allowEmpty: noDate });
     prefix = cleanPrefix(req.body?.prefix || 'WM dok.pod');
   } catch (err) {
     return res.status(400).json({ ok: false, message: err.message });
   }
+  const saveDocx = String(req.body?.saveDocx || '').toLowerCase() === 'true';
 
   const jobId = crypto.randomUUID();
   const jobDir = path.join(OUTPUT_DIR, jobId);
@@ -545,13 +557,17 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
       if (!folderStat || !folderStat.isDirectory()) throw new Error('Nie znaleziono folderu docelowego: ' + folderPath);
 
       const pdfPath = uniquePath(folderPath, outputFileName(path.basename(sourcePath), prefix));
-      const debugDocxPath = path.join(jobDir, path.basename(pdfPath, '.pdf') + '.docx');
-      return { inputPath: sourcePath, category: String(item.category || ''), pdfPath, debugDocxPath };
+      // docxPath lezy w TYM SAMYM folderPath co pdfPath (folder klienta, czesto
+      // na dysku sieciowym) - NIE w jobDir, ktory ten route usuwa w finally
+      // ponizej. Ten sam wzor co manualny upload wyzej: PDF i DOCX zawsze obok
+      // siebie, zeby zaden nie zniknal po posprzataniu tymczasowego katalogu.
+      const docxPath = path.join(folderPath, path.basename(pdfPath, '.pdf') + '.docx');
+      return { inputPath: sourcePath, category: String(item.category || ''), pdfPath, docxPath };
     });
 
     const inputJson = path.join(jobDir, 'input.json');
     const outputJson = path.join(jobDir, 'result.json');
-    writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx: false, visibleWord: false });
+    writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx, visibleWord: false });
 
     await wordQueue.run(() => runConvertScript(inputJson, outputJson));
     const result = readJsonFileNoBom(outputJson);
@@ -563,8 +579,10 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
     for (const item of result.results || []) {
       const manifestEntry = byInputPath.get(item.input);
       if (item.ok && item.pdf && fs.existsSync(item.pdf)) {
+        const docxOk = item.docx && fs.existsSync(item.docx);
         okItems.push({
           category: manifestEntry?.category || '', file: path.basename(item.pdf), path: item.pdf,
+          docx: docxOk ? path.basename(item.docx) : null,
           deletedSection: Boolean(item.deletedSection),
           deletedCharCount: Number(item.deletedCharCount || 0),
           deletedPreview: item.deletedPreview || '',

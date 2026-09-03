@@ -145,15 +145,16 @@ Microsoft Word musi być zainstalowany i aktywowany.
 
 1. Wybierz **Wgraj pliki ręcznie**.
 2. Dodaj pliki DOCX.
-3. Ustaw datę albo miesiąc i rok.
-4. Ustaw przedrostek nazwy.
-5. Kliknij **Utwórz PDF-y**.
+3. Ustaw datę: konkretną, tylko miesiąc i rok, albo **Bez daty** (żadna data w dokumencie nie zostanie zmieniona).
+4. Zaznacz **Dodaj też wersję Word (DOCX)**, jeśli oprócz PDF-a potrzebujesz też pliku Word.
+5. Ustaw przedrostek nazwy.
+6. Kliknij **Utwórz PDF-y**.
 
 ### Cały folder WM
 
 1. Wybierz **Cały folder WM (automatycznie)**.
 2. Wklej ścieżkę folderu.
-3. Ustaw datę i przedrostek.
+3. Ustaw datę (albo **Bez daty**), przedrostek i opcjonalnie **Dodaj też wersję Word (DOCX)**.
 4. Kliknij **Skanuj folder**.
 5. Sprawdź znalezione kategorie.
 6. Kliknij **Przerób zaznaczone i zapisz w folderach**.

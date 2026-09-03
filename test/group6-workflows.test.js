@@ -203,6 +203,51 @@ test('wnioski powykonawcze: normalizeDate odrzuca nieistniejące daty kalendarzo
   assert.throws(() => normalizeDate('13.2026'), /Nieprawidłowa data/);
 });
 
+test('wnioski powykonawcze: normalizeDate z {allowEmpty:true} zwraca pusty string zamiast rzucać błąd (tryb "Bez daty")', () => {
+  // "Bez daty" musi byc swiadomym wyborem w UI (radio "Bez daty"), nie
+  // przyzwoleniem na dowolny smieciowy/pusty wpis - allowEmpty nie osiabia
+  // reszty walidacji, gdy cokolwiek jednak zostalo podane.
+  assert.equal(normalizeDate('', { allowEmpty: true }), '');
+  assert.equal(normalizeDate('   ', { allowEmpty: true }), '');
+  assert.equal(normalizeDate(undefined, { allowEmpty: true }), '');
+  assert.throws(() => normalizeDate(''), /Wpisz datę/);
+  assert.throws(() => normalizeDate('', { allowEmpty: false }), /Wpisz datę/);
+  assert.throws(() => normalizeDate('31.02.2026', { allowEmpty: true }), /Nieprawidłowa data/);
+  assert.equal(normalizeDate('15.02.2026', { allowEmpty: true }), '15.02.2026');
+});
+
+test('wnioski powykonawcze: podmiana tytułu dokumentu obejmuje TEŻ nagłówki/stopki, nie tylko główną treść (naprawiony realny błąd - stopka zostawała ze starym tytułem)', async () => {
+  // Doc.Content w Word COM obejmuje WYLACZNIE glowny tekst dokumentu - naglowki
+  // i stopki to osobne StoryRanges, ktorych Replace-InContent nigdy nie
+  // dotyka (patrz definicja obu funkcji w tym samym pliku). Replace-InAllStories
+  // to dokladnie ta sama funkcja, ktorej podmiana dat kilka linii nizej juz
+  // uzywa - tam stopka zawsze dzialala poprawnie.
+  const script = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'scripts', 'convert-wm.ps1'), 'utf8');
+  const titleReplaceLines = script.split('\n').filter(line => /\$TITLE[123]\b/.test(line) && /ReplaceText \$POW\b/.test(line));
+  assert.equal(titleReplaceLines.length, 3, 'powinny być dokładnie 3 podmiany tytułu (TITLE1/TITLE2/TITLE3)');
+  for (const line of titleReplaceLines) {
+    assert.match(line, /Replace-InAllStories\b/, `podmiana tytułu musi objąć też stopkę: ${line}`);
+    assert.doesNotMatch(line, /Replace-InContent\b/, `Replace-InContent NIE obejmuje stopki: ${line}`);
+  }
+});
+
+test('wnioski powykonawcze: DOCX wynikowy trafia do TEGO SAMEGO folderu co PDF (nie do oddzielnego "debug" katalogu, który nigdzie nie był udostępniany do pobrania)', async () => {
+  const server = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'server.js'), 'utf8');
+  assert.doesNotMatch(server, /debugDir/, 'stary oddzielny katalog na DOCX-y powinien zniknąć razem z przekierowaniem docxPath do pdfDir');
+  // Manualny upload: docx obok pdf w pdfDir (dzieki temu leci do tego samego
+  // ZIP-a i jest widoczny przez juz istniejacy /api/jobs/:id/files/:file, bez
+  // zadnego nowego route'a pobierania).
+  assert.match(server, /path\.join\(pdfDir, path\.basename\(pdfPath, '\.pdf'\) \+ '\.docx'\)/);
+  // Tryb folderowy: docx obok pdf w REALNYM folderze klienta (folderPath), nie
+  // w tymczasowym jobDir ktory ten route i tak usuwa na koniec (finally).
+  assert.match(server, /path\.join\(folderPath, path\.basename\(pdfPath, '\.pdf'\) \+ '\.docx'\)/);
+  assert.match(server, /req\.body\.noDate/);
+  assert.match(server, /req\.body\?\.noDate/);
+  assert.match(server, /req\.body\.saveDocx/);
+  assert.match(server, /req\.body\?\.saveDocx/);
+  assert.match(server, /docxUrl:/);
+});
+
 test('wnioski powykonawcze używają szybkiego modelu zadaniowego z anulowaniem', async () => {
   const server = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'server.js'), 'utf8');
   const frontend = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'public', 'inline-1.js'), 'utf8');

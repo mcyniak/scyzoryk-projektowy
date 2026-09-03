@@ -24,7 +24,9 @@ const $ = s => document.querySelector(s);
     let activeJobId = null;
     let manualPollTimer = null;
     const dateInput = $('#date');
-    const monthOnlyEl = $('#monthOnly');
+    const dateModeFullEl = $('#dateModeFull');
+    const dateModeMonthEl = $('#dateModeMonth');
+    const dateModeNoneEl = $('#dateModeNone');
     const dateHint = $('#dateHint');
     const monthYearFields = $('#monthYearFields');
     const monthNumInput = $('#monthNum');
@@ -33,11 +35,27 @@ const $ = s => document.querySelector(s);
 
     function pad2(n) { return String(n).padStart(2, '0'); }
 
+    function currentDateMode() {
+      if (dateModeNoneEl.checked) return 'none';
+      if (dateModeMonthEl.checked) return 'month';
+      return 'full';
+    }
+
     // Osobne pola liczbowe na miesiac/rok (zamiast natywnego <input type=month>),
     // zeby na kazdym systemie/przegladarce miesiac zawsze byl liczba, a nie
     // nazwa slowna z natywnego kalendarza (np. "lipiec" w polskiej lokalizacji).
-    function setDateMode(monthOnly) {
-      if (monthOnly) {
+    // Trzeci tryb "Bez daty" (zadana funkcja): zaden dokument nie ma "daty
+    // dokumentacji powykonawczej" wymyslonej z powietrza - convert-wm.ps1's
+    // Replace-AllDates juz od dawna po cichu pomija podmiane przy pustym
+    // DateText, wiec wystarczy tu wyslac pusta wartosc (patrz dateValidation.js
+    // #normalizeDate, opcja allowEmpty).
+    function setDateMode(mode) {
+      if (mode === 'none') {
+        dateInput.hidden = true;
+        dateInput.required = false;
+        monthYearFields.style.display = 'none';
+        dateHint.textContent = 'Żadna data w dokumencie nie zostanie zmieniona - zostaje dokładnie taka, jak w oryginale.';
+      } else if (mode === 'month') {
         dateInput.hidden = true;
         dateInput.required = false;
         monthYearFields.style.display = '';
@@ -52,14 +70,18 @@ const $ = s => document.querySelector(s);
       }
     }
 
-    monthOnlyEl.addEventListener('change', () => setDateMode(monthOnlyEl.checked));
+    [dateModeFullEl, dateModeMonthEl, dateModeNoneEl].forEach(el => el.addEventListener('change', () => setDateMode(currentDateMode())));
 
     function getDateValue() {
-      if (!monthOnlyEl.checked) return dateInput.value;
-      const month = Number(monthNumInput.value);
-      const year = Number(yearNumInput.value);
-      if (!month || month < 1 || month > 12 || !year) return '';
-      return `${year}-${pad2(month)}`;
+      const mode = currentDateMode();
+      if (mode === 'none') return { noDate: true, value: '' };
+      if (mode === 'month') {
+        const month = Number(monthNumInput.value);
+        const year = Number(yearNumInput.value);
+        if (!month || month < 1 || month > 12 || !year) return { noDate: false, value: '' };
+        return { noDate: false, value: `${year}-${pad2(month)}` };
+      }
+      return { noDate: false, value: dateInput.value };
     }
 
     function showStatus(text, type='') {
@@ -134,8 +156,7 @@ const $ = s => document.querySelector(s);
       lastFailedKeys = new Set();
       filesInput.value = '';
       form.reset();
-      monthOnlyEl.checked = false;
-      setDateMode(false);
+      setDateMode('full');
       $('#prefix').value='WM dok.pod';
       fileList.innerHTML='<div class="empty">Nie dodano jeszcze plików.</div>';
       statusBox.hidden=true;
@@ -154,13 +175,14 @@ const $ = s => document.querySelector(s);
       e.preventDefault();
       const files = selectedFiles;
       if (!files.length) return showStatus('Dodaj przynajmniej jeden plik DOCX.', 'err');
-      const dateValue = getDateValue();
-      if (!dateValue) return showStatus('Wpisz poprawną datę (albo miesiąc i rok).', 'err');
+      const dateResult = getDateValue();
+      if (!dateResult.noDate && !dateResult.value) return showStatus('Wpisz poprawną datę (albo miesiąc i rok), albo wybierz "Bez daty".', 'err');
       files.forEach(f => f._state = 'w kolejce');
       renderFiles();
       const fd = new FormData();
       files.forEach(f => fd.append('files', f));
-      fd.append('date', dateValue);
+      fd.append('date', dateResult.value);
+      fd.append('noDate', dateResult.noDate ? 'true' : 'false');
       fd.append('prefix', $('#prefix').value);
       const saveDocxEl = $('#saveDocx');
       const visibleWordEl = $('#visibleWord');
@@ -219,9 +241,14 @@ const $ = s => document.querySelector(s);
       renderFiles();
       showStatus(`Gotowe. Utworzono PDF-y: ${(job.files || []).length}.`, job.status === 'finished-with-errors' ? '' : 'ok');
       const failed = failedList.length ? `<p class="status err">Niektóre pliki miały błąd: ${escapeHtml(failedList.map(x => x.error).join(' | '))}</p>` : '';
+      // Przy zipUrl DOCX-y sa juz w srodku ZIP-a (leza w tym samym pdfDir co
+      // PDF-y, patrz server.js) - osobny link "Pobierz DOCX" ma sens tylko przy
+      // pojedynczych plikach (bez ZIP-a, patrz warunek okFiles.length>1 w server.js).
+      const anyDocx = (job.files || []).some(item => item.docxUrl);
       const downloadsHtml = job.zipUrl
-        ? `<a class="button primary" href="${job.zipUrl}">Pobierz ZIP z PDF-ami</a>`
-        : (job.files || []).map(item => `<a class="button primary" href="${escapeHtml(item.url)}">Pobierz ${escapeHtml(item.file)}</a>`).join('');
+        ? `<a class="button primary" href="${job.zipUrl}">Pobierz ZIP z ${anyDocx ? 'wynikami' : 'PDF-ami'}</a>`
+        : (job.files || []).map(item => `<a class="button primary" href="${escapeHtml(item.url)}">Pobierz ${escapeHtml(item.file)}</a>`
+            + (item.docxUrl ? ` <a class="button secondary" href="${escapeHtml(item.docxUrl)}">Pobierz ${escapeHtml(item.docx)}</a>` : '')).join('');
       const summary = renderChangesSummary(job.files || []);
 
       if (!summary.hasChanges) {
@@ -306,7 +333,9 @@ const $ = s => document.querySelector(s);
 
     const wmFolderPathInput = $('#wmFolderPath');
     const wmFolderDateInput = $('#wmFolderDate');
-    const wmFolderMonthOnlyEl = $('#wmFolderMonthOnly');
+    const wmFolderDateModeFullEl = $('#wmFolderDateModeFull');
+    const wmFolderDateModeMonthEl = $('#wmFolderDateModeMonth');
+    const wmFolderDateModeNoneEl = $('#wmFolderDateModeNone');
     const wmFolderDateHint = $('#wmFolderDateHint');
     const wmFolderMonthYearFields = $('#wmFolderMonthYearFields');
     const wmFolderMonthNumInput = $('#wmFolderMonthNum');
@@ -333,8 +362,19 @@ const $ = s => document.querySelector(s);
     // (patrz containment check w server.js).
     let wmScanToken = null;
 
-    function setWmFolderDateMode(monthOnly) {
-      if (monthOnly) {
+    function currentWmFolderDateMode() {
+      if (wmFolderDateModeNoneEl.checked) return 'none';
+      if (wmFolderDateModeMonthEl.checked) return 'month';
+      return 'full';
+    }
+
+    function setWmFolderDateMode(mode) {
+      if (mode === 'none') {
+        wmFolderDateInput.hidden = true;
+        wmFolderDateInput.required = false;
+        wmFolderMonthYearFields.style.display = 'none';
+        wmFolderDateHint.textContent = 'Żadna data w dokumencie nie zostanie zmieniona - zostaje dokładnie taka, jak w oryginale.';
+      } else if (mode === 'month') {
         wmFolderDateInput.hidden = true;
         wmFolderDateInput.required = false;
         wmFolderMonthYearFields.style.display = '';
@@ -348,14 +388,18 @@ const $ = s => document.querySelector(s);
         wmFolderDateHint.textContent = 'Ta sama data trafi do wszystkich miejsc w dokumentach.';
       }
     }
-    wmFolderMonthOnlyEl.addEventListener('change', () => setWmFolderDateMode(wmFolderMonthOnlyEl.checked));
+    [wmFolderDateModeFullEl, wmFolderDateModeMonthEl, wmFolderDateModeNoneEl].forEach(el => el.addEventListener('change', () => setWmFolderDateMode(currentWmFolderDateMode())));
 
     function getWmFolderDateValue() {
-      if (!wmFolderMonthOnlyEl.checked) return wmFolderDateInput.value;
-      const month = Number(wmFolderMonthNumInput.value);
-      const year = Number(wmFolderYearNumInput.value);
-      if (!month || month < 1 || month > 12 || !year) return '';
-      return `${year}-${pad2(month)}`;
+      const mode = currentWmFolderDateMode();
+      if (mode === 'none') return { noDate: true, value: '' };
+      if (mode === 'month') {
+        const month = Number(wmFolderMonthNumInput.value);
+        const year = Number(wmFolderYearNumInput.value);
+        if (!month || month < 1 || month > 12 || !year) return { noDate: false, value: '' };
+        return { noDate: false, value: `${year}-${pad2(month)}` };
+      }
+      return { noDate: false, value: wmFolderDateInput.value };
     }
 
     function showWmScanStatus(text, type = '') {
@@ -435,8 +479,8 @@ const $ = s => document.querySelector(s);
     });
 
     wmConvertBtn.addEventListener('click', async () => {
-      const dateValue = getWmFolderDateValue();
-      if (!dateValue) return showWmConvertStatus('Wpisz poprawną datę (albo miesiąc i rok).', 'err');
+      const dateResult = getWmFolderDateValue();
+      if (!dateResult.noDate && !dateResult.value) return showWmConvertStatus('Wpisz poprawną datę (albo miesiąc i rok), albo wybierz "Bez daty".', 'err');
       const checked = [...wmToConvertList.querySelectorAll('[data-wm-check]:checked')]
         .map(el => el.dataset.wmCheck);
       const items = wmScanItems.filter(i => i.status === 'do-przerobienia' && checked.includes(i.sourcePath));
@@ -457,8 +501,10 @@ const $ = s => document.querySelector(s);
           headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
           body: JSON.stringify({
             items: items.map(i => ({ sourcePath: i.sourcePath, folderPath: i.folderPath, category: i.category })),
-            date: dateValue,
+            date: dateResult.value,
+            noDate: dateResult.noDate ? 'true' : 'false',
             prefix: wmFolderPrefixInput.value,
+            saveDocx: $('#wmFolderSaveDocx')?.checked ? 'true' : 'false',
             scanToken: wmScanToken
           })
         });
@@ -466,7 +512,7 @@ const $ = s => document.querySelector(s);
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się przerobić dokumentów.');
         const failedList = data.failed || [];
         showWmConvertStatus(`Gotowe. Utworzono i zapisano w folderach: ${data.created}.`, failedList.length ? '' : 'ok');
-        const okLines = (data.files || []).map(f => `<div class="row ok"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.file)}</small></div></div>`).join('');
+        const okLines = (data.files || []).map(f => `<div class="row ok"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.file)}${f.docx ? ` + ${escapeHtml(f.docx)}` : ''}</small></div></div>`).join('');
         const failLines = failedList.map(f => `<div class="row err"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.error)}</small></div></div>`).join('');
         // Tryb folderowy zapisuje pliki bezposrednio w docelowych folderach -
         // nie ma tu przyciskow pobierania do bramkowania (patrz komentarz przy

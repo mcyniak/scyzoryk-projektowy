@@ -416,9 +416,16 @@ function Convert-ToPowykonawczy {
   $MARK2 = Decode-Utf8Base64 "WkFUV0lFUkRaQU0gLyBaQVRXSUVSRFpBTSB6IFVXQUdBTUkgLyBPRFJaVUNBTQ=="
   $MARK3 = Decode-Utf8Base64 "U3R3aWVyZHphbSwgacW8IHcvdw=="
 
-  Replace-InContent -Doc $Doc -FindText $TITLE1 -ReplaceText $POW | Out-Null
-  Replace-InContent -Doc $Doc -FindText $TITLE2 -ReplaceText $POW | Out-Null
-  Replace-InContent -Doc $Doc -FindText $TITLE3 -ReplaceText $POW | Out-Null
+  # Replace-InAllStories (nie Replace-InContent) - $Doc.Content obejmuje TYLKO
+  # glowny tekst dokumentu, nie naglowki/stopki (osobne StoryRanges w Word COM).
+  # Wczesniej tytul zmienial sie w tresci, ale stopka nadal pokazywala stary
+  # "Wniosek o zatwierdzenie Materialow/Urzadzen" - zauwazone realnie przez
+  # uzytkownika, bo tresc gotowego PDF-a byla niezgodna z jego stopka.
+  # Replace-InAllStories to dokladnie ta sama funkcja, ktorej Replace-AllDates
+  # nizej juz uzywa do dat - tam stopka zawsze dzialala poprawnie.
+  Replace-InAllStories -Doc $Doc -FindText $TITLE1 -ReplaceText $POW | Out-Null
+  Replace-InAllStories -Doc $Doc -FindText $TITLE2 -ReplaceText $POW | Out-Null
+  Replace-InAllStories -Doc $Doc -FindText $TITLE3 -ReplaceText $POW | Out-Null
 
   Replace-InContent -Doc $Doc -FindText $UWAGI_ND -ReplaceText $WBUD | Out-Null
   Replace-InContent -Doc $Doc -FindText $UWAGI -ReplaceText $WBUD | Out-Null
@@ -493,7 +500,7 @@ try {
       try {
         $inputPath = [string]$item.inputPath
         $pdfPath = [string]$item.pdfPath
-        $debugDocxPath = [string]$item.debugDocxPath
+        $docxPath = [string]$item.docxPath
         if (-not (Test-Path -LiteralPath $inputPath)) { throw "Nie znaleziono pliku DOCX: $inputPath" }
 
         $doc = $word.Documents.Open($inputPath, $false, $true, $false, "", "", $false, "", "", 0, 65001, [bool]$config.visibleWord, $true)
@@ -501,9 +508,14 @@ try {
 
         $changeReport = Convert-ToPowykonawczy -Doc $doc -DateText ([string]$config.dateText)
 
+        # savedDocxPath (nie od razu $null) - dopiero po udanym SaveAs2 wiemy, ze
+        # plik DOCX faktycznie powstal, wiec wynik moze go bezpiecznie zglosic
+        # wywolujacemu (server.js dolacza go do pobrania obok PDF-a).
+        $savedDocxPath = $null
         if ([bool]$config.saveDocx) {
           $formatDocx = 16
-          $doc.SaveAs2($debugDocxPath, $formatDocx)
+          $doc.SaveAs2($docxPath, $formatDocx)
+          $savedDocxPath = $docxPath
         }
         $formatPdf = 17
         $doc.SaveAs2($pdfPath, $formatPdf)
@@ -511,6 +523,7 @@ try {
         $doc = $null
         $results.Add([pscustomobject]@{
           ok=$true; input=$inputPath; pdf=$pdfPath; file=[System.IO.Path]::GetFileName($pdfPath)
+          docx=$savedDocxPath
           deletedSection=$changeReport.deletedSection; deletedCharCount=$changeReport.deletedCharCount
           deletedPreview=$changeReport.deletedPreview; dateReplacements=$changeReport.dateReplacements
         }) | Out-Null

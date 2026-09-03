@@ -75,18 +75,22 @@
           <div class="split">
             <div class="field">
               <label class="label" for="date">Data dokumentacji powykonawczej</label>
-              <input class="input" id="date" name="date" type="date" required>
+              <label class="check"><input type="radio" name="dateMode" id="dateModeFull" checked> Konkretna data</label>
+              <input class="input" id="date" name="date" type="date">
+              <label class="check"><input type="radio" name="dateMode" id="dateModeMonth"> Tylko miesiąc i rok</label>
               <div class="split" id="monthYearFields" style="display:none;margin-top:8px">
                 <input class="input" id="monthNum" type="number" inputmode="numeric" min="1" max="12" placeholder="MM">
                 <input class="input" id="yearNum" type="number" inputmode="numeric" min="1900" max="2100" placeholder="RRRR">
               </div>
-              <label class="check" for="monthOnly"><input type="checkbox" id="monthOnly"> Tylko miesiąc i rok</label>
+              <label class="check"><input type="radio" name="dateMode" id="dateModeNone"> Bez daty</label>
               <div class="hint" id="dateHint">Ta sama data trafi do wszystkich miejsc w dokumentach.</div>
             </div>
             <div class="field">
               <label class="label" for="prefix">Przedrostek nazwy PDF</label>
               <input class="input" id="prefix" name="prefix" value="WM dok.pod">
               <div class="hint">Przykład: WM dok.pod Pompa ciepła.pdf</div>
+              <label class="check" for="saveDocx"><input type="checkbox" id="saveDocx"> Dodaj też wersję Word (DOCX)</label>
+              <div class="hint">Ten sam gotowy dokument, obok PDF-a.</div>
             </div>
           </div>
 
@@ -125,18 +129,22 @@
         <div class="split">
           <div class="field">
             <label class="label" for="wmFolderDate">Data dokumentacji powykonawczej</label>
-            <input class="input" id="wmFolderDate" type="date" required>
+            <label class="check"><input type="radio" name="wmFolderDateMode" id="wmFolderDateModeFull" checked> Konkretna data</label>
+            <input class="input" id="wmFolderDate" type="date">
+            <label class="check"><input type="radio" name="wmFolderDateMode" id="wmFolderDateModeMonth"> Tylko miesiąc i rok</label>
             <div class="split" id="wmFolderMonthYearFields" style="display:none;margin-top:8px">
               <input class="input" id="wmFolderMonthNum" type="number" inputmode="numeric" min="1" max="12" placeholder="MM">
               <input class="input" id="wmFolderYearNum" type="number" inputmode="numeric" min="1900" max="2100" placeholder="RRRR">
             </div>
-            <label class="check" for="wmFolderMonthOnly"><input type="checkbox" id="wmFolderMonthOnly"> Tylko miesiąc i rok</label>
+            <label class="check"><input type="radio" name="wmFolderDateMode" id="wmFolderDateModeNone"> Bez daty</label>
             <div class="hint" id="wmFolderDateHint">Ta sama data trafi do wszystkich miejsc w dokumentach.</div>
           </div>
           <div class="field">
             <label class="label" for="wmFolderPrefix">Przedrostek nazwy PDF</label>
             <input class="input" id="wmFolderPrefix" value="WM dok.pod">
             <div class="hint">Przykład: WM dok.pod Pompa ciepła.pdf</div>
+            <label class="check" for="wmFolderSaveDocx"><input type="checkbox" id="wmFolderSaveDocx"> Dodaj też wersję Word (DOCX)</label>
+            <div class="hint">Ten sam gotowy dokument, obok PDF-a w folderze klienta.</div>
           </div>
         </div>
 
