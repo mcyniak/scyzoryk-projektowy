@@ -238,9 +238,10 @@ let activeJob = null;
       document.querySelector('#selectorInfo').textContent = 'Wczytuję adresy z Excela...';
       document.querySelector('#addressRows').innerHTML = '<tr><td colspan="5">Wczytuję...</td></tr>';
 
+      const locationValue = document.querySelector('#location').value || '';
       const data = new FormData();
       data.append('excel', file);
-      data.append('location', document.querySelector('#location').value || '');
+      data.append('location', locationValue);
 
       try {
         const res = await fetch('/api/batch/preview', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
@@ -256,14 +257,26 @@ let activeJob = null;
         const skipLabels = {
           empty: 'puste wiersze', ground: 'pompa gruntowa', unknownPumpType: 'nierozpoznany typ pompy',
           missingAddress: 'brak adresu', missingOzc: 'brak OZC', missingPower: 'brak/niejednoznaczna moc',
-          missingLocation: 'brak lokalizacji', missingHeatingShare: 'brak udziału ogrzewania', missingTank: 'brak zbiornika CWU',
+          missingLocation: 'brak lokalizacji', invalidHeatingShare: 'niepoprawny udział ogrzewania (np. „50/50”)', missingTank: 'brak zbiornika CWU',
           missingLp: 'brak numeru LP', duplicateLp: 'zduplikowany numer LP'
         };
         const skipBreakdown = Object.entries(skipped)
           .filter(([, count]) => Number(count) > 0)
           .map(([key, count]) => `${skipLabels[key] || key}: ${count}`)
           .join(', ');
-        document.querySelector('#selectorInfo').textContent = `Arkusz: ${json.sheetName || '-'} · znaleziono ${previewRecords.length} adresów${skippedTotal ? ` · pominięto ${skippedTotal} wierszy (${skipBreakdown})` : ''}.`;
+        // Realny przypadek uzytkownika: arkusz bez wlasnej kolumny lokalizacji
+        // (np. tabela dla jednej gminy) + puste globalne pole "Lokalizacja/kod
+        // pocztowy" = KAZDY wiersz ladowal do missingLocation i preview
+        // pokazywal "znaleziono 0 adresow" bez zadnej wskazowki, co z tym
+        // zrobic - lokalizacja jest realnie wymagana (automatyzacja wypelnia
+        // nia prawdziwe pole na kalkulatorze myEcodan, patrz
+        // automation/steps.js#chooseLocation), wiec pole MUSI byc wypelnione
+        // PRZED sprawdzeniem, nie da sie tego obejsc. Ostrzegamy o tym wprost
+        // zamiast zostawiac uzytkownika z sama liczba w nawiasie.
+        const locationWarning = (Number(skipped.missingLocation) > 0 && !locationValue.trim())
+          ? ' · UWAGA: wypełnij pole „Lokalizacja / kod pocztowy” powyżej (ten arkusz nie ma własnej kolumny lokalizacji) i sprawdź adresy ponownie'
+          : '';
+        document.querySelector('#selectorInfo').textContent = `Arkusz: ${json.sheetName || '-'} · znaleziono ${previewRecords.length} adresów${skippedTotal ? ` · pominięto ${skippedTotal} wierszy (${skipBreakdown})` : ''}${locationWarning}.`;
         renderAddressRows();
       } catch (error) {
         previewRecords = [];

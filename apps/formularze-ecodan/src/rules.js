@@ -166,9 +166,6 @@ export function calculate(input) {
   if (ozc <= 0 && ozcParsed.valid) errors.push('Brak OZC (obciążenia cieplnego) - uzupełnij dane przed doborem.');
   if (!radiatorsShareParsed.valid) errors.push(radiatorsShareParsed.error);
   if (!floorShareParsed.valid) errors.push(floorShareParsed.error);
-  if (radiatorsShare <= 0 && floorShare <= 0 && radiatorsShareParsed.valid && floorShareParsed.valid) {
-    errors.push('Brak udziału ogrzewania (puste pola "grzejniki" i "podłogówka") - uzupełnij dane przed doborem.');
-  }
   if (tank.litresValid === false) errors.push(tank.litresError);
   // Wlasciciel (2026-08-05): gdy komorka zbiornika jest NAPRAWDE pusta (tabela
   // w ogole nie zbiera tej danej dla tego typu adresow, np. "Kazimierz
@@ -195,6 +192,19 @@ export function calculate(input) {
   if (!boilerRoomHeightParsed.valid) reasons.push(boilerRoomHeightParsed.error);
   else if (boilerRoomHeight <= 0) reasons.push('Wysokość kotłowni nieznana - zweryfikuj ręcznie przed montażem.');
   if (!bufferParsed.valid) reasons.push(bufferParsed.error);
+  // Realny blad zlapany na zywym pliku ("Rychwal tabela dla Gminy.xlsx"):
+  // arkusz w OGOLE nie zbiera podzialu grzejniki/podlogowka dla tego typu
+  // adresow (ani jednej z dwoch znanych konwencji nazewnictwa kolumny) - to
+  // dawnej BLOKOWALO caly wiersz (errors), mimo ze reszta danych byla
+  // kompletna. Ten sam wzorzec co juz zastosowany dla wysokosci
+  // kotlowni/bufora wyzej: brak danych to OSTRZEZENIE, nie blokada.
+  // `receiver` powyzej juz i tak rozstrzyga remis 0/0 na rzecz grzejnikow
+  // (radiatorsShare >= floorShare) - to NIE jest nowy domyslny wybor
+  // dodany przy tej naprawie, tylko juz istniejace w kodzie rozstrzygniecie,
+  // ktore wczesniej nigdy nie bylo osiagalne dla takich wierszy.
+  if (radiatorsShare <= 0 && floorShare <= 0 && radiatorsShareParsed.valid && floorShareParsed.valid) {
+    reasons.push('Brak udziału ogrzewania (puste pola "grzejniki" i "podłogówka") - domyślnie przyjęto grzejniki, zweryfikuj ręcznie przed doborem.');
+  }
 
   // Zgodnie z instrukcją: 16 kW i 18 kW to kaskada dwóch jednostek zewnętrznych,
   // ale sama kaskada NIE oznacza automatycznie układu rozłącznego.

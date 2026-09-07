@@ -172,11 +172,24 @@ test('calculate(): brak lokalizacji blokuje, bez cichego fallbacku do Slesina', 
   assert.ok(result.calculated.errors.some(e => /Brak lokalizacji/.test(e)));
 });
 
-test('calculate(): brak udzialu ogrzewania blokuje, zamiast cicho wybrac grzejniki (0 >= 0)', async () => {
+test('calculate(): brak udzialu ogrzewania NIE blokuje (realny blad na "Rychwal tabela dla Gminy.xlsx" - arkusz bez tej kolumny w ogole), ale daje widoczne ostrzezenie i przyjmuje grzejniki (0 >= 0)', async () => {
+  // Do tej naprawy brak tej kolumny (nie ambiotnie wpisana wartosc, tylko
+  // CALKOWITY brak danych) blokowal caly wiersz - identycznie jak wysokosc
+  // kotlowni/bufor PRZED audytem v1.0.8 P4. Ten sam wzorzec zostaje tu
+  // zastosowany: brak danych = ostrzezenie + bezpieczny domyslny wybor
+  // (juz istniejacy w kodzie tie-break `receiver`), nie twarda blokada.
   const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
   const result = calculate({ ...validInput, radiatorsShare: '', floorShare: '' });
+  assert.equal(result.calculated.valid, true);
+  assert.equal(result.calculated.receiver, 'Grzejniki płytowe');
+  assert.ok(result.calculated.reasons.some(r => /udziału ogrzewania/.test(r)), 'brak danych musi zostac widocznie zaznaczony jako ostrzezenie');
+});
+
+test('calculate(): niejednoznaczny udzial ogrzewania (np. "50/50") DALEJ blokuje - to realny problem z danymi tego wiersza, nie sam brak kolumny', async () => {
+  const { calculate } = await import('../apps/formularze-ecodan/src/rules.js');
+  const result = calculate({ ...validInput, radiatorsShare: '50/50', floorShare: '40' });
   assert.equal(result.calculated.valid, false);
-  assert.ok(result.calculated.errors.some(e => /udziału ogrzewania/.test(e)));
+  assert.ok(result.calculated.errors.some(e => /niejednoznaczna/.test(e)));
 });
 
 test('calculate(): brak KOMORKI zbiornika CWU (present=false) NIE blokuje - przyjmuje domyslnie 200 l (wlasciciel, 2026-08-05: tabele bez tej kolumny, np. Kazimierz Biskupi)', async () => {
@@ -234,6 +247,23 @@ test('readExcelRecords: wiersze z brakujacymi danymi krytycznymi sa pomijane, ni
   const input = rowToInput(row, '');
   assert.equal(input.municipalityPower, '');
   assert.equal(input.location, '');
+});
+
+test('rowToInput: rozpoznaje "Ogrzewanie grzejnikowe/podłogowe" (bez "udział"/"%") - realny blad na "Rychwal tabela dla Gminy.xlsx"', async () => {
+  // Ta konwencja nazewnictwa (bez slowa "udzial", bez znaku "%") to inna,
+  // rownie realna forma tej samej kolumny co Ecodanowe "Udział ogrzew
+  // grzejnik"/"Grzejniki" - dokladnie ta, ktorej uzywa
+  // apps/formularze-varmero/src/excel.js#COLUMN_VARIANTS na plikach
+  // Kamiensk/Zagorow. Zlapane na zywym zgloszeniu: plik "Rychwal tabela dla
+  // Gminy.xlsx" mial ta kolumne, ale getCell() z waska lista wariantow
+  // zwracal pusty string dla WSZYSTKICH 62 poprawnych wierszy, ktore
+  // wygladaly w podgladzie jako "brak udzialu ogrzewania" mimo kompletnych
+  // danych w Excelu.
+  const { rowToInput } = await import('../apps/formularze-ecodan/src/excel.js');
+  const row = { 'Adres': 'Testowa 5', 'OZC': '9,5', 'Ogrzewanie grzejnikowe': '30', 'Ogrzewanie podłogowe': '70' };
+  const input = rowToInput(row, '');
+  assert.equal(input.radiatorsShare, '30');
+  assert.equal(input.floorShare, '70');
 });
 
 // =====================================================================

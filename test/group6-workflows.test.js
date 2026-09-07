@@ -216,6 +216,22 @@ test('wnioski powykonawcze: normalizeDate z {allowEmpty:true} zwraca pusty strin
   assert.equal(normalizeDate('15.02.2026', { allowEmpty: true }), '15.02.2026');
 });
 
+test('wnioski powykonawcze: convert-wm.ps1 przyjmuje pusty $DateText (real bug - "Bez daty" rzucało "Cannot bind argument to parameter \'DateText\' because it is an empty string")', async () => {
+  // server.js poprawnie przepuszcza pusty string przez normalizeDate({allowEmpty:true})
+  // dla "Bez daty" (test wyzej), ale sama funkcja PowerShell ma osobny,
+  // NIEZALEZNY punkt odrzucenia: [Parameter(Mandatory=$true)][string]$DateText
+  // bez [AllowEmptyString()] odrzuca pusty string juz na etapie BINDOWANIA
+  // parametru, zanim funkcja w ogole dostanie szanse cokolwiek zrobic - wiec
+  // sama poprawnosc JS-owej walidacji nic tu nie dawala. Zlapane realnie na
+  // pierwszym uzyciu "Bez daty" po wydaniu tej opcji.
+  const script = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'scripts', 'convert-wm.ps1'), 'utf8');
+  const dateTextParamLines = script.split('\n').filter(line => /\[string\]\$DateText\b/.test(line) && /Parameter\(Mandatory/.test(line));
+  assert.equal(dateTextParamLines.length, 2, 'oczekiwane dokladnie 2 deklaracje parametru $DateText (Replace-AllDates, Convert-ToPowykonawczy)');
+  for (const line of dateTextParamLines) {
+    assert.match(line, /\[AllowEmptyString\(\)\]/, `$DateText musi miec [AllowEmptyString()], inaczej Mandatory string odrzuca pusty wpis z "Bez daty": ${line}`);
+  }
+});
+
 test('wnioski powykonawcze: podmiana tytułu dokumentu obejmuje TEŻ nagłówki/stopki, nie tylko główną treść (naprawiony realny błąd - stopka zostawała ze starym tytułem)', async () => {
   // Doc.Content w Word COM obejmuje WYLACZNIE glowny tekst dokumentu - naglowki
   // i stopki to osobne StoryRanges, ktorych Replace-InContent nigdy nie

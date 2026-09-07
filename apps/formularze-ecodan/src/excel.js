@@ -220,8 +220,21 @@ export function rowToInput(row, globalLocation = '') {
     cwuTankRaw: cwuTank,
     buffer: getCell(row, ['Wielkość bufora', 'Wielkosc bufora', 'Bufor']),
     boilerRoomHeight: getCell(row, ['Wysokość kotłowni (m)', 'Wysokosc kotlowni (m)', 'Wysokość kotłowni', 'Wysokosc kotlowni']),
-    radiatorsShare: getCell(row, ['Udział ogrzew grzejnik', 'Udzial ogrzew grzejnik', 'Udział ogrzew grzejniki %', 'Grzejniki']),
-    floorShare: getCell(row, ['Udział ogrzew podłog', 'Udzial ogrzew podlog', 'Udział ogrzew podłog %', 'Podłogówka', 'Podlogowka']),
+    // "Ogrzewanie grzejnikowe/podłogowe" (bez "udział"/"%") to inna, rownie
+    // realna konwencja nazewnictwa tej samej kolumny - dokladnie ta, ktorej
+    // uzywa apps/formularze-varmero/src/excel.js#COLUMN_VARIANTS na plikach
+    // Kamiensk/Zagorow (patrz komentarz tamze). Dodane po zlapaniu innego
+    // (pokrewnego) bledu na zywym pliku "Rychwal tabela dla Gminy.xlsx" -
+    // ten konkretny plik finalnie okazal sie NIE MIEC zadnej takiej kolumny
+    // w ogole (ani tej, ani Ecodanowej konwencji "Udział ogrzew..."), co
+    // odslonilo prawdziwy blad ponizej: sam BRAK calej kolumny w arkuszu
+    // (nie zla nazwa) tez blokowal caly wiersz - patrz rules.js#calculate(),
+    // "Brak udzialu ogrzewania" przeniesione z errors (blokada) do reasons
+    // (ostrzezenie), tak jak juz wczesniej wysokosc kotlowni/bufor. Ten
+    // dodatkowy wariant nazwy zostaje, bo jest prawdziwy dla innych plikow
+    // (Kamiensk/Zagorow) - to osobna, tez realna naprawa.
+    radiatorsShare: getCell(row, ['Udział ogrzew grzejnik', 'Udzial ogrzew grzejnik', 'Udział ogrzew grzejniki %', 'Grzejniki', 'Ogrzewanie grzejnikowe']),
+    floorShare: getCell(row, ['Udział ogrzew podłog', 'Udzial ogrzew podlog', 'Udział ogrzew podłog %', 'Podłogówka', 'Podlogowka', 'Ogrzewanie podłogowe']),
     forceSplit: /rozłącz|rozlacz|rozl/i.test(remarks) ? 'tak' : 'nie',
     sourceRemarks: remarks
   };
@@ -245,7 +258,7 @@ export async function readExcelRecords(filePath, globalLocation = '') {
   const records = [];
   const skipped = {
     empty: 0, ground: 0, unknownPumpType: 0, missingAddress: 0, missingOzc: 0,
-    missingPower: 0, missingLocation: 0, missingHeatingShare: 0, missingTank: 0,
+    missingPower: 0, missingLocation: 0, invalidHeatingShare: 0, missingTank: 0,
     missingLp: 0, duplicateLp: 0
   };
   // Audyt rozdz. 14, P1: nazwa wygenerowanego pliku wczesniej opierala sie o
@@ -316,14 +329,20 @@ export async function readExcelRecords(filePath, globalLocation = '') {
       return;
     }
 
+    // Realny blad zlapany na zywym pliku ("Rychwal tabela dla Gminy.xlsx"):
+    // arkusz w OGOLE nie ma kolumny z podzialem grzejniki/podlogowka (ani w
+    // konwencji Ecodana, ani w konwencji Varmero) - taki arkusz kiedys
+    // blokowal KAZDY wiersz jako "brak udzialu ogrzewania", mimo ze dane sa
+    // kompletne we wszystkich innych polach. Ten sam blad, ktory juz raz
+    // naprawiono dla zbiornika CWU (patrz komentarz przy parseTank w
+    // rules.js): NIEJEDNOZNACZNA wartosc (np. "50/50") to realny problem z
+    // danymi tego wiersza i dalej blokuje, ale ZUPELNY BRAK tej kolumny w
+    // calym arkuszu NIE blokuje - rules.js#calculate() traktuje to od teraz
+    // jako ostrzezenie (jak wysokosc kotlowni/bufor), nie twardy blad.
     const radiatorsShareParsed = parseHeatingSharePercent(input.radiatorsShare, 'Udział ogrzewania grzejnikowego');
     const floorShareParsed = parseHeatingSharePercent(input.floorShare, 'Udział ogrzewania podłogowego');
     if (!radiatorsShareParsed.valid || !floorShareParsed.valid) {
-      skipped.missingHeatingShare += 1;
-      return;
-    }
-    if (radiatorsShareParsed.percent <= 0 && floorShareParsed.percent <= 0) {
-      skipped.missingHeatingShare += 1;
+      skipped.invalidHeatingShare += 1;
       return;
     }
 

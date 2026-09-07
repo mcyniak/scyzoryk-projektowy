@@ -293,7 +293,11 @@ function Collect-DateTexts {
 function Replace-AllDates {
   param(
     [Parameter(Mandatory=$true)]$Doc,
-    [Parameter(Mandatory=$true)][string]$DateText
+    # AllowEmptyString: "Bez daty" wysyla z serwera pusty string (dateValidation.js
+    # normalizeDate({allowEmpty:true})) - bez tego atrybutu PowerShell odrzuca sam
+    # BINDING parametru ("Cannot bind argument... because it is an empty string"),
+    # zanim funkcja w ogole dostanie szanse obsluzyc pusta wartosc ponizej.
+    [Parameter(Mandatory=$true)][AllowEmptyString()][string]$DateText
   )
   # Zwraca liste faktycznie znalezionych/podmienionych dat (stara -> nowa),
   # zeby wywolujacy (server.js, potem UI) mogl to pokazac uzytkownikowi PRZED
@@ -396,7 +400,10 @@ function Delete-FromMarkerToEnd {
 function Convert-ToPowykonawczy {
   param(
     [Parameter(Mandatory=$true)]$Doc,
-    [Parameter(Mandatory=$true)][string]$DateText
+    # AllowEmptyString: patrz komentarz przy Replace-AllDates - ten sam powod,
+    # wywolanie ponizej (linia z "Convert-ToPowykonawczy -Doc $doc -DateText")
+    # przekazuje dalej dokladnie to samo, potencjalnie puste config.dateText.
+    [Parameter(Mandatory=$true)][AllowEmptyString()][string]$DateText
   )
 
   if ($null -eq $Doc) { throw "Word nie otworzyl dokumentu DOCX." }
