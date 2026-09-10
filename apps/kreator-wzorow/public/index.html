@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kreator wzorów seryjnych</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="app.css" />
+  <script src="/shared/theme.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="#" data-main-link aria-label="Wróć do panelu głównego">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-scan"/></svg>
+          <strong>Kreator wzorów seryjnych</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <a class="btn btn-ghost btn-sm" href="pomoc.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-help-circle"/></svg>
+          Pomoc
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div class="panel hero-main">
+        <div class="kicker">Word → gotowy wzór seryjny</div>
+        <h1>Przygotuj Worda do automatycznego generowania</h1>
+        <p class="lead">Wczytaj dokument z oznaczonymi fragmentami i przykładowy Excel. Wskaż, które kolory oznaczają pola robocze, określ skąd mają pochodzić dane, a Kreator przygotuje wzór do użycia w Dokumentach seryjnych.</p>
+      </div>
+      <aside class="panel info-card">
+        <h2>Jak działa?</h2>
+        <div class="pill-list">
+          <div class="pill">Kolor nie ma znaczenia — liczy się samo oznaczenie.</div>
+          <div class="pill">Obliczenia zostają „Do projektanta”.</div>
+          <div class="pill">Gotowy wzór trafia do Dokumentów seryjnych.</div>
+        </div>
+      </aside>
+    </section>
+
+    <div id="globalNotice" class="panel notice hidden" role="alert"></div>
+
+    <!-- KROK 1: pliki + paleta + skan -->
+    <section class="panel" id="step1Panel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">1</span>Wzór i przykładowy Excel</h2>
+          <p class="panel-desc">Oznaczenia mogą mieć dowolny kolor — sam fakt oznaczenia przez autora dokumentu wystarczy.</p>
+        </div>
+      </div>
+      <form id="uploadForm">
+        <div class="split">
+          <label>Wzór Word (.docx)
+            <input type="file" id="templateFile" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required />
+          </label>
+          <label>Przykładowa tabela Excel (.xlsx)
+            <input type="file" id="excelFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required />
+          </label>
+        </div>
+        <div class="hero-actions u-mt-4">
+          <button type="submit" id="uploadBtn" class="btn btn-primary">Sprawdź pliki</button>
+        </div>
+        <div id="uploadStatus"></div>
+      </form>
+
+      <div id="afterUpload" class="hidden u-mt-4">
+        <div class="split">
+          <div class="field">
+            <label class="label" for="sheetSelect">Arkusz Excela</label>
+            <select id="sheetSelect" class="input"></select>
+          </div>
+          <div class="field">
+            <label class="label" for="addressColumnSelect">Kolumna adresu</label>
+            <select id="addressColumnSelect" class="input"></select>
+          </div>
+        </div>
+        <div class="hero-actions u-mt-3">
+          <button type="button" id="detectMarkingsBtn" class="btn btn-secondary">Wykryj oznaczenia</button>
+        </div>
+        <div id="markingsStatus"></div>
+
+        <div id="markingsPaletteBox" class="hidden u-mt-4">
+          <h3 class="u-text-md">Które oznaczenia są polami roboczymi?</h3>
+          <p class="hint">Zaznacz kolory/rodzaje, które we wzorze oznaczają miejsca do wypełnienia. Niezaznaczone (np. nagłówki tabel, komórki informacyjne) zostaną pominięte.</p>
+          <div id="markingsList" class="markings-list"></div>
+          <div class="hero-actions u-mt-3">
+            <button type="button" id="scanBtn" class="btn btn-primary">Skanuj wybrane oznaczenia</button>
+          </div>
+          <div id="scanStatus"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- KROK 2: konfiguracja kandydatów -->
+    <section class="panel hidden" id="step2Panel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">2</span>Znalezione miejsca</h2>
+          <p class="panel-desc">Skonfiguruj każdy kandydat: STAŁE / Z EXCELA / WARIANT / WARUNEK / DO PROJEKTANTA.</p>
+        </div>
+      </div>
+      <div class="candidate-metrics" id="candidateMetrics"></div>
+      <div class="candidate-filters" id="candidateFilters"></div>
+      <div class="candidate-list" id="candidateList"></div>
+      <div class="hero-actions u-mt-4">
+        <button type="button" id="toStep3Btn" class="btn btn-primary">Sprawdź wzór</button>
+      </div>
+    </section>
+
+    <!-- panel konfiguracji kandydata (side panel prosty - pod lista) -->
+    <section class="panel hidden" id="candidateConfigPanel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title">Konfiguracja kandydata</h2>
+          <p class="panel-desc" id="candidateConfigContext"></p>
+        </div>
+      </div>
+      <div class="config-type-choices" id="configTypeChoices">
+        <button type="button" class="config-type-btn" data-type="constant">STAŁE</button>
+        <button type="button" class="config-type-btn" data-type="field">Z EXCELA</button>
+        <button type="button" class="config-type-btn" data-type="block">WARUNEK / BLOK</button>
+        <button type="button" class="config-type-btn" data-type="manual">DO PROJEKTANTA</button>
+      </div>
+      <div id="configTypeBody" class="u-mt-4"></div>
+      <div class="hero-actions u-mt-4">
+        <button type="button" id="closeConfigBtn" class="btn btn-secondary">Zamknij</button>
+      </div>
+    </section>
+
+    <!-- KROK 3: walidacja + podgląd -->
+    <section class="panel hidden" id="step3Panel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">3</span>Sprawdzenie i podgląd</h2>
+          <p class="panel-desc">Walidacja przechodzi po rzeczywistych rekordach przykładowego arkusza.</p>
+        </div>
+      </div>
+      <div class="hero-actions">
+        <button type="button" id="validateBtn" class="btn btn-secondary">Sprawdź wzór</button>
+      </div>
+      <div id="validationResult" class="u-mt-4"></div>
+
+      <div class="u-mt-4">
+        <label class="label" for="previewRecordSelect">Rekord do próbki</label>
+        <select id="previewRecordSelect" class="input"></select>
+        <div class="hero-actions u-mt-3">
+          <button type="button" id="previewBtn" class="btn btn-secondary">Wygeneruj próbkę</button>
+        </div>
+        <div id="previewResult" class="u-mt-3"></div>
+      </div>
+
+      <div class="hero-actions u-mt-4">
+        <button type="button" id="toStep4Btn" class="btn btn-primary">Przejdź do budowy wzoru</button>
+      </div>
+    </section>
+
+    <!-- KROK 4: build -->
+    <section class="panel hidden" id="step4Panel">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">4</span>Zbuduj wzór</h2>
+          <p class="panel-desc">Gotowy plik wrzuć potem do „Dokumenty seryjne PDF”.</p>
+        </div>
+      </div>
+      <label>Nazwa wzoru
+        <input type="text" id="templateNameInput" class="input" />
+        <span class="field-help">Plik zapisze się jako „&lt;nazwa&gt;_seryjny.docx”.</span>
+      </label>
+      <div class="hero-actions u-mt-4">
+        <button type="button" id="buildBtn" class="btn btn-primary">Zbuduj wzór</button>
+      </div>
+      <div id="buildResult" class="u-mt-4"></div>
+    </section>
+
+    <div id="jobStatusBar" class="job-status-bar hidden"></div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

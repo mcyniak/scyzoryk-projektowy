@@ -98,7 +98,8 @@ const apps = [
   { slug: 'formularze-varmero', name: 'Dobory Varmero', description: 'Automatyczne zgloszenia do kalkulatora doboru pompy ciepla Varmero na podstawie tabeli adresowej, z odbiorem kart wynikowych mailem.', dir: path.join(ROOT, 'apps', 'formularze-varmero'), port: Number(process.env.FORMULARZE_VARMERO_PORT || 3012), healthPath: '/api/health', extraEnv: { PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || '0' } },
   { slug: 'tworzenie-folderow', name: 'Tworzenie folderów', description: 'Automatyczne tworzenie struktury podfolderow (WM/pompy/kolektory/kotly) w istniejacym folderze inwestycji, na podstawie tabeli adresowej.', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), port: Number(process.env.TWORZENIE_FOLDEROW_PORT || 3013), healthPath: '/api/health' },
   { slug: 'protokoly', name: 'Zdjęcia do PDF Protokołów', description: 'Sklada zdjecia protokolow (z folderow adresow, tak jak w drukarce projektow) w przyciete, czarno-biale PDF-y gotowe do druku.', dir: path.join(ROOT, 'apps', 'protokoly'), port: Number(process.env.PROTOKOLY_PORT || 3014), healthPath: '/api/health' },
-  { slug: 'pipeline', name: 'Obsługa całej inwestycji', description: 'Odpala po kolei wybrane narzedzia (Tworzenie folderow, Dokumenty seryjne, Przypisywanie plikow do folderow, Dobory myEcodan/Varmero) dla jednej inwestycji naraz.', dir: path.join(ROOT, 'apps', 'pipeline'), port: Number(process.env.PIPELINE_PORT || 3015), healthPath: '/api/health' }
+  { slug: 'pipeline', name: 'Obsługa całej inwestycji', description: 'Odpala po kolei wybrane narzedzia (Tworzenie folderow, Dokumenty seryjne, Przypisywanie plikow do folderow, Dobory myEcodan/Varmero) dla jednej inwestycji naraz.', dir: path.join(ROOT, 'apps', 'pipeline'), port: Number(process.env.PIPELINE_PORT || 3015), healthPath: '/api/health' },
+  { slug: 'kreator-wzorow', name: 'Kreator wzorów seryjnych', description: 'Przygotowuje zwykly Word z oznaczonymi (dowolnym kolorem) fragmentami do uzycia w Dokumentach seryjnych PDF - Smart Template z regulami (Excel/warianty/warunki), obliczenia zostaja "Do projektanta".', dir: path.join(ROOT, 'apps', 'kreator-wzorow'), port: Number(process.env.KREATOR_WZOROW_PORT || 3016), healthPath: '/api/health' }
 ];
 
 
@@ -115,7 +116,8 @@ const dependencyChecks = [
   { slug: 'formularze-varmero', dir: path.join(ROOT, 'apps', 'formularze-varmero'), deps: ['express', 'playwright', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx', 'imapflow', 'mailparser'], playwright: true },
   { slug: 'tworzenie-folderow', dir: path.join(ROOT, 'apps', 'tworzenie-folderow'), deps: ['express', 'multer', 'sanitize-filename', 'express-rate-limit', 'xlsx'] },
   { slug: 'protokoly', dir: path.join(ROOT, 'apps', 'protokoly'), deps: ['express', 'express-rate-limit', 'jimp', 'pdf-lib'] },
-  { slug: 'pipeline', dir: path.join(ROOT, 'apps', 'pipeline'), deps: ['express', 'multer', 'express-rate-limit', 'read-excel-file', 'adm-zip', 'exceljs'] }
+  { slug: 'pipeline', dir: path.join(ROOT, 'apps', 'pipeline'), deps: ['express', 'multer', 'express-rate-limit', 'read-excel-file', 'adm-zip', 'exceljs'] },
+  { slug: 'kreator-wzorow', dir: path.join(ROOT, 'apps', 'kreator-wzorow'), deps: ['express', 'multer', 'express-rate-limit', 'read-excel-file', 'adm-zip', 'sanitize-filename'] }
 ];
 
 function appHasDependencies(app) {

@@ -207,6 +207,12 @@ Zawiera funkcje wykorzystywane przez różne aplikacje, między innymi:
 
 Aplikacje drukujące korzystają ze wspólnej warstwy w `lib/printing.js` oraz ze skryptu PowerShell. Mechanizm wybiera dostępny sposób drukowania i przekazuje pliki do drukarki w ustalonej kolejności.
 
+### Smart Template (Kreator wzorów seryjnych)
+
+- `lib/smartTemplateRules.js` — czysty moduł JS (bez zależności npm) interpretujący reguły wzoru: wylicza wartość każdego pola dla konkretnego rekordu, ocenia warunki bloków, waliduje strukturę manifestu. Używany zarówno przez Kreatora (podgląd/build), jak i przez Dokumenty seryjne (prawdziwe generowanie) — jedno wspólne miejsce, żeby oba narzędzia nigdy nie interpretowały tych samych reguł inaczej.
+- `lib/wordAutomationCoordinator.js` — blokada międzyprocesowa na plikach (ten sam wzorzec co `lib/printCoordinator.js`), żeby dwie niezależne aplikacje (Kreator, Dokumenty seryjne) nie uruchomiły Worda jednocześnie. Zadanie, które przyszło drugie, czeka na zwolnienie zamiast kolidować.
+- `lib/wordSmartTemplate.ps1` — współdzielony skrypt PowerShell: znajdowanie oznaczonych fragmentów w dokumencie (ta sama funkcja w skanie Kreatora i w ponownej weryfikacji przed budową wzoru) oraz stosowanie już podjętych decyzji o widoczności bloków warunkowych podczas generowania.
+
 ## 7. Opis narzędzi
 
 ### 7.1 Drukarka
@@ -271,6 +277,16 @@ Narzędzie przygotowuje osobny dokument dla każdego wiersza lub adresu.
 Microsoft Word jest sterowany przez skrypt PowerShell i mechanizm COM. Program odnajduje właściwe miejsca w tabelach oraz tekstach szablonu i zastępuje je danymi rekordu.
 
 Ważne jest zachowanie istniejącego formatowania dokumentów. Dlatego uzupełnianie wykonywane jest w programie Word, a nie przez budowanie dokumentów od zera.
+
+### 7.5a Kreator wzorów seryjnych
+
+Osobne narzędzie (port 3016), które przygotowuje zwykły dokument Word do użycia w „Dokumentach seryjnych PDF” opisanych wyżej. Punktem wyjścia jest wzór z fragmentami oznaczonymi przez autora dowolnym kolorem (Highlight albo cieniowanie komórki/akapitu/runu) — **sam kolor nie ma znaczenia biznesowego**, liczy się tylko fakt oznaczenia. Dlatego skanowanie jest dwuetapowe: najpierw narzędzie pokazuje pełną paletę kolorów/rodzajów oznaczeń faktycznie użytych w dokumencie (z przykładami tekstu), a dopiero po tym, jak użytkownik zaznaczy, które z nich są polami roboczymi, szuka konkretnych fragmentów.
+
+Dla każdego znalezionego fragmentu użytkownik wybiera jedną z pięciu decyzji: STAŁE (treść zostaje, oznaczenie znika), Z EXCELA (kolumna wprost albo wariant/lookup zależny od wartości), WARUNEK/BLOK (cały akapit/lista/tabela pojawia się tylko dla pasujących rekordów), albo DO PROJEKTANTA (fragment — najczęściej obliczenia, schemat, wynik symulacji — zostaje całkowicie nietknięty, razem z oryginalnym oznaczeniem i kolorem). Narzędzie świadomie **nie liczy niczego** za projektanta.
+
+Gotowy wzór to nadal zwykły plik `.docx` — reguły (które pole skąd bierze dane, warunki bloków) są zapisane wewnątrz dokumentu jako osadzony manifest (Custom XML Part), a widoczna treść korzysta z prawdziwych pól `MERGEFIELD` i zakładek Worda. Taki plik wgrywa się do „Dokumenty seryjne PDF” dokładnie tak samo jak zwykły szablon — narzędzie samo rozpoznaje manifest i pokazuje w interfejsie informację „Wzór utworzony w Kreatorze”.
+
+Ponieważ oba narzędzia (Kreator i Dokumenty seryjne) mogą niezależnie uruchamiać własną instancję Worda, dostęp do niego jest koordynowany między procesami — drugie zadanie czeka na zwolnienie zamiast kolidować z pierwszym.
 
 ### 7.6 Wnioski powykonawcze
 

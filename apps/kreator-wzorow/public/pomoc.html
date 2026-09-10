@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pomoc — Kreator wzorów seryjnych</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="stylesheet" href="/shared/tokens.css" />
+  <link rel="stylesheet" href="/shared/components.css" />
+  <link rel="stylesheet" href="/shared/help.css" />
+  <script src="/shared/theme.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="app-header">
+      <div class="app-header-left">
+        <a class="app-brand" href="index.html" aria-label="Wróć do narzędzia">
+          <span class="app-brand-mark" aria-hidden="true"><svg class="icon"><use href="/shared/icons.svg#i-logo"/></svg></span>
+        </a>
+        <span class="app-divider"></span>
+        <div class="app-current-tool">
+          <svg class="icon icon-muted"><use href="/shared/icons.svg#i-scan"/></svg>
+          <strong>Pomoc — Kreator wzorów seryjnych</strong>
+        </div>
+      </div>
+      <div class="app-header-right">
+        <button class="btn btn-ghost btn-sm btn-icon" type="button" data-theme-toggle aria-label="Zmień motyw"><svg class="icon"><use href="/shared/icons.svg#i-moon"/></svg></button>
+        <a class="btn btn-ghost btn-sm" href="index.html">
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Wróć do narzędzia
+        </a>
+        <a class="btn btn-ghost btn-sm" href="#" data-main-link>
+          <svg class="icon"><use href="/shared/icons.svg#i-chevron-left"/></svg>
+          Panel główny
+        </a>
+      </div>
+    </header>
+
+    <div class="help-doc">
+      <p class="help-tagline u-mt-6">Przygotowuje zwykły Word z oznaczonymi (dowolnym kolorem) fragmentami do automatycznego generowania w Dokumentach seryjnych PDF.</p>
+      <div class="help-chips"><span class="help-chip">DOCX</span><span class="help-chip">XLSX</span><span class="help-chip help-chip-req">wymaga Worda</span></div>
+
+      <h3 class="u-mt-6">Krok po kroku</h3>
+      <ol>
+        <li>Przygotuj Word z fragmentami oznaczonymi dowolnym kolorem — Highlight albo cieniowanie (komórki, akapitu, runu).</li>
+        <li>Dodaj wzór i przykładową tabelę Excel, kliknij „Sprawdź pliki”.</li>
+        <li>Kliknij „Wykryj oznaczenia” — zobaczysz paletę wszystkich kolorów/rodzajów oznaczeń użytych w dokumencie z przykładami tekstu.</li>
+        <li>Zaznacz, które oznaczenia są polami roboczymi (dekoracyjne, np. nagłówki tabel, zostaw odznaczone), kliknij „Skanuj wybrane oznaczenia”.</li>
+        <li>Skonfiguruj każdego znalezionego kandydata: STAŁE (zostaw treść), Z EXCELA (kolumna wprost albo wariant/lookup), WARUNEK/BLOK (cały akapit/tabela zależne od wartości w Excelu) albo DO PROJEKTANTA (obliczenia, schematy — zostają nietknięte razem z oryginalnym oznaczeniem).</li>
+        <li>Kliknij „Sprawdź wzór” — walidacja przechodzi po rzeczywistych rekordach przykładowego arkusza i pokazuje błędy/ostrzeżenia.</li>
+        <li>Wygeneruj próbkę dla jednego rekordu i sprawdź wynik (DOCX/PDF) przed zbudowaniem całego wzoru.</li>
+        <li>Zbuduj wzór i pobierz gotowy plik „&lt;nazwa&gt;_seryjny.docx”.</li>
+        <li>Wgraj ten plik do „Dokumenty seryjne PDF” razem z właściwym Excelem inwestycji — zobaczysz tam znacznik „Wzór utworzony w Kreatorze”.</li>
+        <li>Projektant otwiera gotowe pliki, sprawdza je i ręcznie uzupełnia obliczenia, schematy i inne elementy wymagające decyzji projektowej.</li>
+      </ol>
+
+      <div class="help-callout good">
+        <span class="help-callout-label">Kolor nie ma znaczenia biznesowego</span>
+        <p>Liczy się sam fakt oznaczenia fragmentu przez autora dokumentu, nie konkretny kolor. Jeden dokument może mieć kilka kolorów roboczych naraz (np. żółty = dane z Excela, zielony = warianty tekstu, różowy = obliczenia projektanta) — o tym, co dany kolor znaczy, decydujesz Ty przy konfiguracji każdego kandydata, nie sam kolor.</p>
+      </div>
+
+      <div class="help-callout warn">
+        <span class="help-callout-label">Narzędzie nie liczy nic za projektanta</span>
+        <p>Kreator nie wykonuje obliczeń projektowych (spadki napięć, obciążenia, dobory zabezpieczeń itd.). Fragmenty z obliczeniami oznacz jako „Do projektanta” — zachowają dokładnie swoje oryginalne oznaczenie i kolor w gotowym wzorze, żeby projektant wiedział, że musi je ręcznie sprawdzić/uzupełnić.</p>
+      </div>
+
+      <h3 class="u-mt-6">Najczęstsze problemy</h3>
+      <div><dt>„Wzór zmienił się od czasu skanowania”</dt><dd>Ktoś (albo Ty) zmienił plik między skanem a zbudowaniem wzoru. Wczytaj plik ponownie i przejdź przez skanowanie od nowa.</dd></div>
+      <div><dt>„N kandydatów nadal nie ma przypisanej decyzji”</dt><dd>Przed zbudowaniem wzoru każdy znaleziony fragment musi mieć jawną decyzję — filtr „Nierozwiązane” pokaże, które.</dd></div>
+      <div><dt>„Word jest teraz używany przez inne narzędzie”</dt><dd>Dokumenty seryjne i Kreator dzielą tego samego Worda — zadanie samo czeka na zwolnienie, nie trzeba nic robić ręcznie.</dd></div>
+      <div><dt>„Brak mapowania dla wartości…” (lookup)</dt><dd>W przykładowym Excelu pojawiła się wartość, dla której nie wpisano jeszcze tekstu wynikowego — uzupełnij mapowanie w konfiguracji pola.</dd></div>
+      <div><dt>„Żaden blok nie pasuje” / „Pasuje więcej niż jeden blok”</dt><dd>Grupa wariantów (np. „System montażowy”) musi mieć dokładnie jeden pasujący blok na rekord (polityka „exactlyOne”) — popraw warunki bloków.</dd></div>
+    </div>
+  </main>
+  <script src="pomoc.js"></script>
+</body>
+</html>

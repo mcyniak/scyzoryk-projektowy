@@ -13,13 +13,25 @@ param(
   [string]$ImageManifestJson = "",
   [switch]$VisibleWord,
   [switch]$DebugMode,
-  [switch]$SaveWord
+  [switch]$SaveWord,
+  # Kreator wzorow seryjnych (Smart Template) - server.js przekazuje ten
+  # switch WYLACZNIE gdy w DOCX wykryto manifest Kreatora (patrz
+  # src/smartTemplate.js#readSmartTemplateManifest). Zmienia, KTORE fillery
+  # dzialaja na "podswietlonych" fragmentach dokumentu (patrz komentarz przy
+  # petli per-record nizej) - reczne oznaczenia kolorystyczne w Smart
+  # Template NIE sa etykietami legacy heurystyk, tylko smart polami/blokami
+  # skonfigurowanymi w Kreatorze.
+  [switch]$SmartTemplateMode
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 try { [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false) } catch {}
+# Apply-ScyzorykSmartBlocks - dzielone z apps/kreator-wzorow (patrz komentarz
+# w tym pliku). $PSScriptRoot = apps/dokumenty-seryjne/scripts, wiec lib/ jest
+# dwa poziomy wyzej.
+. (Join-Path $PSScriptRoot "..\..\..\lib\wordSmartTemplate.ps1")
 
 function Write-Log([string]$level, [string]$message, $data = $null) {
   $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss.fff")
@@ -1058,13 +1070,32 @@ try {
         $imageFieldDebug = New-Object System.Collections.Generic.List[object]
         Replace-PhotoGalleryMergeField $mergedDoc $record $imageFieldDebug
 
-        Write-Log "info" "Wypelniam podswietlone komorki tabeli wg etykiety." ([pscustomobject]@{ row = $rowNumber; address = $address })
+        # Smart Template (Kreator wzorow seryjnych) vs legacy - DOKLADNIE
+        # jedna z tych dwoch galezi, nigdy obie naraz (sekcja 9/28
+        # specyfikacji Kreatora). Reczne oznaczenia kolorystyczne w Smart
+        # Template NIE sa etykietami dla Fill-HighlightedTableCells/
+        # Fill-NarrativeBlanks - to smart pola/bloki juz rozstrzygniete PRZED
+        # uruchomieniem Worda (lib/smartTemplateRules.js#evaluateSmartRecord,
+        # patrz _scyBlocksJson w rekordzie) - te heurystyki dotykalyby ich
+        # przypadkowo i psuly gotowy wzor.
         $tableFieldDebug = New-Object System.Collections.Generic.List[object]
-        $tableFilledCount = Fill-HighlightedTableCells $mergedDoc $record $tableFieldDebug
-
-        Write-Log "info" "Wypelniam podswietlone wielokropki w tresci zdan." ([pscustomobject]@{ row = $rowNumber; address = $address })
         $narrativeFieldDebug = New-Object System.Collections.Generic.List[object]
-        $narrativeFilledCount = Fill-NarrativeBlanks $mergedDoc $record $narrativeFieldDebug
+        $tableFilledCount = 0
+        $narrativeFilledCount = 0
+        $smartBlockIssues = New-Object System.Collections.Generic.List[object]
+        if ($SmartTemplateMode) {
+          Write-Log "info" "Rozstrzygam smart bloki (Kreator wzorow seryjnych)." ([pscustomobject]@{ row = $rowNumber; address = $address })
+          $smartBlockIssues = Apply-ScyzorykSmartBlocks $mergedDoc $record
+          foreach ($issue in $smartBlockIssues) {
+            Write-Log $issue.level $issue.message ([pscustomobject]@{ row = $rowNumber })
+          }
+        } else {
+          Write-Log "info" "Wypelniam podswietlone komorki tabeli wg etykiety." ([pscustomobject]@{ row = $rowNumber; address = $address })
+          $tableFilledCount = Fill-HighlightedTableCells $mergedDoc $record $tableFieldDebug
+
+          Write-Log "info" "Wypelniam podswietlone wielokropki w tresci zdan." ([pscustomobject]@{ row = $rowNumber; address = $address })
+          $narrativeFilledCount = Fill-NarrativeBlanks $mergedDoc $record $narrativeFieldDebug
+        }
 
         Write-Log "info" "Podmieniam pola MERGEFIELD." ([pscustomobject]@{ row = $rowNumber; address = $address })
         $script:mergeFieldFailures.Clear()
@@ -1136,6 +1167,17 @@ try {
           file = [System.IO.Path]::GetFileName($pdfPath)
           path = $pdfPath
         }) | Out-Null
+        # Uszkodzony/brakujacy bookmark smart bloku (patrz
+        # lib/wordSmartTemplate.ps1) NIE blokuje eksportu PDF (plik juz
+        # istnieje, wart jest do obejrzenia), ale MUSI byc widoczny jako
+        # blad rekordu - w odroznieniu od zwyklego brakujacego MERGEFIELD,
+        # zly/brakujacy smart blok moze oznaczac NIEWLASCIWY wariant tresci w
+        # gotowym dokumencie (znacznie powazniejsze niz puste pole).
+        if ($smartBlockIssues.Count -gt 0) {
+          $blockMsg = "PDF powstal, ale wystapil problem ze smart blokami: " + (($smartBlockIssues | ForEach-Object { $_.message }) -join "; ")
+          $errors.Add([pscustomobject]@{ row = $rowNumber; message = $blockMsg }) | Out-Null
+          Write-Event "record-error" "Rekord $($rowNumber): $($blockMsg)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; error = $blockMsg })
+        }
         Write-Event "record-done" "Gotowy PDF $($index)/$($total): $($address)" ([pscustomobject]@{ current = $index; total = $total; row = $rowNumber; address = $address; file = [System.IO.Path]::GetFileName($pdfPath) })
         $recordDone = $true
       } catch {

@@ -120,6 +120,24 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
   - Polish "ł" doesn't decompose under Unicode NFD the way ą/ę/ć/ń/ś/ź/ż do, so the shared `Normalize-Name`
     PS helper turns "Działka" into `dzia_ka`, not `dzialka` — any new ASCII label/column candidate
     containing "ł" needs both spellings considered.
+  - **Smart Template mode** (added with `kreator-wzorow`, below): a DOCX built by the Kreator carries an
+    embedded manifest (Custom XML Part, `apps/dokumenty-seryjne/src/smartTemplate.js#readSmartTemplateManifest`
+    detects it at upload time). When present, `server.js` takes a **separate** code path from legacy —
+    skips `groupMailMergeTemplates`/`validateReferenceColumns` (smart templates need `addressColumn` +
+    `collectRequiredColumns(manifest)` from `lib/smartTemplateRules.js` instead), and before spawning
+    PowerShell, augments every selected row via `evaluateSmartRecord(manifest, row)` (adds synthetic
+    `SCY_F_xxx` merge-field properties + `_scyBlocksJson`) and preflights **all** selected rows — any
+    row with a blocking error refuses the whole batch rather than generating some documents with silently
+    wrong content. `mailmerge-to-pdf.ps1 -SmartTemplateMode` then skips `Fill-HighlightedTableCells`/
+    `Fill-NarrativeBlanks` (smart templates' colored marks are Kreator fields/blocks, not legacy
+    label-cells) and calls `Apply-ScyzorykSmartBlocks` (in `lib/wordSmartTemplate.ps1`, shared with the
+    Kreator's own scripts) instead, right before the existing `Replace-AllMergeFields`. Legacy templates
+    (no manifest) are completely unaffected — same fillers, same validation, same everything.
+  - Word COM itself is now coordinated **across processes**, not just within this app's own
+    `wordQueue = createSerialQueue(...)` (which only serializes within one Node process): both this app
+    and `kreator-wzorow` can independently spin up `Word.Application`, so `startGeneration()`'s PowerShell
+    spawn is wrapped in `lib/wordAutomationCoordinator.js#withWordAutomationLease` — waits for the other
+    app to finish (with a `SCYZORYK_WORD_LOCK_TIMEOUT_MS`, default 60 min) instead of colliding.
 - `wnioski-powykonawcze` — converts DOCX "wniosek materiałowy" files into "dokumentacja powykonawcza" PDFs.
 - `karty-katalogowe` — matches a UID column in an Excel sheet to product spec-sheet files and copies them
   into per-client folders.
@@ -158,6 +176,50 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
   This is also the only child app in the repo that makes outbound network calls, and only when Gemini or
   OpenAI is the active provider — `manual` mode and every other app are deliberately offline/
   `127.0.0.1`-only end-to-end.
+- `kreator-wzorow` ("Kreator wzorów seryjnych", port 3016 / `KREATOR_WZOROW_PORT`) — turns a plain,
+  colour-marked DOCX + a sample XLSX into a **Smart Template** for `dokumenty-seryjne` (see that app's
+  entry above for the consuming side). **Colour has no business meaning** — the tool inventories every
+  highlight/shading colour actually used in the document first (`scripts/scan-template.ps1 -Mode palette`,
+  pure OOXML regex scan of `word/(document|header*|footer*).xml`, no Word COM — same low-risk pattern as
+  the pre-existing `apps/dokumenty-seryjne/scripts/scan-placeholders.ps1`) and only asks the user which
+  colours are actually "working marks" before doing anything else; deselected colours (table headers,
+  decorative shading) are never touched. Only `-Mode candidates` (locating the *specific* marked ranges to
+  configure) opens real Word COM, via `Find-ScyzorykMarkedCandidates` in `lib/wordSmartTemplate.ps1` —
+  shared with `build-template.ps1`, which re-runs the *identical* scan before mutating anything and aborts
+  ("Wzór zmienił się od czasu skanowania") if the fingerprints don't match, rather than trusting raw
+  `Range.Start`/`.End` integers carried over from a separate COM session.
+  - Each candidate gets one of five user decisions (constant / Excel column / lookup-or-composed variant /
+    conditional block / left untouched for the designer) — `src/templateManifest.js` assembles these into
+    the manifest shape `lib/smartTemplateRules.js#validateManifest` checks, generating the synthetic
+    `SCY_F_<hex>` merge-field and `SCYB_<hex>` bookmark names itself (the client never invents these).
+    `src/candidateConfig.js#validateOverlaps` blocks ambiguous overlaps (two unrelated blocks partially
+    overlapping, a manual region overlapping anything) before build — a field fully *contained* in a block
+    is the one allowed overlap (unambiguous: block survives → field works, block removed → field goes with
+    it).
+  - **Never computes engineering values** (voltage drops, loads, snow/wind, cable sizing, PV string config,
+    …) — that's explicitly out of scope; anything of that nature is meant to be left as a manual region, not
+    modelled as a rule.
+  - Preview (`POST /api/jobs/:id/preview`) doesn't reimplement rendering — it calls
+    `evaluateSmartRecord()` (same function `dokumenty-seryjne` uses at generation time) for one record, then
+    shells out to **`apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1`** directly (the one deliberate
+    cross-app script reference in this repo — everywhere else, apps are independent), so a preview can never
+    silently diverge from what real generation later produces.
+  - `build-template.ps1` inserts real `MERGEFIELD` field codes via `Document.Fields.Add(range, wdFieldMergeField, name, false)`
+    and wraps merged block ranges in `Document.Bookmarks.Add(name, range)`, mutating from the **highest**
+    `Range.Start` down to the lowest (same ordering rule as `Apply-ScyzorykSmartBlocks`) so no not-yet-processed
+    candidate's position ever shifts underneath it. The finished manifest is embedded as a Custom XML Part
+    (`urn:scyzoryk:smart-template:v1`, CDATA-wrapped JSON) via `Document.CustomXMLParts.Add(...)` — Word
+    manages the OPC packaging, so no manual `[Content_Types].xml`/relationship editing was needed here
+    (contrast `dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1#Remove-MailMergeFromDocx`, which *does* hand-edit
+    the zip, but only to strip an existing native part, not add a new one).
+  - **Not unit-testable in CI** the way the rest of the scan/build pipeline is: `test/group26-kreator-wzorow.test.js`
+    covers every pure-JS module (`lib/smartTemplateRules.js`, `lib/wordAutomationCoordinator.js`,
+    `smartTemplate.js`, `templateManifest.js`, `candidateConfig.js`, `excelWorkbook.js`) and the whole HTTP
+    surface of `server.js` (upload validation, security headers, job lifecycle) with real fixtures, **plus**
+    a real, Word-free run of `scan-template.ps1 -Mode palette` against a hand-built fixture `.docx` — but
+    `-Mode candidates` and `build-template.ps1` themselves need a live Word install and have not been
+    exercised against a real marked-up document; treat their first real run as the acceptance test, per
+    `docs/TECHNICZNE_DZIALANIE.md`.
 
 Each app's `data/`, `logs/`, `uploads/`, `output/`, `tmp/` directories are runtime state (uploads, job
 data, generated output), not source — they're excluded from `scripts/check-project.js` and should not be

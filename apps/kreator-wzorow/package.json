@@ -1,0 +1,20 @@
+{
+  "name": "scyzoryk-kreator-wzorow",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.6.0",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.5.0",
+    "multer": "^2.0.2",
+    "read-excel-file": "^9.2.0",
+    "sanitize-filename": "^1.6.3"
+  },
+  "engines": {
+    "node": ">=22 <27"
+  }
+}

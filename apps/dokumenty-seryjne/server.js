@@ -35,6 +35,9 @@ const { createTelemetryService } = require('../../lib/telemetry');
 const { estimateManualMs } = require('../../lib/timeBenchmarks');
 const { detectMailMergeSheetBinding, getDocxModifiedTime } = require('./src/mailMergeSheetBinding');
 const { detectImageMergeFields, summarizeImages, loadManifest, saveManifest } = require('./src/imageMatching');
+const { readSmartTemplateManifest, SmartTemplateError } = require('./src/smartTemplate');
+const { evaluateSmartRecord, collectRequiredColumns } = require('../../lib/smartTemplateRules');
+const { withWordAutomationLease } = require('../../lib/wordAutomationCoordinator');
 
 const AdmZip = require('adm-zip');
 
@@ -113,6 +116,7 @@ function persistJobsIndex() {
       imageManifestPath: job.imageManifestPath || null,
       template: job.template,
       templateGroups: job.templateGroups,
+      smartManifest: job.smartManifest || null,
       excel: job.excel,
       workbook: job.workbook || null
     }));
@@ -137,6 +141,7 @@ function restoreJobsIndex() {
         endedAt: item.endedAt || null,
         template: item.template || null,
         templateGroups: item.templateGroups || null,
+        smartManifest: item.smartManifest || null,
         excel: item.excel || null,
         workbook: item.workbook || null,
         outputDir: item.outputDir,
@@ -921,7 +926,11 @@ function parseJsonLines(job, chunk, state) {
 async function startGeneration(job, options) {
   const sheetName = String(options.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
   const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
-  const addressColumn = String(options.addressColumn || guessAddressColumn(selectedSheet.columns || [])).trim() || 'Adres';
+  // Smart Template: addressColumn to swiadomy wybor uzytkownika w Kreatorze
+  // (manifest.addressColumn), ma pierwszenstwo przed zgadywaniem po nazwie
+  // kolumny - ale jawny addressColumn z requestu (jesli kiedys UI go wysle)
+  // dalej wygrywa nad obydwoma.
+  const addressColumn = String(options.addressColumn || (job.smartManifest && job.smartManifest.addressColumn) || guessAddressColumn(selectedSheet.columns || [])).trim() || 'Adres';
   const selectedRows = Array.isArray(options.selectedRows) ? options.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
   const rowsCsv = selectedRows.join(',');
   const visibleWord = options.visibleWord === true;
@@ -933,11 +942,46 @@ async function startGeneration(job, options) {
   const rowsForMerge = selectedRows.length ? allRows.filter(row => selectedRows.includes(Number(row._record))) : allRows;
   if (!rowsForMerge.length) throw new Error('Nie wybrano żadnych rekordów do wygenerowania.');
 
+  // Smart Template: kazdy rekord jest PRZED uruchomieniem Worda wyliczany
+  // przez ten sam silnik regul co podglad/build w Kreatorze
+  // (lib/smartTemplateRules.js#evaluateSmartRecord) - dostaje syntetyczne
+  // pola SCY_F_xxx (podmieniane pozniej jako prawdziwe MERGEFIELD) i
+  // _scyBlocksJson (ktore smart bloki zostawic/usunac). Preflight: jesli
+  // KTORYKOLWIEK wybrany rekord ma blokujacy blad (brak wymaganej wartosci,
+  // lookup bez mapowania, grupa wariantow bez jednoznacznego dopasowania...),
+  // generowanie NIE STARTUJE w ogole - "lepiej zablokowac caly zestaw niz
+  // cicho wygenerowac zly opis dla czesci adresow" (sekcja 32 specyfikacji
+  // Kreatora). Ostrzezenia (emptyPolicy/unknownPolicy = "warn") NIE blokuja.
+  let rowsForOutput = rowsForMerge;
+  if (job.smartManifest) {
+    const augmented = [];
+    const preflightErrors = [];
+    for (const row of rowsForMerge) {
+      const evaluated = evaluateSmartRecord(job.smartManifest, row);
+      if (evaluated.errors.length) {
+        preflightErrors.push({
+          row: Number(row._record) || null,
+          address: String(row[job.smartManifest.addressColumn] || '').trim(),
+          reasons: evaluated.errors.map(e => e.message)
+        });
+      }
+      augmented.push(evaluated.record);
+    }
+    if (preflightErrors.length) {
+      const examples = preflightErrors.slice(0, 10);
+      const message = `Wzór (z Kreatora) wymaga poprawy danych dla ${preflightErrors.length} z ${rowsForMerge.length} wybranych rekordów - pierwsze przykłady: ` +
+        examples.map(e => `wiersz ${e.row}${e.address ? ' (' + e.address + ')' : ''}: ${e.reasons.join('; ')}`).join(' | ');
+      appendLog(job, 'error', message, { preflightErrors });
+      return { ok: false, created: [], errors: preflightErrors, message };
+    }
+    rowsForOutput = augmented;
+  }
+
   const dataJsonPath = path.join(job.outputDir, 'merge-data.json');
   const debugJsonPath = path.join(job.outputDir, 'debug-events.jsonl');
   const replacementJsonPath = path.join(job.outputDir, 'text-replacements.json');
   const textReplacements = cleanTextReplacements(options.textReplacements, selectedSheet.columns || [], addressColumn);
-  writeJsonFileNoBom(dataJsonPath, { sheetName, addressColumn, records: rowsForMerge });
+  writeJsonFileNoBom(dataJsonPath, { sheetName, addressColumn, records: rowsForOutput });
   writeJsonFileNoBom(replacementJsonPath, { rules: textReplacements });
   if (!options._keepLog) fs.writeFileSync(job.logPath, '', 'utf8');
   // BUG: brakowalo tu tego samego warunku co przy logPath - debugJsonPath byl
@@ -983,12 +1027,32 @@ async function startGeneration(job, options) {
   if (debugMode) args.push('-DebugMode');
   if (saveWord) args.push('-SaveWord');
   if (job.imageManifestPath && fs.existsSync(job.imageManifestPath)) args.push('-ImageManifestJson', job.imageManifestPath);
+  if (job.smartManifest) args.push('-SmartTemplateMode');
 
   const exe = process.env.POWERSHELL_EXE || 'powershell.exe';
   const psArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_SCRIPT, ...args];
   appendLog(job, 'info', 'Uruchamiam PowerShell.', { exe, script: PS_SCRIPT });
 
-  return new Promise(resolveGeneration => {
+  // Cross-process koordynacja Worda (lib/wordAutomationCoordinator.js) -
+  // apps/kreator-wzorow moze rownolegle uruchamiac wlasna instancje Worda
+  // (scan/build/preview), wiec ten spawn CZEKA na zwolnienie zamiast
+  // odrazu kolidowac z drugim procesem WINWORD.EXE. onWaiting loguje to
+  // uzytkownikowi zamiast ciszy przez cala kolejke (wywolywane raz na
+  // kazda proba ponownego przejecia, wiec dopisujemy do logu tylko RAZ,
+  // nie przy kazdym pollu).
+  let waitLogged = false;
+  const leaseOptions = {
+    onWaiting: ownerMeta => {
+      if (waitLogged) return;
+      waitLogged = true;
+      appendLog(job, 'info', `Word jest teraz używany przez ${ownerMeta && ownerMeta.app || 'inne narzędzie'} - to zadanie czeka w kolejce.`);
+      setProgress(job, { phase: 'queued', message: `Word jest zajęty przez inne narzędzie (${ownerMeta && ownerMeta.app || 'nieznane'}) - czekam na zwolnienie...` });
+    }
+  };
+
+  return withWordAutomationLease(
+    { app: 'dokumenty-seryjne', operation: job.template.originalName },
+    () => new Promise(resolveGeneration => {
   const child = spawn(exe, psArgs, {
     cwd: ROOT,
     windowsHide: !visibleWord,
@@ -1048,7 +1112,9 @@ async function startGeneration(job, options) {
     }
     resolveGeneration(job.result);
   });
-  });
+  }),
+    leaseOptions
+  );
 }
 
 // Odpala startGeneration RAZ NA KAZDE zadanie (kazdy wybrany typ dokumentu,
@@ -1190,7 +1256,25 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     const templateInfos = [...singleTemplateFiles, ...multiTemplateFiles]
       .map(t => ({ path: t.path, originalName: decodeOriginalName(t.originalname) }));
 
+    // Smart Template (Kreator wzorow seryjnych) - wykrywane PRZED reszta
+    // logiki legacy. Smart template CELOWO nie ma natywnego powiazania
+    // mail-merge Worda ("Wybierz odbiorcow") - jego reguly sa interpretowane
+    // przez Scyzoryka (lib/smartTemplateRules.js), nie przez Worda. Wspiera
+    // WYLACZNIE pojedynczy plik szablonu - dokladnie tak, jak buduje go
+    // Kreator (jeden plik "<nazwa>_seryjny.docx"); paczka wielu plikow
+    // (multiTemplateFiles) zawsze idzie sciezka legacy.
+    let smartManifest = null;
+    if (!multiTemplateFiles.length && singleTemplateFiles.length === 1) {
+      try {
+        smartManifest = readSmartTemplateManifest(templateInfos[0].path);
+      } catch (err) {
+        if (err instanceof SmartTemplateError) return res.status(400).json({ ok: false, message: err.message });
+        throw err;
+      }
+    }
+
     const sheetNames = (await loadExcelWorkbook(excel.path)).worksheets.map(sheet => sheet.name);
+    const sheetOrderFromXml = getSheetOrderFromWorkbookXml(excel.path);
     // Niektore szablony (np. Slesin) maja na stale podpiety przez Word
     // "Wybierz odbiorcow" konkretny arkusz Excela - to jest pewna informacja,
     // wiec ma pierwszenstwo przed zgadywaniem mocy z nazwy pliku.
@@ -1198,31 +1282,60 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     const boundSheetName = boundSheet
       ? sheetNames.find(name => String(name).toLowerCase() === String(boundSheet.sheetName).toLowerCase())
       : null;
-    const sheetOrderFromXml = getSheetOrderFromWorkbookXml(excel.path);
-    const defaultSheet = boundSheetName || pickDefaultSheet(sheetNames, templateInfos[0].originalName, sheetOrderFromXml);
-    const workbook = await parseWorkbook(excel.path, defaultSheet);
-
-    // Tabela musi "wygladac jak wzorcowa" - patrz mem:conventions / komentarz
-    // przy REQUIRED_REFERENCE_COLUMNS. Sprawdzamy to od razu, zamiast po
-    // cichu generowac dokumenty z pustymi polami dla zle dobranej tabeli.
-    const missingColumns = validateReferenceColumns(workbook.columns);
-    if (missingColumns.length) {
-      return res.status(400).json({
-        ok: false,
-        message: komunikatBrakujacychKolumn(workbook.sheetName, missingColumns)
-      });
-    }
 
     const jobId = crypto.randomUUID();
     const outDir = path.join(OUTPUT_DIR, jobId);
     await fsp.mkdir(outDir, { recursive: true });
 
-    const { groups: templateGroups, ambiguous: ambiguousTemplates, skipped: skippedTemplates } = groupMailMergeTemplates(templateInfos, defaultSheet);
-    if (!templateGroups.length) {
-      return res.status(400).json({
-        ok: false,
-        message: 'Żaden z wgranych plików .docx nie jest prawdziwym dokumentem korespondencji seryjnej (brak powiązania z arkuszem Excela przez "Wybierz odbiorców" w Wordzie). Ta aplikacja generuje dokumenty tylko z takich plików.'
-      });
+    let defaultSheet, workbook, templateGroups, ambiguousTemplates = [], skippedTemplates = [];
+
+    if (smartManifest) {
+      // Kolejnosc priorytetow wyboru arkusza dla Smart Template (sekcja 11
+      // specyfikacji): 1) natywne powiazanie Worda, jesli mimo wszystko
+      // istnieje (nie lamiemy go bez potrzeby); 2) preferredSheet z
+      // manifestu Kreatora; 3) dotychczasowy pickDefaultSheet.
+      const preferredSheetName = smartManifest.preferredSheet && sheetNames.includes(smartManifest.preferredSheet)
+        ? smartManifest.preferredSheet
+        : null;
+      defaultSheet = boundSheetName || preferredSheetName || pickDefaultSheet(sheetNames, templateInfos[0].originalName, sheetOrderFromXml);
+      workbook = await parseWorkbook(excel.path, defaultSheet);
+
+      const missingColumns = collectRequiredColumns(smartManifest).filter(col => !workbook.columns.includes(col));
+      if (missingColumns.length) {
+        return res.status(400).json({
+          ok: false,
+          message: `Ten wzór (z Kreatora) wymaga kolumn, których nie ma w arkuszu „${workbook.sheetName}": ${missingColumns.join(', ')}.`
+        });
+      }
+      // hasVariants zawsze false - Smart Template nie ma wariantow po sheet
+      // (jeden plik = jeden komplet regul), dokladnie jak juz istniejacy
+      // groupMailMergeTemplates robi dla natywnego mail-merge.
+      templateGroups = [{ name: smartManifest.templateName || templateInfos[0].originalName, hasVariants: false, variants: { [defaultSheet]: templateInfos[0] }, single: null }];
+    } else {
+      defaultSheet = boundSheetName || pickDefaultSheet(sheetNames, templateInfos[0].originalName, sheetOrderFromXml);
+      workbook = await parseWorkbook(excel.path, defaultSheet);
+
+      // Tabela musi "wygladac jak wzorcowa" - patrz mem:conventions / komentarz
+      // przy REQUIRED_REFERENCE_COLUMNS. Sprawdzamy to od razu, zamiast po
+      // cichu generowac dokumenty z pustymi polami dla zle dobranej tabeli.
+      const missingColumns = validateReferenceColumns(workbook.columns);
+      if (missingColumns.length) {
+        return res.status(400).json({
+          ok: false,
+          message: komunikatBrakujacychKolumn(workbook.sheetName, missingColumns)
+        });
+      }
+
+      const grouped = groupMailMergeTemplates(templateInfos, defaultSheet);
+      templateGroups = grouped.groups;
+      ambiguousTemplates = grouped.ambiguous;
+      skippedTemplates = grouped.skipped;
+      if (!templateGroups.length) {
+        return res.status(400).json({
+          ok: false,
+          message: 'Żaden z wgranych plików .docx nie jest prawdziwym dokumentem korespondencji seryjnej (brak powiązania z arkuszem Excela przez "Wybierz odbiorców" w Wordzie). Ta aplikacja generuje dokumenty tylko z takich plików.'
+        });
+      }
     }
 
     const job = {
@@ -1233,6 +1346,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       endedAt: null,
       template: templateInfos[0],
       templateGroups,
+      smartManifest,
       excel: { path: excel.path, originalName: decodeOriginalName(excel.originalname) },
       workbook,
       outputDir: outDir,
@@ -1246,7 +1360,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     };
     jobs.set(jobId, job);
     persistJobsIndex();
-    appendLog(job, 'info', 'Wczytano pliki.', { templates: templateInfos.map(t => t.originalName), excel: job.excel.originalName, rows: workbook.totalRows, sheet: workbook.sheetName, sheets: workbook.summaries });
+    appendLog(job, 'info', 'Wczytano pliki.', { templates: templateInfos.map(t => t.originalName), excel: job.excel.originalName, rows: workbook.totalRows, sheet: workbook.sheetName, sheets: workbook.summaries, smartTemplate: Boolean(smartManifest) });
     res.json({
       ok: true,
       jobId,
@@ -1256,12 +1370,34 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       templateGroups: templateGroups.map(g => ({ name: g.name, hasVariants: g.hasVariants, variants: Object.keys(g.variants) })),
       ambiguousTemplates,
       skippedTemplatesCount: skippedTemplates.length,
-      detectedTemplatePower: boundSheetName || detectPowerFromText(templateInfos[0].originalName)
+      detectedTemplatePower: boundSheetName || detectPowerFromText(templateInfos[0].originalName),
+      smartTemplate: smartManifest ? {
+        templateName: smartManifest.templateName,
+        schemaVersion: smartManifest.schemaVersion,
+        addressColumn: smartManifest.addressColumn,
+        preferredSheet: smartManifest.preferredSheet || null,
+        fieldsCount: (smartManifest.fields || []).length,
+        blocksCount: (smartManifest.blocks || []).length,
+        manualRegionsCount: (smartManifest.manualRegions || []).length
+      } : null
     });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Nie udało się wczytać plików.' });
   }
 });
+
+// Smart template wymaga innych kolumn niz legacy (addressColumn +
+// collectRequiredColumns z manifestu, nie sztywne ID/Adres/Beneficjent) -
+// jedno wspolne miejsce dla obu endpointow ponizej, zeby nie rozjechaly sie
+// z czasem (ten sam powod co komunikatBrakujacychKolumn).
+function missingColumnsFor(job, columns) {
+  if (job.smartManifest) return collectRequiredColumns(job.smartManifest).filter(col => !(columns || []).includes(col));
+  return validateReferenceColumns(columns);
+}
+function missingColumnsMessage(job, sheetName, missingColumns) {
+  if (job.smartManifest) return `Ten wzór (z Kreatora) wymaga kolumn, których nie ma w arkuszu „${sheetName}": ${missingColumns.join(', ')}.`;
+  return komunikatBrakujacychKolumn(sheetName, missingColumns);
+}
 
 app.get('/api/sheet/:jobId/:sheetName', (req, res) => {
   const job = getJob(req.params.jobId);
@@ -1269,9 +1405,9 @@ app.get('/api/sheet/:jobId/:sheetName', (req, res) => {
   const sheetName = req.params.sheetName;
   const sheet = getWorkbookSheet(job.workbook, sheetName);
   if (!sheet || sheet.sheetName !== sheetName) return res.status(404).json({ ok: false, message: 'Nie znaleziono arkusza w Excelu.' });
-  const missingColumns = validateReferenceColumns(sheet.columns);
+  const missingColumns = missingColumnsFor(job, sheet.columns);
   if (missingColumns.length) {
-    return res.status(400).json({ ok: false, sheetName, missingColumns, message: komunikatBrakujacychKolumn(sheetName, missingColumns) });
+    return res.status(400).json({ ok: false, sheetName, missingColumns, message: missingColumnsMessage(job, sheetName, missingColumns) });
   }
   res.json({ ok: true, workbook: workbookPreview(job.workbook, sheetName), suggestedAddressColumn: guessAddressColumn(sheet.columns || []), suggestedUidColumn: guessUidColumn(sheet.columns || []) });
 });
@@ -1281,9 +1417,9 @@ app.get('/api/jobs/:jobId/sheets/:sheetName/rows', (req, res) => {
   if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
   const sheet = getWorkbookSheet(job.workbook, req.params.sheetName);
   if (!sheet || sheet.sheetName !== req.params.sheetName) return res.status(404).json({ ok: false, message: 'Nie znaleziono arkusza w Excelu.' });
-  const missingColumns = validateReferenceColumns(sheet.columns);
+  const missingColumns = missingColumnsFor(job, sheet.columns);
   if (missingColumns.length) {
-    return res.status(400).json({ ok: false, sheetName: sheet.sheetName, missingColumns, message: komunikatBrakujacychKolumn(sheet.sheetName, missingColumns) });
+    return res.status(400).json({ ok: false, sheetName: sheet.sheetName, missingColumns, message: missingColumnsMessage(job, sheet.sheetName, missingColumns) });
   }
   const offset = Math.max(0, Number(req.query.offset) || 0);
   const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
@@ -1371,15 +1507,20 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
     const body = req.body || {};
     const sheetName = String(body.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
     const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
-    const missingColumns = validateReferenceColumns(selectedSheet?.columns || []);
+    const missingColumns = missingColumnsFor(job, selectedSheet?.columns || []);
     if (missingColumns.length) {
-      return res.status(400).json({ ok: false, sheetName, missingColumns, message: komunikatBrakujacychKolumn(sheetName, missingColumns) });
+      return res.status(400).json({ ok: false, sheetName, missingColumns, message: missingColumnsMessage(job, sheetName, missingColumns) });
     }
     const selectedRowRecords = Array.isArray(body.selectedRows) ? body.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
     const selectedGroups = Array.isArray(body.selectedGroups) ? body.selectedGroups.filter(Boolean) : null;
 
     let tasks, skippedGroups = [];
-    if (selectedGroups && selectedGroups.length && job.templateGroups && job.templateGroups.length) {
+    if (job.smartManifest) {
+      // Smart Template to zawsze jeden plik, bez wariantow po sheet (patrz
+      // /api/upload) - buildGenerationTasks (grupy/warianty legacy) tu nie
+      // ma zastosowania.
+      tasks = [{ templatePath: job.template.path, templateOriginalName: job.template.originalName, rowRecords: selectedRowRecords.length ? selectedRowRecords : (selectedSheet.rows || []).map(r => Number(r._record)) }];
+    } else if (selectedGroups && selectedGroups.length && job.templateGroups && job.templateGroups.length) {
       const built = buildGenerationTasks(job, selectedGroups, sheetName, selectedSheet, selectedRowRecords);
       tasks = built.tasks;
       skippedGroups = built.skippedGroups;
@@ -1471,6 +1612,15 @@ app.get('/api/job/:jobId', (req, res) => {
     result: job.result,
     workbook: job.workbook,
     templateGroups: (job.templateGroups || []).map(g => ({ name: g.name, hasVariants: g.hasVariants, variants: Object.keys(g.variants) })),
+    smartTemplate: job.smartManifest ? {
+      templateName: job.smartManifest.templateName,
+      schemaVersion: job.smartManifest.schemaVersion,
+      addressColumn: job.smartManifest.addressColumn,
+      preferredSheet: job.smartManifest.preferredSheet || null,
+      fieldsCount: (job.smartManifest.fields || []).length,
+      blocksCount: (job.smartManifest.blocks || []).length,
+      manualRegionsCount: (job.smartManifest.manualRegions || []).length
+    } : null,
     logs: job.logs.slice(-120),
     hasLog: Boolean(job.logPath && fs.existsSync(job.logPath)),
     logUrl: `/api/download/${job.id}/logs`,

@@ -157,6 +157,7 @@ Source: "{#StagingDir}\apps\drukarka-projekty\node_modules\*"; DestDir: "{app}\a
 Source: "{#StagingDir}\apps\formularze-ecodan\node_modules\*"; DestDir: "{app}\apps\formularze-ecodan\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\formularze-varmero\node_modules\*"; DestDir: "{app}\apps\formularze-varmero\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\karty-katalogowe\node_modules\*"; DestDir: "{app}\apps\karty-katalogowe\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#StagingDir}\apps\kreator-wzorow\node_modules\*"; DestDir: "{app}\apps\kreator-wzorow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\nazywarka-skanow\node_modules\*"; DestDir: "{app}\apps\nazywarka-skanow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\ocr-audytow\node_modules\*"; DestDir: "{app}\apps\ocr-audytow\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\pieczatki-pdf\node_modules\*"; DestDir: "{app}\apps\pieczatki-pdf\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion

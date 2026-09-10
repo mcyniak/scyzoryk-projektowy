@@ -43,6 +43,7 @@ Zamiast otwierać wiele programów i wykonywać te same kroki dla każdego adres
 | 🧾 **Pieczątki PDF** | Dodaje jedną lub wiele pieczątek do plików PDF, z podglądem, presetami, zakresem stron i ustawieniem pozycji. |
 | 📋 **Dobory myEcodan** | Pobiera dane z Excela, automatycznie wypełnia formularze i zapisuje raporty PDF. Wynik zachowuje wyłącznie pierwsze trzy potrzebne strony. |
 | 📄 **Dokumenty seryjne PDF** | Łączy folder wzorów Worda z tabelą Excel i tworzy osobne dokumenty dla wybranych adresów i wariantów. |
+| 🪄 **Kreator wzorów seryjnych** | Zwykły Word z kolorowymi oznaczeniami + przykładowy Excel → gotowy wzór (Smart Template) do użycia w Dokumentach seryjnych. Obliczenia projektowe zostają „Do projektanta”. |
 | 📝 **Wnioski powykonawcze PDF** | Zamienia wnioski materiałowe Word na dokumentację powykonawczą pojedynczo albo dla całego folderu WM. |
 | 📚 **Przypisywanie plików do folderów** | Dobiera właściwe karty katalogowe urządzeń (albo audyty/schematy/dokumenty seryjne/dobory po adresie) i kopiuje je do odpowiednich folderów klientów. |
 | 🔎 **OCR audytów** | Odczytuje skany, także z odręcznymi wpisami, tworzy przeszukiwalne PDF-y, dzieli pliki na adresy i przenosi sprawdzone dane do Excela. |

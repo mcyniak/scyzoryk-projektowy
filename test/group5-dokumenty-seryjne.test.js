@@ -17,15 +17,24 @@ test('pełne rekordy są przechowywane, a podgląd jest osobną listą', async (
 
 test('wybrany arkusz jest walidowany w podglądzie, paginacji i generowaniu', async () => {
   const source = await fsp.readFile(serverPath, 'utf8');
+  // Kreator wzorow seryjnych (Smart Template) dolozyl WLASNA, inna liste
+  // wymaganych kolumn (manifest.addressColumn + collectRequiredColumns, nie
+  // sztywne ID/Adres/Beneficjent) - 3 z 4 dawnych wywolan
+  // validateReferenceColumns zostaly skonsolidowane we wspolnym
+  // missingColumnsFor()/missingColumnsMessage(), ktore rozgalezia sie na
+  // legacy (validateReferenceColumns) albo smart w JEDNYM miejscu, zamiast
+  // powtarzac ta sama galaz w kazdym z 3 endpointow z osobna.
   const validations = source.match(/validateReferenceColumns\(/g) || [];
-  assert.ok(validations.length >= 5, `wywołania walidacji: ${validations.length}`);
+  assert.ok(validations.length >= 3, `wywołania walidacji legacy: ${validations.length}`);
+  assert.match(source, /function missingColumnsFor\(job, columns\)/);
+  const missingColumnsForCalls = source.match(/missingColumnsFor\(/g) || [];
+  assert.ok(missingColumnsForCalls.length >= 4, `wywołania missingColumnsFor (1 definicja + min. 3 endpointy - sheet/rows/generate): ${missingColumnsForCalls.length}`);
   // Komunikat o brakujacych kolumnach jest teraz jedna wspolna funkcja
   // (audyt 2026-08-21 - hint "to moze byc zla tabela" w jednym miejscu,
   // zamiast 4 rozjezdzajacych sie kopii tego samego stringa).
   assert.match(source, /function komunikatBrakujacychKolumn\(sheetName, missingColumns\)/);
   assert.match(source, /Arkusz "\$\{sheetName\}" nie ma wymaganych kolumn: \$\{missingColumns\.join/);
-  const wywolania = source.match(/komunikatBrakujacychKolumn\(/g) || [];
-  assert.ok(wywolania.length >= 5, `wywolania komunikatu (1 definicja + min. 4 uzycia): ${wywolania.length}`);
+  assert.match(source, /function missingColumnsMessage\(job, sheetName, missingColumns\)/);
 });
 
 test('zadania aktywne po restarcie są przerywane i można je anulować', async () => {

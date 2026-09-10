@@ -195,6 +195,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wczytać plików.');
 
         currentJob = data.jobId; detectedTemplatePower = data.detectedTemplatePower || '';
+        renderSmartTemplateBadge(data.smartTemplate || null);
         data.workbook = await loadAllRows(data.workbook);
         currentWorkbook = data.workbook;
         $('filePrefix').value = '';
@@ -218,6 +219,25 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         $('recordsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (e) { status($('uploadStatus'), e.message, 'err'); }
       finally { setBusy(false); }
+    }
+
+    // Sekcja 30 specyfikacji Kreatora wzorow seryjnych: sam fakt, ze wzor
+    // pochodzi z Kreatora, ma byc widoczny - ale BEZ edytora regul tutaj
+    // (reguly edytuje sie wylacznie w Kreatorze). Legacy template (bez
+    // manifestu, smartTemplate === null) nie pokazuje nic - ekran zostaje
+    // dokladnie taki jak wczesniej.
+    function renderSmartTemplateBadge(smartTemplate) {
+      const box = $('smartTemplateBadge');
+      if (!smartTemplate) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+      box.classList.remove('hidden');
+      box.innerHTML = `<span class="badge badge-info">✓ Wzór utworzony w Kreatorze</span>
+        <span class="hint u-mt-2" style="display:block">
+          „${esc(smartTemplate.templateName || '')}” · schemat v${smartTemplate.schemaVersion} ·
+          arkusz: ${esc(smartTemplate.preferredSheet || '—')} ·
+          ${smartTemplate.fieldsCount} pól automatycznych ·
+          ${smartTemplate.blocksCount} bloków warunkowych ·
+          ${smartTemplate.manualRegionsCount} regionów „Do projektanta”
+        </span>`;
     }
 
     function selectedTemplateGroups() {
