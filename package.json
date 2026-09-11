@@ -27,6 +27,7 @@
     "test:group25": "node --test test/group25-formularze.test.js",
     "test:pester": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"Import-Module Pester -MinimumVersion 5.0.0 -Force; $result = Invoke-Pester -Path test/print-engine.Tests.ps1 -PassThru; if ($result.FailedCount -gt 0) { exit 1 }\"",
     "test:regressions": "node scripts/run-regression-tests.js",
+    "test:kreator-word": "powershell -NoProfile -ExecutionPolicy Bypass -File apps/kreator-wzorow/scripts/test-word-com.ps1",
     "security-smoke": "node scripts/security-smoke-test.js",
     "audit": "node scripts/check-project.js",
     "package": "node scripts/build-package.js",

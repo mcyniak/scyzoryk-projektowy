@@ -59,7 +59,12 @@ try {
     try { $word.Options.UpdateLinksAtOpen = $false } catch {}
     try { $word.Options.ConfirmConversions = $false } catch {}
 
-    $doc = $word.Documents.Open($TemplatePath, $false, $false, $false, "", "", $false, "", "", 0, 65001, $false, $true)
+    # Visible (12ty parametr) MUSI byc $true - patrz komentarz w scan-template.ps1
+    # (audyt 2026-09-10): to jest wlasciwosc DOKUMENTU (nie Application, ktora
+    # zostaje niewidoczna dzieki $word.Visible=$false powyzej), i jej $false
+    # uniemozliwia pelna inicjalizacje Shape.TextFrame (TEXTBOX_MARK nigdy nie
+    # zostalby wykryty, "The property 'HasText' cannot be found on this object").
+    $doc = $word.Documents.Open($TemplatePath, $false, $false, $false, "", "", $false, "", "", 0, 65001, $true, $true)
     if ($null -eq $doc) { throw "Word nie otworzyl szablonu." }
     try { $doc.Repaginate() } catch {}
 
@@ -70,7 +75,15 @@ try {
     # oddzielnymi sesjami otwarcia dokumentu - powtorzenie IDENTYCZNEGO
     # zapytania Find w TEJ SESJI jest jedynym pewnym zrodlem prawdy "gdzie to
     # teraz naprawde jest").
-    $freshCandidates = Find-ScyzorykMarkedCandidates -doc $doc -selectedMarkings ([string[]]$selectedMarkings)
+    $scan = Find-ScyzorykMarkedCandidates -doc $doc -selectedMarkings ([string[]]$selectedMarkings)
+    # .ToArray() zamiast @(List[object]) - patrz komentarz w scan-template.ps1
+    # (audyt 2026-09-10): @() na System.Collections.Generic.List[object] rzuca
+    # "Niezgodne typy argumentow" na niektorych maszynach.
+    $freshCandidates = $scan.Candidates.ToArray()
+    if ($freshCandidates.Count -eq 0 -and $scan.Diagnostics.mechanismErrors.Count -gt 0) {
+      $firstErr = $scan.Diagnostics.mechanismErrors[0]
+      throw "Nie udalo sie ponownie przeskanowac oznaczen typu '$($firstErr.mechanism)' (story: $($firstErr.storyKey)) przed buildem. Word COM: $($firstErr.message)"
+    }
     $freshByKey = @{}
     foreach ($c in $freshCandidates) {
       $key = "$($c.storyKey)|$($c.mark.paletteKey)|$($c.ordinal)"
@@ -88,8 +101,10 @@ try {
 
     # Zbuduj liste jednostek mutacji: field/constant = jeden kandydat, block =
     # WSZYSCY kandydaci z tym samym blockId polaczeni w JEDEN zakres
-    # (min Start .. max End, po FRESH pozycjach), manual = bez jednostki
-    # (nic nie ruszamy - sekcja 8.E: "nie probuj niczego podmieniac").
+    # (min..max PO KONTENERZE, nie po tresci - sekcja 5.C/8.E audytu: usuniecie
+    # bloku przy warunku niespelnionym ma zabrac CALY akapit/komorke wraz z
+    # koncowym znacznikiem, a nie zostawic osierocona pusta linie), manual =
+    # bez jednostki (nic nie ruszamy).
     $units = New-Object System.Collections.Generic.List[object]
     $blockGroups = @{}
     foreach ($stored in $storedCandidates) {
@@ -105,28 +120,80 @@ try {
         $blockGroups[$blockId].Add($fresh) | Out-Null
         continue
       }
-      $units.Add([pscustomobject]@{ type = $decision.status; start = [int]$fresh.start; end = [int]$fresh.end; storyKey = $fresh.storyKey; candidateId = $stored.id; decision = $decision }) | Out-Null
+      $units.Add([pscustomobject]@{ type = $decision.status; start = [int]$fresh.start; end = [int]$fresh.end; storyKey = $fresh.storyKey; storyType = [int]$fresh.storyType; chainIndex = [int]$fresh.chainIndex; shapeIndex = $fresh.shapeIndex; markKind = [string]$fresh.mark.kind; tableOrdinal = $fresh.tableOrdinal; cellOrdinal = $fresh.cellOrdinal; candidateId = $stored.id; decision = $decision }) | Out-Null
     }
     foreach ($blockId in $blockGroups.Keys) {
       $members = $blockGroups[$blockId]
-      $minStart = ($members | Measure-Object -Property start -Minimum).Minimum
-      $maxEnd = ($members | Measure-Object -Property end -Maximum).Maximum
+      # Wszyscy czlonkowie tego samego bloku MUSZA byc w JEDNEJ, spojnej
+      # czesci dokumentu - min/max Start/End miedzy roznymi story (np.
+      # naglowek i stopka maja WLASNA, niezalezna numeracje od zera) byloby
+      # bezsensowne i mogloby uszkodzic zupelnie inny fragment dokumentu.
+      $distinctStories = $members | Select-Object -ExpandProperty storyKey -Unique
+      if ($distinctStories.Count -gt 1) {
+        throw "Blok '$blockId' laczy fragmenty z roznych czesci dokumentu ($($distinctStories -join ', ')) - to nie jest obslugiwane, kazdy blok musi byc w jednej spojnej czesci dokumentu (np. tylko w glownym tekscie albo tylko w jednym naglowku)."
+      }
+      $minStart = ($members | Measure-Object -Property containerStart -Minimum).Minimum
+      $maxEnd = ($members | Measure-Object -Property containerEnd -Maximum).Maximum
       $blockDefProp = $manifestObj.blocks | Where-Object { $_.id -eq $blockId } | Select-Object -First 1
       if ($null -eq $blockDefProp) { continue }
-      $units.Add([pscustomobject]@{ type = 'block'; start = [int]$minStart; end = [int]$maxEnd; storyKey = $members[0].storyKey; blockId = $blockId; bookmarkName = $blockDefProp.bookmarkName }) | Out-Null
+      $units.Add([pscustomobject]@{ type = 'block'; start = [int]$minStart; end = [int]$maxEnd; storyKey = $members[0].storyKey; storyType = [int]$members[0].storyType; chainIndex = [int]$members[0].chainIndex; shapeIndex = $members[0].shapeIndex; blockId = $blockId; bookmarkName = $blockDefProp.bookmarkName; members = $members }) | Out-Null
     }
 
     # Od NAJWYZSZEGO Range.Start do NAJNIZSZEGO (sekcja 26) - mutacja pozniej
     # w dokumencie nigdy nie przesuwa pozycji tego, co jeszcze czeka wczesniej
-    # w dokumencie.
-    $sortedUnits = $units | Sort-Object -Property start -Descending
+    # w tej SAMEJ story (rozne story maja niezalezna numeracje, wiec ich
+    # wzajemna kolejnosc w tym sortowaniu nie ma znaczenia dla poprawnosci).
+    # WYJATEK (zweryfikowane live, audyt 2026-09-10): jednostki w TextFrame
+    # (shapeIndex <> null) sa przetwarzane JAKO PIERWSZE, przed jakakolwiek
+    # mutacja glownego tekstu/naglowka/stopki - Word potrafi USUNAC caly
+    # ksztalt (shape), jesli akapit, do ktorego jest on zakotwiczony w
+    # dokumencie, zostanie w miedzyczasie podmieniony (np. staly tekst w
+    # innym oznaczonym fragmencie tego samego akapitu). Przetwarzajac
+    # ksztalty najpierw, zanim cokolwiek innego w dokumencie sie zmieni,
+    # minimalizujemy ryzyko trafienia na ten przypadek.
+    $sortedUnits = $units | Sort-Object -Property @{ Expression = { if ($null -ne $_.shapeIndex) { 0 } else { 1 } } }, @{ Expression = 'start'; Descending = $true }
     $warnings = New-Object System.Collections.Generic.List[object]
     $wdFieldEmpty = 59 # wdFieldMergeField w rzeczywistosci = 59 (WdFieldType.wdFieldMergeField)
 
+    # Czysci oznaczenie robocze z DANEGO mechanizmu (mark.kind) na danej
+    # jednostce mutacji. Highlight/run-shading czyscimy na $CleanupRange
+    # (dziala poprawnie nawet dla czesciowego zakresu po mutacji tresci).
+    # Paragraph shading TEZ czyscimy na $CleanupRange - zweryfikowane live
+    # (audyt 2026-09-10): ParagraphFormat.Shading poprawnie propaguje sie z
+    # DOWOLNEGO czesciowego zakresu na caly akapit. Cell shading NIE MOZE byc
+    # czyszczony przez czesciowy zakres (zweryfikowane live: to CICHY NO-OP) -
+    # wymaga bezposrednio obiektu Cell (Get-ScyzorykCellByOrdinal), niezaleznie
+    # od $CleanupRange.
+    function Clear-ScyzorykWorkingMark($StoryRangeForCells, $CleanupRange, [string]$MarkKind, $TableOrdinal, $CellOrdinal) {
+      if ($MarkKind -eq 'highlight') {
+        try { $CleanupRange.HighlightColorIndex = 0 } catch {}
+      } elseif ($MarkKind -eq 'shading-run') {
+        try { $CleanupRange.Shading.BackgroundPatternColor = -16777216 } catch {}
+      } elseif ($MarkKind -eq 'shading-paragraph') {
+        try { $CleanupRange.ParagraphFormat.Shading.BackgroundPatternColor = -16777216 } catch {}
+      } elseif ($MarkKind -eq 'shading-cell') {
+        try {
+          $cell = Get-ScyzorykCellByOrdinal $StoryRangeForCells ([int]$TableOrdinal) ([int]$CellOrdinal)
+          $cell.Shading.BackgroundPatternColor = -16777216
+        } catch {}
+      } else {
+        # Nieznany/legacy mark.kind - wyczysc oba mozliwe mechanizmy jak
+        # poprzednio, zeby nic nie zostalo widocznie oznaczone.
+        try { $CleanupRange.HighlightColorIndex = 0 } catch {}
+        try { $CleanupRange.Shading.BackgroundPatternColor = -16777216 } catch {}
+      }
+    }
+
     foreach ($unit in $sortedUnits) {
       try {
-        $range = $doc.Range($unit.start, $unit.end)
+        $range = Get-ScyzorykStoryRangeCopy -doc $doc -storyKey $unit.storyKey -storyType $unit.storyType -chainIndex $unit.chainIndex -shapeIndex $unit.shapeIndex
+        $range.Start = $unit.start
+        $range.End = $unit.end
         $cleanupRange = $range
+        # Kopia story PRZED jakakolwiek mutacja tresci w tej jednostce -
+        # potrzebna do Get-ScyzorykCellByOrdinal (iteruje Tables od poczatku
+        # story), zeby dzialala niezaleznie od tego, co $range robi dalej.
+        $storyForCells = Get-ScyzorykStoryRangeCopy -doc $doc -storyKey $unit.storyKey -storyType $unit.storyType -chainIndex $unit.chainIndex -shapeIndex $unit.shapeIndex
 
         if ($unit.type -eq 'field') {
           $fieldDefProp = $manifestObj.fields | Where-Object { $_.id -eq $unit.decision.fieldId } | Select-Object -First 1
@@ -137,21 +204,31 @@ try {
           # ktorego dlugosc/pozycja koncowa zmienila sie po wstawieniu pola).
           $newField = $doc.Fields.Add($range, $wdFieldEmpty, [string]$fieldDefProp.mergeFieldName, $false)
           $cleanupRange = $newField.Result
+          Clear-ScyzorykWorkingMark $storyForCells $cleanupRange $unit.markKind $unit.tableOrdinal $unit.cellOrdinal
         } elseif ($unit.type -eq 'constant') {
           if ($null -ne $unit.decision.constantText) {
             $range.Text = [string]$unit.decision.constantText
-            $cleanupRange = $doc.Range($unit.start, $unit.start + [string]$unit.decision.constantText.Length)
+            $constRange = Get-ScyzorykStoryRangeCopy -doc $doc -storyKey $unit.storyKey -storyType $unit.storyType -chainIndex $unit.chainIndex -shapeIndex $unit.shapeIndex
+            $constRange.Start = $unit.start
+            $constRange.End = $unit.start + [string]$unit.decision.constantText.Length
+            $cleanupRange = $constRange
           }
+          Clear-ScyzorykWorkingMark $storyForCells $cleanupRange $unit.markKind $unit.tableOrdinal $unit.cellOrdinal
         } elseif ($unit.type -eq 'block') {
           [void]$doc.Bookmarks.Add([string]$unit.bookmarkName, $range)
+          # Kazdy czlonek bloku moze pochodzic z INNEGO mechanizmu oznaczenia
+          # (np. jedna komorka + jeden akapit polaczone w jeden blok), wiec
+          # czyscimy KAZDEGO z osobna, jego WLASNA metoda - zadna mutacja
+          # tresci nie zaszla jeszcze w tej jednostce (Bookmarks.Add nie
+          # zmienia dlugosci tekstu), wiec ich zapisane fresh start/end sa
+          # nadal aktualne.
+          foreach ($member in $unit.members) {
+            $memberRange = Get-ScyzorykStoryRangeCopy -doc $doc -storyKey $member.storyKey -storyType ([int]$member.storyType) -chainIndex ([int]$member.chainIndex) -shapeIndex $member.shapeIndex
+            $memberRange.Start = [int]$member.start
+            $memberRange.End = [int]$member.end
+            Clear-ScyzorykWorkingMark $storyForCells $memberRange ([string]$member.mark.kind) $member.tableOrdinal $member.cellOrdinal
+          }
         }
-
-        # Usun oznaczenie robocze z tego zakresu - czyszczenie zarowno
-        # Highlight jak i Shading jest bezpieczne nawet gdy kandydat mial
-        # tylko jeden z nich (czyszczenie wlasciwosci, ktora nigdy nie byla
-        # ustawiona, jest no-opem).
-        try { $cleanupRange.HighlightColorIndex = 0 } catch {}
-        try { $cleanupRange.Shading.BackgroundPatternColor = -16777216 } catch {}
       } catch {
         $warnings.Add([pscustomobject]@{ level = 'error'; message = "Kandydat $($unit.candidateId): $($_.Exception.Message)" }) | Out-Null
       }
@@ -172,7 +249,7 @@ try {
     if (Test-Path -LiteralPath $OutputPath) { Remove-Item -LiteralPath $OutputPath -Force }
     $doc.SaveAs2([string]$OutputPath, [int]16)
 
-    Write-Result ([pscustomobject]@{ ok = $true; warnings = @($warnings) })
+    Write-Result ([pscustomobject]@{ ok = $true; warnings = $warnings.ToArray() })
   } finally {
     if ($null -ne $doc) { try { $doc.Close($false) } catch {}; Release-ComObject $doc }
     if ($null -ne $word) {

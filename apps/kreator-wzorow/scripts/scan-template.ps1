@@ -148,12 +148,34 @@ try {
     try { $oldSecurity = $word.AutomationSecurity; $word.AutomationSecurity = 3 } catch {}
     try { $word.Options.UpdateLinksAtOpen = $false } catch {}
 
-    $doc = $word.Documents.Open($TemplatePath, $false, $true, $false, "", "", $false, "", "", 0, 65001, $false, $true)
+    # Parametr Visible (12ty, przedostatni) TO NIE JEST to samo co
+    # $word.Visible ustawione wyzej - to WLASNE, DOKUMENTOWE ustawienie
+    # Documents.Open, i MUSI byc $true (zweryfikowane live, audyt 2026-09-10:
+    # otwarcie z Visible=$false na poziomie dokumentu powoduje, ze Shape.TextFrame
+    # nigdy sie w pelni nie inicjalizuje - "The property 'HasText' cannot be
+    # found on this object" - mimo ze cala aplikacja Word pozostaje niewidoczna
+    # dzieki $word.Visible=$false ustawionemu na Application, nie na Document).
+    $doc = $word.Documents.Open($TemplatePath, $false, $true, $false, "", "", $false, "", "", 0, 65001, $true, $true)
     if ($null -eq $doc) { throw "Word nie otworzyl szablonu." }
     try { $doc.Repaginate() } catch {}
 
-    $candidates = Find-ScyzorykMarkedCandidates -doc $doc -selectedMarkings ([string[]]$selectedMarkings)
-    Write-Result ([pscustomobject]@{ ok = $true; candidates = @($candidates) })
+    $scan = Find-ScyzorykMarkedCandidates -doc $doc -selectedMarkings ([string[]]$selectedMarkings)
+    # Blad pojedynczego mechanizmu (np. wyjatek COM przy skanowaniu highlightu)
+    # NIE moze zostac po cichu zamieniony w "0 kandydatow" (audyt 2026-09-10,
+    # sekcja 7 promptu naprawczego) - jesli WSZYSTKIE mechanizmy zawiodly (brak
+    # kandydatow ORAZ sa bledy), zglaszamy to jako twardy blad zamiast pustego
+    # sukcesu. Pojedynczy blad przy niepustym wyniku trafia do diagnostics,
+    # zeby UI moglo go pokazac, ale nie blokuje reszty znalezionych kandydatow.
+    if ($scan.Candidates.Count -eq 0 -and $scan.Diagnostics.mechanismErrors.Count -gt 0) {
+      $firstErr = $scan.Diagnostics.mechanismErrors[0]
+      throw "Nie udalo sie przeskanowac oznaczen typu '$($firstErr.mechanism)' (story: $($firstErr.storyKey)). Word COM: $($firstErr.message)"
+    }
+    # .ToArray() zamiast @(List[object]) - na niektorych maszynach operator
+    # tablicowy @() rzuca "Niezgodne typy argumentow" (System.ArgumentException)
+    # przy probie skopiowania System.Collections.Generic.List[object] do
+    # tablicy (zaobserwowane zywo po resecie systemu - audyt 2026-09-10);
+    # .ToArray() jest wprost wspieranym mechanizmem List<T> i nie ma tego problemu.
+    Write-Result ([pscustomobject]@{ ok = $true; candidates = $scan.Candidates.ToArray(); diagnostics = $scan.Diagnostics })
   } finally {
     if ($null -ne $doc) { try { $doc.Close($false) } catch {} }
     if ($null -ne $word) {

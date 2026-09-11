@@ -206,20 +206,66 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     silently diverge from what real generation later produces.
   - `build-template.ps1` inserts real `MERGEFIELD` field codes via `Document.Fields.Add(range, wdFieldMergeField, name, false)`
     and wraps merged block ranges in `Document.Bookmarks.Add(name, range)`, mutating from the **highest**
-    `Range.Start` down to the lowest (same ordering rule as `Apply-ScyzorykSmartBlocks`) so no not-yet-processed
-    candidate's position ever shifts underneath it. The finished manifest is embedded as a Custom XML Part
-    (`urn:scyzoryk:smart-template:v1`, CDATA-wrapped JSON) via `Document.CustomXMLParts.Add(...)` — Word
+    `Range.Start` down to the lowest (same ordering rule as `Apply-ScyzorykSmartBlocks`) — **except** TextFrame/shape
+    units, which are always processed *first*, regardless of position (see audit below: Word can delete a shape
+    outright if the paragraph it's anchored to gets mutated first). The finished manifest is embedded as a Custom
+    XML Part (`urn:scyzoryk:smart-template:v1`, CDATA-wrapped JSON) via `Document.CustomXMLParts.Add(...)` — Word
     manages the OPC packaging, so no manual `[Content_Types].xml`/relationship editing was needed here
     (contrast `dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1#Remove-MailMergeFromDocx`, which *does* hand-edit
     the zip, but only to strip an existing native part, not add a new one).
-  - **Not unit-testable in CI** the way the rest of the scan/build pipeline is: `test/group26-kreator-wzorow.test.js`
-    covers every pure-JS module (`lib/smartTemplateRules.js`, `lib/wordAutomationCoordinator.js`,
-    `smartTemplate.js`, `templateManifest.js`, `candidateConfig.js`, `excelWorkbook.js`) and the whole HTTP
-    surface of `server.js` (upload validation, security headers, job lifecycle) with real fixtures, **plus**
-    a real, Word-free run of `scan-template.ps1 -Mode palette` against a hand-built fixture `.docx` — but
-    `-Mode candidates` and `build-template.ps1` themselves need a live Word install and have not been
-    exercised against a real marked-up document; treat their first real run as the acceptance test, per
-    `docs/TECHNICZNE_DZIALANIE.md`.
+  - **`npm run test:kreator-word` (`apps/kreator-wzorow/scripts/test-word-com.ps1`)** is a real, live-Word smoke
+    test — not run in CI (needs an actual Word install), run it manually after touching scan/build logic. It
+    builds its own fixture DOCX (highlight ×2 colors, run shading, paragraph shading, cell shading, header,
+    footer, textbox, two identical `XXX` texts, one deliberately-unselected "decorative" color), then exercises
+    palette scan → candidate scan → a full build (field/constant/block/manual) → re-opens the built file and
+    asserts structure (MERGEFIELD exists, bookmark exists, manual region's color is untouched, table intact).
+    **Changes to scan/build logic are not considered verified without a passing run of this script on Windows
+    with Word** (previously the repo only *said* this — see the audit below for what shipped without it).
+  - **Audit 2026-09-10 ("0 kandydatów" in production, commit `6a7705e`)**: the first version of the scan/build
+    pipeline (above) shipped *never* having actually run `-Mode candidates` or `build-template.ps1` against live
+    Word — and it turned out to be almost entirely broken, catching zero of it because every failure mode
+    silently degraded to "0 candidates" instead of an error. Root causes, all confirmed by hand against a real
+    Word COM session:
+    - `Find.Font.HighlightColorIndex` and bare `Find.Shading` **don't exist** as properties on Word's `Find`
+      object — both threw `ArgumentException`, swallowed by a blanket `catch { break }` around `Find.Execute()`.
+      Highlight detection now uses a manual character-walk (`Get-ScyzorykCharWalkRanges`, keyed off
+      `Range.HighlightColorIndex`) instead of `Find` at all — a live test showed `Find.Highlight = $true` itself
+      returning **false-positive matches** (a "ghost" of the last real match) once genuine highlights were
+      exhausted, which is worse than merely not finding anything. Run/paragraph shading use `Find.Font.Shading`
+      / `Find.ParagraphFormat.Shading` respectively (the only two `Shading`-bearing properties that actually
+      exist on `Find`) — cell shading has no `Find` equivalent at all and is a direct `Table.Range.Cells` walk.
+    - `StoryRanges.NextStoryRange` chains multiple instances of the *same* story type (e.g. per-section headers)
+      — it does **not** cross from `main` into `header`/`footer`. The fix iterates the `doc.StoryRanges`
+      *collection* (one entry per distinct type present) and follows `NextStoryRange` within each.
+    - `Document.Range(start, end)` addresses **only** the `main` story — every other story (header/footer/
+      footnote/textframe) has its own Start/End numbering from zero, and two different shapes' TextFrames can
+      report *identical* Start/End despite being physically unrelated. `build-template.ps1` no longer calls
+      `$doc.Range()` for anything but reconstructing a range; `Get-ScyzorykStoryRangeCopy` resolves the correct
+      story/shape object first, then narrows it — candidates now carry `storyType`/`chainIndex`/`shapeIndex` to
+      make that resolution unambiguous, and `storyKey` itself became a document-unique string (`header#0`,
+      `textframe#2`) rather than a bare `header`.
+    - `Documents.Open(...)`'s **document-level** `Visible` parameter (12th positional arg) — distinct from
+      `Application.Visible` — must be `$true`, or `Shape.TextFrame` never fully initializes and every property
+      access throws `"The property 'HasText' cannot be found on this object"`. The whole app stays invisible
+      regardless, since `Application.Visible = $false` still holds.
+    - A table cell's trailing paragraph-mark + end-of-cell-marker (`Chr(13)` + `Chr(7)`) collapse into a
+      **single** position in Word's Range addressing even though `.Text` reports them as two characters —
+      subtracting the "obvious" length from `.End` truncates the last real character. The fix shrinks `.End`
+      one position at a time, re-reading `.Text` after each step, rather than precomputing an offset.
+    - Replacing a shape's text can make Word **delete the shape outright** if it's anchored to a paragraph that
+      gets mutated first elsewhere in the same build — `build-template.ps1` now processes all TextFrame/shape
+      units before anything else for exactly this reason (see above).
+    - Unrelated finding, not a code bug: this dev/test machine's `ConvertFrom-Json` is broken for arrays of
+      complex objects (collapses N objects into 1 with space-joined property values) after an OS reset — a
+      pre-existing, standard PowerShell pattern, reproducible with a 3-object array with no Kreator code
+      involved. Not routed around in shipped code (would mask a real system-level fault on whichever machine
+      hits it); flagged here so a future "JSON parsing is returning garbage" report on *this specific machine*
+      isn't re-investigated as a Kreator bug from scratch.
+    - `test/group26-kreator-wzorow.test.js` gained static regression tests asserting the *removed* broken
+      patterns don't come back (no `Find.Font.HighlightColorIndex`, no bare `Find.Shading`, no `$doc.Range(`
+      outside comments, no single `catch { break }` wrapped directly around `Find.Execute()`, correct
+      `WdStoryType` values in `Get-ScyzorykStoryKey`) — these catch a *regression* of the same mistake, they
+      are not a substitute for `npm run test:kreator-word`.
 
 Each app's `data/`, `logs/`, `uploads/`, `output/`, `tmp/` directories are runtime state (uploads, job
 data, generated output), not source — they're excluded from `scripts/check-project.js` and should not be
