@@ -48,6 +48,13 @@ apps/drukarka-projekty/test/fixtures/
 launcher/**/bin/
 launcher/**/obj/
 
+# To samo dla Scyzoryk.DocumentEngine (.NET, silnik Open XML - patrz
+# scripts/build-document-engine.ps1) - publish/ to jego dodatkowy katalog
+# wyjsciowy, z ktorego korzysta lib/documentEngine.js w trybie deweloperskim.
+tools/**/bin/
+tools/**/obj/
+tools/Scyzoryk.DocumentEngine/publish/
+
 # Pliki tymczasowe
 ~$*
 *.bak

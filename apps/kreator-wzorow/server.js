@@ -20,11 +20,18 @@ const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 const { withWordAutomationLease } = require('../../lib/wordAutomationCoordinator');
 const { evaluateSmartRecord, validateManifest, collectRequiredColumns } = require('../../lib/smartTemplateRules');
+// Migracja Word COM -> Open XML (CLAUDE.md, "Migracja Word COM -> Open XML",
+// audyt 2026-09-14): skanowanie/budowanie wzoru nie uzywa juz Worda w ogole -
+// patrz lib/documentEngine.js (fasada nad Scyzoryk.DocumentEngine.exe,
+// tools/Scyzoryk.DocumentEngine, Open XML SDK). withWordAutomationLease
+// zostaje w tym pliku WYLACZNIE dla /preview (nadal renderuje przez
+// dokumenty-seryjne/mailmerge-to-pdf.ps1, Word COM - migracja runtime Smart
+// Template to kolejny, jeszcze nie wykonany etap, patrz raport koncowy).
+const documentEngine = require('../../lib/documentEngine');
 
 const { createJobStore } = require('./src/jobStore');
 const { readWorkbook, sheetPreview, uniqueColumnValues } = require('./src/excelWorkbook');
 const tm = require('./src/templateManifest');
-const { validateOverlaps } = require('./src/candidateConfig');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3016);
@@ -38,8 +45,6 @@ const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
 const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
 const MAX_FILE_MB = Number(process.env.KREATOR_MAX_FILE_MB || 80);
 const JOB_TTL_MS = Number(process.env.KREATOR_JOB_TTL_MS || 24 * 60 * 60 * 1000);
-const SCAN_SCRIPT = path.join(ROOT, 'scripts', 'scan-template.ps1');
-const BUILD_SCRIPT = path.join(ROOT, 'scripts', 'build-template.ps1');
 // Preview (KROK 4A) uzywa DOKLADNIE tego samego runtime co prawdziwe
 // generowanie w Dokumentach seryjnych (sekcja 27 specyfikacji) - zamiast
 // pisac drugi, niezalezny renderer smart-template, ktory z czasem rozjedzie
@@ -262,36 +267,6 @@ app.get('/api/jobs/:jobId/sheets/:sheetName/columns/:columnName/values', (req, r
   res.json({ ok: true, values: uniqueColumnValues(sheet, req.params.columnName) });
 });
 
-// ---------------------------------------------------------------------------
-// Wspolny helper: uruchom skrypt PowerShell Kreatora, oczekuj JEDNEGO obiektu
-// JSON na stdout (nie strumienia zdarzen jak w Dokumentach seryjnych - skan/
-// build to jedna operacja, nie petla po wielu rekordach), pod cross-process
-// blokada Worda.
-// ---------------------------------------------------------------------------
-async function runKreatorScript(job, scriptPath, args, operation) {
-  let waitLogged = false;
-  return withWordAutomationLease(
-    { app: 'kreator-wzorow', operation },
-    async () => {
-      const result = await runPowerShell(scriptPath, args, { cwd: ROOT, timeoutMs: Number(process.env.KREATOR_PS_TIMEOUT_MS || 20 * 60 * 1000) });
-      const lines = String(result.stdout || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-      const jsonLine = [...lines].reverse().find(l => l.startsWith('{') && l.endsWith('}'));
-      if (!jsonLine) throw new Error(`PowerShell nie zwrócił wyniku JSON.${result.stderr ? ' ' + result.stderr : ''}`);
-      let parsed;
-      try { parsed = JSON.parse(jsonLine); } catch (err) { throw new Error(`Nie udało się odczytać wyniku PowerShell: ${err.message}`); }
-      if (!parsed.ok) throw new Error(parsed.message || 'PowerShell zgłosił błąd.');
-      return parsed;
-    },
-    {
-      onWaiting: ownerMeta => {
-        if (waitLogged) return;
-        waitLogged = true;
-        jobStore.updateJob(job.id, { statusMessage: `Word jest zajęty przez inne narzędzie (${ownerMeta && ownerMeta.app || 'nieznane'}) - czekam na zwolnienie...` });
-      }
-    }
-  );
-}
-
 function assertTemplateUnchanged(job) {
   if (!fs.existsSync(job.templatePath) || sha256File(job.templatePath) !== job.templateHash) {
     throw new Error('Wzór zmienił się od czasu wczytania. Wczytaj/skanuj ponownie.');
@@ -299,16 +274,18 @@ function assertTemplateUnchanged(job) {
 }
 
 // ---------------------------------------------------------------------------
-// KROK 1 (cd.) - paleta oznaczen
+// KROK 1 (cd.) - paleta oznaczen. Migracja Word COM -> Open XML: bez Worda,
+// bez cross-process locka (documentEngine.scanTemplatePalette otwiera plik
+// tylko do odczytu przez Open XML SDK) - patrz CLAUDE.md.
 // ---------------------------------------------------------------------------
 app.post('/api/jobs/:jobId/scan-markings', heavyJobLimiter, async (req, res) => {
   const job = jobStore.getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
-  if (process.platform !== 'win32') return res.status(400).json({ ok: false, message: 'Wykrywanie oznaczeń działa tylko na Windows z zainstalowanym Microsoft Word.' });
   try {
     assertTemplateUnchanged(job);
     jobStore.updateJob(job.id, { status: 'markings_scanning', statusMessage: 'Wykrywam oznaczenia użyte we wzorze...' });
-    const result = await runKreatorScript(job, SCAN_SCRIPT, ['-Mode', 'palette', '-TemplatePath', job.templatePath], `wykrywanie oznaczeń: ${job.templateOriginalName}`);
+    const result = await documentEngine.scanTemplatePalette(job.templatePath);
+    if (!result.ok) throw new Error(result.message || 'Nie udało się wykryć oznaczeń.');
     jobStore.updateJob(job.id, { status: 'configuring', statusMessage: 'Wybierz, które oznaczenia są polami roboczymi.', markingsPalette: result.markings || [] });
     res.json({ ok: true, markings: result.markings || [] });
   } catch (err) {
@@ -318,12 +295,12 @@ app.post('/api/jobs/:jobId/scan-markings', heavyJobLimiter, async (req, res) => 
 });
 
 // ---------------------------------------------------------------------------
-// KROK 1 (cd.) - skan wybranych oznaczen -> kandydaci
+// KROK 1 (cd.) - skan wybranych oznaczen -> kandydaci. Migracja Word COM ->
+// Open XML: bez Worda, bez cross-process locka.
 // ---------------------------------------------------------------------------
 app.post('/api/jobs/:jobId/scan', heavyJobLimiter, async (req, res) => {
   const job = jobStore.getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
-  if (process.platform !== 'win32') return res.status(400).json({ ok: false, message: 'Skanowanie działa tylko na Windows z zainstalowanym Microsoft Word.' });
   const selectedMarkings = Array.isArray(req.body?.selectedMarkings) ? req.body.selectedMarkings.filter(m => typeof m === 'string') : [];
   if (!selectedMarkings.length) return res.status(400).json({ ok: false, message: 'Zaznacz przynajmniej jedno oznaczenie do skanowania.' });
   const sheetName = String(req.body?.sheetName || job.workbook.defaultSheet || '').trim();
@@ -332,12 +309,8 @@ app.post('/api/jobs/:jobId/scan', heavyJobLimiter, async (req, res) => {
   try {
     assertTemplateUnchanged(job);
     jobStore.updateJob(job.id, { status: 'scanning', statusMessage: 'Skanuję zaznaczone oznaczenia...' });
-    const result = await runKreatorScript(
-      job,
-      SCAN_SCRIPT,
-      ['-Mode', 'candidates', '-TemplatePath', job.templatePath, '-SelectedMarkingsJson', JSON.stringify(selectedMarkings)],
-      `skanowanie: ${job.templateOriginalName}`
-    );
+    const result = await documentEngine.scanTemplateCandidates(job.templatePath, selectedMarkings);
+    if (!result.ok) throw new Error(result.message || 'Nie udało się przeskanować wzoru.');
     const candidates = result.candidates || [];
     const draft = tm.seedCandidates(job.draft, candidates.map(c => c.id));
     jobStore.updateJob(job.id, {
@@ -539,27 +512,19 @@ function runPreflight(job, sheetName) {
   const manifestValidation = validateManifest(manifest);
   for (const message of manifestValidation.errors) errors.push({ message });
 
-  const overlapEntries = job.candidates
-    .filter(c => job.draft.candidates[c.id] && ['field', 'block', 'manual'].includes(job.draft.candidates[c.id].status))
-    .map(c => {
-      const decision = job.draft.candidates[c.id];
-      const kind = decision.status === 'field' ? 'field' : decision.status === 'manual' ? 'manual' : 'block';
-      const groupId = decision.status === 'block' ? decision.blockId : c.id;
-      return { id: groupId, start: c.scopeHints?.exactStart ?? c.start, end: c.scopeHints?.exactEnd ?? c.end, storyKey: c.storyKey || 'main', kind };
-    });
-  // Bloki polaczone z kilku kandydatow (ten sam blockId) trzeba zredukowac do
-  // JEDNEGO wpisu obejmujacego min(start)..max(end) - inaczej dwa fragmenty
-  // tego samego bloku "nakladalyby sie" same ze soba.
-  const merged = new Map();
-  for (const entry of overlapEntries) {
-    const key = `${entry.kind}:${entry.id}:${entry.storyKey}`;
-    if (!merged.has(key)) { merged.set(key, { ...entry }); continue; }
-    const existing = merged.get(key);
-    existing.start = Math.min(existing.start, entry.start);
-    existing.end = Math.max(existing.end, entry.end);
-  }
-  const overlapErrors = validateOverlaps(Array.from(merged.values()));
-  for (const err of overlapErrors) errors.push({ message: err.message });
+  // UWAGA (migracja Word COM -> Open XML, ETAP 2, jeszcze nie domkniete):
+  // poprzednia wersja miala tu numeryczna walidacje nakladania sie zakresow
+  // (candidateConfig.js#validateOverlaps) oparta na Range.Start/End z Word
+  // COM. Nowy model kandydata (partUri/ordinal/structuralPath, patrz
+  // lib/documentEngine.js) nie ma porownywalnej numerycznej pozycji miedzy
+  // RUZNYMI mechanizmami (ordinal liczy sie osobno per paletteKey), wiec ta
+  // sama walidacja nie da sie 1:1 przeniesc bez dostepu do zywego drzewa
+  // OpenXml (ktore ma tylko silnik .NET, w trakcie samego builda). Typowy,
+  // zamierzony przypadek ("field w calosci wewnatrz blocku") dziala poprawnie
+  // z konstrukcji w BuildTemplateCommand (mutacje na bezposrednich referencjach
+  // wezlow, nie na wspolrzednych) - PRAWDZIWA luka to brak wczesnego,
+  // czytelnego bledu przy user-error (dwa bloki czesciowo nakladajace sie).
+  // Patrz raport migracji w CLAUDE.md.
 
   let recordErrors = [];
   const sheet = job.workbook.sheets[sheetName || job.draft.preferredSheet];
@@ -679,7 +644,6 @@ app.post('/api/jobs/:jobId/preview', heavyJobLimiter, async (req, res) => {
 app.post('/api/jobs/:jobId/build', heavyJobLimiter, async (req, res) => {
   const job = requireJob(req, res);
   if (!job) return;
-  if (process.platform !== 'win32') return res.status(400).json({ ok: false, message: 'Budowanie wzoru działa tylko na Windows z zainstalowanym Microsoft Word.' });
   const sheetName = String(req.body?.sheetName || job.draft.preferredSheet || job.workbook.defaultSheet || '').trim();
   const templateName = String(req.body?.templateName || job.draft.templateName || job.templateOriginalName).trim();
 
@@ -702,24 +666,26 @@ app.post('/api/jobs/:jobId/build', heavyJobLimiter, async (req, res) => {
     jobStore.updateJob(job.id, { status: 'building', statusMessage: 'Buduję wzór...', draft: { ...job.draft, templateName, preferredSheet: sheetName } });
 
     const manifest = { ...preflight.manifest, templateName };
-    const manifestPath = path.join(job.outputDir, 'manifest.json');
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
-
-    const draftPath = path.join(job.outputDir, 'draft.json');
-    fs.writeFileSync(draftPath, JSON.stringify(job.draft), 'utf8');
-
-    const candidatesPath = path.join(job.outputDir, 'candidates.json');
-    fs.writeFileSync(candidatesPath, JSON.stringify(job.candidates), 'utf8');
+    const manifestJson = JSON.stringify(manifest);
+    fs.writeFileSync(path.join(job.outputDir, 'manifest.json'), manifestJson, 'utf8');
+    fs.writeFileSync(path.join(job.outputDir, 'draft.json'), JSON.stringify(job.draft), 'utf8');
+    fs.writeFileSync(path.join(job.outputDir, 'candidates.json'), JSON.stringify(job.candidates), 'utf8');
 
     const outputName = safeName(`${templateName}_seryjny`, 'wzor_seryjny') + '.docx';
     const outputPath = path.join(job.outputDir, outputName);
 
-    const result = await runKreatorScript(
-      job,
-      BUILD_SCRIPT,
-      ['-TemplatePath', job.templatePath, '-DraftJson', draftPath, '-CandidatesJson', candidatesPath, '-ManifestJson', manifestPath, '-OutputPath', outputPath, '-SelectedMarkingsJson', JSON.stringify(job.selectedMarkings || [])],
-      `budowanie wzoru: ${templateName}`
-    );
+    // Migracja Word COM -> Open XML: bez Worda, bez cross-process locka
+    // (documentEngine.buildSmartTemplate uruchamia Scyzoryk.DocumentEngine.exe,
+    // ktory dziala na kopii pliku, nigdy na oryginale job.templatePath).
+    const result = await documentEngine.buildSmartTemplate({
+      templatePath: job.templatePath,
+      outputPath,
+      selectedMarkings: job.selectedMarkings || [],
+      storedCandidates: job.candidates,
+      draft: job.draft,
+      manifestJson,
+    });
+    if (!result.ok) throw new Error(result.message || 'Nie udało się zbudować wzoru.');
 
     const lastBuild = { templatePath: outputPath, downloadName: outputName, builtAt: new Date().toISOString(), warnings: result.warnings || [] };
     jobStore.updateJob(job.id, { status: 'done', statusMessage: `Wzór gotowy: ${outputName}`, lastBuild });

@@ -940,3 +940,130 @@ test('kreator-wzorow/server.js: poprawny upload tworzy job z workbookiem (bez Wo
   assert.equal(jobJson.ok, true);
   assert.equal(jobJson.job.status, 'uploaded');
 });
+
+// ===========================================================================
+// Migracja Word COM -> Open XML (CLAUDE.md, audyt 2026-09-14): pelny przeplyw
+// HTTP scan-markings -> scan -> build przez documentEngine.js/
+// Scyzoryk.DocumentEngine.exe, BEZ Worda/PowerShell - w przeciwienstwie do
+// pozostalych testow w tym pliku (ktore uzywaja buildMinimalDocx(), za
+// ubogiego dla realnego skanu), ten fixture jest PRAWDZIWYM, otwieralnym
+// przez Open XML SDK dokumentem z realnym oznaczeniem.
+// ===========================================================================
+
+function buildRealFixtureDocx() {
+  const zip = new AdmZipForKreator();
+  zip.addFile('[Content_Types].xml', Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+    '</Types>', 'utf8'));
+  zip.addFile('_rels/.rels', Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+    '</Relationships>', 'utf8'));
+  zip.addFile('word/document.xml', Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+    '<w:body>' +
+    '<w:p><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>XXX</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t>plain text niepowiazany z oznaczeniem</w:t></w:r></w:p>' +
+    '<w:sectPr/>' +
+    '</w:body>' +
+    '</w:document>', 'utf8'));
+  return zip.toBuffer();
+}
+
+// Tylko PID-y (sekcja 33 promptu migracji: "zapisac PID-y WINWORD.EXE przed/po,
+// sprawdzic ze nie pojawil sie NOWY") - porownanie calej linii CSV z tasklist
+// (audyt 2026-09-14) jest falszywie-alarmujace, bo kolumna "Mem Usage"
+// naturalnie zmienia sie dla TEGO SAMEGO, juz dzialajacego procesu (np.
+// wlasnego dokumentu uzytkownika) miedzy dwoma pomiarami w czasie.
+function getWinwordPids() {
+  if (process.platform !== 'win32') return [];
+  let output = '';
+  try {
+    output = require('child_process').execSync('tasklist /FI "IMAGENAME eq WINWORD.EXE" /FO CSV /NH', { encoding: 'utf8' });
+  } catch {
+    return [];
+  }
+  const pids = [];
+  for (const line of output.trim().split(/\r?\n/)) {
+    const match = line.match(/^"WINWORD\.EXE","(\d+)"/);
+    if (match) pids.push(match[1]);
+  }
+  return pids;
+}
+
+test('kreator-wzorow: pelny przeplyw upload -> scan-markings -> scan -> build przez Open XML, zero WINWORD.EXE', async (t) => {
+  const port = await withKreatorApp(t);
+
+  const beforePids = getWinwordPids();
+
+  const form = new FormData();
+  form.append('template', new Blob([buildRealFixtureDocx()], { type: 'application/octet-stream' }), 'wzor.docx');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-e2e-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const ExcelJSForE2E = require('../apps/ocr-audytow/node_modules/exceljs');
+  const wb = new ExcelJSForE2E.Workbook();
+  const ws = wb.addWorksheet('Dane');
+  ws.addRow(['Adres', 'Wartosc']);
+  ws.addRow(['Testowa 1', 'ABC']);
+  const xlsxPath = path.join(dir, 'dane.xlsx');
+  await wb.xlsx.writeFile(xlsxPath);
+  form.append('excel', new Blob([await fsp.readFile(xlsxPath)], { type: 'application/octet-stream' }), 'dane.xlsx');
+
+  const uploadRes = await fetch(`http://127.0.0.1:${port}/api/jobs`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const uploadJson = await uploadRes.json();
+  assert.equal(uploadRes.status, 200, JSON.stringify(uploadJson));
+  const jobId = uploadJson.jobId;
+
+  const paletteRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/scan-markings`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+  const paletteJson = await paletteRes.json();
+  assert.equal(paletteRes.status, 200, JSON.stringify(paletteJson));
+  assert.ok(paletteJson.markings.some(m => m.key === 'highlight:yellow'));
+
+  const scanRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/scan`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selectedMarkings: ['highlight:yellow'] }),
+  });
+  const scanJson = await scanRes.json();
+  assert.equal(scanRes.status, 200, JSON.stringify(scanJson));
+  assert.equal(scanJson.candidates.length, 1);
+  const candidate = scanJson.candidates[0];
+  assert.equal(candidate.text, 'XXX');
+  assert.equal(candidate.partUri, '/word/document.xml');
+  assert.equal(candidate.markKind, 'highlight');
+
+  const configRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/config`, {
+    method: 'PUT', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      addressColumn: 'Adres',
+      candidates: { [candidate.id]: { status: 'constant', constantText: 'STALA' } },
+    }),
+  });
+  assert.equal(configRes.status, 200);
+
+  const buildRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/build`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+  const buildJson = await buildRes.json();
+  assert.equal(buildRes.status, 200, JSON.stringify(buildJson));
+  assert.ok(buildJson.downloadName);
+
+  const downloadRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/download/template`);
+  assert.equal(downloadRes.status, 200);
+  const builtBuffer = Buffer.from(await downloadRes.arrayBuffer());
+  const builtZip = new AdmZipForKreator(builtBuffer);
+  const builtDocXml = builtZip.readAsText('word/document.xml');
+  assert.match(builtDocXml, /STALA/);
+  assert.doesNotMatch(builtDocXml, /<w:highlight/); // oznaczenie wyczyszczone
+  const customXmlEntries = builtZip.getEntries().filter(e => /^customXml\/item\d*\.xml$/.test(e.entryName));
+  assert.ok(customXmlEntries.some(e => builtZip.readAsText(e).includes('urn:scyzoryk:smart-template:v1')));
+
+  if (process.platform === 'win32') {
+    const afterPids = getWinwordPids();
+    const newPids = afterPids.filter(pid => !beforePids.includes(pid));
+    assert.deepEqual(newPids, [], 'zaden NOWY WINWORD.EXE nie powinien powstac podczas scan/build');
+  }
+});

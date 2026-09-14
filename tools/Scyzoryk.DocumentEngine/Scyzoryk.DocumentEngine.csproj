@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Silnik strukturalnych operacji na DOCX przez Microsoft Open XML SDK - bez
+    Word/COM/WINWORD.EXE (patrz CLAUDE.md, sekcja "Migracja Word COM -> Open XML").
+    Wywolywany przez lib/documentEngine.js (Node) jako osobny proces: jeden plik
+    JSON wejsciowy, jeden plik JSON wyjsciowy, exit code 0/1 - ten sam wzorzec co
+    launcher/Scyzoryk.Launcher (self-contained, nie wymaga .NET Runtime u
+    uzytkownika koncowego).
+
+    NIE jest to launcher/GUI - to jest silnik/CLI, dlatego OutputType=Exe (nie
+    WinExe) i TargetFramework=net8.0 (nie net8.0-windows) - DocumentFormat.OpenXml
+    dziala niezaleznie od platformy, jedynie publikacja jest scelowana w win-x64
+    (jedyna platforma, na ktorej dziala reszta Scyzoryka).
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Scyzoryk.DocumentEngine</RootNamespace>
+    <AssemblyName>Scyzoryk.DocumentEngine</AssemblyName>
+
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+
+    <!-- Wersja nadawana z zewnatrz (scripts\build-document-engine.ps1), ten sam
+         wzorzec co Scyzoryk.Launcher - jedna wersja z package.json/instalatora. -->
+    <Version Condition="'$(Version)' == ''">0.0.0.0</Version>
+    <FileVersion Condition="'$(FileVersion)' == ''">$(Version)</FileVersion>
+    <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">0.0.0.0</AssemblyVersion>
+
+    <Product>Scyzoryk Projektowy - Document Engine</Product>
+    <Company>Dzial Projektowy Sanitarny</Company>
+    <Description>Silnik operacji Open XML na dokumentach DOCX (bez Word COM)</Description>
+
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.1.1" />
+  </ItemGroup>
+
+</Project>

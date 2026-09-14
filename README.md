@@ -133,7 +133,7 @@ Wymagania deweloperskie:
 - npm,
 - Microsoft Word do testów funkcji Word COM,
 - Inno Setup 6 do lokalnego budowania instalatora Windows,
-- .NET SDK 8 do budowania natywnego launchera (`launcher/Scyzoryk.Launcher`).
+- .NET SDK 8 do budowania natywnego launchera (`launcher/Scyzoryk.Launcher`) i silnika dokumentów Open XML (`tools/Scyzoryk.DocumentEngine`, `scripts/build-document-engine.ps1`).
 
 Podstawowe komendy:
 

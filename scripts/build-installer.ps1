@@ -170,6 +170,19 @@ if ($LASTEXITCODE -ne 0 -or -not $launcherExePath -or -not (Test-Path $launcherE
 }
 Copy-Item -Path $launcherExePath -Destination (Join-Path $stagingDir 'Scyzoryk.exe') -Force
 
+# --- 3b) Silnik dokumentow Open XML (Scyzoryk.DocumentEngine.exe) ---
+# Ten sam wzorzec co launcher powyzej: build-document-engine.ps1 uruchamia
+# wlasne testy (tools/Scyzoryk.DocumentEngine.Tests) i publikuje self-
+# contained/single-file win-x64 EXE. Stoi obok Scyzoryk.exe w katalogu
+# instalacji - lib/documentEngine.js szuka go tam (patrz resolveEnginePath).
+# Migracja Word COM -> Open XML (CLAUDE.md) - na dzis uzywany tylko przez
+# apps/kreator-wzorow (scan/build), docelowo tez przez inne apki.
+$documentEngineExePath = & (Join-Path $Root 'scripts\build-document-engine.ps1') -Version $Version
+if ($LASTEXITCODE -ne 0 -or -not $documentEngineExePath -or -not (Test-Path $documentEngineExePath)) {
+  throw "Budowa silnika dokumentow (Scyzoryk.DocumentEngine.exe) nie powiodla sie - build-document-engine.ps1 nie zwrocil poprawnej sciezki."
+}
+Copy-Item -Path $documentEngineExePath -Destination (Join-Path $stagingDir 'Scyzoryk.DocumentEngine.exe') -Force
+
 # --- 4) Zaleznosci kazdej aplikacji (npm install + Chromium dla Playwrighta) ---
 # Audyt 2026-08-06 (Podejrzenie B): to kiedys robil ukryty CMD na komputerze
 # UZYTKOWNIKA (installer\instaluj-zaleznosci.cmd, usuniety z [Run] w

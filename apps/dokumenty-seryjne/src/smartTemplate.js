@@ -58,7 +58,13 @@ function readSmartTemplateManifest(docxPath) {
     return null;
   }
 
-  const entries = zip.getEntries().filter(e => /^customXml\/item\d+\.xml$/.test(e.entryName));
+  // \d* (nie \d+): Word COM (Document.CustomXMLParts.Add) i Open XML SDK
+  // (MainDocumentPart.AddCustomXmlPart, patrz tools/Scyzoryk.DocumentEngine/
+  // OpenXml/SmartTemplateManifest.cs - migracja Word COM -> Open XML) nie
+  // nazywaja czesci identycznie - SDK dla PIERWSZEJ/JEDYNEJ czesci custom XML
+  // w pakiecie generuje "item.xml" (bez cyfry), zweryfikowane live; Word
+  // (i SDK dla kolejnych czesci) uzywaja "item1.xml", "item2.xml" itd.
+  const entries = zip.getEntries().filter(e => /^customXml\/item\d*\.xml$/.test(e.entryName));
   for (const entry of entries) {
     let xmlText;
     try {

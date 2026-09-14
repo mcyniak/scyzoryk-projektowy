@@ -179,23 +179,24 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
 - `kreator-wzorow` ("Kreator wzorów seryjnych", port 3016 / `KREATOR_WZOROW_PORT`) — turns a plain,
   colour-marked DOCX + a sample XLSX into a **Smart Template** for `dokumenty-seryjne` (see that app's
   entry above for the consuming side). **Colour has no business meaning** — the tool inventories every
-  highlight/shading colour actually used in the document first (`scripts/scan-template.ps1 -Mode palette`,
-  pure OOXML regex scan of `word/(document|header*|footer*).xml`, no Word COM — same low-risk pattern as
-  the pre-existing `apps/dokumenty-seryjne/scripts/scan-placeholders.ps1`) and only asks the user which
-  colours are actually "working marks" before doing anything else; deselected colours (table headers,
-  decorative shading) are never touched. Only `-Mode candidates` (locating the *specific* marked ranges to
-  configure) opens real Word COM, via `Find-ScyzorykMarkedCandidates` in `lib/wordSmartTemplate.ps1` —
-  shared with `build-template.ps1`, which re-runs the *identical* scan before mutating anything and aborts
-  ("Wzór zmienił się od czasu skanowania") if the fingerprints don't match, rather than trusting raw
-  `Range.Start`/`.End` integers carried over from a separate COM session.
+  highlight/shading colour actually used in the document first and only asks the user which colours are
+  actually "working marks" before doing anything else; deselected colours (table headers, decorative
+  shading) are never touched.
+  - **Scan and build run entirely through `lib/documentEngine.js` → `Scyzoryk.DocumentEngine.exe`
+    (Open XML SDK, no Word/COM at all)** — see "Document engine (Open XML, no Word COM)" under Shared code
+    below for the architecture. `server.js`'s `/scan-markings`, `/scan` and `/build` routes call
+    `documentEngine.scanTemplatePalette`/`scanTemplateCandidates`/`buildSmartTemplate` directly; none of
+    them take a `withWordAutomationLease` lock any more (nothing to lock — no Word process involved).
   - Each candidate gets one of five user decisions (constant / Excel column / lookup-or-composed variant /
     conditional block / left untouched for the designer) — `src/templateManifest.js` assembles these into
     the manifest shape `lib/smartTemplateRules.js#validateManifest` checks, generating the synthetic
     `SCY_F_<hex>` merge-field and `SCYB_<hex>` bookmark names itself (the client never invents these).
-    `src/candidateConfig.js#validateOverlaps` blocks ambiguous overlaps (two unrelated blocks partially
-    overlapping, a manual region overlapping anything) before build — a field fully *contained* in a block
-    is the one allowed overlap (unambiguous: block survives → field works, block removed → field goes with
-    it).
+    `src/candidateConfig.js#validateOverlaps` (Range.Start/.End-based) is **not currently wired into
+    `runPreflight`** post-migration — the new candidate identity (`partUri`/`ordinal`/`structuralPath`,
+    no comparable numeric position across mechanisms) doesn't fit its input shape 1:1; the common
+    "field fully inside a block" case still works correctly by construction (the build command mutates
+    direct OpenXmlElement references, not coordinates), but a genuinely conflicting configuration (two
+    blocks partially overlapping) no longer gets an early, dedicated error. Known gap, not yet closed.
   - **Never computes engineering values** (voltage drops, loads, snow/wind, cable sizing, PV string config,
     …) — that's explicitly out of scope; anything of that nature is meant to be left as a manual region, not
     modelled as a rule.
@@ -203,69 +204,51 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     `evaluateSmartRecord()` (same function `dokumenty-seryjne` uses at generation time) for one record, then
     shells out to **`apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1`** directly (the one deliberate
     cross-app script reference in this repo — everywhere else, apps are independent), so a preview can never
-    silently diverge from what real generation later produces.
-  - `build-template.ps1` inserts real `MERGEFIELD` field codes via `Document.Fields.Add(range, wdFieldMergeField, name, false)`
-    and wraps merged block ranges in `Document.Bookmarks.Add(name, range)`, mutating from the **highest**
-    `Range.Start` down to the lowest (same ordering rule as `Apply-ScyzorykSmartBlocks`) — **except** TextFrame/shape
-    units, which are always processed *first*, regardless of position (see audit below: Word can delete a shape
-    outright if the paragraph it's anchored to gets mutated first). The finished manifest is embedded as a Custom
-    XML Part (`urn:scyzoryk:smart-template:v1`, CDATA-wrapped JSON) via `Document.CustomXMLParts.Add(...)` — Word
-    manages the OPC packaging, so no manual `[Content_Types].xml`/relationship editing was needed here
-    (contrast `dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1#Remove-MailMergeFromDocx`, which *does* hand-edit
-    the zip, but only to strip an existing native part, not add a new one).
-  - **`npm run test:kreator-word` (`apps/kreator-wzorow/scripts/test-word-com.ps1`)** is a real, live-Word smoke
-    test — not run in CI (needs an actual Word install), run it manually after touching scan/build logic. It
-    builds its own fixture DOCX (highlight ×2 colors, run shading, paragraph shading, cell shading, header,
-    footer, textbox, two identical `XXX` texts, one deliberately-unselected "decorative" color), then exercises
-    palette scan → candidate scan → a full build (field/constant/block/manual) → re-opens the built file and
-    asserts structure (MERGEFIELD exists, bookmark exists, manual region's color is untouched, table intact).
-    **Changes to scan/build logic are not considered verified without a passing run of this script on Windows
-    with Word** (previously the repo only *said* this — see the audit below for what shipped without it).
-  - **Audit 2026-09-10 ("0 kandydatów" in production, commit `6a7705e`)**: the first version of the scan/build
-    pipeline (above) shipped *never* having actually run `-Mode candidates` or `build-template.ps1` against live
-    Word — and it turned out to be almost entirely broken, catching zero of it because every failure mode
-    silently degraded to "0 candidates" instead of an error. Root causes, all confirmed by hand against a real
-    Word COM session:
+    silently diverge from what real generation later produces. This is the **one remaining Word COM
+    dependency** in this app — it still needs `withWordAutomationLease` and Microsoft Word, because Smart
+    Template *runtime* generation (evaluating a record into a finished document, in `dokumenty-seryjne`)
+    has not been migrated to Open XML yet (see migration status below).
+  - **Migration status (Word COM → Open XML, started 2026-09-14, after the "0 kandydatów" audit below)**:
+    Kreator scan/build is now **fully Open XML, zero `WINWORD.EXE` launches** — verified by
+    `tools/Scyzoryk.DocumentEngine.Tests` (6 xUnit tests, no Word, includes an explicit
+    zero-WINWORD-process-delta assertion) and by `test/group26-kreator-wzorow.test.js`'s full HTTP
+    end-to-end test (upload → scan-markings → scan → configure → build → download, also asserting no new
+    `WINWORD.EXE` PID appears). **Not migrated yet**: Kreator's own `/preview` (still Word COM, see above),
+    and — much bigger — Smart Template *runtime* generation in `dokumenty-seryjne`
+    (`Apply-ScyzorykSmartBlocks`/merge-field substitution, still Word COM), `wnioski-powykonawcze`'s
+    `convert-wm.ps1` mutation, and the shared DOCX→PDF renderer (`lib/printing/docx-to-pdf.ps1`, currently
+    the *only* correct way to get a PDF, and likely to stay Word-COM-based long-term as "the renderer" per
+    the migration's own stated non-goal: "nie chodzi o usunięcie Worda za wszelką cenę"). The now-superseded
+    Word-COM scan/build scripts (`apps/kreator-wzorow/scripts/{scan,build}-template.ps1`,
+    `lib/wordSmartTemplate.ps1`, `apps/kreator-wzorow/scripts/test-word-com.ps1`,
+    `npm run test:kreator-word`) are **still present in the repo but no longer called by `server.js`** —
+    kept only as reference/rollback material for now, not wired into any route.
+  - **Audit 2026-09-10 ("0 kandydatów" in production, commit `6a7705e`)** — history, superseded by the Open
+    XML migration above, kept because it explains *why* Word COM automation for this kind of structural
+    scan/mutate work turned out to be so fragile (the actual motivation for migrating away from it, not just
+    "Word is slow"). The first version of the scan/build pipeline shipped *never* having actually run
+    `-Mode candidates` or `build-template.ps1` against live Word, and it turned out to be almost entirely
+    broken, catching zero of it because every failure mode silently degraded to "0 candidates" instead of an
+    error. Root causes, all confirmed by hand against a real Word COM session:
     - `Find.Font.HighlightColorIndex` and bare `Find.Shading` **don't exist** as properties on Word's `Find`
       object — both threw `ArgumentException`, swallowed by a blanket `catch { break }` around `Find.Execute()`.
-      Highlight detection now uses a manual character-walk (`Get-ScyzorykCharWalkRanges`, keyed off
-      `Range.HighlightColorIndex`) instead of `Find` at all — a live test showed `Find.Highlight = $true` itself
-      returning **false-positive matches** (a "ghost" of the last real match) once genuine highlights were
-      exhausted, which is worse than merely not finding anything. Run/paragraph shading use `Find.Font.Shading`
-      / `Find.ParagraphFormat.Shading` respectively (the only two `Shading`-bearing properties that actually
-      exist on `Find`) — cell shading has no `Find` equivalent at all and is a direct `Table.Range.Cells` walk.
-    - `StoryRanges.NextStoryRange` chains multiple instances of the *same* story type (e.g. per-section headers)
-      — it does **not** cross from `main` into `header`/`footer`. The fix iterates the `doc.StoryRanges`
-      *collection* (one entry per distinct type present) and follows `NextStoryRange` within each.
+    - `Find.Highlight = $true` itself returned **false-positive matches** (a "ghost" of the last real match)
+      once genuine highlights were exhausted in a story — worse than merely not finding anything.
+    - `StoryRanges.NextStoryRange` chains multiple instances of the *same* story type (e.g. per-section
+      headers) — it does **not** cross from `main` into `header`/`footer`.
     - `Document.Range(start, end)` addresses **only** the `main` story — every other story (header/footer/
       footnote/textframe) has its own Start/End numbering from zero, and two different shapes' TextFrames can
-      report *identical* Start/End despite being physically unrelated. `build-template.ps1` no longer calls
-      `$doc.Range()` for anything but reconstructing a range; `Get-ScyzorykStoryRangeCopy` resolves the correct
-      story/shape object first, then narrows it — candidates now carry `storyType`/`chainIndex`/`shapeIndex` to
-      make that resolution unambiguous, and `storyKey` itself became a document-unique string (`header#0`,
-      `textframe#2`) rather than a bare `header`.
+      report *identical* Start/End despite being physically unrelated.
     - `Documents.Open(...)`'s **document-level** `Visible` parameter (12th positional arg) — distinct from
-      `Application.Visible` — must be `$true`, or `Shape.TextFrame` never fully initializes and every property
-      access throws `"The property 'HasText' cannot be found on this object"`. The whole app stays invisible
-      regardless, since `Application.Visible = $false` still holds.
-    - A table cell's trailing paragraph-mark + end-of-cell-marker (`Chr(13)` + `Chr(7)`) collapse into a
-      **single** position in Word's Range addressing even though `.Text` reports them as two characters —
-      subtracting the "obvious" length from `.End` truncates the last real character. The fix shrinks `.End`
-      one position at a time, re-reading `.Text` after each step, rather than precomputing an offset.
-    - Replacing a shape's text can make Word **delete the shape outright** if it's anchored to a paragraph that
-      gets mutated first elsewhere in the same build — `build-template.ps1` now processes all TextFrame/shape
-      units before anything else for exactly this reason (see above).
-    - Unrelated finding, not a code bug: this dev/test machine's `ConvertFrom-Json` is broken for arrays of
-      complex objects (collapses N objects into 1 with space-joined property values) after an OS reset — a
-      pre-existing, standard PowerShell pattern, reproducible with a 3-object array with no Kreator code
-      involved. Not routed around in shipped code (would mask a real system-level fault on whichever machine
-      hits it); flagged here so a future "JSON parsing is returning garbage" report on *this specific machine*
-      isn't re-investigated as a Kreator bug from scratch.
-    - `test/group26-kreator-wzorow.test.js` gained static regression tests asserting the *removed* broken
-      patterns don't come back (no `Find.Font.HighlightColorIndex`, no bare `Find.Shading`, no `$doc.Range(`
-      outside comments, no single `catch { break }` wrapped directly around `Find.Execute()`, correct
-      `WdStoryType` values in `Get-ScyzorykStoryKey`) — these catch a *regression* of the same mistake, they
-      are not a substitute for `npm run test:kreator-word`.
+      `Application.Visible` — had to be `$true`, or `Shape.TextFrame` never fully initialized.
+    - A table cell's trailing paragraph-mark + end-of-cell-marker (`Chr(13)` + `Chr(7)`) collapsed into a
+      **single** position in Word's Range addressing even though `.Text` reported them as two characters.
+    - Replacing a shape's text could make Word **delete the shape outright** if it was anchored to a
+      paragraph that got mutated first elsewhere in the same build.
+    - Unrelated finding, not a code bug: that session's dev/test machine had a broken `ConvertFrom-Json`
+      for arrays of complex objects (collapses N objects into 1 with space-joined property values) after an
+      OS reset — reproducible with a trivial 3-object array, nothing to do with Kreator code. Not routed
+      around in the (now-superseded) shipped code; flagged here in case it recurs on that machine again.
 
 Each app's `data/`, `logs/`, `uploads/`, `output/`, `tmp/` directories are runtime state (uploads, job
 data, generated output), not source — they're excluded from `scripts/check-project.js` and should not be
