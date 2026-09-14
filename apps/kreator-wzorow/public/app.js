@@ -32,6 +32,16 @@ function describeCandidateLocation(c) {
   return `${describePartUri(c.partUri)} · ${container}`;
 }
 
+// Krotki opis propozycji auto-konfiguracji (sekcja 26 promptu: karta
+// sugestii) - tylko etykieta typu + ewentualna kolumna, procent pewnosci
+// dolaczany osobno przez wywolujacego.
+function describeSuggestion(s) {
+  if (s.kind === 'field' && s.bestColumn) return `Z Excela → „${s.bestColumn}”`;
+  if (s.kind === 'manual') return 'Do projektanta';
+  if (s.kind === 'constant') return 'Stałe';
+  return 'Z Excela';
+}
+
 async function apiJson(method, url, body) {
   const opts = { method, headers: { ...HEADERS } };
   if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
@@ -228,10 +238,13 @@ function renderAutoConfigSummary() {
   $('#autoConfigPanel').classList.toggle('hidden', !ac);
   if (!ac) return;
   const s = ac.summary;
-  $('#autoConfigSummary').textContent = `Automatyczna analiza: ${s.auto} z ${s.total} kandydatów rozpoznanych automatycznie, ${s.review} do przejrzenia, ${s.unresolved} bez propozycji.`;
+  // Liczby pochodza z policzonego przez serwer podsumowania (nie z tekstu
+  // kandydata/Excela), wiec innerHTML z <strong> jest tu bezpieczny - w
+  // odroznieniu od renderowania samego tekstu kandydata (escapeHtml ponizej).
+  $('#autoConfigSummary').innerHTML = `Rozpoznano automatycznie <strong>${s.auto}</strong> z <strong>${s.total}</strong> kandydatów, <strong>${s.review}</strong> wymaga przejrzenia, <strong>${s.unresolved}</strong> zostaje bez propozycji.`;
   $('#sampleRowInfo').textContent = ac.sampleRow
-    ? `Wykryty rekord wzorcowy: #${ac.sampleRow.recordNumber} (pewność ${Math.round(ac.sampleRow.confidence * 100)}%).`
-    : 'Nie udało się jednoznacznie wskazać wiersza wzorcowego — dopasowania oparte tylko o kontekst.';
+    ? `Wykryto rekord wzorcowy #${ac.sampleRow.recordNumber} (pewność ${Math.round(ac.sampleRow.confidence * 100)}%).`
+    : 'Nie udało się jednoznacznie wskazać rekordu wzorcowego — dopasowania oparte wyłącznie o kontekst.';
   $('#applyHighConfidenceBtn').textContent = `Zastosuj ${s.auto} pewnych`;
   $('#applyHighConfidenceBtn').disabled = s.auto === 0;
 }
@@ -291,16 +304,16 @@ function renderCandidates() {
     const decision = decisions[c.id] || { status: 'unresolved' };
     const badgeText = { constant: 'Stałe', field: 'Excel', block: 'Warunek', manual: 'Projektant', unresolved: 'Brak decyzji' }[decision.status] || 'Brak decyzji';
     const suggestion = decision.status === 'unresolved' ? suggestions.get(c.id) : null;
-    const autoBadge = suggestion && suggestion.tier !== 'unresolved'
-      ? `<span class="candidate-badge auto-suggestion tier-${suggestion.tier}">${suggestion.score}% · ${escapeHtml((suggestion.reasons[0] && suggestion.reasons[0].message) || '')}</span>`
+    const suggestionBadge = suggestion && suggestion.tier !== 'unresolved'
+      ? `<div class="u-mt-2"><span class="badge ${suggestion.tier === 'auto' ? 'badge-success' : 'badge-warning'}">Sugestia: ${escapeHtml(describeSuggestion(suggestion))} (${suggestion.score}%)</span></div>`
       : '';
     return `<div class="candidate-row" data-candidate-id="${escapeHtml(c.id)}">
       <span class="candidate-swatch" style="background:${escapeHtml(c.displayColor)}"></span>
       <span class="candidate-body">
         <div class="candidate-text">${escapeHtml(c.text)}</div>
         <div class="candidate-context">${escapeHtml(describeCandidateLocation(c))}</div>
+        ${suggestionBadge}
       </span>
-      ${autoBadge}
       <span class="candidate-badge ${decision.status}">${badgeText}</span>
     </div>`;
   }).join('') || '<p class="hint">Brak kandydatów dla tego filtra.</p>';

@@ -46,7 +46,8 @@
         <li>Dodaj wzór i przykładową tabelę Excel, kliknij „Sprawdź pliki”.</li>
         <li>Kliknij „Wykryj oznaczenia” — zobaczysz paletę wszystkich kolorów/rodzajów oznaczeń użytych w dokumencie z przykładami tekstu.</li>
         <li>Zaznacz, które oznaczenia są polami roboczymi (dekoracyjne, np. nagłówki tabel, zostaw odznaczone), kliknij „Skanuj wybrane oznaczenia”.</li>
-        <li>Skonfiguruj każdego znalezionego kandydata: STAŁE (zostaw treść), Z EXCELA (kolumna wprost albo wariant/lookup), WARUNEK/BLOK (cały akapit/tabela zależne od wartości w Excelu) albo DO PROJEKTANTA (obliczenia, schematy — zostają nietknięte razem z oryginalnym oznaczeniem).</li>
+        <li>Kreator od razu proponuje automatyczną konfigurację (lokalnie, bez internetu) — zobaczysz, ile kandydatów rozpoznał samodzielnie, ile wymaga przejrzenia, a ile zostaje bez propozycji. Kliknij „Zastosuj pewne”, żeby przyjąć te z wysoką pewnością, albo przejrzyj resztę ręcznie.</li>
+        <li>Skonfiguruj pozostałych kandydatów: STAŁE (zostaw treść), Z EXCELA (kolumna wprost albo wariant/lookup), WARUNEK/BLOK (cały akapit/tabela zależne od wartości w Excelu) albo DO PROJEKTANTA (obliczenia, schematy — zostają nietknięte razem z oryginalnym oznaczeniem).</li>
         <li>Kliknij „Sprawdź wzór” — walidacja przechodzi po rzeczywistych rekordach przykładowego arkusza i pokazuje błędy/ostrzeżenia.</li>
         <li>Wygeneruj próbkę dla jednego rekordu i sprawdź wynik (DOCX/PDF) przed zbudowaniem całego wzoru.</li>
         <li>Zbuduj wzór i pobierz gotowy plik „&lt;nazwa&gt;_seryjny.docx”.</li>
@@ -57,6 +58,11 @@
       <div class="help-callout good">
         <span class="help-callout-label">Kolor nie ma znaczenia biznesowego</span>
         <p>Liczy się sam fakt oznaczenia fragmentu przez autora dokumentu, nie konkretny kolor. Jeden dokument może mieć kilka kolorów roboczych naraz (np. żółty = dane z Excela, zielony = warianty tekstu, różowy = obliczenia projektanta) — o tym, co dany kolor znaczy, decydujesz Ty przy konfiguracji każdego kandydata, nie sam kolor.</p>
+      </div>
+
+      <div class="help-callout info">
+        <span class="help-callout-label">Automatyczna konfiguracja jest ostrożna z rozmysłem</span>
+        <p>Kandydat trafia do „Automatyczne” tylko przy bardzo wysokiej pewności i wyraźnej przewadze nad drugą najlepszą kolumną — w razie wątpliwości Kreator woli pokazać go w „Do przejrzenia”, niż zgadywać. Nic nie jest stosowane bez Twojej akceptacji, a każdą sugestię można zmienić ręcznie jak dotychczas.</p>
       </div>
 
       <div class="help-callout warn">
