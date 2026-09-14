@@ -5,7 +5,7 @@
 // sluzy wylacznie do podniesienia score, gdy oba teksty (kontekst i naglowek)
 // pasuja do tego samego pojecia mimo innego sformulowania. Latwe do
 // rozszerzenia - nowe pojecie to nowy wpis, bez zmian w logice scoringu.
-const { normalizeValue, tokenize } = require('./textNormalize');
+const { normalizeValue, tokenize, stemToken } = require('./textNormalize');
 
 const CONCEPTS = {
   ADDRESS: ['adres', 'adres instalacji', 'adres obiektu', 'adres inwestycji', 'lokalizacja'],
@@ -17,26 +17,30 @@ const CONCEPTS = {
   ROOF_COVER: ['pokrycie', 'pokrycie dachowe', 'rodzaj pokrycia'],
 };
 
-// Prekomputacja tokenow aliasow raz przy starcie modulu (nie per-wywolanie).
-const CONCEPT_ALIAS_TOKENS = Object.fromEntries(
+// Prekomputacja RDZENI (nie surowych tokenow) aliasow raz przy starcie
+// modulu - dopasowanie idzie po stemToken (lekka odmiana polska, patrz
+// textNormalize.js), zeby "moc instalacji" w slowniku pasowalo tez do
+// realnego tekstu wzoru "o mocy instalacji ..." (dopelniacz), nie tylko do
+// identycznej mianownikowej formy.
+const CONCEPT_ALIAS_STEMS = Object.fromEntries(
   Object.entries(CONCEPTS).map(([concept, aliases]) => [
     concept,
-    aliases.map((alias) => tokenize(normalizeValue(alias))).filter((tokens) => tokens.length > 0),
+    aliases.map((alias) => tokenize(normalizeValue(alias)).map(stemToken)).filter((stems) => stems.length > 0),
   ])
 );
 
 // Zwraca liste kluczy pojec, ktorych PELNA fraza aliasu (wszystkie jej
-// tokeny) wystepuje w tekscie. Celowo wymaga calej frazy, nie pojedynczego
+// rdzenie) wystepuje w tekscie. Celowo wymaga calej frazy, nie pojedynczego
 // tokenu, zeby np. samo slowo "moc" w niezwiazanym zdaniu nie trafialo w
 // PV_POWER tak samo mocno jak jawne "moc instalacji".
 function findConceptsForText(text) {
   const textTokens = tokenize(normalizeValue(text));
   if (!textTokens.length) return [];
-  const textTokenSet = new Set(textTokens);
+  const textStemSet = new Set(textTokens.map(stemToken));
 
   const matched = [];
-  for (const [concept, aliasTokenLists] of Object.entries(CONCEPT_ALIAS_TOKENS)) {
-    const hit = aliasTokenLists.some((aliasTokens) => aliasTokens.every((t) => textTokenSet.has(t)));
+  for (const [concept, aliasStemLists] of Object.entries(CONCEPT_ALIAS_STEMS)) {
+    const hit = aliasStemLists.some((stems) => stems.every((s) => textStemSet.has(s)));
     if (hit) matched.push(concept);
   }
   return matched;

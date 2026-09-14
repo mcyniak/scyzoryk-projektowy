@@ -7,7 +7,7 @@
 // Priorytet (sekcja 63 promptu): zero blednych auto-mappingow > wyjasnialnosc
 // > coverage. Progi i marginesy sa celowo konserwatywne - lepiej wiecej
 // kandydatow w "review" niz choc jeden zly "auto".
-const { normalizeValue, tokenize, isTrivialValue, jaccardSimilarity, guessValueType } = require('./textNormalize');
+const { normalizeValue, tokenize, isTrivialValue, columnTokenCoverage, guessValueType } = require('./textNormalize');
 const domainAliases = require('./domainAliases');
 
 const AUTO_APPLY_THRESHOLD = 0.95;
@@ -147,6 +147,20 @@ function clamp(value, min, max) {
 
 // --- scoring kandydat -> kolumna ----------------------------------------------
 
+// Druga korekta wag (po pierwszej, patrz SAMPLE_ROW_EXACT/EXACT_MATCH_ANYWHERE
+// nizej) - znaleziona przy tescie na PRAWDZIWYM wzorze/arkuszu (2026-09-14,
+// "Wzór PV.docx" + "Kazimierz Biskupi 2026..."): tam wiersz wzorcowy w ogole
+// nie zostal wykryty (przykladowe wartosci we wzorze NIE byly kopia zadnego
+// konkretnego rekordu Excela - zalozenie sekcji 6 promptu nie zawsze sie
+// sprawdza w praktyce), wiec JEDYNYM dostepnym sygnalem byl kontekst. Przy
+// poprzednich wagach (CONTEXT max +20, ALIAS +15, TYPE +6, UNIQ +4 = 45 pkt
+// maks. bez zadnego dopasowania wartosci) nawet oczywiste dla czlowieka
+// przypadki ("Falownik: XXX" obok kolumny "falownik") nigdy nie osiagaly
+// REVIEW_THRESHOLD (75) - caly wzor ladowal w "nierozwiazane". Podniesione
+// tak, zeby SILNY kontekst+alias+typ+unikalnosc (bez zadnego dopasowania
+// wartosci) osiagal max ~80 pkt - powyzej progu review, ale wciaz PONIZEJ
+// auto (95), bo sam kontekst - bez potwierdzenia wartoscia - nigdy nie
+// powinien wystarczyc do automatycznego zastosowania.
 function scoreCandidateColumn(candidate, column, { sampleRowRecord, mappingPrior } = {}) {
   const candNorm = normalizeValue(candidate.text);
   const trivial = isTrivialValue(candNorm);
@@ -165,9 +179,13 @@ function scoreCandidateColumn(candidate, column, { sampleRowRecord, mappingPrior
   }
 
   const ctxTokens = collectContextTokens(candidate);
-  const sim = jaccardSimilarity(ctxTokens, column.normalizedTokens);
+  // Pokrycie tokenow KOLUMNY w kontekscie (nie Jaccard) - dlugie, techniczne
+  // zdania w realnych wzorach maja dziesiatki niezwiazanych slow, ktore w
+  // Jaccardzie (dzielonym przez sume obu zbiorow) topily sygnal na zero.
+  // Patrz komentarz przy columnTokenCoverage w textNormalize.js.
+  const sim = columnTokenCoverage(ctxTokens, column.normalizedTokens);
   if (sim > 0) {
-    const w = Math.round(sim * 20);
+    const w = Math.round(sim * 42);
     score += w;
     reasons.push({ code: 'CONTEXT_HEADER_SIMILARITY', weight: w, message: `Podobieństwo kontekstu do nazwy kolumny: ${Math.round(sim * 100)}%.` });
   }
@@ -176,8 +194,8 @@ function scoreCandidateColumn(candidate, column, { sampleRowRecord, mappingPrior
   const colConcepts = domainAliases.findConceptsForText(column.normalizedTokens.join(' '));
   const sharedConcept = candConcepts.find((c) => colConcepts.includes(c));
   if (sharedConcept) {
-    score += 15;
-    reasons.push({ code: 'DOMAIN_ALIAS_MATCH', weight: 15, message: `Kontekst i nazwa kolumny pasują do pojęcia "${sharedConcept}".` });
+    score += 24;
+    reasons.push({ code: 'DOMAIN_ALIAS_MATCH', weight: 24, message: `Kontekst i nazwa kolumny pasują do pojęcia "${sharedConcept}".` });
   }
 
   if (mappingPrior && mappingPrior.columnName === column.name) {
@@ -191,8 +209,8 @@ function scoreCandidateColumn(candidate, column, { sampleRowRecord, mappingPrior
 
   const candType = guessValueType(candNorm);
   if (candType && candType === column.dominantType) {
-    score += 6;
-    reasons.push({ code: 'TYPE_MATCH', weight: 6, message: 'Typ wartości zgodny z kolumną.' });
+    score += 8;
+    reasons.push({ code: 'TYPE_MATCH', weight: 8, message: 'Typ wartości zgodny z kolumną.' });
   } else if ((candType === 'numeric' && column.dominantType === 'free-text') || (candType === 'free-text' && column.dominantType === 'numeric')) {
     score -= 10;
     reasons.push({ code: 'TYPE_MISMATCH', weight: -10, message: 'Typ wartości NIE pasuje do kolumny.' });
@@ -202,8 +220,8 @@ function scoreCandidateColumn(candidate, column, { sampleRowRecord, mappingPrior
     score -= 15;
     reasons.push({ code: 'TRIVIAL_VALUE', weight: -15, message: 'Wartość zbyt ogólna do wiarygodnego dopasowania.' });
   } else if (column.uniquenessRatio > 0.8) {
-    score += 4;
-    reasons.push({ code: 'HIGH_UNIQUENESS', weight: 4, message: 'Kolumna ma wysoką unikalność wartości.' });
+    score += 6;
+    reasons.push({ code: 'HIGH_UNIQUENESS', weight: 6, message: 'Kolumna ma wysoką unikalność wartości.' });
   }
 
   return { column: column.name, score: clamp(score, 0, 100), reasons };

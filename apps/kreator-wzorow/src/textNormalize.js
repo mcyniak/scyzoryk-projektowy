@@ -67,6 +67,60 @@ function jaccardSimilarity(tokensA, tokensB) {
   return union === 0 ? 0 : intersection / union;
 }
 
+// Lekkie "aliasy koncowek" polskiej odmiany (sekcja 56 promptu auto-konfiguracji:
+// "Dodaj lekkie aliasy koncowek, ale NIE pelny stemming/morfologie... nie
+// twórz generatora odmiany"). Realny problem znaleziony na zywym dokumencie:
+// tekst wzoru mowi "o MOCY 5,28 kWp" (dopelniacz), a naglowek kolumny w Excelu
+// to "MOC zestawu..." (mianownik) - bez tego zadne dopasowanie kontekstu ani
+// aliasu domenowego nigdy by sie nie trafilo, mimo ze to oczywiscie to samo
+// pojecie. Lista jawna, sprawdzana od najdluzszej koncowki (zeby "ami"/"iej"
+// nie zostalo przypadkiem "zjedzone" przez krotsza "i"/"a" najpierw), ucina
+// TYLKO jesli zostanie co najmniej 3 znaki rdzenia - krotkie slowa (np. samo
+// "moc", 3 znaki) nigdy nie sa obcinane.
+const COMMON_POLISH_SUFFIXES = ['ami', 'ach', 'owi', 'ego', 'iej', 'ymi', 'imi', 'ow', 'em', 'a', 'e', 'i', 'u', 'y'];
+const STEM_MIN_REMAINING = 3;
+
+function stemToken(token) {
+  const t = String(token || '');
+  for (const suffix of COMMON_POLISH_SUFFIXES) {
+    if (t.length - suffix.length >= STEM_MIN_REMAINING && t.endsWith(suffix)) {
+      return t.slice(0, t.length - suffix.length);
+    }
+  }
+  return t;
+}
+
+// Jak jaccardSimilarity, ale porownuje RDZENIE tokenow (po stemToken), nie
+// tokeny 1:1 - uzywana WYLACZNIE tam, gdzie tolerowanie odmiany jest pozadane
+// (CONTEXT_HEADER_SIMILARITY w scoreCandidateColumn), nie w miejscach
+// wymagajacych scislej rownosci (np. dopasowanie WARTOSCI rekordu).
+function fuzzyJaccardSimilarity(tokensA, tokensB) {
+  const a = new Set((tokensA || []).map(stemToken));
+  const b = new Set((tokensB || []).map(stemToken));
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const t of a) if (b.has(t)) intersection++;
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+// Jaki ulamek RDZENI kolumny (nie kontekstu) wystepuje w kontekscie - w
+// odroznieniu od fuzzyJaccardSimilarity NIE jest karany dlugoscia kontekstu.
+// Realny problem znaleziony na zywym dokumencie: kontekst kandydata to czesto
+// cale zdanie techniczne (30+ tokenow, wymiary modulow, numery katalogowe...),
+// a Jaccard (dzielony przez SUME obu zbiorow) topil sygnal w szumie. Nazwa
+// kolumny jest zwykle krotka (2-6 tokenow) - liczenie wzgledem NIEJ, nie
+// wzgledem calego zdania, daje sensowny wynik niezaleznie od tego, ile
+// dodatkowych, niezwiazanych slow jest w kontekscie.
+function columnTokenCoverage(contextTokens, columnTokens) {
+  const columnStems = new Set((columnTokens || []).map(stemToken));
+  if (columnStems.size === 0) return 0;
+  const contextStems = new Set((contextTokens || []).map(stemToken));
+  let hits = 0;
+  for (const stem of columnStems) if (contextStems.has(stem)) hits++;
+  return hits / columnStems.size;
+}
+
 const BOOLEAN_LIKE = new Set(['tak', 'nie', '0', '1', 'prawda', 'falsz', 'fałsz', 'x', '']);
 
 function guessValueType(normalized) {
@@ -83,5 +137,8 @@ module.exports = {
   splitNumericUnit,
   isTrivialValue,
   jaccardSimilarity,
+  fuzzyJaccardSimilarity,
+  columnTokenCoverage,
+  stemToken,
   guessValueType,
 };
