@@ -42,7 +42,18 @@ public static class FixtureBuilder
         dupParagraph.Append(HighlightRun("XXX", HighlightColorValues.Yellow));
         body.Append(dupParagraph);
 
+        // Paragraf z tekstem PRZED/PO oznaczeniem, w JEDNYM akapicie - fixture
+        // dla auto-konfiguracji Kreatora (ParagraphPrefix/ParagraphSuffix,
+        // patrz MarkScanner.PopulateParagraphContext), np. "Projektowana moc
+        // instalacji: XXX (potwierdzone)." ma dac prefix/suffix wokol XXX.
+        var ctxParagraph = new Paragraph();
+        ctxParagraph.Append(PlainRun("Projektowana moc instalacji: "));
+        ctxParagraph.Append(HighlightRun("CTX_PARA_VALUE", HighlightColorValues.Yellow));
+        ctxParagraph.Append(PlainRun(" (potwierdzone)."));
+        body.Append(ctxParagraph);
+
         body.Append(BuildTableWithMerges());
+        body.Append(BuildContextTable());
         body.Append(BuildTextBoxParagraph());
         body.Append(new SectionProperties());
 
@@ -114,6 +125,27 @@ public static class FixtureBuilder
         row3.Append(cell31);
 
         table.Append(row1, row2, row3);
+        return table;
+    }
+
+    // Osobna, prosta tabela 1x3 (etykieta | wartosc oznaczona | jednostka) -
+    // fixture dla auto-konfiguracji Kreatora (LeftCellText/RightCellText/
+    // TableRowText, patrz MarkScanner.PopulateTableCellContext). Celowo
+    // OSOBNA od BuildTableWithMerges powyzej, zeby nie ryzykowac niezgodnosci
+    // liczby komorek z TableGrid w tabeli, ktora ma juz wlasne, wrazliwe na
+    // zmiany testy vMerge/gridSpan.
+    private static Table BuildContextTable()
+    {
+        var table = new Table();
+        table.Append(new TableProperties());
+        table.Append(new TableGrid(new GridColumn(), new GridColumn(), new GridColumn()));
+
+        var row = new TableRow();
+        var labelCell = new TableCell(new Paragraph(new Run(new Text("Moc PV") { Space = SpaceProcessingModeValues.Preserve })));
+        var valueCell = new TableCell(new Paragraph(HighlightRun("CTX_TABLE_VALUE", HighlightColorValues.Yellow)));
+        var unitCell = new TableCell(new Paragraph(new Run(new Text("kWp") { Space = SpaceProcessingModeValues.Preserve })));
+        row.Append(labelCell, valueCell, unitCell);
+        table.Append(row);
         return table;
     }
 

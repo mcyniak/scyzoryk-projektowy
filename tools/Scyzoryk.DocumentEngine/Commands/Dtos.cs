@@ -48,6 +48,19 @@ public sealed class CandidateDto
     [JsonPropertyName("before")] public string Before { get; set; } = "";
     [JsonPropertyName("after")] public string After { get; set; } = "";
     [JsonPropertyName("fingerprint")] public string Fingerprint { get; set; } = "";
+
+    // Kontekst strukturalny dla auto-konfiguracji Kreatora (JS:
+    // apps/kreator-wzorow/src/autoConfigurator.js) - liczony przez
+    // MarkScanner.PopulateExtendedContext. Zawsze "" gdy nie dotyczy (np. pola
+    // tabelaryczne dla kandydata spoza tabeli), nigdy null - upraszcza kod JS
+    // (`if (candidate.leftCellText) {...}` bez sprawdzania null/undefined) i
+    // zachowuje kompatybilnosc wsteczna ze starszymi zeskanowanymi jobami.
+    [JsonPropertyName("paragraphText")] public string ParagraphText { get; set; } = "";
+    [JsonPropertyName("paragraphPrefix")] public string ParagraphPrefix { get; set; } = "";
+    [JsonPropertyName("paragraphSuffix")] public string ParagraphSuffix { get; set; } = "";
+    [JsonPropertyName("tableRowText")] public string TableRowText { get; set; } = "";
+    [JsonPropertyName("leftCellText")] public string LeftCellText { get; set; } = "";
+    [JsonPropertyName("rightCellText")] public string RightCellText { get; set; } = "";
 }
 
 public sealed class ScanDiagnosticsDto

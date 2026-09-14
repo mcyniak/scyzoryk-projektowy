@@ -94,6 +94,12 @@ public static class ScanTemplateCommand
         Before = region.Before,
         After = region.After,
         Fingerprint = region.Fingerprint,
+        ParagraphText = region.ParagraphText,
+        ParagraphPrefix = region.ParagraphPrefix,
+        ParagraphSuffix = region.ParagraphSuffix,
+        TableRowText = region.TableRowText,
+        LeftCellText = region.LeftCellText,
+        RightCellText = region.RightCellText,
     };
 
     private static string Sanitize(string value) => new(value.Where(char.IsLetterOrDigit).ToArray());

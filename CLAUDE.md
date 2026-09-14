@@ -223,6 +223,39 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     `lib/wordSmartTemplate.ps1`, `apps/kreator-wzorow/scripts/test-word-com.ps1`,
     `npm run test:kreator-word`) are **still present in the repo but no longer called by `server.js`** —
     kept only as reference/rollback material for now, not wired into any route.
+  - **Auto-configuration (added 2026-09-14, `PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md`)** — a local,
+    deterministic (zero AI/network) heuristic engine that proposes a decision for most scanned candidates
+    instead of forcing the user to classify every single one by hand. `POST /api/jobs/:id/auto-configure/analyze`
+    runs `apps/kreator-wzorow/src/autoConfigurator.js#analyzeAutoConfiguration` (profiles every Excel column,
+    builds a value index, tries to detect a "sample row" the template's placeholder text was likely copied
+    from, then scores each candidate against every column using weighted signals — exact value match,
+    context/header token similarity, a small domain-concept alias dictionary (`src/domainAliases.js`),
+    a local mapping-memory prior, type compatibility, uniqueness — with explicit `reasons[]` per suggestion)
+    and stores the (small, capped-to-5-reasons-per-candidate) result on the job. Three tiers:
+    `auto` (≥95% confidence *and* a ≥15-point margin over the runner-up column — both required, since a
+    high score alone doesn't rule out two equally-plausible columns), `review` (≥75%), `unresolved`
+    (everything else, unchanged manual flow). `POST .../apply` (`{applyHighConfidence:true}` or explicit
+    `suggestionIds`) applies accepted suggestions through the **same** `templateManifest.js` (`tm.*`)
+    helpers the manual panel already uses (`src/autoConfigApply.js` — never duplicates draft-mutation
+    logic), and only then records acceptance into `src/mappingMemory.js`
+    (`<data>/auto-config-memory.json` — context/concept/column names and accept/reject counters *only*,
+    atomic tmp+rename write like `jobStore.js`, corrupted file → backed up and reset, never a crash;
+    **never** record values or PII). `POST .../reject` records rejection feedback only, never touches the
+    draft. The candidate DTO carries six extra structural-context fields for this
+    (`paragraphText`/`paragraphPrefix`/`paragraphSuffix`/`tableRowText`/`leftCellText`/`rightCellText`,
+    computed in `MarkScanner.PopulateExtendedContext`, always `""` when not applicable — never `null`, so
+    JS-side checks stay simple and older scanned jobs without them don't crash). Priority baked into every
+    threshold in this feature: **zero wrong auto-applies matters far more than coverage** — conservative by
+    design, matching the source prompt's own stated preference for "25 correct auto + 12 review + 6 manual +
+    0 errors" over "40 auto + 3 wrong". **Deliberately out of scope for this pass** (disclosed, not
+    forgotten): variant/category detection, lookup detection, numeric-threshold/condition detection (all
+    higher-risk pattern-matching that would touch document generation directly), automatic working-colour
+    preselection, `nearestHeading`/`headingLevel`/`aboveCellText`/`belowCellText` context fields (fragile
+    under `vMerge`/`gridSpan` — no existing precedent to build the column-alignment logic on), full bulk UI
+    actions beyond "apply all high-confidence" (multi-select accept/reject, bulk-mark-as-manual/constant),
+    an "undo auto-configuration" action, a downloadable debug report, and any validation against real
+    customer documents (no such files available in this environment — validated against synthetic
+    `FixtureBuilder`/`test/group26-kreator-wzorow.test.js` fixtures only).
   - **Audit 2026-09-10 ("0 kandydatów" in production, commit `6a7705e`)** — history, superseded by the Open
     XML migration above, kept because it explains *why* Word COM automation for this kind of structural
     scan/mutate work turned out to be so fragile (the actual motivation for migrating away from it, not just

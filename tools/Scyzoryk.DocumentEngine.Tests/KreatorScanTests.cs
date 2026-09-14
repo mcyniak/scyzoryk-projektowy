@@ -81,6 +81,60 @@ public class KreatorScanTests : IDisposable
     }
 
     [Fact]
+    public void Candidates_ParagraphContext_PrefixSuffixRozdzielonePoprawnie()
+    {
+        var output = ScanTemplateCommand.RunCandidates(new ScanCandidatesInput
+        {
+            TemplatePath = _fixturePath,
+            SelectedMarkings = FixtureBuilder.SelectedMarkings.ToList(),
+        });
+        Assert.True(output.Ok, output.Message);
+        var candidate = output.Candidates!.First(c => c.Text == "CTX_PARA_VALUE");
+
+        Assert.Equal("Projektowana moc instalacji: CTX_PARA_VALUE (potwierdzone).", candidate.ParagraphText);
+        Assert.Equal("Projektowana moc instalacji:", candidate.ParagraphPrefix);
+        Assert.Equal("(potwierdzone).", candidate.ParagraphSuffix);
+        // Nie jest w tabeli - pola tabelaryczne musza zostac puste, nie null.
+        Assert.Equal("", candidate.TableRowText);
+        Assert.Equal("", candidate.LeftCellText);
+        Assert.Equal("", candidate.RightCellText);
+    }
+
+    [Fact]
+    public void Candidates_TableCellContext_LeftRightCellTextIWierszWypelnione()
+    {
+        var output = ScanTemplateCommand.RunCandidates(new ScanCandidatesInput
+        {
+            TemplatePath = _fixturePath,
+            SelectedMarkings = FixtureBuilder.SelectedMarkings.ToList(),
+        });
+        Assert.True(output.Ok, output.Message);
+        var candidate = output.Candidates!.First(c => c.Text == "CTX_TABLE_VALUE");
+
+        Assert.Equal("tableCell", candidate.ContainerKind);
+        Assert.Equal("Moc PV", candidate.LeftCellText);
+        Assert.Equal("kWp", candidate.RightCellText);
+        Assert.Equal("Moc PVCTX_TABLE_VALUEkWp", candidate.TableRowText);
+    }
+
+    [Fact]
+    public void Candidates_NonTableContext_TableFieldsPozostajaPuste()
+    {
+        var output = ScanTemplateCommand.RunCandidates(new ScanCandidatesInput
+        {
+            TemplatePath = _fixturePath,
+            SelectedMarkings = FixtureBuilder.SelectedMarkings.ToList(),
+        });
+        Assert.True(output.Ok, output.Message);
+        var candidate = output.Candidates!.First(c => c.Text == "HL_YELLOW");
+
+        Assert.Equal("", candidate.TableRowText);
+        Assert.Equal("", candidate.LeftCellText);
+        Assert.Equal("", candidate.RightCellText);
+        Assert.Equal("HL_YELLOW", candidate.ParagraphText);
+    }
+
+    [Fact]
     public void Candidates_BezWybranychOznaczen_DajeCzytelnyBladNiePustyWynik()
     {
         var output = ScanTemplateCommand.RunCandidates(new ScanCandidatesInput

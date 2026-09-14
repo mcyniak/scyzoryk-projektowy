@@ -232,8 +232,73 @@ public static class MarkScanner
             ContentRuns = contentRuns,
             StructuralPath = structuralPath,
         };
+        PopulateExtendedContext(region, container, contentRuns, containerKind);
+        // Fingerprint celowo NIE zalezy od nowego kontekstu (Paragraph*/TableRowText/
+        // *CellText) - liczony jak dotychczas z Before/After, zeby nie zmienic
+        // semantyki "wzor zmienil sie od czasu skanowania" przy buildzie (patrz
+        // Commands/BuildTemplateCommand) w ramach niezwiazanej z tym funkcji.
         region.Fingerprint = ComputeFingerprint(region);
         return region;
+    }
+
+    // Kontekst strukturalny dla auto-konfiguracji Kreatora (JS:
+    // apps/kreator-wzorow/src/autoConfigurator.js) - NIGDY nie rzuca wyjatku,
+    // brakujacy kontekst zostaje jako "" (patrz CandidateDto). `container` bywa
+    // Paragraph nawet gdy containerKind == "tableCell" (highlight/shading-run/
+    // shading-paragraph zawsze przekazuja tu Paragraph, TYLKO shading-cell
+    // przekazuje realny TableCell) - dlatego oba typy sa rozwiazywane niezaleznie,
+    // nie przez rozgalezienie na samym containerKind.
+    private static void PopulateExtendedContext(MarkRegion region, OpenXmlElement container, List<Run> contentRuns, string containerKind)
+    {
+        var cell = container as TableCell;
+        var paragraph = container as Paragraph;
+
+        if (cell is null && containerKind == "tableCell" && paragraph is not null)
+            cell = paragraph.Ancestors<TableCell>().FirstOrDefault();
+
+        if (paragraph is null && contentRuns.Count > 0)
+            paragraph = contentRuns[0].Ancestors<Paragraph>().FirstOrDefault();
+
+        if (paragraph is not null) PopulateParagraphContext(region, paragraph, contentRuns);
+        if (cell is not null) PopulateTableCellContext(region, cell);
+    }
+
+    private static void PopulateParagraphContext(MarkRegion region, Paragraph paragraph, List<Run> contentRuns)
+    {
+        region.ParagraphText = NormalizeText(string.Concat(paragraph.Descendants<Text>().Select(t => t.Text)));
+        if (contentRuns.Count == 0) return;
+
+        // Prefiks/sufiks WEWNATRZ tego samego akapitu (rozne od Before/After,
+        // ktore patrza na sasiednie akapity/wiersze) - potrzebne np. dla
+        // "Projektowana moc instalacji: XXX", gdzie XXX to kandydat a reszta
+        // zdania to kontekst do dopasowania kolumny Excela.
+        var runsInParagraph = paragraph.Elements<Run>().ToList();
+        var firstIdx = runsInParagraph.IndexOf(contentRuns[0]);
+        var lastIdx = runsInParagraph.IndexOf(contentRuns[^1]);
+        // -1 gdy contentRuns naleza do INNEGO akapitu niz ten rozwiazany tutaj
+        // (np. wieloakapitowa komorka przy shading-cell) - wtedy prefiks/sufiks
+        // nie maja jednoznacznego sensu, zostaja puste zamiast zgadywac.
+        if (firstIdx < 0 || lastIdx < 0) return;
+
+        region.ParagraphPrefix = NormalizeText(string.Concat(runsInParagraph.Take(firstIdx).SelectMany(r => r.Elements<Text>()).Select(t => t.Text)));
+        region.ParagraphSuffix = NormalizeText(string.Concat(runsInParagraph.Skip(lastIdx + 1).SelectMany(r => r.Elements<Text>()).Select(t => t.Text)));
+    }
+
+    private static void PopulateTableCellContext(MarkRegion region, TableCell cell)
+    {
+        var row = cell.Ancestors<TableRow>().FirstOrDefault();
+        if (row is null) return;
+
+        // Indeksowanie po prostej pozycji w wierszu (bez uwzgledniania vMerge/
+        // gridSpan miedzy WIERSZAMI) - celowo ograniczone do lewego/prawego
+        // sasiada w TYM SAMYM wierszu, gdzie ten problem nie wystepuje (w
+        // odroznieniu od sasiada nad/pod, ktory wymagalby dopasowania kolumn
+        // miedzy wierszami o roznej liczbie scalen - odlozone, patrz plan).
+        var cells = row.Elements<TableCell>().ToList();
+        var idx = cells.IndexOf(cell);
+        region.TableRowText = NormalizeText(string.Concat(row.Descendants<Text>().Select(t => t.Text)));
+        if (idx > 0) region.LeftCellText = NormalizeText(string.Concat(cells[idx - 1].Descendants<Text>().Select(t => t.Text)));
+        if (idx >= 0 && idx < cells.Count - 1) region.RightCellText = NormalizeText(string.Concat(cells[idx + 1].Descendants<Text>().Select(t => t.Text)));
     }
 
     // Kontekst do fingerprintu - tekst poprzedniego/nastepnego akapitu (albo

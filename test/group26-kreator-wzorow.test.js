@@ -807,6 +807,427 @@ test('excelWorkbook.js: sheetPreview paginuje, uniqueColumnValues zbiera unikaln
 });
 
 // ===========================================================================
+// apps/kreator-wzorow/src/textNormalize.js + domainAliases.js - pomocnicze
+// funkcje tekstowe auto-konfiguracji Kreatora (PROMPT_CLAUDE_AUTO_KONFIGURACJA_
+// KREATORA.md sekcja 7/9/56). Zero zaleznosci od ksztaltu kandydata/arkusza.
+// ===========================================================================
+
+const textNormalize = require('../apps/kreator-wzorow/src/textNormalize');
+const domainAliases = require('../apps/kreator-wzorow/src/domainAliases');
+
+test('textNormalize.normalizeValue: trim/lowercase/collapse spaces, "ł" jawnie przed NFD, diakrytyki usuniete', () => {
+  assert.equal(textNormalize.normalizeValue('  Działka  Łąka '), 'dzialka laka');
+  assert.equal(textNormalize.normalizeValue('Kraków'), 'krakow');
+  assert.equal(textNormalize.normalizeValue(null), '');
+  assert.equal(textNormalize.normalizeValue(undefined), '');
+});
+
+test('textNormalize.normalizeValue: liczba z jednostka i bez daja ta sama kanoniczna forme (przecinek/kropka)', () => {
+  assert.equal(textNormalize.normalizeValue('5,52 kWp'), textNormalize.normalizeValue('5.52'));
+  assert.equal(textNormalize.normalizeValue('5,52kWp'), textNormalize.normalizeValue('5,52'));
+  assert.equal(textNormalize.normalizeValue('10 kWh'), textNormalize.normalizeValue('10'));
+});
+
+test('textNormalize.isTrivialValue: wartosci ogolne (0/1/tak/nie/x/pojedynczy znak) sa trywialne, prawdziwe wartosci nie', () => {
+  for (const v of ['0', '1', '2', 'tak', 'nie', 'x', '-', '']) {
+    assert.equal(textNormalize.isTrivialValue(textNormalize.normalizeValue(v)), true, v);
+  }
+  assert.equal(textNormalize.isTrivialValue(textNormalize.normalizeValue('XXX')), false);
+  assert.equal(textNormalize.isTrivialValue(textNormalize.normalizeValue('Testowa 1')), false);
+});
+
+test('textNormalize.tokenize/jaccardSimilarity: tokenizacja slow + podobienstwo Jaccarda', () => {
+  const tokens = textNormalize.tokenize(textNormalize.normalizeValue('Projektowana moc instalacji:'));
+  assert.deepEqual(tokens, ['projektowana', 'moc', 'instalacji']);
+  assert.equal(textNormalize.jaccardSimilarity(['moc', 'instalacji'], ['moc', 'zestawu']), 1 / 3);
+  assert.equal(textNormalize.jaccardSimilarity([], ['moc']), 0);
+});
+
+test('textNormalize.guessValueType: numeric/boolean-like/free-text', () => {
+  assert.equal(textNormalize.guessValueType(textNormalize.normalizeValue('42')), 'numeric');
+  assert.equal(textNormalize.guessValueType(textNormalize.normalizeValue('tak')), 'boolean-like');
+  assert.equal(textNormalize.guessValueType(textNormalize.normalizeValue('Testowa 1')), 'free-text');
+});
+
+test('domainAliases.findConceptsForText: dopasowuje pelna fraze aliasu, nie pojedynczy przypadkowy token', () => {
+  assert.deepEqual(domainAliases.findConceptsForText('Falownik: XXX'), ['INVERTER']);
+  assert.deepEqual(domainAliases.findConceptsForText('Projektowana moc instalacji'), ['PV_POWER']);
+  assert.deepEqual(domainAliases.findConceptsForText('zupelnie niezwiazany tekst o niczym'), []);
+});
+
+// ===========================================================================
+// apps/kreator-wzorow/src/autoConfigurator.js - profilowanie kolumn i indeks
+// wartosci (runtime-only, nigdy nie zapisywane na dysk).
+// ===========================================================================
+
+const autoConfig = require('../apps/kreator-wzorow/src/autoConfigurator');
+
+function fakeSheet(columns, rows) {
+  return { columns, rows };
+}
+
+test('autoConfigurator.profileWorkbookColumns: uniqueness/dominantType/emptyCount policzone poprawnie', () => {
+  const sheet = fakeSheet(['Adres', 'Moc'], [
+    { _record: 1, Adres: 'Testowa 1', Moc: '5,52' },
+    { _record: 2, Adres: 'Inna 2', Moc: '5,52' },
+    { _record: 3, Adres: 'Trzecia 3', Moc: '' },
+  ]);
+  const profiles = autoConfig.profileWorkbookColumns(sheet);
+  const adres = profiles.find(p => p.name === 'Adres');
+  const moc = profiles.find(p => p.name === 'Moc');
+
+  assert.equal(adres.uniqueCount, 3);
+  assert.equal(adres.uniquenessRatio, 1);
+  assert.equal(adres.dominantType, 'free-text');
+
+  assert.equal(moc.emptyCount, 1);
+  assert.equal(moc.uniqueCount, 1); // oba niepuste wpisy to ta sama znormalizowana wartosc
+  assert.equal(moc.uniquenessRatio, 0.5);
+  assert.equal(moc.dominantType, 'numeric');
+});
+
+test('autoConfigurator.buildValueIndex: jedna wartosc w wielu kolumnach/wierszach daje wiele trafien', () => {
+  const sheet = fakeSheet(['A', 'B'], [
+    { _record: 1, A: '5', B: '5' },
+    { _record: 2, A: '3', B: '7' },
+  ]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const hits = index.get('5');
+  assert.equal(hits.length, 2);
+  assert.deepEqual(hits.map(h => h.columnName).sort(), ['A', 'B']);
+});
+
+// ===========================================================================
+// apps/kreator-wzorow/src/autoConfigurator.js - detekcja wiersza wzorcowego
+// (sekcja 6/40 promptu auto-konfiguracji).
+// ===========================================================================
+
+test('detectSampleRow: jednoznaczna detekcja gdy kilku kandydatow trafia w TEN SAM rekord', () => {
+  const sheet = fakeSheet(['A', 'B', 'C'], [
+    { _record: 1, A: 'alfa1', B: 'beta1', C: 'gamma1' },
+    { _record: 2, A: 'alfa2', B: 'beta2', C: 'gamma2' },
+  ]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const candidates = [{ id: 'c1', text: 'alfa1' }, { id: 'c2', text: 'beta1' }, { id: 'c3', text: 'gamma1' }];
+  const result = autoConfig.detectSampleRow(candidates, index);
+  assert.equal(result.recordNumber, 1);
+  assert.equal(result.matchedCandidateCount, 3);
+  assert.equal(result.reason, 'ok');
+});
+
+test('detectSampleRow: dwa rekordy z rownowaznymi trafieniami -> brak jednoznacznej detekcji', () => {
+  const sheet = fakeSheet(['A', 'B'], [
+    { _record: 1, A: 'alfa1', B: 'beta1' },
+    { _record: 2, A: 'alfa2', B: 'beta2' },
+  ]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const candidates = [{ id: 'c1', text: 'alfa1' }, { id: 'c2', text: 'beta1' }, { id: 'c3', text: 'alfa2' }, { id: 'c4', text: 'beta2' }];
+  const result = autoConfig.detectSampleRow(candidates, index);
+  assert.equal(result.recordNumber, null);
+  assert.equal(result.reason, 'ambiguous-top2');
+});
+
+test('detectSampleRow: same trywialne kandydaci ("1"/"tak"/"-") nigdy nie daja falszywej detekcji', () => {
+  const sheet = fakeSheet(['A'], [{ _record: 1, A: '1' }, { _record: 2, A: '1' }]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const candidates = [{ id: 'c1', text: '1' }, { id: 'c2', text: 'tak' }, { id: 'c3', text: '-' }];
+  const result = autoConfig.detectSampleRow(candidates, index);
+  assert.equal(result.recordNumber, null);
+  assert.equal(result.reason, 'no-matches');
+});
+
+test('detectSampleRow: liczba z jednostka w kandydacie dopasowuje sie do samej liczby w Excelu', () => {
+  const sheet = fakeSheet(['Adres', 'Moc'], [
+    { _record: 1, Adres: 'Testowa 1', Moc: '5.52' },
+    { _record: 2, Adres: 'Inna 2', Moc: '3.1' },
+  ]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const candidates = [{ id: 'c1', text: 'Testowa 1' }, { id: 'c2', text: '5,52 kWp' }];
+  const result = autoConfig.detectSampleRow(candidates, index);
+  assert.equal(result.recordNumber, 1);
+  assert.equal(result.matchedCandidateCount, 2);
+});
+
+test('detectSampleRow: polskie znaki diakrytyczne dopasowuja sie do wersji ASCII w Excelu', () => {
+  const sheet = fakeSheet(['Adres', 'Miasto'], [
+    { _record: 1, Adres: 'Testowa 1', Miasto: 'Krakow' },
+    { _record: 2, Adres: 'Inna 2', Miasto: 'Poznan' },
+  ]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const candidates = [{ id: 'c1', text: 'Testowa 1' }, { id: 'c2', text: 'Kraków' }];
+  const result = autoConfig.detectSampleRow(candidates, index);
+  assert.equal(result.recordNumber, 1);
+});
+
+test('detectSampleRow: ta sama wartosc w dwoch kolumnach jednego rekordu nie psuje detekcji', () => {
+  // Wartosci celowo WIELOZNAKOWE (nie pojedyncze cyfry/litery) - te ostatnie
+  // sa z zalozenia trywialne (sekcja 7 promptu: "zmniejsz wage: pojedyncze
+  // litery") i nie moga posluzyc do sprawdzenia WLASCIWEGO zachowania tego
+  // testu (dopasowanie tej samej wartosci w 2 kolumnach TEGO SAMEGO rekordu).
+  const sheet = fakeSheet(['A', 'B', 'C'], [
+    { _record: 1, A: '55', B: '55', C: 'unikalna1' },
+    { _record: 2, A: '33', B: '77', C: 'unikalna2' },
+  ]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const candidates = [{ id: 'c1', text: '55' }, { id: 'c2', text: 'unikalna1' }];
+  const result = autoConfig.detectSampleRow(candidates, index);
+  assert.equal(result.recordNumber, 1);
+});
+
+test('detectSampleRow: brak wiersza wzorcowego (zero dopasowan) - scoreCandidate dziala dalej bez wyjatku, oparty tylko na kontekscie', () => {
+  const sheet = fakeSheet(['Adres'], [{ _record: 1, Adres: 'Testowa 1' }]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const result = autoConfig.detectSampleRow([{ id: 'c1', text: 'zupelnie inna wartosc' }], index);
+  assert.equal(result.recordNumber, null);
+  assert.equal(result.reason, 'no-matches');
+
+  const columns = autoConfig.profileWorkbookColumns(sheet);
+  const scored = autoConfig.scoreCandidate({ id: 'c1', text: 'zupelnie inna wartosc' }, columns, {});
+  assert.equal(typeof scored.score, 'number');
+});
+
+test('detectSampleRow i scoreCandidate: kandydat bez nowych pol kontekstu C# (kompatybilnosc wsteczna) nie rzuca wyjatku', () => {
+  const sheet = fakeSheet(['Adres'], [{ _record: 1, Adres: 'Testowa 1' }, { _record: 2, Adres: 'Inna 2' }]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const bareCandidate = { id: 'c1', text: 'Testowa 1' }; // brak paragraphPrefix/leftCellText/before/after itd.
+  assert.doesNotThrow(() => autoConfig.detectSampleRow([bareCandidate, { id: 'c2', text: 'placeholder' }], index));
+  const columns = autoConfig.profileWorkbookColumns(sheet);
+  assert.doesNotThrow(() => autoConfig.scoreCandidate(bareCandidate, columns, {}));
+});
+
+// ===========================================================================
+// apps/kreator-wzorow/src/autoConfigurator.js - scoring kandydat->kolumna
+// (sekcja 11/12/31/34 promptu auto-konfiguracji).
+// ===========================================================================
+
+function fakeColumn({ name, tokens, values = {}, dominantType = 'free-text', uniquenessRatio = 1 }) {
+  const valueIndex = new Map();
+  for (const [normalizedValue, recordNumber] of Object.entries(values)) {
+    valueIndex.set(normalizedValue, [{ recordNumber, rawValue: normalizedValue }]);
+  }
+  return { name, normalizedTokens: tokens, valueIndex, dominantType, uniquenessRatio };
+}
+
+test('scoreCandidateColumn: silne dopasowanie (sample-row + kontekst + alias + typ + unikalnosc) osiaga poziom auto', () => {
+  const column = fakeColumn({ name: 'Moc PV', tokens: ['moc', 'pv'], values: { '5.52': 1 }, dominantType: 'numeric', uniquenessRatio: 0.9 });
+  const candidate = { id: 'c1', text: '5,52 kWp', paragraphPrefix: 'Moc PV wynosi:', paragraphSuffix: '', leftCellText: '', rightCellText: '', before: '', after: '' };
+  const scored = autoConfig.scoreCandidateColumn(candidate, column, { sampleRowRecord: { 'Moc PV': '5.52' } });
+  const codes = scored.reasons.map(r => r.code);
+  assert.ok(codes.includes('SAMPLE_ROW_EXACT'));
+  assert.ok(codes.includes('CONTEXT_HEADER_SIMILARITY'));
+  assert.ok(codes.includes('DOMAIN_ALIAS_MATCH'));
+  assert.ok(scored.score >= 95);
+
+  const tier = autoConfig.classifyTier(autoConfig.scoreCandidate(candidate, [column], { sampleRowRecord: { 'Moc PV': '5.52' } }));
+  assert.equal(tier, 'auto');
+});
+
+test('scoreCandidateColumn: tylko exact-match-anywhere (brak wiersza wzorcowego, brak kontekstu) nie osiaga poziomu auto', () => {
+  const column = fakeColumn({ name: 'Kolumna X', tokens: ['kolumna', 'x'], values: { 'wartosc a': 3 }, uniquenessRatio: 0.3 });
+  const candidate = { id: 'c1', text: 'Wartosc A' };
+  const scored = autoConfig.scoreCandidateColumn(candidate, column, {});
+  assert.ok(scored.reasons.some(r => r.code === 'EXACT_MATCH_ANYWHERE'));
+  assert.ok(scored.score < 95);
+});
+
+test('scoreCandidateColumn: sam kontekst/naglowek bez zadnego dopasowania wartosci nigdy nie daje auto', () => {
+  const column = fakeColumn({ name: 'Adres inwestycji', tokens: ['adres', 'inwestycji'] });
+  const candidate = { id: 'c1', text: 'cos, czego nie ma w Excelu', paragraphPrefix: 'Adres inwestycji:', before: '', after: '', paragraphSuffix: '', leftCellText: '', rightCellText: '' };
+  const scored = autoConfig.scoreCandidateColumn(candidate, column, {});
+  assert.ok(!scored.reasons.some(r => r.code === 'SAMPLE_ROW_EXACT' || r.code === 'EXACT_MATCH_ANYWHERE'));
+  assert.ok(scored.score < 95);
+});
+
+test('scoreCandidateColumn: alias domenowy laczy inaczej sformulowany kontekst z naglowkiem kolumny', () => {
+  const column = fakeColumn({ name: 'Inwerter', tokens: ['inwerter'] });
+  const candidate = { id: 'c1', text: 'XYZ-1000', paragraphPrefix: 'Falownik:', before: '', after: '', paragraphSuffix: '', leftCellText: '', rightCellText: '' };
+  const scored = autoConfig.scoreCandidateColumn(candidate, column, {});
+  assert.ok(scored.reasons.some(r => r.code === 'DOMAIN_ALIAS_MATCH'));
+});
+
+test('scoreCandidateColumn: pamiec (mappingPrior) przechyla remis miedzy dwiema rownie dobrze pasujacymi kolumnami', () => {
+  const columnA = fakeColumn({ name: 'Moc A', tokens: ['moc'], dominantType: 'numeric' });
+  const columnB = fakeColumn({ name: 'Moc B', tokens: ['moc'], dominantType: 'numeric' });
+  const candidate = { id: 'c1', text: '5', paragraphPrefix: 'Moc:', before: '', after: '', paragraphSuffix: '', leftCellText: '', rightCellText: '' };
+
+  const withoutPrior = autoConfig.scoreCandidate(candidate, [columnA, columnB], {});
+  assert.equal(withoutPrior.alternatives[0].score, withoutPrior.alternatives[1].score); // remis
+
+  const withPrior = autoConfig.scoreCandidate(candidate, [columnA, columnB], { mappingPrior: { columnName: 'Moc A', accepted: 5, rejected: 0 } });
+  assert.equal(withPrior.bestColumn, 'Moc A');
+});
+
+test('scoreCandidateColumn: niezgodnosc typu (numeric vs free-text) obniza wynik przez kare TYPE_MISMATCH', () => {
+  const column = fakeColumn({ name: 'Adres', tokens: ['adres'], dominantType: 'free-text' });
+  const candidate = { id: 'c1', text: '42' };
+  const scored = autoConfig.scoreCandidateColumn(candidate, column, {});
+  assert.ok(scored.reasons.some(r => r.code === 'TYPE_MISMATCH' && r.weight === -10));
+});
+
+test('scoreCandidate: kolizja kilku niemal identycznie pasujacych kolumn demotuje auto do review', () => {
+  // "5,52" (wieloznakowa liczba), nie pojedyncza cyfra - pojedynczy znak jest
+  // z zalozenia trywialny (patrz komentarz w tescie sample-row wyzej) i
+  // dostalby kare TRIVIAL_VALUE zamiast bonusu za unikalnosc, psujac test.
+  const columnA = fakeColumn({ name: 'Moc A', tokens: ['moc', 'a'], values: { '5.52': 1 }, dominantType: 'numeric', uniquenessRatio: 0.9 });
+  const columnB = fakeColumn({ name: 'Moc B', tokens: ['moc', 'b'], values: { '5.52': 1 }, dominantType: 'numeric', uniquenessRatio: 0.9 });
+  const candidate = { id: 'c1', text: '5,52', paragraphPrefix: 'Moc:', before: '', after: '', paragraphSuffix: '', leftCellText: '', rightCellText: '' };
+  const sampleRowRecord = { 'Moc A': '5.52', 'Moc B': '5.52' };
+
+  const soloTier = autoConfig.classifyTier(autoConfig.scoreCandidate(candidate, [columnA], { sampleRowRecord }));
+  assert.equal(soloTier, 'auto');
+
+  const bothTier = autoConfig.classifyTier(autoConfig.scoreCandidate(candidate, [columnA, columnB], { sampleRowRecord }));
+  assert.notEqual(bothTier, 'auto');
+});
+
+test('classifyTier: maly margines miedzy top1 i top2 blokuje auto mimo wyniku >= 95', () => {
+  assert.equal(autoConfig.classifyTier({ score: 100, margin: 10 }), 'review');
+  assert.equal(autoConfig.classifyTier({ score: 100, margin: 20 }), 'auto');
+  assert.equal(autoConfig.classifyTier({ score: 80, margin: 20 }), 'review');
+  assert.equal(autoConfig.classifyTier({ score: 50, margin: 0 }), 'unresolved');
+});
+
+// ===========================================================================
+// apps/kreator-wzorow/src/autoConfigurator.js - grupowanie powtarzajacych
+// sie pol (sekcja 14/42 promptu auto-konfiguracji).
+// ===========================================================================
+
+function fieldSuggestion(candidateId, bestColumn, reasonCodes) {
+  return { candidateId, kind: 'field', tier: 'auto', score: 96, margin: 20, bestColumn, fieldGroupId: null, reasons: reasonCodes.map(code => ({ code, weight: 1, message: '' })) };
+}
+
+test('groupRepeatedFields: dwaj kandydaci z dopasowaniem WARTOSCI na tej samej kolumnie grupuja sie', () => {
+  const suggestions = [fieldSuggestion('c1', 'Adres', ['SAMPLE_ROW_EXACT']), fieldSuggestion('c2', 'Adres', ['EXACT_MATCH_ANYWHERE'])];
+  const groups = autoConfig.groupRepeatedFields(suggestions);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].candidateIds.sort(), ['c1', 'c2']);
+  assert.equal(suggestions[0].fieldGroupId, groups[0].groupId);
+  assert.equal(suggestions[1].fieldGroupId, groups[0].groupId);
+});
+
+test('groupRepeatedFields: dopasowanie WARTOSCI + dopasowanie TYLKO kontekstem na tej samej kolumnie NIE grupuja sie', () => {
+  const suggestions = [fieldSuggestion('c1', 'Adres', ['SAMPLE_ROW_EXACT']), fieldSuggestion('c2', 'Adres', ['CONTEXT_HEADER_SIMILARITY'])];
+  const groups = autoConfig.groupRepeatedFields(suggestions);
+  assert.equal(groups.length, 0);
+  assert.equal(suggestions[0].fieldGroupId, null);
+  assert.equal(suggestions[1].fieldGroupId, null);
+});
+
+test('groupRepeatedFields: 2 grupowalnych + 1 na innej kolumnie -> dokladnie jedna 2-elementowa grupa', () => {
+  const suggestions = [
+    fieldSuggestion('c1', 'Adres', ['SAMPLE_ROW_EXACT']),
+    fieldSuggestion('c2', 'Adres', ['SAMPLE_ROW_EXACT']),
+    fieldSuggestion('c3', 'Falownik', ['SAMPLE_ROW_EXACT']),
+  ];
+  const groups = autoConfig.groupRepeatedFields(suggestions);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].column, 'Adres');
+  assert.equal(groups[0].candidateIds.length, 2);
+});
+
+// ===========================================================================
+// apps/kreator-wzorow/src/autoConfigurator.js - klasyfikator "DO PROJEKTANTA"
+// (sekcja 16/43 promptu) i konserwatywna detekcja stalych (sekcja 15).
+// ===========================================================================
+
+test('classifyManualCandidate: dlugi blok z mocnym slowem kluczowym ("obliczenia") -> auto', () => {
+  const candidate = { text: 'Obliczenia spadku napięcia dla przewodu zasilającego wynoszą poniżej dopuszczalnych 3% zgodnie z normą PN-HD 60364.', paragraphText: 'Obliczenia spadku napięcia dla przewodu zasilającego wynoszą poniżej dopuszczalnych 3% zgodnie z normą PN-HD 60364.' };
+  const result = autoConfig.classifyManualCandidate(candidate, [{ score: 0 }]);
+  assert.equal(result.tier, 'auto');
+});
+
+test('classifyManualCandidate: dlugi blok ze slabym slowem kluczowym ("schemat"), brak dopasowania kolumny -> review', () => {
+  const text = 'Poniższy schemat instalacji przedstawia rozmieszczenie modułów na dachu budynku zgodnie z projektem technicznym.';
+  const result = autoConfig.classifyManualCandidate({ text, paragraphText: text }, [{ score: 0 }]);
+  assert.equal(result.tier, 'review');
+});
+
+test('classifyManualCandidate: krotki fragment dzielacy TYLKO slowo-klucz nie staje sie manual', () => {
+  const result = autoConfig.classifyManualCandidate({ text: 'Konstrukcja', paragraphText: 'Konstrukcja' }, [{ score: 0 }]);
+  assert.equal(result.tier, 'none');
+});
+
+test('classifyManualCandidate: kandydat z dobrym dopasowaniem kolumny nigdy nie jest manual, niezaleznie od slow', () => {
+  const text = 'Obliczenia dla przewodu zasilajacego - dlugi blok tekstu technicznego o obciazeniu i zabezpieczeniu.';
+  const result = autoConfig.classifyManualCandidate({ text, paragraphText: text }, [{ score: 90 }]);
+  assert.equal(result.tier, 'none');
+});
+
+test('detectConstantCandidate: powtarzajacy sie boilerplate bez dopasowania kolumny -> review, nigdy auto', () => {
+  const result = autoConfig.detectConstantCandidate({ text: 'Uwaga: dane orientacyjne' }, [{ score: 5 }], 3);
+  assert.equal(result.tier, 'review');
+});
+
+test('detectConstantCandidate: wyraznie dynamiczne (wysoki score dopasowania kolumny) nigdy nie jest sugerowane jako stala', () => {
+  const result = autoConfig.detectConstantCandidate({ text: 'Testowa 1' }, [{ score: 90 }], 5);
+  assert.equal(result.tier, 'none');
+});
+
+test('detectConstantCandidate: tekst wystepujacy tylko raz (bez powtorzenia) nie jest sugerowany jako stala', () => {
+  const result = autoConfig.detectConstantCandidate({ text: 'Unikalny tekst' }, [{ score: 5 }], 1);
+  assert.equal(result.tier, 'none');
+});
+
+// ===========================================================================
+// apps/kreator-wzorow/src/mappingMemory.js - lokalna pamiec mapowan (sekcja
+// 4/29/45 promptu auto-konfiguracji) - WYLACZNIE reguly/liczniki, zero PII.
+// ===========================================================================
+
+const { createMappingMemory } = require('../apps/kreator-wzorow/src/mappingMemory');
+
+test('mappingMemory: recordAccepted/recordRejected licza poprawnie, getPrior zwraca najczesciej akceptowane mapowanie', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+
+  assert.equal(memory.getPrior('adres instalacji'), null);
+  memory.recordAccepted('adres instalacji', 'ADDRESS', 'Adres inwestycji');
+  memory.recordAccepted('adres instalacji', 'ADDRESS', 'Adres inwestycji');
+  memory.recordRejected('adres instalacji', 'ADDRESS', 'Inna kolumna');
+
+  const prior = memory.getPrior('adres instalacji');
+  assert.equal(prior.columnName, 'Adres inwestycji');
+  assert.equal(prior.accepted, 2);
+});
+
+test('mappingMemory: zapisany plik JSON nie zawiera zadnych danych osobowych/wartosci rekordow - tylko reguly i liczniki', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory2-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+  memory.recordAccepted('falownik', 'INVERTER', 'Falownik');
+
+  const raw = JSON.parse(await fsp.readFile(path.join(dir, 'auto-config-memory.json'), 'utf8'));
+  assert.equal(raw.schemaVersion, 1);
+  assert.equal(raw.mappings.length, 1);
+  const entry = raw.mappings[0];
+  assert.deepEqual(Object.keys(entry).sort(), ['accepted', 'columnAliases', 'contextKey', 'lastUsedAt', 'logicalConcept', 'rejected'].sort());
+  assert.equal(entry.contextKey, 'falownik');
+  assert.equal(entry.accepted, 1);
+});
+
+test('mappingMemory: uszkodzony plik pamieci daje bezpieczny reset z kopia zapasowa, nie wyjatek', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory3-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  await fsp.writeFile(path.join(dir, 'auto-config-memory.json'), '{ to nie jest poprawny json', 'utf8');
+
+  let memory;
+  assert.doesNotThrow(() => { memory = createMappingMemory(dir); });
+  assert.equal(memory.getPrior('cokolwiek'), null);
+
+  const entries = await fsp.readdir(dir);
+  assert.ok(entries.some(name => name.includes('.corrupted-') && name.endsWith('.bak')));
+});
+
+test('mappingMemory: zapis jest atomowy - po recordAccepted nie zostaje plik .tmp', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory4-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+  memory.recordAccepted('cokolwiek', null, 'Kolumna');
+  const entries = await fsp.readdir(dir);
+  assert.ok(!entries.some(name => name.endsWith('.tmp')));
+});
+
+// ===========================================================================
 // apps/kreator-wzorow/server.js - testy HTTP (bez Worda: tylko upload,
 // bezpieczenstwo, health). Ten sam wzorzec co test/group14-nazywarka-skanow.test.js
 // (app.listen(0), fetch, X-Scyzoryk-Request).
@@ -1065,5 +1486,151 @@ test('kreator-wzorow: pelny przeplyw upload -> scan-markings -> scan -> build pr
     const afterPids = getWinwordPids();
     const newPids = afterPids.filter(pid => !beforePids.includes(pid));
     assert.deepEqual(newPids, [], 'zaden NOWY WINWORD.EXE nie powinien powstac podczas scan/build');
+  }
+});
+
+// ===========================================================================
+// Auto-konfiguracja kandydatow (PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md) -
+// pelny przeplyw HTTP scan -> auto-configure/analyze -> apply -> build. Ten
+// fixture (w odroznieniu od buildRealFixtureDocx() powyzej, ktora ma TYLKO
+// jeden goly highlight bez zadnego kontekstu) ma DWA oznaczone fragmenty z
+// tekstem dookola w TYM SAMYM akapicie, zeby auto-konfigurator mial cokolwiek
+// do dopasowania (ParagraphPrefix, patrz MarkScanner.PopulateParagraphContext).
+// ===========================================================================
+
+function buildAutoConfigFixtureDocx() {
+  const zip = new AdmZipForKreator();
+  zip.addFile('[Content_Types].xml', Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+    '<Default Extension="xml" ContentType="application/xml"/>' +
+    '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+    '</Types>', 'utf8'));
+  zip.addFile('_rels/.rels', Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+    '</Relationships>', 'utf8'));
+  zip.addFile('word/document.xml', Buffer.from(
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+    '<w:body>' +
+    '<w:p><w:r><w:t xml:space="preserve">Adres inwestycji: </w:t></w:r><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>Testowa 1</w:t></w:r></w:p>' +
+    '<w:p><w:r><w:t xml:space="preserve">Wartosc pomiaru: </w:t></w:r><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>ABC</w:t></w:r></w:p>' +
+    '<w:sectPr/>' +
+    '</w:body>' +
+    '</w:document>', 'utf8'));
+  return zip.toBuffer();
+}
+
+async function setupAutoConfigJob(t) {
+  const port = await withKreatorApp(t);
+  const form = new FormData();
+  form.append('template', new Blob([buildAutoConfigFixtureDocx()], { type: 'application/octet-stream' }), 'wzor.docx');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-autoconfig-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const ExcelJSForAutoConfig = require('../apps/ocr-audytow/node_modules/exceljs');
+  const wb = new ExcelJSForAutoConfig.Workbook();
+  const ws = wb.addWorksheet('Dane');
+  ws.addRow(['Adres inwestycji', 'Wartosc pomiaru']);
+  ws.addRow(['Testowa 1', 'ABC']);
+  const xlsxPath = path.join(dir, 'dane.xlsx');
+  await wb.xlsx.writeFile(xlsxPath);
+  form.append('excel', new Blob([await fsp.readFile(xlsxPath)], { type: 'application/octet-stream' }), 'dane.xlsx');
+
+  const uploadRes = await fetch(`http://127.0.0.1:${port}/api/jobs`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const uploadJson = await uploadRes.json();
+  assert.equal(uploadRes.status, 200, JSON.stringify(uploadJson));
+  const jobId = uploadJson.jobId;
+
+  await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/scan-markings`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+  const scanRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/scan`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selectedMarkings: ['highlight:yellow'], sheetName: 'Dane' }),
+  });
+  const scanJson = await scanRes.json();
+  assert.equal(scanRes.status, 200, JSON.stringify(scanJson));
+  assert.equal(scanJson.candidates.length, 2);
+
+  await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/config`, {
+    method: 'PUT', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ addressColumn: 'Adres inwestycji', preferredSheet: 'Dane' }),
+  });
+
+  return { port, jobId, candidates: scanJson.candidates };
+}
+
+test('auto-configure/analyze: rozpoznaje kandydatow z jednoznacznym kontekstem, przynajmniej jeden z pewnoscia "auto"', async (t) => {
+  const { port, jobId } = await setupAutoConfigJob(t);
+  const res = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/analyze`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+  });
+  const json = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(json));
+  assert.equal(json.analysis.candidateSuggestions.length, 2);
+  assert.ok(json.analysis.summary.auto >= 1, JSON.stringify(json.analysis.summary));
+  assert.ok(json.analysis.candidateSuggestions.some(s => s.tier === 'auto' && s.bestColumn === 'Adres inwestycji'));
+});
+
+test('auto-configure/apply: applyHighConfidence stosuje tylko sugestie "auto", zmniejsza unresolvedCount, build nadal dziala po zastosowaniu', async (t) => {
+  const { port, jobId, candidates } = await setupAutoConfigJob(t);
+  await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/analyze`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+
+  const applyRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/apply`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ applyHighConfidence: true }),
+  });
+  const applyJson = await applyRes.json();
+  assert.equal(applyRes.status, 200, JSON.stringify(applyJson));
+  assert.ok(applyJson.appliedCount >= 1);
+  assert.ok(applyJson.unresolvedCount < candidates.length);
+
+  // Kandydaci, ktorzy zostali "unresolved" (nie osiagneli progu auto), musza
+  // zostac rozwiazani recznie zanim build zadziala - dokladnie tak, jak
+  // dzialaloby to w prawdziwym UI po kliknieciu "Zastosuj pewnych".
+  const jobRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`);
+  const jobJson = await jobRes.json();
+  const stillUnresolved = candidates.filter(c => {
+    const decision = jobJson.job.draft.candidates[c.id];
+    return !decision || decision.status === 'unresolved';
+  });
+  for (const c of stillUnresolved) {
+    await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/candidates/${c.id}/constant`, {
+      method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'STALA' }),
+    });
+  }
+
+  const buildRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/build`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+  const buildJson = await buildRes.json();
+  assert.equal(buildRes.status, 200, JSON.stringify(buildJson));
+});
+
+test('auto-configure/reject: zapisuje feedback do pamieci, NIE dotyka draftu', async (t) => {
+  const { port, jobId, candidates } = await setupAutoConfigJob(t);
+  await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/analyze`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+
+  const beforeRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`);
+  const beforeJson = await beforeRes.json();
+
+  const rejectRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/reject`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ suggestionIds: [candidates[0].id] }),
+  });
+  const rejectJson = await rejectRes.json();
+  assert.equal(rejectRes.status, 200, JSON.stringify(rejectJson));
+  assert.equal(rejectJson.rejectedCount, 1);
+
+  const afterRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`);
+  const afterJson = await afterRes.json();
+  assert.deepEqual(afterJson.job.draft.candidates, beforeJson.job.draft.candidates);
+});
+
+test('auto-configure endpointy wymagaja X-Scyzoryk-Request (403 bez naglowka)', async (t) => {
+  const { port, jobId } = await setupAutoConfigJob(t);
+  for (const suffix of ['analyze', 'apply', 'reject']) {
+    const res = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/${suffix}`, { method: 'POST' });
+    assert.equal(res.status, 403, suffix);
   }
 });

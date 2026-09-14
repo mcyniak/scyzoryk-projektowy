@@ -32,6 +32,11 @@ const documentEngine = require('../../lib/documentEngine');
 const { createJobStore } = require('./src/jobStore');
 const { readWorkbook, sheetPreview, uniqueColumnValues } = require('./src/excelWorkbook');
 const tm = require('./src/templateManifest');
+// Auto-konfiguracja kandydatow (lokalna, deterministyczna - zero AI/sieci),
+// patrz PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md i src/autoConfigurator.js.
+const autoConfigurator = require('./src/autoConfigurator');
+const { applyAutoConfiguration } = require('./src/autoConfigApply');
+const { createMappingMemory } = require('./src/mappingMemory');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3016);
@@ -82,6 +87,9 @@ app.use('/shared', express.static(path.join(ROOT, '..', '..', 'shared-styles')))
 app.use(express.static(path.join(ROOT, 'public')));
 
 const jobStore = createJobStore(DATA_DIR);
+// Ten sam katalog data/ co jobs.json (jobStore) - osobny plik
+// (auto-config-memory.json), nie osobny appSlug (patrz mappingMemory.js).
+const mappingMemory = createMappingMemory(DATA_DIR);
 
 function decodeOriginalName(name) {
   try { return Buffer.from(name, 'latin1').toString('utf8'); } catch { return name; }
@@ -426,6 +434,76 @@ app.post('/api/jobs/:jobId/blocks', (req, res) => {
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Auto-konfiguracja (lokalny, deterministyczny silnik - zero AI/sieci, patrz
+// PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md i src/autoConfigurator.js).
+// Uzupelnia reczny panel powyzej, nigdy go nie zastepuje - kazda zaakceptowana
+// sugestia przechodzi przez TE SAME helpery draftu (tm.*) co reczna decyzja
+// (patrz src/autoConfigApply.js). `job.autoConfig` trzymane celowo malo -
+// reasons juz ucinane do 5 wewnatrz analyzeAutoConfiguration, zero kopii
+// wartosci rekordow z Excela.
+// ---------------------------------------------------------------------------
+app.post('/api/jobs/:jobId/auto-configure/analyze', (req, res) => {
+  const job = requireJob(req, res);
+  if (!job) return;
+  const sheetName = String(req.body?.sheetName || job.draft.preferredSheet || job.workbook.defaultSheet || '').trim();
+  const sheet = job.workbook.sheets[sheetName];
+  if (!sheet) return res.status(400).json({ ok: false, message: 'Nieznany arkusz. Wybierz arkusz przed analizą.' });
+  try {
+    const analysis = autoConfigurator.analyzeAutoConfiguration({
+      candidates: job.candidates,
+      workbook: job.workbook,
+      sheetName,
+      draft: job.draft,
+      mappingMemory,
+    });
+    jobStore.updateJob(job.id, { autoConfig: { ...analysis, appliedSuggestionIds: [], rejectedSuggestionIds: [] } });
+    res.json({ ok: true, analysis, analyzedAt: new Date().toISOString() });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message || 'Nie udało się przeanalizować wzoru.' });
+  }
+});
+
+app.post('/api/jobs/:jobId/auto-configure/apply', (req, res) => {
+  const job = requireJob(req, res);
+  if (!job) return;
+  if (!job.autoConfig) return res.status(400).json({ ok: false, message: 'Najpierw przeanalizuj wzór.' });
+  const body = req.body || {};
+  const suggestionIds = Array.isArray(body.suggestionIds) ? body.suggestionIds.filter(id => typeof id === 'string') : [];
+  const applyHighConfidence = body.applyHighConfidence === true;
+  const result = applyAutoConfiguration(job.draft, job.autoConfig, {
+    suggestionIds,
+    applyHighConfidence,
+    mappingMemory,
+    candidates: job.candidates,
+  });
+  const nextAppliedIds = [...new Set([...(job.autoConfig.appliedSuggestionIds || []), ...result.appliedSuggestionIds])];
+  jobStore.updateJob(job.id, { draft: result.draft, autoConfig: { ...job.autoConfig, appliedSuggestionIds: nextAppliedIds } });
+  const unresolvedCount = tm.unresolvedCandidateIds(result.draft, job.candidates.map(c => c.id)).length;
+  res.json({ ok: true, draft: result.draft, appliedCount: result.appliedCount, appliedSuggestionIds: result.appliedSuggestionIds, unresolvedCount });
+});
+
+app.post('/api/jobs/:jobId/auto-configure/reject', (req, res) => {
+  const job = requireJob(req, res);
+  if (!job) return;
+  if (!job.autoConfig) return res.status(400).json({ ok: false, message: 'Najpierw przeanalizuj wzór.' });
+  const body = req.body || {};
+  const suggestionIds = Array.isArray(body.suggestionIds) ? body.suggestionIds.filter(id => typeof id === 'string') : [];
+  const suggestionsById = new Map((job.autoConfig.candidateSuggestions || []).map(s => [s.candidateId, s]));
+  const candidatesById = new Map(job.candidates.map(c => [c.id, c]));
+  let rejectedCount = 0;
+  for (const id of suggestionIds) {
+    const suggestion = suggestionsById.get(id);
+    const candidate = candidatesById.get(id);
+    if (!suggestion || !candidate) continue;
+    mappingMemory.recordRejected(mappingMemory.buildContextKey(candidate), null, suggestion.bestColumn);
+    rejectedCount++;
+  }
+  const nextRejectedIds = [...new Set([...(job.autoConfig.rejectedSuggestionIds || []), ...suggestionIds])];
+  jobStore.updateJob(job.id, { autoConfig: { ...job.autoConfig, rejectedSuggestionIds: nextRejectedIds } });
+  res.json({ ok: true, rejectedCount });
 });
 
 // Pelna konfiguracja naraz (kontrakt z sekcji 29 specyfikacji) - alternatywa

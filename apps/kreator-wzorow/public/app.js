@@ -153,6 +153,7 @@ $('#scanBtn').addEventListener('click', async () => {
     $('#step2Panel').classList.remove('hidden');
     renderCandidates();
     $('#step2Panel').scrollIntoView({ behavior: 'smooth' });
+    await runAutoConfigureAnalyze();
   } catch (err) {
     setStatus('#scanStatus', err.message, false);
   } finally {
@@ -197,21 +198,72 @@ function buildConfigPutBody(overrides = {}) {
 const FILTERS = [
   { key: 'all', label: 'Wszystkie' },
   { key: 'unresolved', label: 'Nierozwiązane' },
+  { key: 'auto', label: 'Automatyczne' },
+  { key: 'review', label: 'Do przejrzenia' },
   { key: 'constant', label: 'Stałe' },
   { key: 'field', label: 'Excel' },
   { key: 'block', label: 'Warunek' },
   { key: 'manual', label: 'Do projektanta' }
 ];
 
+// Auto-konfiguracja (PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md) - lokalny,
+// deterministyczny silnik sugestii (zero AI/sieci). Uzupelnia reczny panel
+// ponizej, nigdy go nie zastepuje: sugestia to tylko odznaka przy kandydacie,
+// ktory NADAL nie ma zadnej decyzji - jesli user rozstrzygnie recznie, badge
+// znika (bo filtr auto/review patrzy WYLACZNIE na status 'unresolved').
+async function runAutoConfigureAnalyze() {
+  try {
+    await apiJson('POST', `/api/jobs/${state.jobId}/auto-configure/analyze`, { sheetName: state.job.draft.preferredSheet });
+    await loadJob();
+    renderAutoConfigSummary();
+    renderCandidates();
+  } catch (err) {
+    // Nie-fatalne: skan juz sie udal, to tylko dodatkowa, opcjonalna analiza.
+    setStatus('#autoConfigStatus', `Automatyczna analiza nie powiodła się: ${err.message}`, false);
+  }
+}
+
+function renderAutoConfigSummary() {
+  const ac = state.job && state.job.autoConfig;
+  $('#autoConfigPanel').classList.toggle('hidden', !ac);
+  if (!ac) return;
+  const s = ac.summary;
+  $('#autoConfigSummary').textContent = `Automatyczna analiza: ${s.auto} z ${s.total} kandydatów rozpoznanych automatycznie, ${s.review} do przejrzenia, ${s.unresolved} bez propozycji.`;
+  $('#sampleRowInfo').textContent = ac.sampleRow
+    ? `Wykryty rekord wzorcowy: #${ac.sampleRow.recordNumber} (pewność ${Math.round(ac.sampleRow.confidence * 100)}%).`
+    : 'Nie udało się jednoznacznie wskazać wiersza wzorcowego — dopasowania oparte tylko o kontekst.';
+  $('#applyHighConfidenceBtn').textContent = `Zastosuj ${s.auto} pewnych`;
+  $('#applyHighConfidenceBtn').disabled = s.auto === 0;
+}
+
+$('#reanalyzeBtn').addEventListener('click', () => runAutoConfigureAnalyze());
+$('#applyHighConfidenceBtn').addEventListener('click', async () => {
+  setStatus('#autoConfigStatus', 'Stosuję pewne sugestie...', null);
+  try {
+    const res = await apiJson('POST', `/api/jobs/${state.jobId}/auto-configure/apply`, { applyHighConfidence: true });
+    setStatus('#autoConfigStatus', `Zastosowano ${res.appliedCount} sugestii.`, true);
+    await loadJob();
+    await runAutoConfigureAnalyze();
+  } catch (err) {
+    setStatus('#autoConfigStatus', err.message, false);
+  }
+});
+
 function renderCandidates() {
   const job = state.job;
   if (!job || !job.candidates) return;
   const decisions = job.draft.candidates || {};
+  const suggestions = new Map((job.autoConfig && job.autoConfig.candidateSuggestions || []).map(s => [s.candidateId, s]));
 
-  const counts = { all: job.candidates.length, unresolved: 0, constant: 0, field: 0, block: 0, manual: 0 };
+  const counts = { all: job.candidates.length, unresolved: 0, auto: 0, review: 0, constant: 0, field: 0, block: 0, manual: 0 };
   for (const c of job.candidates) {
     const status = (decisions[c.id] && decisions[c.id].status) || 'unresolved';
     counts[status] = (counts[status] || 0) + 1;
+    if (status === 'unresolved') {
+      const suggestion = suggestions.get(c.id);
+      if (suggestion && suggestion.tier === 'auto') counts.auto++;
+      else if (suggestion && suggestion.tier === 'review') counts.review++;
+    }
   }
   $('#candidateMetrics').innerHTML = `
     <span class="candidate-metric">Znalezione: ${counts.all}</span>
@@ -227,18 +279,28 @@ function renderCandidates() {
   const filtered = job.candidates.filter(c => {
     if (state.candidateFilter === 'all') return true;
     const status = (decisions[c.id] && decisions[c.id].status) || 'unresolved';
+    if (state.candidateFilter === 'auto' || state.candidateFilter === 'review') {
+      if (status !== 'unresolved') return false;
+      const suggestion = suggestions.get(c.id);
+      return suggestion && suggestion.tier === state.candidateFilter;
+    }
     return status === state.candidateFilter;
   });
 
   $('#candidateList').innerHTML = filtered.map(c => {
     const decision = decisions[c.id] || { status: 'unresolved' };
     const badgeText = { constant: 'Stałe', field: 'Excel', block: 'Warunek', manual: 'Projektant', unresolved: 'Brak decyzji' }[decision.status] || 'Brak decyzji';
+    const suggestion = decision.status === 'unresolved' ? suggestions.get(c.id) : null;
+    const autoBadge = suggestion && suggestion.tier !== 'unresolved'
+      ? `<span class="candidate-badge auto-suggestion tier-${suggestion.tier}">${suggestion.score}% · ${escapeHtml((suggestion.reasons[0] && suggestion.reasons[0].message) || '')}</span>`
+      : '';
     return `<div class="candidate-row" data-candidate-id="${escapeHtml(c.id)}">
       <span class="candidate-swatch" style="background:${escapeHtml(c.displayColor)}"></span>
       <span class="candidate-body">
         <div class="candidate-text">${escapeHtml(c.text)}</div>
         <div class="candidate-context">${escapeHtml(describeCandidateLocation(c))}</div>
       </span>
+      ${autoBadge}
       <span class="candidate-badge ${decision.status}">${badgeText}</span>
     </div>`;
   }).join('') || '<p class="hint">Brak kandydatów dla tego filtra.</p>';

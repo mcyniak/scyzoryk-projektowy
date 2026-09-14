@@ -113,6 +113,15 @@
           <p class="panel-desc">Skonfiguruj każdy kandydat: STAŁE / Z EXCELA / WARIANT / WARUNEK / DO PROJEKTANTA.</p>
         </div>
       </div>
+      <div id="autoConfigPanel" class="hidden u-mt-3">
+        <p id="autoConfigSummary" class="hint"></p>
+        <p id="sampleRowInfo" class="hint"></p>
+        <div class="hero-actions u-mt-2">
+          <button type="button" id="reanalyzeBtn" class="btn btn-secondary">Przeanalizuj ponownie</button>
+          <button type="button" id="applyHighConfidenceBtn" class="btn btn-primary">Zastosuj pewne</button>
+        </div>
+        <p id="autoConfigStatus"></p>
+      </div>
       <div class="candidate-metrics" id="candidateMetrics"></div>
       <div class="candidate-filters" id="candidateFilters"></div>
       <div class="candidate-list" id="candidateList"></div>

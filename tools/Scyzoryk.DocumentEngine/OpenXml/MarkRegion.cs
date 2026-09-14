@@ -25,6 +25,15 @@ public sealed class MarkRegion
     public string After { get; set; } = "";
     public string Fingerprint { get; set; } = "";
 
+    // Kontekst strukturalny dla auto-konfiguracji Kreatora - patrz komentarz
+    // przy tych samych polach w Commands/Dtos.cs#CandidateDto.
+    public string ParagraphText { get; set; } = "";
+    public string ParagraphPrefix { get; set; } = "";
+    public string ParagraphSuffix { get; set; } = "";
+    public string TableRowText { get; set; } = "";
+    public string LeftCellText { get; set; } = "";
+    public string RightCellText { get; set; } = "";
+
     // Wylacznie do uzytku WEWNATRZ jednej sesji builda - nigdy nie
     // serializowane, nigdy nie przekazywane miedzy procesami.
     public OpenXmlElement? Container { get; set; } // Paragraph albo TableCell
