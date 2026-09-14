@@ -252,6 +252,13 @@ function publicJob(job) {
     candidatesCount: job.candidates ? job.candidates.length : null,
     candidates: job.candidates,
     draft: job.draft,
+    // Bez tego pola front-end (app.js#renderAutoConfigSummary/renderCandidates)
+    // nigdy nie widzi wyniku auto-konfiguracji mimo poprawnie policzonej i
+    // zapisanej analizy (real bug 2026-09-14, zlapany na zywym GET
+    // /api/jobs/:id - endpoint /auto-configure/analyze zwraca ja we WLASNEJ
+    // odpowiedzi, ale UI po kazdym odswiezeniu (loadJob) czyta stan joba
+    // WYLACZNIE stad).
+    autoConfig: job.autoConfig || null,
     lastValidation: job.lastValidation,
     lastPreview: job.lastPreview ? { warnings: job.lastPreview.warnings, errors: job.lastPreview.errors, hasDocx: Boolean(job.lastPreview.docxPath), hasPdf: Boolean(job.lastPreview.pdfPath) } : null,
     lastBuild: job.lastBuild ? { downloadName: job.lastBuild.downloadName } : null

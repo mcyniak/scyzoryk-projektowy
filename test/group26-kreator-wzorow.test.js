@@ -1573,6 +1573,24 @@ test('auto-configure/analyze: rozpoznaje kandydatow z jednoznacznym kontekstem, 
   assert.ok(json.analysis.candidateSuggestions.some(s => s.tier === 'auto' && s.bestColumn === 'Adres inwestycji'));
 });
 
+// Real bug zlapany na zywej instalacji uzytkownika (2026-09-14): backend
+// poprawnie liczyl i zapisywal autoConfig, ale GET /api/jobs/:id (jedyne
+// zrodlo stanu joba dla UI po kazdym loadJob()) nigdy go nie zwracal -
+// front-end nie mial ZADNEGO sposobu zobaczenia sugestii mimo ze /analyze
+// zwrocilo 200 z poprawna analiza. Ten test pilnuje TEGO KONKRETNEGO
+// polaczenia (analyze -> zapis -> GET), nie tylko odpowiedzi /analyze.
+test('auto-configure: GET /api/jobs/:id zwraca autoConfig po analyze (nie tylko odpowiedz /analyze) - bug zlapany na zywym dokumencie 2026-09-14', async (t) => {
+  const { port, jobId } = await setupAutoConfigJob(t);
+  await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/analyze`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+
+  const jobRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`);
+  const jobJson = await jobRes.json();
+  assert.equal(jobRes.status, 200);
+  assert.ok(jobJson.job.autoConfig, 'GET /api/jobs/:id musi zwracac autoConfig, inaczej UI nigdy go nie zobaczy');
+  assert.equal(jobJson.job.autoConfig.candidateSuggestions.length, 2);
+  assert.equal(jobJson.job.autoConfig.candidateSuggestions[0].candidateId, jobJson.job.candidates[0].id);
+});
+
 test('auto-configure/apply: applyHighConfidence stosuje tylko sugestie "auto", zmniejsza unresolvedCount, build nadal dziala po zastosowaniu', async (t) => {
   const { port, jobId, candidates } = await setupAutoConfigJob(t);
   await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/analyze`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });

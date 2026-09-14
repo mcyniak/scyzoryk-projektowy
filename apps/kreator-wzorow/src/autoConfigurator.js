@@ -273,8 +273,15 @@ function classifyManualCandidate(candidate, scoredColumns) {
   // niezaleznie od tego, jakie slowo akurat pada w kontekscie.
   if (bestScore >= REVIEW_THRESHOLD * 100) return { tier: 'none' };
 
+  // Celowo TYLKO wlasna tresc bloku (nie sasiedni akapit/naglowek z before/
+  // after) - real bug zlapany na zywym dokumencie: "before" bywa naglowkiem
+  // SEKCJI (np. "3.1 Dobor przewodow ... i spadek napiecia"), ktory zawiera
+  // mocne slowo-klucz mimo ze SAM kandydat to tylko nazwa modelu urzadzenia
+  // ("AF5K-MTH+.") - klasyfikowal go blednie jako "Do projektanta". Zakres
+  // wyszukiwania slow-kluczy musi byc SPOJNY ze zakresem sprawdzanym przez
+  // MANUAL_MIN_BLOCK_LENGTH ponizej (oba na blockText, nigdy na sasiadach).
   const blockText = candidate.paragraphText || candidate.text || '';
-  const contextText = normalizeValue(`${blockText} ${candidate.before || ''} ${candidate.after || ''}`);
+  const contextText = normalizeValue(blockText);
   const hasStrong = MANUAL_STRONG_KEYWORDS.some((k) => contextText.includes(k));
   const hasWeak = MANUAL_KEYWORDS.some((k) => contextText.includes(k));
   if (!hasStrong && !hasWeak) return { tier: 'none' };
