@@ -823,12 +823,24 @@ function Apply-ScyzorykSmartBlocks($doc, $record) {
         # znacznik bookmarka (Bookmark.Delete() w Word COM kasuje tylko
         # nazwana referencje, nigdy tekst pod nia), zeby w gotowym dokumencie
         # nie zostal zaden widoczny slad mechanizmu Kreatora.
-        $bm.Delete()
+        [void]$bm.Delete()
       } else {
         # false -> warunek niespelniony, caly zakres (wraz z trescia -
         # akapitami, listami, tabelami, formatowaniem) znika z dokumentu.
+        # [void] jest tu KONIECZNY: Range.Delete() w Word COM (w
+        # odroznieniu od Bookmark.Delete()) zwraca liczbe usunietych
+        # jednostek (Long). Bez tlumienia ta wartosc wyciekala na potok
+        # wyjsciowy funkcji i - gdy akurat byl to JEDYNY obiekt w strumieniu
+        # (pusta $result, dokladnie jeden blok do usuniecia) - PowerShell
+        # zwracal do wywolujacego goly Int32 zamiast listy $result. Pod
+        # Set-StrictMode w mailmerge-to-pdf.ps1 kolejne odwolanie
+        # $smartBlockIssues.Count rzucalo wtedy "The property 'Count'
+        # cannot be found on this object" (real bug, zlapany na zywo
+        # 2026-09-14 przy pierwszym pelnym tescie preview po migracji na
+        # Open XML - poprzednie testy migracji sprawdzaly tylko skan/build,
+        # nigdy pelnego cyklu preview z warunkiem blokowym false).
         $range = $bm.Range
-        $range.Delete()
+        [void]$range.Delete()
       }
     } catch {
       $result.Add([pscustomobject]@{ level = 'error'; message = "Nie udalo sie przetworzyc bloku '$($entry.name)': $($_.Exception.Message)" }) | Out-Null

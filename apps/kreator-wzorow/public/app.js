@@ -16,6 +16,22 @@ const state = {
 function $(sel) { return document.querySelector(sel); }
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+const CONTAINER_LABELS = { tableCell: 'komórka tabeli', textbox: 'pole tekstowe', paragraph: 'akapit' };
+function describePartUri(partUri) {
+  const name = String(partUri || '').split('/').pop() || '';
+  if (name.startsWith('document')) return 'dokument główny';
+  if (name.startsWith('header')) return 'nagłówek';
+  if (name.startsWith('footer')) return 'stopka';
+  if (name.startsWith('footnotes')) return 'przypis dolny';
+  if (name.startsWith('endnotes')) return 'przypis końcowy';
+  if (name.startsWith('comments')) return 'komentarz';
+  return name || 'dokument';
+}
+function describeCandidateLocation(c) {
+  const container = CONTAINER_LABELS[c.containerKind] || 'akapit';
+  return `${describePartUri(c.partUri)} · ${container}`;
+}
+
 async function apiJson(method, url, body) {
   const opts = { method, headers: { ...HEADERS } };
   if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
@@ -218,10 +234,10 @@ function renderCandidates() {
     const decision = decisions[c.id] || { status: 'unresolved' };
     const badgeText = { constant: 'Stałe', field: 'Excel', block: 'Warunek', manual: 'Projektant', unresolved: 'Brak decyzji' }[decision.status] || 'Brak decyzji';
     return `<div class="candidate-row" data-candidate-id="${escapeHtml(c.id)}">
-      <span class="candidate-swatch" style="background:${escapeHtml(c.mark.displayColor)}"></span>
+      <span class="candidate-swatch" style="background:${escapeHtml(c.displayColor)}"></span>
       <span class="candidate-body">
         <div class="candidate-text">${escapeHtml(c.text)}</div>
-        <div class="candidate-context">str. ${c.page} · ${escapeHtml(c.storyKey)} · ${c.container && c.container.kind === 'tableCell' ? 'komórka tabeli' : 'akapit'}</div>
+        <div class="candidate-context">${escapeHtml(describeCandidateLocation(c))}</div>
       </span>
       <span class="candidate-badge ${decision.status}">${badgeText}</span>
     </div>`;
@@ -238,7 +254,7 @@ function openCandidateConfig(candidateId) {
   const candidate = state.job.candidates.find(c => c.id === candidateId);
   if (!candidate) return;
   $('#candidateConfigPanel').classList.remove('hidden');
-  $('#candidateConfigContext').textContent = `„${candidate.text}” (str. ${candidate.page})`;
+  $('#candidateConfigContext').textContent = `„${candidate.text}” (${describeCandidateLocation(candidate)})`;
   const decision = state.job.draft.candidates[candidateId] || { status: 'unresolved' };
   document.querySelectorAll('.config-type-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.type === decision.status));
   renderConfigTypeBody(decision.status === 'unresolved' ? 'constant' : decision.status, candidate, decision);
