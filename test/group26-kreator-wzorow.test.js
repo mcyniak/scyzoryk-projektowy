@@ -828,6 +828,20 @@ test('textNormalize.normalizeValue: liczba z jednostka i bez daja ta sama kanoni
   assert.equal(textNormalize.normalizeValue('10 kWh'), textNormalize.normalizeValue('10'));
 });
 
+test('textNormalize.normalizeValue: pojedyncza koncowa interpunkcja zdaniowa jest ucinana - blad zlapany na zywym dokumencie 2026-09-15', () => {
+  // Realny przypadek z Wzor PV.docx: highlight obejmowal kropke konczaca
+  // zdanie razem z modelem falownika ("AF5K-MTH+."), a w Excelu ta sama
+  // wartosc jest bez kropki ("AF5K-MTH+") - bez tego EXACT_MATCH_ANYWHERE
+  // nigdy by sie nie trafil dla w pelni poprawnego dopasowania.
+  assert.equal(textNormalize.normalizeValue('AF5K-MTH+.'), textNormalize.normalizeValue('AF5K-MTH+'));
+  assert.equal(textNormalize.normalizeValue('Kowalski Jan,'), textNormalize.normalizeValue('Kowalski Jan'));
+  assert.equal(textNormalize.normalizeValue('Testowa wartosc:'), textNormalize.normalizeValue('Testowa wartosc'));
+  // NIE utnij: wielokropek (koncowka ".." blokuje ciecie), ani interpunkcja
+  // ktora nie jest ostatnim znakiem (np. nawias po kropce).
+  assert.equal(textNormalize.normalizeValue('W trakcie...'), 'w trakcie...');
+  assert.equal(textNormalize.normalizeValue('12 szt.)'), '12 szt.)');
+});
+
 test('textNormalize.isTrivialValue: wartosci ogolne (0/1/tak/nie/x/pojedynczy znak) sa trywialne, prawdziwe wartosci nie', () => {
   for (const v of ['0', '1', '2', 'tak', 'nie', 'x', '-', '']) {
     assert.equal(textNormalize.isTrivialValue(textNormalize.normalizeValue(v)), true, v);
@@ -849,9 +863,16 @@ test('textNormalize.guessValueType: numeric/boolean-like/free-text', () => {
   assert.equal(textNormalize.guessValueType(textNormalize.normalizeValue('Testowa 1')), 'free-text');
 });
 
-test('domainAliases.findConceptsForText: dopasowuje pelna fraze aliasu, nie pojedynczy przypadkowy token', () => {
-  assert.deepEqual(domainAliases.findConceptsForText('Falownik: XXX'), ['INVERTER']);
-  assert.deepEqual(domainAliases.findConceptsForText('Projektowana moc instalacji'), ['PV_POWER']);
+test('domainAliases.findConceptsForText: dopasowuje pelna fraze aliasu, nie pojedynczy przypadkowy token, i zwraca sile aliasu (waga)', () => {
+  const inverter = domainAliases.findConceptsForText('Falownik: XXX');
+  assert.equal(inverter.length, 1);
+  assert.equal(inverter[0].concept, 'INVERTER');
+
+  const power = domainAliases.findConceptsForText('Projektowana moc instalacji');
+  assert.equal(power.length, 1);
+  assert.equal(power[0].concept, 'PV_POWER');
+  assert.equal(power[0].weight, 1); // fraza jednoznaczna "moc instalacji" -> pelna waga
+
   assert.deepEqual(domainAliases.findConceptsForText('zupelnie niezwiazany tekst o niczym'), []);
 });
 
@@ -892,6 +913,7 @@ test('autoConfigurator.buildValueIndex: jedna wartosc w wielu kolumnach/wierszac
     { _record: 2, A: '3', B: '7' },
   ]);
   const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
   const hits = index.get('5');
   assert.equal(hits.length, 2);
   assert.deepEqual(hits.map(h => h.columnName).sort(), ['A', 'B']);
@@ -908,8 +930,9 @@ test('detectSampleRow: jednoznaczna detekcja gdy kilku kandydatow trafia w TEN S
     { _record: 2, A: 'alfa2', B: 'beta2', C: 'gamma2' },
   ]);
   const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
   const candidates = [{ id: 'c1', text: 'alfa1' }, { id: 'c2', text: 'beta1' }, { id: 'c3', text: 'gamma1' }];
-  const result = autoConfig.detectSampleRow(candidates, index);
+  const result = autoConfig.detectSampleRow(candidates, index, strictIndex);
   assert.equal(result.recordNumber, 1);
   assert.equal(result.matchedCandidateCount, 3);
   assert.equal(result.reason, 'ok');
@@ -921,8 +944,9 @@ test('detectSampleRow: dwa rekordy z rownowaznymi trafieniami -> brak jednoznacz
     { _record: 2, A: 'alfa2', B: 'beta2' },
   ]);
   const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
   const candidates = [{ id: 'c1', text: 'alfa1' }, { id: 'c2', text: 'beta1' }, { id: 'c3', text: 'alfa2' }, { id: 'c4', text: 'beta2' }];
-  const result = autoConfig.detectSampleRow(candidates, index);
+  const result = autoConfig.detectSampleRow(candidates, index, strictIndex);
   assert.equal(result.recordNumber, null);
   assert.equal(result.reason, 'ambiguous-top2');
 });
@@ -930,8 +954,9 @@ test('detectSampleRow: dwa rekordy z rownowaznymi trafieniami -> brak jednoznacz
 test('detectSampleRow: same trywialne kandydaci ("1"/"tak"/"-") nigdy nie daja falszywej detekcji', () => {
   const sheet = fakeSheet(['A'], [{ _record: 1, A: '1' }, { _record: 2, A: '1' }]);
   const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
   const candidates = [{ id: 'c1', text: '1' }, { id: 'c2', text: 'tak' }, { id: 'c3', text: '-' }];
-  const result = autoConfig.detectSampleRow(candidates, index);
+  const result = autoConfig.detectSampleRow(candidates, index, strictIndex);
   assert.equal(result.recordNumber, null);
   assert.equal(result.reason, 'no-matches');
 });
@@ -942,8 +967,9 @@ test('detectSampleRow: liczba z jednostka w kandydacie dopasowuje sie do samej l
     { _record: 2, Adres: 'Inna 2', Moc: '3.1' },
   ]);
   const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
   const candidates = [{ id: 'c1', text: 'Testowa 1' }, { id: 'c2', text: '5,52 kWp' }];
-  const result = autoConfig.detectSampleRow(candidates, index);
+  const result = autoConfig.detectSampleRow(candidates, index, strictIndex);
   assert.equal(result.recordNumber, 1);
   assert.equal(result.matchedCandidateCount, 2);
 });
@@ -954,8 +980,9 @@ test('detectSampleRow: polskie znaki diakrytyczne dopasowuja sie do wersji ASCII
     { _record: 2, Adres: 'Inna 2', Miasto: 'Poznan' },
   ]);
   const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
   const candidates = [{ id: 'c1', text: 'Testowa 1' }, { id: 'c2', text: 'Kraków' }];
-  const result = autoConfig.detectSampleRow(candidates, index);
+  const result = autoConfig.detectSampleRow(candidates, index, strictIndex);
   assert.equal(result.recordNumber, 1);
 });
 
@@ -969,15 +996,17 @@ test('detectSampleRow: ta sama wartosc w dwoch kolumnach jednego rekordu nie psu
     { _record: 2, A: '33', B: '77', C: 'unikalna2' },
   ]);
   const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
   const candidates = [{ id: 'c1', text: '55' }, { id: 'c2', text: 'unikalna1' }];
-  const result = autoConfig.detectSampleRow(candidates, index);
+  const result = autoConfig.detectSampleRow(candidates, index, strictIndex);
   assert.equal(result.recordNumber, 1);
 });
 
 test('detectSampleRow: brak wiersza wzorcowego (zero dopasowan) - scoreCandidate dziala dalej bez wyjatku, oparty tylko na kontekscie', () => {
   const sheet = fakeSheet(['Adres'], [{ _record: 1, Adres: 'Testowa 1' }]);
   const index = autoConfig.buildValueIndex(sheet);
-  const result = autoConfig.detectSampleRow([{ id: 'c1', text: 'zupelnie inna wartosc' }], index);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
+  const result = autoConfig.detectSampleRow([{ id: 'c1', text: 'zupelnie inna wartosc' }], index, strictIndex);
   assert.equal(result.recordNumber, null);
   assert.equal(result.reason, 'no-matches');
 
@@ -989,8 +1018,9 @@ test('detectSampleRow: brak wiersza wzorcowego (zero dopasowan) - scoreCandidate
 test('detectSampleRow i scoreCandidate: kandydat bez nowych pol kontekstu C# (kompatybilnosc wsteczna) nie rzuca wyjatku', () => {
   const sheet = fakeSheet(['Adres'], [{ _record: 1, Adres: 'Testowa 1' }, { _record: 2, Adres: 'Inna 2' }]);
   const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
   const bareCandidate = { id: 'c1', text: 'Testowa 1' }; // brak paragraphPrefix/leftCellText/before/after itd.
-  assert.doesNotThrow(() => autoConfig.detectSampleRow([bareCandidate, { id: 'c2', text: 'placeholder' }], index));
+  assert.doesNotThrow(() => autoConfig.detectSampleRow([bareCandidate, { id: 'c2', text: 'placeholder' }], index, strictIndex));
   const columns = autoConfig.profileWorkbookColumns(sheet);
   assert.doesNotThrow(() => autoConfig.scoreCandidate(bareCandidate, columns, {}));
 });
@@ -1002,23 +1032,30 @@ test('detectSampleRow i scoreCandidate: kandydat bez nowych pol kontekstu C# (ko
 
 function fakeColumn({ name, tokens, values = {}, dominantType = 'free-text', uniquenessRatio = 1 }) {
   const valueIndex = new Map();
+  const strictValueIndex = new Map();
   for (const [normalizedValue, recordNumber] of Object.entries(values)) {
     valueIndex.set(normalizedValue, [{ recordNumber, rawValue: normalizedValue }]);
+    const parsed = textNormalize.parseNumericValue(normalizedValue);
+    if (parsed) strictValueIndex.set(textNormalize.numericMatchKey(parsed), [{ recordNumber, rawValue: normalizedValue }]);
   }
-  return { name, normalizedTokens: tokens, valueIndex, dominantType, uniquenessRatio };
+  return { name, normalizedTokens: tokens, valueIndex, strictValueIndex, dominantType, uniquenessRatio };
 }
 
 test('scoreCandidateColumn: silne dopasowanie (sample-row + kontekst + alias + typ + unikalnosc) osiaga poziom auto', () => {
-  const column = fakeColumn({ name: 'Moc PV', tokens: ['moc', 'pv'], values: { '5.52': 1 }, dominantType: 'numeric', uniquenessRatio: 0.9 });
+  // Excel z jednostka W TEKSCIE komorki ("5.52 kWp", nie goly numeryczny
+  // "5.52") - zeby unit-aware porownanie (hardening sekcja 5) dalo 'strong',
+  // nie 'weak' (goly numeryczny Excel bez jednostki jest z definicji
+  // niepewny co do jednostki wzgledem kandydata majacego jednostke w tekscie).
+  const column = fakeColumn({ name: 'Moc PV', tokens: ['moc', 'pv'], values: { '5.52 kwp': 1 }, dominantType: 'numeric', uniquenessRatio: 0.9 });
   const candidate = { id: 'c1', text: '5,52 kWp', paragraphPrefix: 'Moc PV wynosi:', paragraphSuffix: '', leftCellText: '', rightCellText: '', before: '', after: '' };
-  const scored = autoConfig.scoreCandidateColumn(candidate, column, { sampleRowRecord: { 'Moc PV': '5.52' } });
+  const scored = autoConfig.scoreCandidateColumn(candidate, column, { sampleRowRecord: { 'Moc PV': '5.52 kWp' } });
   const codes = scored.reasons.map(r => r.code);
   assert.ok(codes.includes('SAMPLE_ROW_EXACT'));
   assert.ok(codes.includes('CONTEXT_HEADER_SIMILARITY'));
   assert.ok(codes.includes('DOMAIN_ALIAS_MATCH'));
   assert.ok(scored.score >= 95);
 
-  const tier = autoConfig.classifyTier(autoConfig.scoreCandidate(candidate, [column], { sampleRowRecord: { 'Moc PV': '5.52' } }));
+  const tier = autoConfig.classifyTier(autoConfig.scoreCandidate(candidate, [column], { sampleRowRecord: { 'Moc PV': '5.52 kWp' } }));
   assert.equal(tier, 'auto');
 });
 
@@ -1045,6 +1082,32 @@ test('scoreCandidateColumn: alias domenowy laczy inaczej sformulowany kontekst z
   assert.ok(scored.reasons.some(r => r.code === 'DOMAIN_ALIAS_MATCH'));
 });
 
+test('scoreCandidateColumn: sasiedni akapit (before/after) NIE licza sie do kontekstu - blad zlapany na zywym dokumencie 2026-09-15', () => {
+  // Realny przypadek z Wzor PV.docx: akapit "Panele fotowoltaiczne
+  // zaprojektowano na polaci dachu..." w ogole nie wspomina falownika, ale
+  // jego JEDNOZDANIOWY "after" (caly NASTEPNY akapit, z
+  // MarkScanner.GetSurroundingContext) to "Falownik i magazyn zostana
+  // zamontowane w garazu." - przed poprawka to samo w sobie dawalo
+  // CONTEXT_HEADER_SIMILARITY 100% dla kolumny "falownik", mimo ze kandydat
+  // mowi wylacznie o orientacji dachu. before/after byly z zalozenia luznym
+  // fingerprintem do weryfikacji zmiany dokumentu (patrz komentarz przy
+  // GetSurroundingContext w C#), nie sygnalem semantycznym - nie powinny
+  // wplywac na scoring.
+  const column = fakeColumn({ name: 'falownik', tokens: ['falownik'], dominantType: 'free-text' });
+  const candidate = {
+    id: 'c1',
+    text: 'polaci dachu/konstrukcji gruntowej skierowanej w strone poludniowa.',
+    paragraphPrefix: 'Panele fotowoltaiczne zaprojektowano na',
+    paragraphSuffix: '',
+    leftCellText: '', rightCellText: '',
+    before: 'Usytuowanie instalacji fotowoltaicznej',
+    after: 'Falownik i magazyn zostana zamontowane w garazu.',
+  };
+  const scored = autoConfig.scoreCandidateColumn(candidate, column, {});
+  assert.ok(!scored.reasons.some(r => r.code === 'CONTEXT_HEADER_SIMILARITY'), 'sasiedni akapit nie powinien dac dopasowania naglowka');
+  assert.ok(!scored.reasons.some(r => r.code === 'DOMAIN_ALIAS_MATCH'), 'sasiedni akapit nie powinien dac dopasowania aliasu domenowego');
+});
+
 test('scoreCandidateColumn: pamiec (mappingPrior) przechyla remis miedzy dwiema rownie dobrze pasujacymi kolumnami', () => {
   const columnA = fakeColumn({ name: 'Moc A', tokens: ['moc'], dominantType: 'numeric' });
   const columnB = fakeColumn({ name: 'Moc B', tokens: ['moc'], dominantType: 'numeric' });
@@ -1053,7 +1116,7 @@ test('scoreCandidateColumn: pamiec (mappingPrior) przechyla remis miedzy dwiema 
   const withoutPrior = autoConfig.scoreCandidate(candidate, [columnA, columnB], {});
   assert.equal(withoutPrior.alternatives[0].score, withoutPrior.alternatives[1].score); // remis
 
-  const withPrior = autoConfig.scoreCandidate(candidate, [columnA, columnB], { mappingPrior: { columnName: 'Moc A', accepted: 5, rejected: 0 } });
+  const withPrior = autoConfig.scoreCandidate(candidate, [columnA, columnB], { mappingPriors: [{ columnName: 'Moc A', accepted: 5, rejected: 0, weight: 15 }] });
   assert.equal(withPrior.bestColumn, 'Moc A');
 });
 
@@ -1200,7 +1263,7 @@ test('mappingMemory: zapisany plik JSON nie zawiera zadnych danych osobowych/war
   assert.equal(raw.schemaVersion, 1);
   assert.equal(raw.mappings.length, 1);
   const entry = raw.mappings[0];
-  assert.deepEqual(Object.keys(entry).sort(), ['accepted', 'columnAliases', 'contextKey', 'lastUsedAt', 'logicalConcept', 'rejected'].sort());
+  assert.deepEqual(Object.keys(entry).sort(), ['accepted', 'columnAliases', 'contextKey', 'lastUsedAt', 'logicalConcept', 'rejected', 'schemaFingerprint'].sort());
   assert.equal(entry.contextKey, 'falownik');
   assert.equal(entry.accepted, 1);
 });
@@ -1226,6 +1289,316 @@ test('mappingMemory: zapis jest atomowy - po recordAccepted nie zostaje plik .tm
   const entries = await fsp.readdir(dir);
   assert.ok(!entries.some(name => name.endsWith('.tmp')));
 });
+
+// ===========================================================================
+// Hardening (PROMPT_CLAUDE_HARDENING_AUTO_KONFIGURACJI_KREATORA.md) - signed
+// prior, PII, schema fingerprint (sekcja 2-4/30).
+// ===========================================================================
+
+test('mappingMemory signed prior: accepted > rejected -> dodatni wplyw', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory5-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+  for (let i = 0; i < 5; i++) memory.recordAccepted('ctx', null, 'Kolumna A');
+  const prior = memory.getPrior('ctx');
+  assert.ok(prior.weight > 0, `weight powinien byc dodatni, jest ${prior.weight}`);
+});
+
+test('mappingMemory signed prior: rejected > accepted -> ujemny wplyw (kara)', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory6-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+  for (let i = 0; i < 3; i++) memory.recordRejected('ctx', null, 'Kolumna A');
+  memory.recordAccepted('ctx', null, 'Kolumna A');
+  const prior = memory.getPrior('ctx');
+  assert.ok(prior.weight < 0, `weight powinien byc ujemny, jest ${prior.weight}`);
+});
+
+test('mappingMemory signed prior: 0 accepted / 1 rejected NIGDY nie daje dodatniego bonusu (naprawiony bug)', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory7-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+  memory.recordRejected('ctx', null, 'Kolumna A');
+  const prior = memory.getPrior('ctx');
+  assert.ok(prior.weight <= 0, `0 accepted / 1 rejected dalo dodatni weight=${prior.weight} - to jest dokladnie naprawiany bug`);
+});
+
+test('mappingMemory isSafeMemoryContext: odrzuca kontekst wygladajacy jak PII, akceptuje bezpieczna etykiete szablonu', () => {
+  const { isSafeMemoryContext } = require('../apps/kreator-wzorow/src/mappingMemory');
+  // "Kowalski Jan" bez bezpiecznego kontekstu strukturalnego - buildContextKey
+  // zwrocilby '' (nie fallbackuje juz do tekstu kandydata), a '' jest odrzucane.
+  assert.equal(isSafeMemoryContext(''), false);
+  // Adres z duza gestoscia cyfr (numer domu/kod pocztowy) - odrzucony.
+  assert.equal(isSafeMemoryContext('62 850 tuliszkow ul dluga 5 97 360'), false);
+  // Zbyt dlugi "kontekst" (wyciekle cale zdanie, nie etykieta) - odrzucony.
+  assert.equal(isSafeMemoryContext('to jest bardzo dlugi tekst ktory wyglada jak cale zdanie a nie etykieta'), false);
+  // Kontekst rowny wartosci kandydata (stary, usuniety fallback odtworzony
+  // przypadkiem) - odrzucony.
+  assert.equal(isSafeMemoryContext('testowa 1', 'testowa 1'), false);
+  // Krotka, bezpieczna etykieta szablonu - dozwolona.
+  assert.equal(isSafeMemoryContext('adres instalacji'), true);
+});
+
+test('mappingMemory buildContextKey: BEZ bezpiecznego kontekstu strukturalnego zwraca pusty string, NIGDY tekst kandydata (naprawiony bug)', () => {
+  const { buildContextKey } = require('../apps/kreator-wzorow/src/mappingMemory');
+  // Kandydat bez paragraphPrefix/Suffix/leftCellText/rightCellText - stary
+  // kod fallbackowal tu do normalizeValue(candidate.text) ("kowalski jan"),
+  // co bylo realnym wyciekiem danych z rekordu do pamieci na dysku.
+  const key = buildContextKey({ text: 'Kowalski Jan' });
+  assert.equal(key, '');
+});
+
+test('mappingMemory: niebezpieczny kontekst -> recordAccepted/recordRejected NIC nie zapisuja (0 write)', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory8-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+
+  const acceptedOk = memory.recordAccepted('', null, 'Kolumna'); // pusty kontekst (brak bezpiecznej etykiety)
+  assert.equal(acceptedOk, false);
+  const rejectedOk = memory.recordRejected('testowa 1', null, 'Kolumna', '', 'testowa 1'); // kontekst == wartosc kandydata
+  assert.equal(rejectedOk, false);
+
+  assert.equal(memory.getPrior(''), null);
+  assert.equal(memory.getPrior('testowa 1'), null);
+  // Plik nigdy nie zostal utworzony (persist() nigdy sie nie wykonal, bo
+  // zero faktycznych zapisow) - to TEZ jest poprawny dowod "0 write", nie
+  // tylko pusta tablica w istniejacym pliku.
+  const filePath = path.join(dir, 'auto-config-memory.json');
+  const raw = await fsp.readFile(filePath, 'utf8').then(JSON.parse).catch((err) => (err.code === 'ENOENT' ? { mappings: [] } : Promise.reject(err)));
+  assert.equal(raw.mappings.length, 0);
+});
+
+test('mappingMemory schema fingerprint: deterministyczny i niezalezny od kolejnosci kolumn', () => {
+  const { buildSchemaFingerprint } = require('../apps/kreator-wzorow/src/mappingMemory');
+  const fp1 = buildSchemaFingerprint(['Adres', 'Moc', 'Falownik']);
+  const fp2 = buildSchemaFingerprint(['Falownik', 'Adres', 'Moc']);
+  const fp3 = buildSchemaFingerprint(['Adres', 'Moc', 'Inna kolumna']);
+  assert.equal(fp1, fp2, 'ten sam zestaw kolumn w innej kolejnosci -> ten sam fingerprint');
+  assert.notEqual(fp1, fp3, 'inny zestaw kolumn -> inny fingerprint');
+  assert.equal(typeof fp1, 'string');
+  assert.ok(fp1.length > 0);
+});
+
+test('mappingMemory getPrior: TEN SAM schema dostaje pelna wage, "obcy" schema polowiczna', async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory9-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+  const schemaA = memory.buildSchemaFingerprint(['Adres', 'Moc']);
+  const schemaB = memory.buildSchemaFingerprint(['Zupelnie', 'Inny', 'Arkusz']);
+
+  for (let i = 0; i < 5; i++) memory.recordAccepted('ctx', null, 'Kolumna', schemaA);
+
+  const sameSchemaPrior = memory.getPrior('ctx', schemaA);
+  const foreignSchemaPrior = memory.getPrior('ctx', schemaB);
+  assert.equal(sameSchemaPrior.sameSchema, true);
+  assert.equal(foreignSchemaPrior.sameSchema, false);
+  assert.ok(foreignSchemaPrior.weight < sameSchemaPrior.weight, 'obcy schemat musi miec nizsza wage niz ten sam schemat');
+});
+
+test('recordManualCorrectionFeedback: sugerowana kolumna dostaje rejected+1, finalna accepted+1', async (t) => {
+  const { createMappingMemory, recordManualCorrectionFeedback } = require('../apps/kreator-wzorow/src/mappingMemory');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory10-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+  const candidate = { id: 'c1', text: '5,52', paragraphPrefix: 'Moc zestawu:' };
+  const previousSuggestion = { kind: 'field', bestColumn: 'Moc zestawu' };
+  const finalDecision = { kind: 'field', column: 'moc projekt' };
+
+  const result = recordManualCorrectionFeedback(memory, candidate, previousSuggestion, finalDecision, '');
+  assert.equal(result.rejectedPrevious, true);
+  assert.equal(result.acceptedFinal, true);
+
+  const contextKey = memory.buildContextKey(candidate);
+  const priorForOld = memory.getPrior(contextKey); // najlepszy (najwiekszy |weight|) wpis dla kontekstu
+  // Po jednej korekcie: "Moc zestawu" ma 0/1 (rejected), "moc projekt" ma 1/0
+  // (accepted) - "moc projekt" ma wiekszy |weight| (dodatni), wiec getPrior
+  // (ktory bierze NAJSILNIEJSZY wpis) zwraca WLASNIE jego, nie odrzucony.
+  assert.equal(priorForOld.columnName, 'moc projekt');
+  assert.ok(priorForOld.weight > 0);
+});
+
+test('recordManualCorrectionFeedback: identyczna finalna decyzja jak sugestia -> nic nie zapisuje (nie ma korekty)', async (t) => {
+  const { createMappingMemory, recordManualCorrectionFeedback } = require('../apps/kreator-wzorow/src/mappingMemory');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-memory11-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const memory = createMappingMemory(dir);
+  const candidate = { id: 'c1', text: 'X', paragraphPrefix: 'Falownik:' };
+  const suggestion = { kind: 'field', bestColumn: 'Falownik' };
+  const result = recordManualCorrectionFeedback(memory, candidate, suggestion, { kind: 'field', column: 'Falownik' }, '');
+  assert.equal(result.rejectedPrevious, false);
+  assert.equal(result.acceptedFinal, false);
+});
+
+// ===========================================================================
+// Hardening - unit-aware numeric matching (sekcja 5/6/31).
+// ===========================================================================
+
+test('textNormalize.compareValues: pelna tabela przypadkow z sekcji 31 promptu hardeningowego', () => {
+  assert.equal(textNormalize.compareValues('5,52 kWp', '5.52 kWp'), 'strong');
+  assert.equal(textNormalize.compareValues('5,52 kWp', '5.52'), 'weak');
+  assert.equal(textNormalize.compareValues('10 kWh', '10 kWp'), 'conflict');
+  assert.equal(textNormalize.compareValues('10 kWh', '10'), 'weak');
+  assert.equal(textNormalize.compareValues('10', '10'), 'strong');
+});
+
+test('textNormalize.parseNumericValue: rozpoznaje wartosc, jednostke i hadUnit', () => {
+  assert.deepEqual(textNormalize.parseNumericValue('10 kWh'), { value: 10, unit: 'kwh', hadUnit: true });
+  assert.deepEqual(textNormalize.parseNumericValue('10'), { value: 10, unit: '', hadUnit: false });
+  assert.equal(textNormalize.parseNumericValue('nie liczba'), null);
+});
+
+test('scoreCandidateColumn: EXACT_VALUE_AND_UNIT dla zgodnej liczby+jednostki, UNIT_CONFLICT (bez bonusu) dla tej samej liczby z inna jednostka', () => {
+  const columnKwh = fakeColumn({ name: 'Pojemnosc magazynu', tokens: ['pojemnosc', 'magazynu'], values: { '10 kwh': 1 }, dominantType: 'numeric' });
+  const candidateKwh = { id: 'c1', text: '10 kWh' };
+  const scoredMatch = autoConfig.scoreCandidateColumn(candidateKwh, columnKwh, {});
+  assert.ok(scoredMatch.reasons.some(r => r.code === 'EXACT_VALUE_AND_UNIT'));
+
+  // Ta sama liczba, ale kandydat ma INNA jednostke (kWp) - kolumna ma TYLKO
+  // "10 kWh" w indeksie -> brak strict hita, a weak (goly "10") tez nie
+  // istnieje w tej kolumnie -> brak jakiegokolwiek dopasowania wartosci.
+  const candidateKwp = { id: 'c2', text: '10 kWp' };
+  const scoredConflict = autoConfig.scoreCandidateColumn(candidateKwp, columnKwh, {});
+  assert.ok(!scoredConflict.reasons.some(r => r.code === 'EXACT_VALUE_AND_UNIT' || r.code === 'EXACT_MATCH_ANYWHERE'));
+});
+
+test('scoreCandidateColumn: sample-row z KONFLIKTEM jednostek nigdy nie daje SAMPLE_ROW_EXACT ani NUMERIC_VALUE_COMPATIBLE', () => {
+  const column = fakeColumn({ name: 'Moc zestawu', tokens: ['moc', 'zestawu'], dominantType: 'numeric' });
+  const candidate = { id: 'c1', text: '10 kWh' }; // kWh, nie kWp - inna wielkosc fizyczna
+  const scored = autoConfig.scoreCandidateColumn(candidate, column, { sampleRowRecord: { 'Moc zestawu': '10 kWp' } });
+  assert.ok(scored.reasons.some(r => r.code === 'UNIT_CONFLICT'));
+  assert.ok(!scored.reasons.some(r => r.code === 'SAMPLE_ROW_EXACT' || r.code === 'NUMERIC_VALUE_COMPATIBLE'));
+});
+
+test('detectSampleRow: "10 kWh" nigdy nie miesza sie z "10 kWp" w innej kolumnie tego samego rekordu', () => {
+  const sheet = fakeSheet(['Moc', 'Magazyn', 'Adres'], [
+    { _record: 1, Moc: '10 kWp', Magazyn: '10 kWh', Adres: 'Testowa 1' },
+    { _record: 2, Moc: '7 kWp', Magazyn: '5 kWh', Adres: 'Inna 2' },
+  ]);
+  const index = autoConfig.buildValueIndex(sheet);
+  const strictIndex = autoConfig.buildStrictValueIndex(sheet);
+  // "10 kWh" jako kandydat powinien trafic TYLKO w kolumne "Magazyn" (strict,
+  // zgodna jednostka), NIGDY w "Moc" (ta sama liczba, ale kWp != kWh).
+  const hitsForKwh = strictIndex.get(textNormalize.numericMatchKey(textNormalize.parseNumericValue('10 kWh')));
+  assert.equal(hitsForKwh.length, 1);
+  assert.equal(hitsForKwh[0].columnName, 'Magazyn');
+});
+
+// ===========================================================================
+// Hardening - analiza tylko nierozwiazanych kandydatow (sekcja 7/32).
+// ===========================================================================
+
+test('analyzeAutoConfiguration: analizuje TYLKO nierozwiazanych kandydatow, summary rozroznia alreadyResolved/analyzed', () => {
+  const sheet = fakeSheet(['Adres', 'Moc'], [
+    { _record: 1, Adres: 'Testowa 1', Moc: '5.52' },
+    { _record: 2, Adres: 'Inna 2', Moc: '3.1' },
+  ]);
+  const workbook = { defaultSheet: 'Dane', sheets: { Dane: sheet } };
+  const candidates = [
+    { id: 'c1', text: 'Testowa 1', paragraphPrefix: 'Adres:' },
+    { id: 'c2', text: '5,52', paragraphPrefix: 'Moc:' },
+    { id: 'c3', text: 'juz rozwiazany 1' },
+    { id: 'c4', text: 'juz rozwiazany 2' },
+  ];
+  const draft = {
+    preferredSheet: 'Dane',
+    candidates: {
+      c3: { status: 'constant', constantText: 'X' },
+      c4: { status: 'manual' },
+    },
+  };
+  const analysis = autoConfig.analyzeAutoConfiguration({ candidates, workbook, sheetName: 'Dane', draft, mappingMemory: null });
+  assert.equal(analysis.summary.totalCandidates, 4);
+  assert.equal(analysis.summary.alreadyResolved, 2);
+  assert.equal(analysis.summary.analyzed, 2);
+  assert.equal(analysis.candidateSuggestions.length, 2);
+  assert.ok(!analysis.candidateSuggestions.some(s => s.candidateId === 'c3' || s.candidateId === 'c4'));
+  assert.equal(analysis.summary.auto + analysis.summary.review + analysis.summary.unresolved, 2);
+});
+
+// ===========================================================================
+// Hardening - trwale grupowanie miedzy osobnymi apply requestami (sekcja 14/35).
+// ===========================================================================
+
+test('applyAutoConfiguration: grupa rozlozona na DWA osobne apply-requesty daje JEDNO pole, nie dwa', () => {
+  const { applyAutoConfiguration } = require('../apps/kreator-wzorow/src/autoConfigApply');
+  const tmLocal = require('../apps/kreator-wzorow/src/templateManifest');
+  let draft = tmLocal.emptyDraft({ templateName: 't', preferredSheet: 'Dane', addressColumn: 'Adres' });
+  draft = tmLocal.seedCandidates(draft, ['a', 'b']);
+
+  const analysis = {
+    candidateSuggestions: [
+      { candidateId: 'a', kind: 'field', tier: 'auto', score: 96, bestColumn: 'Adres', fieldGroupId: 'grp_1', reasons: [] },
+      { candidateId: 'b', kind: 'field', tier: 'auto', score: 96, bestColumn: 'Adres', fieldGroupId: 'grp_1', reasons: [] },
+    ],
+  };
+
+  const first = applyAutoConfiguration(draft, analysis, { suggestionIds: ['a'], candidates: [{ id: 'a', text: 'x' }, { id: 'b', text: 'y' }] });
+  assert.equal(Object.keys(first.draft.fields).length, 1);
+  const fieldIdAfterFirst = Object.keys(first.draft.fields)[0];
+
+  // DRUGI, OSOBNY request - existingGroupFieldIds przekazane z persystowanego
+  // stanu joba po pierwszym requescie (dokladnie tak, jak robi to server.js).
+  const second = applyAutoConfiguration(first.draft, analysis, {
+    suggestionIds: ['b'], candidates: [{ id: 'a', text: 'x' }, { id: 'b', text: 'y' }],
+    existingGroupFieldIds: first.groupFieldIds,
+  });
+  assert.equal(Object.keys(second.draft.fields).length, 1, 'nadal JEDNO pole, nie dwa');
+  assert.equal(second.draft.candidates.b.fieldId, fieldIdAfterFirst, 'ten sam fieldId co przy pierwszym apply');
+});
+
+// ===========================================================================
+// Hardening - konflikt domenowy / niejednoznacznosc (sekcja 17/36).
+// ===========================================================================
+
+test('domainAliases.hasDomainConflict: PV vs PC to konflikt, PV vs PV nie', () => {
+  assert.equal(domainAliases.hasDomainConflict('moc instalacji fotowoltaicznej PV', 'Moc pompy ciepla'), true);
+  assert.equal(domainAliases.hasDomainConflict('moc instalacji PV', 'Moc zestawu PV'), false);
+  assert.equal(domainAliases.hasDomainConflict('brak jakichkolwiek markerow', 'Moc zestawu'), false);
+});
+
+test('scoreCandidateColumn: DOMAIN_CONFLICT karze kolumne z wyraznie inna domena (moc PV vs moc pompy ciepla)', () => {
+  const pcColumn = fakeColumn({ name: 'Moc pompy ciepła', tokens: ['moc', 'pompy', 'ciepla'], dominantType: 'numeric' });
+  const candidate = { id: 'c1', text: '5', paragraphPrefix: 'Moc instalacji fotowoltaicznej PV:' };
+  const scored = autoConfig.scoreCandidateColumn(candidate, pcColumn, {});
+  assert.ok(scored.reasons.some(r => r.code === 'DOMAIN_CONFLICT' && r.weight < 0));
+});
+
+test('classifyTier: sam kontekst/alias/typ/unikalnosc (BEZ zadnego dopasowania wartosci ani pamieci) nigdy nie osiaga review - blad zlapany na zywym dokumencie 2026-09-15', () => {
+  // Realny przypadek z Wzor PV.docx: caly akapit o doborze kabla/zabezpieczenia
+  // dla falownika ("Dla falownika dobrano przewod YDY 5x4mm2 ... Iz = 27A. W
+  // celu zabezpieczenia Falownika dobrano wylacznik ... In=16A") sprawial, ze
+  // KAZDA podswietlona liczba w tym akapicie (prad, przekroj kabla) dostawala
+  // sugestie "falownik" (78%, review) tylko dlatego, ze slowo "falownik"
+  // padlo GDZIES w tym samym (dlugim) akapicie - CONTEXT_HEADER_SIMILARITY(42)
+  // + DOMAIN_ALIAS_MATCH(22) + TYPE_MATCH(8) + HIGH_UNIQUENESS(6) = 78, ponad
+  // prog review (75), bez ZADNEGO potwierdzenia w samej wartosci "Iz = 27A"
+  // wzgledem faktycznych wartosci kolumny "falownik" w Excelu.
+  const column = fakeColumn({ name: 'falownik', tokens: ['falownik'], values: { 'af5k-mth+': 1, 'af3k-mth+': 2 }, dominantType: 'free-text', uniquenessRatio: 0.9 });
+  const candidate = {
+    id: 'c1',
+    text: 'Iz = 27A',
+    paragraphPrefix: 'Dla falownika dobrano przewod YDY 5x4mm2 0,6/1kV o dopuszczalnym pradzie dlugotrwalym',
+    paragraphSuffix: '. W celu zabezpieczenia Falownika dobrano wylacznik nadpradowy o charakterystyce B i pradzie In=16A',
+    leftCellText: '', rightCellText: '',
+  };
+  const scored = autoConfig.scoreCandidate(candidate, [column], {});
+  // Bez tej poprawki: score >= 75 (review). Z poprawka: brak dowodu wartosci -> unresolved.
+  assert.ok(!scored.reasons.some(r => r.code === 'SAMPLE_ROW_EXACT' || r.code === 'EXACT_VALUE_AND_UNIT' || r.code === 'EXACT_MATCH_ANYWHERE' || r.code === 'NUMERIC_VALUE_COMPATIBLE'));
+  assert.equal(autoConfig.classifyTier(scored), 'unresolved');
+});
+
+test('classifyTier: kontekst/alias + REALNE dopasowanie wartosci (EXACT_MATCH_ANYWHERE) nadal osiaga review', () => {
+  const column = fakeColumn({ name: 'falownik', tokens: ['falownik'], values: { 'af5k-mth+': 1 }, dominantType: 'free-text', uniquenessRatio: 0.9 });
+  const candidate = { id: 'c1', text: 'AF5K-MTH+.', paragraphPrefix: 'Falownik:', paragraphSuffix: '', leftCellText: '', rightCellText: '' };
+  const scored = autoConfig.scoreCandidate(candidate, [column], {});
+  assert.ok(scored.reasons.some(r => r.code === 'EXACT_MATCH_ANYWHERE'));
+  assert.notEqual(autoConfig.classifyTier(scored), 'unresolved');
+});
+
+// ===========================================================================
+// Hardening - review 1-klik, undo, origin metadata: patrz sekcja HTTP
+// ponizej (kontynuacja istniejacych testow auto-configure/*).
+// ===========================================================================
 
 // ===========================================================================
 // apps/kreator-wzorow/server.js - testy HTTP (bez Worda: tylko upload,
@@ -1651,4 +2024,123 @@ test('auto-configure endpointy wymagaja X-Scyzoryk-Request (403 bez naglowka)', 
     const res = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/${suffix}`, { method: 'POST' });
     assert.equal(res.status, 403, suffix);
   }
+});
+
+// ===========================================================================
+// Hardening HTTP: analysisId guard, review 1-klik + origin metadata, undo,
+// reczna korekta ucząca pamiec, dedupe feedbacku (sekcje 9/12/13/20-28/33/34).
+// ===========================================================================
+
+async function analyzeJob(port, jobId) {
+  const res = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/analyze`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+  });
+  return res.json();
+}
+
+test('auto-configure/apply: stary analysisId jest odrzucany 409 po ponownej analizie (version guard, sekcja 28)', async (t) => {
+  const { port, jobId } = await setupAutoConfigJob(t);
+  const first = await analyzeJob(port, jobId);
+  const staleAnalysisId = first.analysis.analysisId;
+  assert.ok(staleAnalysisId);
+
+  await analyzeJob(port, jobId); // druga analiza -> nowy analysisId
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/apply`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ analysisId: staleAnalysisId, applyHighConfidence: true }),
+  });
+  assert.equal(res.status, 409);
+});
+
+test('auto-configure/apply: 1-klikowa akceptacja pojedynczej sugestii (nie tylko applyHighConfidence) ustawia origin=reviewAccepted', async (t) => {
+  const { port, jobId, candidates } = await setupAutoConfigJob(t);
+  const analysis = (await analyzeJob(port, jobId)).analysis;
+  const nonAuto = analysis.candidateSuggestions.find(s => s.tier !== 'auto' && s.kind === 'field' && s.bestColumn) || analysis.candidateSuggestions.find(s => s.tier === 'auto');
+  assert.ok(nonAuto, 'fixture powinna miec co najmniej jedna sugestie do zaakceptowania 1-klikiem');
+
+  const applyRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/apply`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ analysisId: analysis.analysisId, suggestionIds: [nonAuto.candidateId] }),
+  });
+  const applyJson = await applyRes.json();
+  assert.equal(applyRes.status, 200, JSON.stringify(applyJson));
+  assert.equal(applyJson.appliedCount, 1);
+
+  const jobJson = (await (await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`)).json()).job;
+  const meta = jobJson.candidateDecisionMeta[nonAuto.candidateId];
+  assert.ok(meta);
+  assert.equal(meta.origin, nonAuto.tier === 'auto' ? 'auto' : 'reviewAccepted');
+});
+
+test('auto-configure/undo: cofa TYLKO origin=auto, nie rusza reczne/reviewAccepted decyzje', async (t) => {
+  const { port, jobId, candidates } = await setupAutoConfigJob(t);
+  const analysis = (await analyzeJob(port, jobId)).analysis;
+
+  // Zastosuj pewne (origin=auto)
+  await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/apply`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ analysisId: analysis.analysisId, applyHighConfidence: true }),
+  });
+  // Recznie rozstrzygnij cokolwiek zostalo (origin=manual)
+  let job = (await (await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`)).json()).job;
+  const stillUnresolved = candidates.filter(c => !job.draft.candidates[c.id] || job.draft.candidates[c.id].status === 'unresolved');
+  for (const c of stillUnresolved) {
+    await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/candidates/${c.id}/constant`, {
+      method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'STALA' }),
+    });
+  }
+  job = (await (await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`)).json()).job;
+  const beforeUndoStatuses = { ...job.draft.candidates };
+  const autoIds = Object.entries(job.candidateDecisionMeta).filter(([, m]) => m.origin === 'auto').map(([id]) => id);
+  const manualIds = Object.entries(job.candidateDecisionMeta).filter(([, m]) => m.origin === 'manual').map(([id]) => id);
+
+  const undoRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/undo`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+  const undoJson = await undoRes.json();
+  assert.equal(undoRes.status, 200, JSON.stringify(undoJson));
+  assert.equal(undoJson.undoneCount, autoIds.length);
+
+  const after = (await (await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`)).json()).job;
+  for (const id of autoIds) assert.equal(after.draft.candidates[id].status, 'unresolved', `${id} (origin=auto) powinien wrocic do unresolved`);
+  for (const id of manualIds) assert.equal(after.draft.candidates[id].status, beforeUndoStatuses[id].status, `${id} (origin=manual) NIE powinien byc ruszony`);
+});
+
+test('reczna korekta po sugestii ucza pamiec (sekcja 12/34) - kolejny job z tym samym kontekstem preferuje finalna kolumne', async (t) => {
+  const { port, jobId, candidates } = await setupAutoConfigJob(t);
+  const analysis = (await analyzeJob(port, jobId)).analysis;
+  const addressCandidate = candidates.find(c => c.paragraphPrefix && c.paragraphPrefix.toLowerCase().includes('adres'));
+  assert.ok(addressCandidate);
+  const suggestion = analysis.candidateSuggestions.find(s => s.candidateId === addressCandidate.id);
+  assert.ok(suggestion);
+
+  // Recznie ustaw jako STALA (nie pole) - to jest KOREKTA wzgledem sugestii
+  // "Z Excela" (jesli taka byla) - powinno odrzucic sugerowana kolumne w pamieci.
+  const res = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/candidates/${addressCandidate.id}/constant`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'zawsze taki sam tekst' }),
+  });
+  assert.equal(res.status, 200);
+
+  const jobJson = (await (await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`)).json()).job;
+  assert.equal(jobJson.candidateDecisionMeta[addressCandidate.id].origin, 'manual');
+});
+
+test('auto-configure/reject: dedupe - odrzucenie TEJ SAMEJ sugestii dwa razy w jednym jobie nie nabija licznika w pamieci podwojnie', async (t) => {
+  const { port, jobId, candidates } = await setupAutoConfigJob(t);
+  const analysis = (await analyzeJob(port, jobId)).analysis;
+  const suggestion = analysis.candidateSuggestions.find(s => s.bestColumn);
+  assert.ok(suggestion, 'fixture powinna miec co najmniej jedna sugestie z bestColumn');
+
+  for (let i = 0; i < 2; i++) {
+    const res = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/auto-configure/reject`, {
+      method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ analysisId: analysis.analysisId, suggestionIds: [suggestion.candidateId] }),
+    });
+    assert.equal(res.status, 200);
+  }
+
+  const job = (await (await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}`)).json()).job;
+  // feedbackEvents jest Setem logicznym (bez duplikatow) - jeden wpis mimo
+  // dwoch identycznych requestow reject.
+  const rejectEvents = job.autoConfig.feedbackEvents.filter(e => e.startsWith(`reject:${suggestion.candidateId}:`));
+  assert.equal(rejectEvents.length, 1);
 });

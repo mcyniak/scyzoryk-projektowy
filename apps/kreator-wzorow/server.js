@@ -32,11 +32,13 @@ const documentEngine = require('../../lib/documentEngine');
 const { createJobStore } = require('./src/jobStore');
 const { readWorkbook, sheetPreview, uniqueColumnValues } = require('./src/excelWorkbook');
 const tm = require('./src/templateManifest');
+const { normalizeValue: normalizeValueForMemory } = require('./src/textNormalize');
 // Auto-konfiguracja kandydatow (lokalna, deterministyczna - zero AI/sieci),
 // patrz PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md i src/autoConfigurator.js.
 const autoConfigurator = require('./src/autoConfigurator');
 const { applyAutoConfiguration } = require('./src/autoConfigApply');
-const { createMappingMemory } = require('./src/mappingMemory');
+const mappingMemoryModule = require('./src/mappingMemory');
+const { createMappingMemory } = mappingMemoryModule;
 
 const app = express();
 const PORT = Number(process.env.PORT || 3016);
@@ -259,6 +261,9 @@ function publicJob(job) {
     // odpowiedzi, ale UI po kazdym odswiezeniu (loadJob) czyta stan joba
     // WYLACZNIE stad).
     autoConfig: job.autoConfig || null,
+    // origin metadata (hardening sekcja 27) - UI uzywa do pokazania "Cofnij
+    // automatyczne przypisania" tylko gdy jest co cofac (origin==='auto').
+    candidateDecisionMeta: job.candidateDecisionMeta || {},
     lastValidation: job.lastValidation,
     lastPreview: job.lastPreview ? { warnings: job.lastPreview.warnings, errors: job.lastPreview.errors, hasDocx: Boolean(job.lastPreview.docxPath), hasPdf: Boolean(job.lastPreview.pdfPath) } : null,
     lastBuild: job.lastBuild ? { downloadName: job.lastBuild.downloadName } : null
@@ -352,11 +357,83 @@ function requireJob(req, res) {
   return job;
 }
 
+// --- Auto-konfiguracja: pomocnicze (hardening PROMPT_CLAUDE_HARDENING_AUTO_
+// KONFIGURACJI_KREATORA.md) --------------------------------------------------
+
+// Znajduje sugestie z OSTATNIEJ analizy dla danego kandydata - potrzebne przy
+// recznej korekcie (sekcja 12/34: "reczna korekta musi uczyc pamiec"), zeby
+// wiedziec CO bylo zasugerowane PRZED reczna zmiana. Dziala nawet gdy
+// kandydat nie jest juz w biezacym `candidateSuggestions` (bo /analyze filtruje
+// tylko nierozwiazanych, a ten kandydat wlasnie przestaje byc unresolved) -
+// szukamy w OSTATNIM znanym zestawie sugestii zapisanym w job.autoConfig.
+function findLastSuggestion(job, candidateId) {
+  if (!job.autoConfig || !Array.isArray(job.autoConfig.candidateSuggestions)) return null;
+  return job.autoConfig.candidateSuggestions.find(s => s.candidateId === candidateId) || null;
+}
+
+// Dedup zdarzen feedbacku (sekcja 13: "nie nabijaj accepted/rejected
+// wielokrotnie przy ponownym zapisie TEGO SAMEGO w jednym jobie") - klucz
+// jobId+candidateId+column+action jest niepotrzebny w pelni (job juz wiadomo
+// ktory, bo dzialamy na jego wlasnym stanie), wiec klucz to candidateId+
+// column+action. Zwraca funkcje `commit(recorded)` do wywolania PO faktycznej
+// probie zapisu - dodaje klucz do zbioru TYLKO gdy zapis faktycznie sie
+// odbyl (recordAccepted/recordRejected zwracaja false np. gdy kontekst byl
+// niebezpieczny - to nie jest "juz zapisane zdarzenie", tylko "nigdy nie
+// zostanie zapisane", wiec nie ma co dedupowac).
+function withFeedbackDedup(job, eventKey) {
+  const events = new Set(job.autoConfig && job.autoConfig.feedbackEvents || []);
+  const alreadyRecorded = events.has(eventKey);
+  return {
+    alreadyRecorded,
+    commit(recorded) {
+      if (recorded) events.add(eventKey);
+      return [...events];
+    },
+  };
+}
+
+// Origin metadata (sekcja 27) - zapisywana OBOK draftu (nie w manifescie -
+// runtime Smart Template nie musi nic wiedziec o tym, czy decyzja byla
+// auto/manual), zeby UI/undo wiedzialy, co wolno cofnac.
+function setCandidateDecisionMeta(job, candidateId, meta) {
+  const current = job.candidateDecisionMeta || {};
+  return { ...current, [candidateId]: meta };
+}
+
+// Uczy pamiec z recznej korekty (sekcja 12/34) - wywolywane z KAZDEGO z
+// czterech endpointow recznej decyzji ponizej. `finalDecision` opisuje, co
+// user FAKTYCZNIE zapisal; `columnForFeedback` to nazwa kolumny Excela TYLKO
+// gdy da sie ja jednoznacznie wyprowadzic z proustego valueSpec {type:
+// 'column'} (lookup/compose nie mapuja 1:1 na nazwe kolumny, wiec feedback
+// pamieci jest wtedy pomijany - lepiej nic nie zapisac niz zapisac zle).
+function applyManualCorrectionFeedback(job, candidateId, finalDecision) {
+  const previousSuggestion = findLastSuggestion(job, candidateId);
+  if (!previousSuggestion) return { feedbackEvents: (job.autoConfig && job.autoConfig.feedbackEvents) || [] };
+  const candidate = (job.candidates || []).find(c => c.id === candidateId);
+  if (!candidate) return { feedbackEvents: (job.autoConfig && job.autoConfig.feedbackEvents) || [] };
+
+  const schemaFingerprint = (job.autoConfig && job.autoConfig.schemaFingerprint) || '';
+  const eventKey = `correction:${candidateId}:${finalDecision.kind}:${finalDecision.column || ''}`;
+  const dedup = withFeedbackDedup(job, eventKey);
+  if (dedup.alreadyRecorded) return { feedbackEvents: (job.autoConfig && job.autoConfig.feedbackEvents) || [] };
+
+  const result = mappingMemoryModule.recordManualCorrectionFeedback(mappingMemory, candidate, previousSuggestion, finalDecision, schemaFingerprint);
+  const feedbackEvents = dedup.commit(result.rejectedPrevious || result.acceptedFinal);
+  return { feedbackEvents };
+}
+
+// Wszystkie 4 endpointy ponizej (reczna decyzja z panelu) robia to samo po
+// zapisaniu draftu: ucza pamiec z korekty wzgledem OSTATNIEJ sugestii dla
+// tego kandydata (hardening sekcja 12/34) i oznaczaja origin='manual'
+// (sekcja 27) - user zawsze mial "ostatnie slowo" recznie, niezaleznie od
+// tego, czy auto-konfigurator cokolwiek sugerowal.
 app.post('/api/jobs/:jobId/candidates/:candidateId/constant', (req, res) => {
   const job = requireJob(req, res);
   if (!job) return;
   const draft = tm.setCandidateConstant(job.draft, req.params.candidateId, req.body?.text);
-  jobStore.updateJob(job.id, { draft });
+  const { feedbackEvents } = applyManualCorrectionFeedback(job, req.params.candidateId, { kind: 'constant', column: null });
+  const candidateDecisionMeta = setCandidateDecisionMeta(job, req.params.candidateId, { origin: 'manual', appliedAt: new Date().toISOString() });
+  jobStore.updateJob(job.id, { draft, candidateDecisionMeta, autoConfig: job.autoConfig ? { ...job.autoConfig, feedbackEvents } : job.autoConfig });
   res.json({ ok: true, draft });
 });
 
@@ -364,7 +441,9 @@ app.post('/api/jobs/:jobId/candidates/:candidateId/manual', (req, res) => {
   const job = requireJob(req, res);
   if (!job) return;
   const draft = tm.setCandidateManual(job.draft, req.params.candidateId, req.body?.label);
-  jobStore.updateJob(job.id, { draft });
+  const { feedbackEvents } = applyManualCorrectionFeedback(job, req.params.candidateId, { kind: 'manual', column: null });
+  const candidateDecisionMeta = setCandidateDecisionMeta(job, req.params.candidateId, { origin: 'manual', appliedAt: new Date().toISOString() });
+  jobStore.updateJob(job.id, { draft, candidateDecisionMeta, autoConfig: job.autoConfig ? { ...job.autoConfig, feedbackEvents } : job.autoConfig });
   res.json({ ok: true, draft });
 });
 
@@ -387,7 +466,12 @@ app.post('/api/jobs/:jobId/fields', (req, res) => {
     unknownPolicy: body.unknownPolicy === 'warn' ? 'warn' : 'error',
     valueSpec
   });
-  jobStore.updateJob(job.id, { draft });
+  // Feedback pamieci TYLKO dla prostego typu 'column' - lookup/compose nie
+  // mapuja 1:1 na nazwe kolumny, wiec nie ma czego nauczyc pamiec (patrz
+  // komentarz przy applyManualCorrectionFeedback).
+  const { feedbackEvents } = applyManualCorrectionFeedback(job, candidateId, { kind: 'field', column: valueSpec.type === 'column' ? valueSpec.column : null });
+  const candidateDecisionMeta = setCandidateDecisionMeta(job, candidateId, { origin: 'manual', appliedAt: new Date().toISOString() });
+  jobStore.updateJob(job.id, { draft, candidateDecisionMeta, autoConfig: job.autoConfig ? { ...job.autoConfig, feedbackEvents } : job.autoConfig });
   res.json({ ok: true, draft, fieldId });
 });
 
@@ -395,8 +479,14 @@ app.post('/api/jobs/:jobId/candidates/:candidateId/assign-field', (req, res) => 
   const job = requireJob(req, res);
   if (!job) return;
   try {
-    const draft = tm.assignCandidateToExistingField(job.draft, req.params.candidateId, String(req.body?.fieldId || ''));
-    jobStore.updateJob(job.id, { draft });
+    const candidateId = req.params.candidateId;
+    const fieldId = String(req.body?.fieldId || '');
+    const draft = tm.assignCandidateToExistingField(job.draft, candidateId, fieldId);
+    const targetField = draft.fields[fieldId];
+    const column = targetField && targetField.valueSpec && targetField.valueSpec.type === 'column' ? targetField.valueSpec.column : null;
+    const { feedbackEvents } = applyManualCorrectionFeedback(job, candidateId, { kind: 'field', column });
+    const candidateDecisionMeta = setCandidateDecisionMeta(job, candidateId, { origin: 'manual', appliedAt: new Date().toISOString() });
+    jobStore.updateJob(job.id, { draft, candidateDecisionMeta, autoConfig: job.autoConfig ? { ...job.autoConfig, feedbackEvents } : job.autoConfig });
     res.json({ ok: true, draft });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message });
@@ -459,15 +549,34 @@ app.post('/api/jobs/:jobId/auto-configure/analyze', (req, res) => {
   const sheet = job.workbook.sheets[sheetName];
   if (!sheet) return res.status(400).json({ ok: false, message: 'Nieznany arkusz. Wybierz arkusz przed analizą.' });
   try {
+    // Hardening sekcja 8/21: mapowania jawnie odrzucone przez uzytkownika w
+    // POPRZEDNICH rundach analizy TEGO SAMEGO joba NIE resetuja sie -
+    // przekazywane do analyzeAutoConfiguration, zeby ten sam kandydat+kolumna
+    // nie wrocil natychmiast jako "auto" bez nowego, silnego dowodu.
+    const previousAutoConfig = job.autoConfig || {};
     const analysis = autoConfigurator.analyzeAutoConfiguration({
       candidates: job.candidates,
       workbook: job.workbook,
       sheetName,
       draft: job.draft,
       mappingMemory,
+      options: { previouslyRejectedByCandidate: previousAutoConfig.rejectedMappings || {} },
     });
-    jobStore.updateJob(job.id, { autoConfig: { ...analysis, appliedSuggestionIds: [], rejectedSuggestionIds: [] } });
-    res.json({ ok: true, analysis, analyzedAt: new Date().toISOString() });
+    const analysisId = crypto.randomUUID();
+    const nextAutoConfig = {
+      ...analysis,
+      analysisId,
+      analyzedAt: new Date().toISOString(),
+      // Akumulatory PRZETRWAJA reanalyze (hardening sekcja 8) - resetowane
+      // wylacznie jawna akcja (np. undo dla appliedSuggestionIds z origin=auto).
+      appliedSuggestionIds: previousAutoConfig.appliedSuggestionIds || [],
+      rejectedSuggestionIds: previousAutoConfig.rejectedSuggestionIds || [],
+      rejectedMappings: previousAutoConfig.rejectedMappings || {},
+      groupFieldIds: previousAutoConfig.groupFieldIds || {},
+      feedbackEvents: previousAutoConfig.feedbackEvents || [],
+    };
+    jobStore.updateJob(job.id, { autoConfig: nextAutoConfig });
+    res.json({ ok: true, analysis: { ...analysis, analysisId }, analyzedAt: nextAutoConfig.analyzedAt });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Nie udało się przeanalizować wzoru.' });
   }
@@ -478,6 +587,11 @@ app.post('/api/jobs/:jobId/auto-configure/apply', (req, res) => {
   if (!job) return;
   if (!job.autoConfig) return res.status(400).json({ ok: false, message: 'Najpierw przeanalizuj wzór.' });
   const body = req.body || {};
+  // Analysis version guard (hardening sekcja 28) - chroni przed klikaniem w
+  // stary UI po odswiezeniu analizy przez kogos innego/w innej karcie.
+  if (body.analysisId && body.analysisId !== job.autoConfig.analysisId) {
+    return res.status(409).json({ ok: false, message: 'Analiza się zmieniła od czasu wyświetlenia tej listy - odśwież i spróbuj ponownie.' });
+  }
   const suggestionIds = Array.isArray(body.suggestionIds) ? body.suggestionIds.filter(id => typeof id === 'string') : [];
   const applyHighConfidence = body.applyHighConfidence === true;
   const result = applyAutoConfiguration(job.draft, job.autoConfig, {
@@ -485,9 +599,26 @@ app.post('/api/jobs/:jobId/auto-configure/apply', (req, res) => {
     applyHighConfidence,
     mappingMemory,
     candidates: job.candidates,
+    existingGroupFieldIds: job.autoConfig.groupFieldIds || {},
+    schemaFingerprint: job.autoConfig.schemaFingerprint || '',
   });
   const nextAppliedIds = [...new Set([...(job.autoConfig.appliedSuggestionIds || []), ...result.appliedSuggestionIds])];
-  jobStore.updateJob(job.id, { draft: result.draft, autoConfig: { ...job.autoConfig, appliedSuggestionIds: nextAppliedIds } });
+  const candidateDecisionMeta = { ...(job.candidateDecisionMeta || {}) };
+  const appliedAt = new Date().toISOString();
+  for (const candidateId of result.appliedSuggestionIds) {
+    const suggestion = (job.autoConfig.candidateSuggestions || []).find(s => s.candidateId === candidateId);
+    candidateDecisionMeta[candidateId] = {
+      origin: result.appliedOrigins[candidateId] || 'reviewAccepted',
+      suggestionId: candidateId,
+      confidence: suggestion ? suggestion.score / 100 : null,
+      appliedAt,
+    };
+  }
+  jobStore.updateJob(job.id, {
+    draft: result.draft,
+    candidateDecisionMeta,
+    autoConfig: { ...job.autoConfig, appliedSuggestionIds: nextAppliedIds, groupFieldIds: result.groupFieldIds },
+  });
   const unresolvedCount = tm.unresolvedCandidateIds(result.draft, job.candidates.map(c => c.id)).length;
   res.json({ ok: true, draft: result.draft, appliedCount: result.appliedCount, appliedSuggestionIds: result.appliedSuggestionIds, unresolvedCount });
 });
@@ -497,20 +628,64 @@ app.post('/api/jobs/:jobId/auto-configure/reject', (req, res) => {
   if (!job) return;
   if (!job.autoConfig) return res.status(400).json({ ok: false, message: 'Najpierw przeanalizuj wzór.' });
   const body = req.body || {};
+  if (body.analysisId && body.analysisId !== job.autoConfig.analysisId) {
+    return res.status(409).json({ ok: false, message: 'Analiza się zmieniła od czasu wyświetlenia tej listy - odśwież i spróbuj ponownie.' });
+  }
   const suggestionIds = Array.isArray(body.suggestionIds) ? body.suggestionIds.filter(id => typeof id === 'string') : [];
   const suggestionsById = new Map((job.autoConfig.candidateSuggestions || []).map(s => [s.candidateId, s]));
   const candidatesById = new Map(job.candidates.map(c => [c.id, c]));
+  const schemaFingerprint = job.autoConfig.schemaFingerprint || '';
+  const rejectedMappings = { ...(job.autoConfig.rejectedMappings || {}) };
+  let feedbackEvents = job.autoConfig.feedbackEvents || [];
   let rejectedCount = 0;
   for (const id of suggestionIds) {
     const suggestion = suggestionsById.get(id);
     const candidate = candidatesById.get(id);
     if (!suggestion || !candidate) continue;
-    mappingMemory.recordRejected(mappingMemory.buildContextKey(candidate), null, suggestion.bestColumn);
+
+    // Hardening sekcja 21: zapamietaj DLA TEGO KANDYDATA, ze ta kolumna
+    // zostala jawnie odrzucona - nastepna analiza w tym jobie juz jej nie
+    // zaproponuje jako "auto" bez nowego, silnego dowodu z dokumentu.
+    if (suggestion.bestColumn) {
+      const list = rejectedMappings[id] || [];
+      if (!list.includes(suggestion.bestColumn)) rejectedMappings[id] = [...list, suggestion.bestColumn];
+    }
+
+    const eventKey = `reject:${id}:${suggestion.bestColumn || ''}`;
+    const dedup = withFeedbackDedup({ autoConfig: { feedbackEvents } }, eventKey);
+    if (!dedup.alreadyRecorded) {
+      const recorded = mappingMemory.recordRejected(
+        mappingMemory.buildContextKey(candidate), null, suggestion.bestColumn, schemaFingerprint, normalizeValueForMemory(candidate.text)
+      );
+      feedbackEvents = dedup.commit(recorded);
+    }
     rejectedCount++;
   }
   const nextRejectedIds = [...new Set([...(job.autoConfig.rejectedSuggestionIds || []), ...suggestionIds])];
-  jobStore.updateJob(job.id, { autoConfig: { ...job.autoConfig, rejectedSuggestionIds: nextRejectedIds } });
+  jobStore.updateJob(job.id, { autoConfig: { ...job.autoConfig, rejectedSuggestionIds: nextRejectedIds, rejectedMappings, feedbackEvents } });
   res.json({ ok: true, rejectedCount });
+});
+
+// Cofa TYLKO kandydatow z origin==='auto' biezacego joba (hardening sekcja
+// 26) - reczne decyzje i sugestie zaakceptowane recznie przez "Akceptuj"
+// (origin='reviewAccepted') zostaja nietkniete, bo to byly swiadome decyzje
+// czlowieka, nie zgadywanie silnika.
+app.post('/api/jobs/:jobId/auto-configure/undo', (req, res) => {
+  const job = requireJob(req, res);
+  if (!job) return;
+  const meta = job.candidateDecisionMeta || {};
+  const autoIds = Object.entries(meta).filter(([, m]) => m && m.origin === 'auto').map(([id]) => id);
+  let draft = job.draft;
+  for (const id of autoIds) draft = tm.unresolveCandidate(draft, id);
+  const nextMeta = { ...meta };
+  for (const id of autoIds) delete nextMeta[id];
+  const appliedSuggestionIds = (job.autoConfig && job.autoConfig.appliedSuggestionIds || []).filter(id => !autoIds.includes(id));
+  jobStore.updateJob(job.id, {
+    draft,
+    candidateDecisionMeta: nextMeta,
+    autoConfig: job.autoConfig ? { ...job.autoConfig, appliedSuggestionIds } : job.autoConfig,
+  });
+  res.json({ ok: true, undoneCount: autoIds.length, draft });
 });
 
 // Pelna konfiguracja naraz (kontrakt z sekcji 29 specyfikacji) - alternatywa

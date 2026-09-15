@@ -159,6 +159,23 @@ function unresolvedCandidateIds(draft, allCandidateIds) {
   });
 }
 
+// Cofa POJEDYNCZEGO kandydata do stanu "unresolved" (hardening sekcja 26,
+// "Cofnij auto apply") - uzywana WYLACZNIE dla kandydatow o origin==='auto'
+// (server.js filtruje, ktorych id wywolac tutaj; ten helper nie wie nic o
+// origin, tylko cofa jeden konkretny wpis). Celowo NIE usuwa definicji pola/
+// bloku, do ktorego kandydat byl przypisany (fields[fieldId]/blocks[blockId]
+// zostaja w drafcie nietkniete) - jesli inny kandydat tej samej grupy nadal
+// go uzywa, usuniecie definicji by go zepsulo; jesli byl to jedyny czlonek,
+// nieuzywana definicja pola po prostu nie trafi do manifestu przy buildzie
+// (buildManifestFromDraft emituje `fields`/`placements` tylko dla kandydatow
+// faktycznie majacych status 'field' w draft.candidates).
+function unresolveCandidate(draft, candidateId) {
+  return {
+    ...draft,
+    candidates: { ...draft.candidates, [candidateId]: { status: 'unresolved', constantText: null, fieldId: null, blockId: null } }
+  };
+}
+
 // Skleja finalny manifest (schemat lib/smartTemplateRules.js) z draftu +
 // listy kandydatow ze skanu (potrzebna do placements: candidateId -> fieldId,
 // oraz do zbudowania manualRegions z zachowaniem oryginalnego oznaczenia).
@@ -237,5 +254,6 @@ module.exports = {
   mergeCandidatesIntoBlock,
   createVariantGroup,
   unresolvedCandidateIds,
+  unresolveCandidate,
   buildManifestFromDraft
 };

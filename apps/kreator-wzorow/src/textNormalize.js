@@ -31,6 +31,66 @@ function splitNumericUnit(raw) {
   return { value: numeric, unit: m[2].toLowerCase() };
 }
 
+// Jak splitNumericUnit, ale na SUROWEJ wartosci (diakrytyki/wielkosc liter
+// znormalizowane tu wprost, nie przez normalizeValue - normalizeValue sam w
+// sobie JUZ obcina jednostke przy zwracaniu kanonicznej formy tekstowej,
+// patrz komentarz przy normalizeValue; do porownan UWZGLEDNIAJACYCH
+// jednostke potrzebny jest dostep do jednostki PRZED tym obcieciem) + jawne
+// hadUnit, zeby wywolujacy mogl odroznic "10" (brak jednostki) od "10 szt."
+// (jednostka pusta by sie nie zdarzyla, ale hadUnit jest jednoznaczne).
+function parseNumericValue(raw) {
+  const s = stripDiacritics(String(raw ?? '')).toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  const m = NUMERIC_UNIT_RE.exec(s);
+  if (!m) return null;
+  const value = Number.parseFloat(m[1].replace(',', '.'));
+  if (!Number.isFinite(value)) return null;
+  const unit = m[2].toLowerCase();
+  return { value, unit, hadUnit: unit.length > 0 };
+}
+
+// Kanoniczny klucz DO INDEKSOWANIA wartosci numerycznych Z UWZGLEDNIENIEM
+// jednostki (np. do Map w profileWorkbookColumns) - null dla wartosci
+// nie-numerycznych (indeksowanie takich idzie przez zwykle normalizeValue).
+function numericMatchKey(parsed) {
+  if (!parsed) return null;
+  return `num:${parsed.value}|unit:${parsed.unit}`;
+}
+
+// Porownuje DWIE SUROWE wartosci z uwzglednieniem jednostki (sekcja 5 promptu
+// hardeningowego auto-konfiguracji - "10 kWh" i "10 kWp" NIE moga byc uznane
+// za to samo tylko dlatego, ze liczba sie zgadza, bo to realnie rozne
+// wielkosci fizyczne/pola). Zwraca:
+//   'strong'   - identyczna liczba I identyczna jednostka (w tym: OBIE strony
+//                bez zadnej jednostki - "10" vs "10" to tez 'strong', sekcja
+//                31 promptu: "10 vs 10 - exact bare numeric"), ALBO zwykly
+//                nienumeryczny tekst identyczny po normalizeValue.
+//   'weak'     - ta sama liczba, ale DOKLADNIE JEDNA strona ma jednostke -
+//                prawdopodobnie ta sama wartosc (np. kandydat "5,52 kWp" a
+//                Excel ma goly numeryczny "5.52"), ale bez pewnosci co do
+//                jednostki, wiec nizsza waga i NIGDY samodzielna podstawa do
+//                wykrycia wiersza wzorcowego.
+//   'conflict' - ta sama liczba, ALE OBIE strony maja jednostke i ta
+//                jednostka jest RÓŻNA - realny konflikt (np. 10 kWh magazynu
+//                vs 10 kWp mocy) - NIGDY traktowane jako dopasowanie.
+//   'none'     - brak zwiazku.
+function compareValues(rawA, rawB) {
+  const parsedA = parseNumericValue(rawA);
+  const parsedB = parseNumericValue(rawB);
+  if (parsedA && parsedB) {
+    if (parsedA.value !== parsedB.value) return 'none';
+    if (parsedA.hadUnit === parsedB.hadUnit) {
+      if (!parsedA.hadUnit) return 'strong';
+      return parsedA.unit === parsedB.unit ? 'strong' : 'conflict';
+    }
+    return 'weak';
+  }
+  const normA = normalizeValue(rawA);
+  const normB = normalizeValue(rawB);
+  if (!normA || !normB) return 'none';
+  return normA === normB ? 'strong' : 'none';
+}
+
 // Kanoniczna forma do porownan exact-match: liczby (z jednostka albo bez)
 // sprowadzone do samej wartosci liczbowej jako string ("5,52 kWp" i "5.52"
 // dadza to samo "5.52"), reszta - zwykla normalizacja tekstu (trim/lowercase/
@@ -38,10 +98,21 @@ function splitNumericUnit(raw) {
 // tekstowe dwoch juz istniejacych wartosci, nigdy wyprowadzanie nowej.
 function normalizeValue(raw) {
   if (raw === null || raw === undefined) return '';
-  const collapsed = stripDiacritics(String(raw)).toLowerCase().replace(/\s+/g, ' ').trim();
+  let collapsed = stripDiacritics(String(raw)).toLowerCase().replace(/\s+/g, ' ').trim();
   if (!collapsed) return '';
   const numeric = splitNumericUnit(collapsed);
   if (numeric) return String(numeric.value);
+  // Pojedyncza koncowa interpunkcja zdaniowa (kropka/przecinek/srednik/
+  // dwukropek) - highlight w Wordzie czesto obejmuje kropke konczaca zdanie
+  // razem z wartoscia (np. "AF5K-MTH+." w akapicie, ta sama wartosc w Excelu
+  // bez kropki: "AF5K-MTH+"). Bez tego EXACT_MATCH_ANYWHERE nigdy by sie nie
+  // trafil dla w pelni poprawnego dopasowania, spychajac je do tej samej,
+  // slabszej sciezki "kontekst/alias bez zadnego dowodu wartosci" co
+  // faktyczne pomylki. Tylko JEDEN koncowy znak - nie ucina np. "12 szt.)"
+  // (nawias na koncu, nie interpunkcja zdaniowa) ani wielokropka.
+  if (collapsed.length > 1 && /[.,;:]$/.test(collapsed) && !/\.\.$/.test(collapsed)) {
+    collapsed = collapsed.slice(0, -1).trim();
+  }
   return collapsed;
 }
 
@@ -135,6 +206,9 @@ module.exports = {
   normalizeValue,
   tokenize,
   splitNumericUnit,
+  parseNumericValue,
+  numericMatchKey,
+  compareValues,
   isTrivialValue,
   jaccardSimilarity,
   fuzzyJaccardSimilarity,

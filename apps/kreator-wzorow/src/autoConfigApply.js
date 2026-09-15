@@ -5,13 +5,22 @@
 'use strict';
 
 const tm = require('./templateManifest');
+const { normalizeValue } = require('./textNormalize');
 
 // `analysis` = wynik analyzeAutoConfiguration (patrz autoConfigurator.js).
 // `candidates` = ta sama lista kandydatow, ktora posluzyla do analizy -
-// potrzebna tu WYLACZNIE do policzenia contextKey przy zapisie do pamieci
-// (obiekt sugestii w analysis.candidateSuggestions celowo nie niesie calego
-// kontekstu kandydata, tylko wynik scoringu - patrz kontrakt API).
-function applyAutoConfiguration(draft, analysis, { suggestionIds, applyHighConfidence, mappingMemory, candidates } = {}) {
+// potrzebna tu WYLACZNIE do policzenia contextKey przy zapisie do pamieci.
+// `existingGroupFieldIds` = { [fieldGroupId]: fieldId } z JUZ zastosowanych
+// wczesniej (w POPRZEDNIM apply-requeście tego samego joba) grup (hardening
+// sekcja 14 - "trwale grouping miedzy osobnymi apply requestami": bez tego
+// kazdy osobny POST /auto-configure/apply zaczynal grupowanie od zera i
+// tworzyl NOWE pole nawet dla czlonka grupy juz majacej pole z poprzedniego
+// requesta). Zwracana `groupFieldIds` ma byc zapisana przez wywolujacego
+// (server.js) z powrotem do stanu joba i przekazana przy KOLEJNYM apply.
+function applyAutoConfiguration(draft, analysis, {
+  suggestionIds, applyHighConfidence, mappingMemory, candidates,
+  existingGroupFieldIds, schemaFingerprint,
+} = {}) {
   const suggestionsById = new Map((analysis.candidateSuggestions || []).map((s) => [s.candidateId, s]));
   const candidatesById = new Map((candidates || []).map((c) => [c.id, c]));
 
@@ -21,11 +30,9 @@ function applyAutoConfiguration(draft, analysis, { suggestionIds, applyHighConfi
 
   let nextDraft = draft;
   const appliedSuggestionIds = [];
+  const appliedOrigins = {}; // candidateId -> 'auto' | 'reviewAccepted'
   const skipped = [];
-  // Grupa (sekcja 14): pierwszy czlonek TWORZY pole, kolejni czlonkowie tej
-  // samej grupy uzywaja JUZ istniejacego fieldId - inaczej powstalyby N
-  // osobnych pol dla jednego logicznego pojecia (np. "Adres" powtorzony 3x).
-  const fieldIdByGroupKey = new Map();
+  const fieldIdByGroupKey = new Map(Object.entries(existingGroupFieldIds || {}));
 
   for (const suggestion of targets) {
     const candidateId = suggestion.candidateId;
@@ -52,7 +59,7 @@ function applyAutoConfiguration(draft, analysis, { suggestionIds, applyHighConfi
       }
       const groupKey = suggestion.fieldGroupId || `single_${candidateId}`;
       let fieldId = fieldIdByGroupKey.get(groupKey);
-      if (fieldId) {
+      if (fieldId && nextDraft.fields[fieldId]) {
         nextDraft = tm.assignCandidateToExistingField(nextDraft, candidateId, fieldId);
       } else {
         const fieldDef = {
@@ -72,7 +79,7 @@ function applyAutoConfiguration(draft, analysis, { suggestionIds, applyHighConfi
         const candidate = candidatesById.get(candidateId);
         if (candidate) {
           const contextKey = mappingMemory.buildContextKey(candidate);
-          mappingMemory.recordAccepted(contextKey, null, suggestion.bestColumn);
+          mappingMemory.recordAccepted(contextKey, null, suggestion.bestColumn, schemaFingerprint, normalizeValue(candidate.text));
         }
       }
     } else {
@@ -80,10 +87,18 @@ function applyAutoConfiguration(draft, analysis, { suggestionIds, applyHighConfi
       continue;
     }
 
+    appliedOrigins[candidateId] = suggestion.tier === 'auto' ? 'auto' : 'reviewAccepted';
     appliedSuggestionIds.push(candidateId);
   }
 
-  return { draft: nextDraft, appliedCount: appliedSuggestionIds.length, appliedSuggestionIds, skipped };
+  return {
+    draft: nextDraft,
+    appliedCount: appliedSuggestionIds.length,
+    appliedSuggestionIds,
+    appliedOrigins,
+    skipped,
+    groupFieldIds: Object.fromEntries(fieldIdByGroupKey.entries()),
+  };
 }
 
 module.exports = { applyAutoConfiguration };

@@ -122,6 +122,7 @@
           <div class="alert-actions">
             <button type="button" id="reanalyzeBtn" class="btn btn-secondary btn-sm">Przeanalizuj ponownie</button>
             <button type="button" id="applyHighConfidenceBtn" class="btn btn-primary btn-sm">Zastosuj pewne</button>
+            <button type="button" id="undoAutoConfigBtn" class="btn btn-ghost btn-sm hidden">Cofnij automatyczne przypisania</button>
           </div>
           <p id="autoConfigStatus"></p>
         </div>
@@ -142,11 +143,12 @@
           <p class="panel-desc" id="candidateConfigContext"></p>
         </div>
       </div>
+      <p class="hint">Wybierz, skąd ma pochodzić ta wartość w każdym wygenerowanym dokumencie:</p>
       <div class="config-type-choices" id="configTypeChoices">
-        <button type="button" class="config-type-btn" data-type="constant">STAŁE</button>
-        <button type="button" class="config-type-btn" data-type="field">Z EXCELA</button>
-        <button type="button" class="config-type-btn" data-type="block">WARUNEK / BLOK</button>
-        <button type="button" class="config-type-btn" data-type="manual">DO PROJEKTANTA</button>
+        <button type="button" class="config-type-btn" data-type="constant" title="Ten sam tekst we wszystkich dokumentach, niezależnie od wiersza w Excelu">STAŁE</button>
+        <button type="button" class="config-type-btn" data-type="field" title="Wartość pobierana z wybranej kolumny Excela, osobna dla każdego dokumentu">Z EXCELA</button>
+        <button type="button" class="config-type-btn" data-type="block" title="Fragment pojawia się tylko wtedy, gdy dane z Excela spełniają podany warunek">WARUNEK / BLOK</button>
+        <button type="button" class="config-type-btn" data-type="manual" title="Fragment zostaje bez zmian — projektant uzupełni go ręcznie po wygenerowaniu">DO PROJEKTANTA</button>
       </div>
       <div id="configTypeBody" class="u-mt-4"></div>
       <div class="hero-actions u-mt-4">

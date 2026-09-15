@@ -23,6 +23,14 @@ form > label > input, form > label > select { margin-top: 6px; }
 
 /* Auto-konfiguracja (panel podsumowania nad lista kandydatow, KROK 2) */
 #autoConfigSummary strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.candidate-suggestion-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.suggestion-reason { color: var(--text-tertiary); font-size: 12px; margin-top: 3px; }
+
+/* Podglad przykladowych wartosci kolumny (pole Z EXCELA / WARUNEK) */
+.value-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: var(--space-2); min-height: 0; }
+.value-preview-label { font-size: 12px; font-weight: 700; color: var(--text-tertiary); margin-right: 2px; }
+.value-chip { padding: 3px 10px; border-radius: var(--radius-full); background: var(--bg-surface-muted); border: 1px solid var(--border-default); font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.value-chip.more { color: var(--text-tertiary); font-weight: 700; background: none; border-style: dashed; }
 
 /* KROK 2 - metryki i filtry */
 .candidate-metrics { display: flex; gap: var(--space-4); flex-wrap: wrap; margin: var(--space-3) 0; }

@@ -10,7 +10,8 @@ const state = {
   jobId: null,
   job: null,
   candidateFilter: 'all',
-  openCandidateId: null
+  openCandidateId: null,
+  openCandidateSuggestion: null
 };
 
 function $(sel) { return document.querySelector(sel); }
@@ -40,6 +41,50 @@ function describeSuggestion(s) {
   if (s.kind === 'manual') return 'Do projektanta';
   if (s.kind === 'constant') return 'Stałe';
   return 'Z Excela';
+}
+
+// Krotkie uzasadnienie sugestii "po ludzku" - najwyzej wazony pozytywny powod
+// z reasons[] (patrz autoConfigurator.js), zeby user nie musial ufac samemu
+// procentowi.
+function topReasonMessage(suggestion) {
+  const positive = (suggestion.reasons || []).filter(r => r.weight > 0);
+  if (!positive.length) return null;
+  return positive.reduce((best, r) => (r.weight > best.weight ? r : best)).message;
+}
+
+// Podglad przykladowych wartosci kolumny (sekcja "podglady/podpowiedzi") -
+// uzywa juz istniejacego, ograniczonego do MAX_UNIQUE_VALUES endpointu (patrz
+// tez lookup w renderFieldConfig), wiec bezpieczne nawet dla duzych arkuszy.
+async function fetchColumnValues(sheetName, columnName) {
+  try {
+    const res = await apiJson('GET', `/api/jobs/${state.jobId}/sheets/${encodeURIComponent(sheetName)}/columns/${encodeURIComponent(columnName)}/values`);
+    return res.values || [];
+  } catch {
+    return [];
+  }
+}
+function renderValueChips(container, values, max = 5) {
+  if (!container) return;
+  if (!values.length) { container.innerHTML = '<span class="hint">Brak przykładowych wartości w tej kolumnie.</span>'; return; }
+  const shown = values.slice(0, max);
+  const extra = values.length - shown.length;
+  container.innerHTML = `<span class="value-preview-label">Przykładowe wartości:</span>` +
+    shown.map(v => `<span class="value-chip">${escapeHtml(v)}</span>`).join('') +
+    (extra > 0 ? `<span class="value-chip more">+${extra} więcej</span>` : '');
+}
+
+// Pole "kolumna" jako input+datalist zamiast <select> - przy arkuszach z
+// dziesiatkami kolumn (realne pliki klienta miewaly ich ~90) zwykly select
+// jest trudny do przeszukania; datalist daje wpisywanie/filtrowanie "za
+// darmo" w kazdej przegladarce, bez wlasnej logiki filtrowania.
+function columnPickerHtml({ inputId, listId, columns, selected, suggestedColumn }) {
+  const ordered = suggestedColumn && columns.includes(suggestedColumn)
+    ? [suggestedColumn, ...columns.filter(c => c !== suggestedColumn)]
+    : columns;
+  return `
+    <input type="text" id="${inputId}" class="input" list="${listId}" autocomplete="off"
+      value="${escapeHtml(selected || suggestedColumn || '')}" placeholder="Zacznij pisać, aby wyszukać kolumnę…" />
+    <datalist id="${listId}">${ordered.map(c => `<option value="${escapeHtml(c)}">${c === suggestedColumn ? ' (sugerowane)' : ''}</option>`).join('')}</datalist>`;
 }
 
 async function apiJson(method, url, body) {
@@ -241,26 +286,84 @@ function renderAutoConfigSummary() {
   // Liczby pochodza z policzonego przez serwer podsumowania (nie z tekstu
   // kandydata/Excela), wiec innerHTML z <strong> jest tu bezpieczny - w
   // odroznieniu od renderowania samego tekstu kandydata (escapeHtml ponizej).
-  $('#autoConfigSummary').innerHTML = `Rozpoznano automatycznie <strong>${s.auto}</strong> z <strong>${s.total}</strong> kandydatów, <strong>${s.review}</strong> wymaga przejrzenia, <strong>${s.unresolved}</strong> zostaje bez propozycji.`;
+  const already = s.alreadyResolved ? ` (${s.alreadyResolved} już skonfigurowanych pominięto).` : '';
+  $('#autoConfigSummary').innerHTML = `Rozpoznano automatycznie <strong>${s.auto}</strong> z <strong>${s.total}</strong> kandydatów, <strong>${s.review}</strong> wymaga przejrzenia, <strong>${s.unresolved}</strong> zostaje bez propozycji.${already}`;
   $('#sampleRowInfo').textContent = ac.sampleRow
     ? `Wykryto rekord wzorcowy #${ac.sampleRow.recordNumber} (pewność ${Math.round(ac.sampleRow.confidence * 100)}%).`
     : 'Nie udało się jednoznacznie wskazać rekordu wzorcowego — dopasowania oparte wyłącznie o kontekst.';
   $('#applyHighConfidenceBtn').textContent = `Zastosuj ${s.auto} pewnych`;
   $('#applyHighConfidenceBtn').disabled = s.auto === 0;
+
+  const hasAutoOrigin = state.job.candidateDecisionMeta && Object.values(state.job.candidateDecisionMeta).some(m => m.origin === 'auto');
+  $('#undoAutoConfigBtn').classList.toggle('hidden', !hasAutoOrigin);
 }
 
 $('#reanalyzeBtn').addEventListener('click', () => runAutoConfigureAnalyze());
 $('#applyHighConfidenceBtn').addEventListener('click', async () => {
   setStatus('#autoConfigStatus', 'Stosuję pewne sugestie...', null);
   try {
-    const res = await apiJson('POST', `/api/jobs/${state.jobId}/auto-configure/apply`, { applyHighConfidence: true });
+    const res = await apiJson('POST', `/api/jobs/${state.jobId}/auto-configure/apply`, {
+      applyHighConfidence: true,
+      analysisId: state.job.autoConfig && state.job.autoConfig.analysisId,
+    });
     setStatus('#autoConfigStatus', `Zastosowano ${res.appliedCount} sugestii.`, true);
     await loadJob();
     await runAutoConfigureAnalyze();
+    // Po zastosowaniu pewnych przejdz od razu tam, gdzie jest jeszcze co
+    // zrobic (sekcja 25) - nie zostawiaj widoku na filtrze, ktory wlasnie
+    // opustoszal.
+    const s = state.job.autoConfig && state.job.autoConfig.summary;
+    state.candidateFilter = s && s.review > 0 ? 'review' : 'unresolved';
+    renderCandidates();
   } catch (err) {
     setStatus('#autoConfigStatus', err.message, false);
   }
 });
+
+$('#undoAutoConfigBtn').addEventListener('click', async () => {
+  if (!confirm('Cofnąć wszystkie automatyczne przypisania (nie ręczne, nie zaakceptowane osobno)?')) return;
+  setStatus('#autoConfigStatus', 'Cofam automatyczne przypisania...', null);
+  try {
+    const res = await apiJson('POST', `/api/jobs/${state.jobId}/auto-configure/undo`, {});
+    setStatus('#autoConfigStatus', `Cofnięto ${res.undoneCount} automatycznych przypisań.`, true);
+    await loadJob();
+    renderAutoConfigSummary();
+    renderCandidates();
+  } catch (err) {
+    setStatus('#autoConfigStatus', err.message, false);
+  }
+});
+
+// 1-klikowe akcje na pojedynczej sugestii (sekcja 9/11) - Akceptuj/Odrzuć nie
+// otwieraja duzego panelu, dzialaja bezposrednio z wiersza kandydata.
+async function acceptSuggestion(candidateId) {
+  try {
+    const res = await apiJson('POST', `/api/jobs/${state.jobId}/auto-configure/apply`, {
+      suggestionIds: [candidateId],
+      analysisId: state.job.autoConfig && state.job.autoConfig.analysisId,
+    });
+    await loadJob();
+    renderAutoConfigSummary();
+    renderCandidates();
+    setStatus('#autoConfigStatus', res.appliedCount ? 'Zaakceptowano sugestię.' : 'Nie udało się zastosować tej sugestii.', Boolean(res.appliedCount));
+  } catch (err) {
+    setStatus('#autoConfigStatus', err.message, false);
+  }
+}
+
+async function rejectSuggestion(candidateId) {
+  try {
+    await apiJson('POST', `/api/jobs/${state.jobId}/auto-configure/reject`, {
+      suggestionIds: [candidateId],
+      analysisId: state.job.autoConfig && state.job.autoConfig.analysisId,
+    });
+    await loadJob();
+    renderAutoConfigSummary();
+    renderCandidates();
+  } catch (err) {
+    setStatus('#autoConfigStatus', err.message, false);
+  }
+}
 
 function renderCandidates() {
   const job = state.job;
@@ -304,8 +407,23 @@ function renderCandidates() {
     const decision = decisions[c.id] || { status: 'unresolved' };
     const badgeText = { constant: 'Stałe', field: 'Excel', block: 'Warunek', manual: 'Projektant', unresolved: 'Brak decyzji' }[decision.status] || 'Brak decyzji';
     const suggestion = decision.status === 'unresolved' ? suggestions.get(c.id) : null;
-    const suggestionBadge = suggestion && suggestion.tier !== 'unresolved'
-      ? `<div class="u-mt-2"><span class="badge ${suggestion.tier === 'auto' ? 'badge-success' : 'badge-warning'}">Sugestia: ${escapeHtml(describeSuggestion(suggestion))} (${suggestion.score}%)</span></div>`
+    const hasSuggestion = suggestion && suggestion.tier !== 'unresolved';
+    const topReason = hasSuggestion ? topReasonMessage(suggestion) : null;
+    const suggestionBadge = hasSuggestion
+      ? `<div class="u-mt-2">
+          <span class="badge ${suggestion.tier === 'auto' ? 'badge-success' : 'badge-warning'}">Sugestia: ${escapeHtml(describeSuggestion(suggestion))} (${suggestion.score}%)</span>
+          ${topReason ? `<div class="suggestion-reason">${escapeHtml(topReason)}</div>` : ''}
+        </div>`
+      : '';
+    // 1-klikowe Akceptuj/Zmień/Odrzuć (sekcja 9/11) - TYLKO gdy jest sugestia
+    // do rozstrzygniecia, zeby nie zaslaniac zwyklych, juz nierozwiazanych
+    // bez propozycji kandydatow niepotrzebnymi przyciskami.
+    const suggestionActions = hasSuggestion
+      ? `<div class="candidate-suggestion-actions u-mt-2">
+          <button type="button" class="btn btn-primary btn-sm" data-suggestion-action="accept" data-candidate-id="${escapeHtml(c.id)}">Akceptuj</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-suggestion-action="change" data-candidate-id="${escapeHtml(c.id)}">Zmień</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-suggestion-action="reject" data-candidate-id="${escapeHtml(c.id)}">Odrzuć</button>
+        </div>`
       : '';
     return `<div class="candidate-row" data-candidate-id="${escapeHtml(c.id)}">
       <span class="candidate-swatch" style="background:${escapeHtml(c.displayColor)}"></span>
@@ -313,12 +431,21 @@ function renderCandidates() {
         <div class="candidate-text">${escapeHtml(c.text)}</div>
         <div class="candidate-context">${escapeHtml(describeCandidateLocation(c))}</div>
         ${suggestionBadge}
+        ${suggestionActions}
       </span>
       <span class="candidate-badge ${decision.status}">${badgeText}</span>
     </div>`;
   }).join('') || '<p class="hint">Brak kandydatów dla tego filtra.</p>';
 
   document.querySelectorAll('.candidate-row').forEach(row => row.addEventListener('click', () => openCandidateConfig(row.dataset.candidateId)));
+  document.querySelectorAll('[data-suggestion-action]').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation(); // nie otwieraj panelu konfiguracji pod spodem
+    const candidateId = btn.dataset.candidateId;
+    const action = btn.dataset.suggestionAction;
+    if (action === 'accept') acceptSuggestion(candidateId);
+    else if (action === 'reject') rejectSuggestion(candidateId);
+    else if (action === 'change') openCandidateConfig(candidateId);
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -331,20 +458,32 @@ function openCandidateConfig(candidateId) {
   $('#candidateConfigPanel').classList.remove('hidden');
   $('#candidateConfigContext').textContent = `„${candidate.text}” (${describeCandidateLocation(candidate)})`;
   const decision = state.job.draft.candidates[candidateId] || { status: 'unresolved' };
-  document.querySelectorAll('.config-type-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.type === decision.status));
-  renderConfigTypeBody(decision.status === 'unresolved' ? 'constant' : decision.status, candidate, decision);
+
+  // Prefill z sugestii (sekcja 10) - TYLKO gdy user jeszcze nic recznie nie
+  // ustawil (status unresolved) i jest co prefillowac. "Zmień" z listy
+  // kandydatow prowadzi wlasnie tutaj, wiec to jest jego realizacja.
+  const suggestions = new Map((state.job.autoConfig && state.job.autoConfig.candidateSuggestions || []).map(s => [s.candidateId, s]));
+  const suggestion = decision.status === 'unresolved' ? suggestions.get(candidateId) : null;
+  state.openCandidateSuggestion = suggestion && suggestion.tier !== 'unresolved' ? suggestion : null;
+  const suggestedType = state.openCandidateSuggestion
+    ? { field: 'field', manual: 'manual', constant: 'constant' }[state.openCandidateSuggestion.kind]
+    : null;
+  const initialType = suggestedType || (decision.status === 'unresolved' ? 'constant' : decision.status);
+
+  document.querySelectorAll('.config-type-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.type === initialType));
+  renderConfigTypeBody(initialType, candidate, decision, state.openCandidateSuggestion);
   $('#candidateConfigPanel').scrollIntoView({ behavior: 'smooth' });
 }
 
 document.querySelectorAll('.config-type-btn').forEach(btn => btn.addEventListener('click', () => {
   document.querySelectorAll('.config-type-btn').forEach(b => b.classList.toggle('active', b === btn));
   const candidate = state.job.candidates.find(c => c.id === state.openCandidateId);
-  renderConfigTypeBody(btn.dataset.type, candidate, state.job.draft.candidates[state.openCandidateId] || {});
+  renderConfigTypeBody(btn.dataset.type, candidate, state.job.draft.candidates[state.openCandidateId] || {}, state.openCandidateSuggestion);
 }));
 
-$('#closeConfigBtn').addEventListener('click', () => { $('#candidateConfigPanel').classList.add('hidden'); state.openCandidateId = null; });
+$('#closeConfigBtn').addEventListener('click', () => { $('#candidateConfigPanel').classList.add('hidden'); state.openCandidateId = null; state.openCandidateSuggestion = null; });
 
-function renderConfigTypeBody(type, candidate, decision) {
+function renderConfigTypeBody(type, candidate, decision, suggestion) {
   const body = $('#configTypeBody');
   if (type === 'constant') {
     body.innerHTML = `
@@ -368,7 +507,7 @@ function renderConfigTypeBody(type, candidate, decision) {
       await afterCandidateSave();
     });
   } else if (type === 'field') {
-    renderFieldConfig(candidate, decision);
+    renderFieldConfig(candidate, decision, suggestion);
   } else if (type === 'block') {
     renderBlockConfig(candidate, decision);
   }
@@ -380,20 +519,29 @@ async function afterCandidateSave() {
   $('#candidateConfigPanel').classList.add('hidden');
 }
 
-function renderFieldConfig(candidate, decision) {
+function renderFieldConfig(candidate, decision, suggestion) {
   const body = $('#configTypeBody');
   const columns = currentSheetColumns();
   const existingFields = Object.entries(state.job.draft.fields || {});
+  // Prefill z sugestii (sekcja 10) - TYLKO dla NOWEGO pola (nie ma sensu przy
+  // "uzyj istniejacego pola", to juz jest jawny wybor usera) i tylko gdy
+  // kandydat faktycznie jeszcze nie ma zadnego fieldId.
+  const suggestedColumn = suggestion && suggestion.kind === 'field' && !decision.fieldId ? suggestion.bestColumn : null;
+  const topReason = suggestion ? topReasonMessage(suggestion) : null;
   body.innerHTML = `
     ${existingFields.length ? `<label>Użyj istniejącego pola
       <select id="existingFieldSelect" class="input">
         <option value="">— nowe pole —</option>
         ${existingFields.map(([id, f]) => `<option value="${escapeHtml(id)}" ${decision.fieldId === id ? 'selected' : ''}>${escapeHtml(f.label)}</option>`).join('')}
       </select>
+      <span class="field-help">Wybierz, jeśli inny fragment ma pokazywać dokładnie tę samą wartość co tutaj.</span>
     </label>` : ''}
     <div id="newFieldFields" class="${existingFields.length && decision.fieldId ? 'hidden' : ''}">
+      ${suggestedColumn ? `<div class="alert alert-info u-mt-0"><svg class="icon"><use href="/shared/icons.svg#i-check-circle"/></svg><div class="alert-body">
+          <div class="alert-desc">Zasugerowane przez auto-konfigurację: „${escapeHtml(suggestedColumn)}” (${suggestion.score}%).${topReason ? ` ${escapeHtml(topReason)}` : ''}</div>
+        </div></div>` : ''}
       <label>Nazwa pola
-        <input type="text" id="fieldLabel" class="input" placeholder="np. Adres obiektu" />
+        <input type="text" id="fieldLabel" class="input" value="${escapeHtml(suggestedColumn || '')}" placeholder="np. Adres obiektu" />
       </label>
       <label class="u-mt-3">Typ wartości
         <select id="fieldType" class="input">
@@ -402,8 +550,10 @@ function renderFieldConfig(candidate, decision) {
         </select>
       </label>
       <label class="u-mt-3">Kolumna źródłowa
-        <select id="fieldColumn" class="input">${columns.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select>
+        ${columnPickerHtml({ inputId: 'fieldColumn', listId: 'fieldColumnList', columns, selected: null, suggestedColumn })}
+        <span class="field-help">Wpisz fragment nazwy, żeby przefiltrować listę — arkusz może mieć wiele podobnych kolumn.</span>
       </label>
+      <div id="fieldColumnPreview" class="value-preview"></div>
       <div id="lookupBox" class="hidden u-mt-3">
         <p class="hint">Wpisz tekst wynikowy dla każdej wartości z przykładowego Excela.</p>
         <table class="lookup-table" id="lookupTable"></table>
@@ -417,16 +567,28 @@ function renderFieldConfig(candidate, decision) {
     existingSelect.addEventListener('change', () => { $('#newFieldFields').classList.toggle('hidden', Boolean(existingSelect.value)); });
   }
   const fieldTypeSelect = $('#fieldType');
-  const fieldColumnSelect = $('#fieldColumn');
+  const fieldColumnInput = $('#fieldColumn');
+
+  async function refreshColumnPreview() {
+    const column = fieldColumnInput.value.trim();
+    const preview = $('#fieldColumnPreview');
+    if (!column || !columns.includes(column)) { preview.innerHTML = ''; return; }
+    const sheetName = $('#sheetSelect').value;
+    renderValueChips(preview, await fetchColumnValues(sheetName, column));
+  }
   async function refreshLookupTable() {
     if (fieldTypeSelect.value !== 'lookup') { $('#lookupBox').classList.add('hidden'); return; }
+    const column = fieldColumnInput.value.trim();
+    if (!column || !columns.includes(column)) { $('#lookupBox').classList.add('hidden'); return; }
     $('#lookupBox').classList.remove('hidden');
     const sheetName = $('#sheetSelect').value;
-    const res = await apiJson('GET', `/api/jobs/${state.jobId}/sheets/${encodeURIComponent(sheetName)}/columns/${encodeURIComponent(fieldColumnSelect.value)}/values`);
-    $('#lookupTable').innerHTML = res.values.map(v => `<tr><td>${escapeHtml(v)}</td><td><input type="text" class="input lookup-value" data-key="${escapeHtml(v)}" placeholder="tekst wynikowy" /></td></tr>`).join('');
+    const values = await fetchColumnValues(sheetName, column);
+    $('#lookupTable').innerHTML = values.map(v => `<tr><td>${escapeHtml(v)}</td><td><input type="text" class="input lookup-value" data-key="${escapeHtml(v)}" placeholder="tekst wynikowy" /></td></tr>`).join('');
   }
   fieldTypeSelect.addEventListener('change', refreshLookupTable);
-  fieldColumnSelect.addEventListener('change', refreshLookupTable);
+  fieldColumnInput.addEventListener('input', () => { refreshColumnPreview(); refreshLookupTable(); });
+  refreshColumnPreview();
+  refreshLookupTable();
 
   $('#saveFieldBtn').addEventListener('click', async () => {
     try {
@@ -435,14 +597,16 @@ function renderFieldConfig(candidate, decision) {
       } else {
         const label = $('#fieldLabel').value.trim();
         if (!label) { alert('Podaj nazwę pola.'); return; }
+        const column = fieldColumnInput.value.trim();
+        if (!column || !columns.includes(column)) { alert('Wybierz kolumnę z listy podpowiedzi (zacznij pisać, aby ją znaleźć).'); return; }
         const type = fieldTypeSelect.value;
         let valueSpec;
         if (type === 'lookup') {
           const map = {};
           document.querySelectorAll('.lookup-value').forEach(inp => { if (inp.value.trim()) map[inp.dataset.key] = inp.value.trim(); });
-          valueSpec = { type: 'lookup', column: fieldColumnSelect.value, map };
+          valueSpec = { type: 'lookup', column, map };
         } else {
-          valueSpec = { type: 'column', column: fieldColumnSelect.value };
+          valueSpec = { type: 'column', column };
         }
         await apiJson('POST', `/api/jobs/${state.jobId}/fields`, { candidateId: candidate.id, label, required: $('#fieldRequired').checked, valueSpec });
       }
@@ -461,7 +625,7 @@ function renderBlockConfig(candidate, decision) {
     </label>
     <div class="split u-mt-3">
       <label>Kolumna
-        <select id="condColumn" class="input">${columns.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select>
+        ${columnPickerHtml({ inputId: 'condColumn', listId: 'condColumnList', columns, selected: null, suggestedColumn: null })}
       </label>
       <label>Operator
         <select id="condOperator" class="input">
@@ -478,8 +642,11 @@ function renderBlockConfig(candidate, decision) {
         </select>
       </label>
     </div>
+    <div id="condColumnPreview" class="value-preview"></div>
     <label class="u-mt-3">Wartość
-      <input type="text" id="condValue" class="input" placeholder="np. 6.5 albo mieszkalny" />
+      <input type="text" id="condValue" class="input" list="condValueList" autocomplete="off" placeholder="np. 6.5 albo mieszkalny" />
+      <datalist id="condValueList"></datalist>
+      <span class="field-help">Podpowiedzi w liście to rzeczywiste wartości z wybranej kolumny.</span>
     </label>
     <label class="u-mt-3">Grupa wariantów (opcjonalnie)
       <select id="variantGroupSelect" class="input">
@@ -499,10 +666,26 @@ function renderBlockConfig(candidate, decision) {
     $('#condValue').closest('label').classList.toggle('hidden', !needsValue);
   });
 
+  const condColumnInput = $('#condColumn');
+  async function refreshCondColumnHints() {
+    const column = condColumnInput.value.trim();
+    const preview = $('#condColumnPreview');
+    const list = $('#condValueList');
+    if (!column || !columns.includes(column)) { preview.innerHTML = ''; list.innerHTML = ''; return; }
+    const sheetName = $('#sheetSelect').value;
+    const values = await fetchColumnValues(sheetName, column);
+    renderValueChips(preview, values);
+    list.innerHTML = values.map(v => `<option value="${escapeHtml(v)}">`).join('');
+  }
+  condColumnInput.addEventListener('input', refreshCondColumnHints);
+  refreshCondColumnHints();
+
   $('#saveBlockBtn').addEventListener('click', async () => {
     try {
       const label = $('#blockLabel').value.trim();
       if (!label) { alert('Podaj nazwę bloku.'); return; }
+      const column = condColumnInput.value.trim();
+      if (!column || !columns.includes(column)) { alert('Wybierz kolumnę z listy podpowiedzi (zacznij pisać, aby ją znaleźć).'); return; }
       let variantGroupId = $('#variantGroupSelect').value;
       if (variantGroupId === '__new__') {
         const groupLabel = $('#newGroupLabel').value.trim();
@@ -511,7 +694,7 @@ function renderBlockConfig(candidate, decision) {
         variantGroupId = res.groupId;
       }
       const operator = $('#condOperator').value;
-      const condition = { column: $('#condColumn').value, operator };
+      const condition = { column, operator };
       if (!['empty', 'notEmpty'].includes(operator)) condition.value = $('#condValue').value;
       await apiJson('POST', `/api/jobs/${state.jobId}/blocks`, { candidateId: candidate.id, label, condition, variantGroupId: variantGroupId || undefined });
       await afterCandidateSave();
