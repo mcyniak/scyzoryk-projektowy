@@ -442,15 +442,34 @@ function classifyTier(scored) {
 // zawsze ladują co najwyzej w review. Formy juz bez polskich diakrytykow
 // (porownywane z normalizeValue, ktore je usuwa).
 const MANUAL_STRONG_KEYWORDS = ['obliczenia', 'obliczenie', 'spadek napiecia', 'prad zwarciowy', 'pv*sol', 'pvsol'];
-const MANUAL_KEYWORDS = ['dobor przewodu', 'dobor kabla', 'obciazenie', 'snieg', 'wiatr', 'nosnosc', 'konstrukcja', 'zabezpieczenie', 'symulacja', 'schemat', 'analiza statyczna'];
+// "dobor przewodu"/"zabezpieczenie" (rzeczownik) obok "dobrano przewod"/
+// "dobrano wylacznik" (czasownik) - realne dokumenty (REFERENCJE_Excel_Word,
+// 2026-09-15) opisuja dobor kabla/zabezpieczenia czasownikowo ("Dla falownika
+// dobrano przewod YDY 5x4mm2 ... W celu zabezpieczenia Falownika dobrano
+// wylacznik nadpradowy..."), a "zabezpieczenia" (dopelniacz) nie zawiera w
+// sobie podciagu "zabezpieczenie" (rozne koncowki) - substring-match sam z
+// siebie tego nie zlapie, wiec cale zdanie z prądem/przekrojem kabla dla
+// falownika zostawalo bez klasyfikacji zamiast trafic do projektanta.
+const MANUAL_KEYWORDS = ['dobor przewodu', 'dobor kabla', 'dobrano przewod', 'dobrano kabel', 'dobrano wylacznik', 'dobrano zabezpieczenie', 'dobrano bezpiecznik', 'wylacznik nadpradowy', 'obciazenie', 'snieg', 'wiatr', 'nosnosc', 'konstrukcja', 'zabezpieczenie', 'zabezpieczenia', 'symulacja', 'schemat', 'analiza statyczna'];
 const MANUAL_MIN_BLOCK_LENGTH = 40;
 const MANUAL_STRONG_MIN_LENGTH = 80;
 
-function classifyManualCandidate(candidate, scoredColumns) {
-  const bestScore = scoredColumns && scoredColumns.length ? scoredColumns[0].score : 0;
-  // Wyraznie dopasowane do kolumny Excela - to dane, nie tresc do projektanta,
-  // niezaleznie od tego, jakie slowo akurat pada w kontekscie.
-  if (bestScore >= REVIEW_THRESHOLD * 100) return { tier: 'none' };
+// Drugi parametr to JUZ POLICZONY classifyTier(scored) dla tego samego
+// kandydata (nie surowy wynik per-kolumnowy) - blad zlapany na zywym
+// dokumencie 2026-09-15: wczesniejsza wersja liczyla wlasny "czy juz dobrze
+// pasuje do kolumny" prog na SUROWYM top1.score (przed bramka dowodowa w
+// classifyTier), wiec kandydat typu "Iz = 27A" (surowy wynik 78 z samego
+// kontekstu/aliasu, bez zadnego dowodu wartosci - dokladnie ten przypadek,
+// ktory classifyTier juz poprawnie zdemotowal do 'unresolved') nigdy nie
+// dostawal szansy na klasyfikacje manualna, bo "wygladal" na dobrze
+// dopasowany do kolumny "falownik", mimo ze finalnie i tak ladowal jako
+// unresolved. Uzywajac tej samej, juz przefiltrowanej decyzji co reszta
+// systemu, obie klasyfikacje sa spojne.
+function classifyManualCandidate(candidate, fieldTier) {
+  // Wyraznie dopasowane do kolumny Excela (auto/review z realnym dowodem) -
+  // to dane, nie tresc do projektanta, niezaleznie od tego, jakie slowo
+  // akurat pada w kontekscie.
+  if (fieldTier === 'auto' || fieldTier === 'review') return { tier: 'none' };
 
   // Celowo TYLKO wlasna tresc bloku (nie sasiedni akapit/naglowek z before/
   // after) - real bug zlapany na zywym dokumencie: "before" bywa naglowkiem
@@ -476,9 +495,14 @@ function classifyManualCandidate(candidate, scoredColumns) {
 
 // --- detekcja stalych (konserwatywna, nigdy auto w tej turze) ----------------
 
-function detectConstantCandidate(candidate, scoredColumns, repeatCount = 1) {
+function detectConstantCandidate(candidate, scoredColumns, repeatCount = 1, fieldTier = null) {
   const bestScore = scoredColumns && scoredColumns.length ? scoredColumns[0].score : 0;
-  if (bestScore >= REVIEW_THRESHOLD * 100) return { tier: 'none' }; // wyraznie dynamiczne
+  // Jak w classifyManualCandidate - "wyraznie dynamiczne" znaczy realny dowod
+  // (auto/review PO bramce dowodowej classifyTier), nie sam surowy top1.score
+  // (kontekst/alias same w sobie moga dac >=75 bez zadnego dopasowania
+  // wartosci). Gdy fieldTier nie jest podany (kompatybilnosc wsteczna/testy
+  // izolowane), zachowanie spada do starego progu na surowym wyniku.
+  if (fieldTier !== null ? (fieldTier === 'auto' || fieldTier === 'review') : bestScore >= REVIEW_THRESHOLD * 100) return { tier: 'none' }; // wyraznie dynamiczne
 
   const norm = normalizeValue(candidate.text);
   if (!norm || isTrivialValue(norm)) return { tier: 'none' };
@@ -584,8 +608,9 @@ function analyzeAutoConfiguration({ candidates, workbook, sheetName, draft, mapp
     const previouslyRejectedColumns = rejectedRaw ? new Set(Array.isArray(rejectedRaw) ? rejectedRaw : [...rejectedRaw]) : null;
 
     const scored = scoreCandidate(candidate, columns, { sampleRowRecord, mappingPriors, previouslyRejectedColumns });
+    const fieldTier = classifyTier(scored);
 
-    const manual = classifyManualCandidate(candidate, scored.alternatives);
+    const manual = classifyManualCandidate(candidate, fieldTier);
     if (manual.tier !== 'none') {
       return {
         candidateId: candidate.id, kind: 'manual', tier: manual.tier,
@@ -595,7 +620,7 @@ function analyzeAutoConfiguration({ candidates, workbook, sheetName, draft, mapp
       };
     }
 
-    const constant = detectConstantCandidate(candidate, scored.alternatives, textCounts.get(normalizeValue(candidate.text)) || 1);
+    const constant = detectConstantCandidate(candidate, scored.alternatives, textCounts.get(normalizeValue(candidate.text)) || 1, fieldTier);
     if (constant.tier !== 'none') {
       return {
         candidateId: candidate.id, kind: 'constant', tier: constant.tier,
@@ -605,7 +630,7 @@ function analyzeAutoConfiguration({ candidates, workbook, sheetName, draft, mapp
     }
 
     return {
-      candidateId: candidate.id, kind: 'field', tier: classifyTier(scored),
+      candidateId: candidate.id, kind: 'field', tier: fieldTier,
       score: scored.finalScore, finalScore: scored.finalScore, rawTopScore: scored.rawTopScore, rawRunnerUpScore: scored.rawRunnerUpScore,
       margin: scored.margin, bestColumn: scored.bestColumn, fieldGroupId: null, concept: scored.concept,
       reasons: (scored.reasons || []).slice(0, 5),

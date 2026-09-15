@@ -1195,25 +1195,43 @@ test('groupRepeatedFields: 2 grupowalnych + 1 na innej kolumnie -> dokladnie jed
 
 test('classifyManualCandidate: dlugi blok z mocnym slowem kluczowym ("obliczenia") -> auto', () => {
   const candidate = { text: 'Obliczenia spadku napięcia dla przewodu zasilającego wynoszą poniżej dopuszczalnych 3% zgodnie z normą PN-HD 60364.', paragraphText: 'Obliczenia spadku napięcia dla przewodu zasilającego wynoszą poniżej dopuszczalnych 3% zgodnie z normą PN-HD 60364.' };
-  const result = autoConfig.classifyManualCandidate(candidate, [{ score: 0 }]);
+  const result = autoConfig.classifyManualCandidate(candidate, 'unresolved');
   assert.equal(result.tier, 'auto');
 });
 
 test('classifyManualCandidate: dlugi blok ze slabym slowem kluczowym ("schemat"), brak dopasowania kolumny -> review', () => {
   const text = 'Poniższy schemat instalacji przedstawia rozmieszczenie modułów na dachu budynku zgodnie z projektem technicznym.';
-  const result = autoConfig.classifyManualCandidate({ text, paragraphText: text }, [{ score: 0 }]);
+  const result = autoConfig.classifyManualCandidate({ text, paragraphText: text }, 'unresolved');
   assert.equal(result.tier, 'review');
 });
 
 test('classifyManualCandidate: krotki fragment dzielacy TYLKO slowo-klucz nie staje sie manual', () => {
-  const result = autoConfig.classifyManualCandidate({ text: 'Konstrukcja', paragraphText: 'Konstrukcja' }, [{ score: 0 }]);
+  const result = autoConfig.classifyManualCandidate({ text: 'Konstrukcja', paragraphText: 'Konstrukcja' }, 'unresolved');
   assert.equal(result.tier, 'none');
 });
 
-test('classifyManualCandidate: kandydat z dobrym dopasowaniem kolumny nigdy nie jest manual, niezaleznie od slow', () => {
+test('classifyManualCandidate: czasownikowy dobor kabla/zabezpieczenia ("dobrano przewod"/"dobrano wylacznik") -> review - blad z realnego dokumentu (REFERENCJE_Excel_Word, 2026-09-15)', () => {
+  // Dokladny tekst akapitu z Wzor PV.docx: liczby "Iz = 27A"/"In=16A," sa
+  // podswietlonymi kandydatami WEWNATRZ tego akapitu (paragraphText to caly
+  // akapit, nie sam highlight). Przed poprawka #1: "dobor przewodu"/
+  // "zabezpieczenie" (rzeczowniki) nie pasowaly do "dobrano przewod"/
+  // "zabezpieczenia" (czasownik/dopelniacz) w tekscie. Przed poprawka #2 (ta
+  // sama sesja, zlapane od razu potem): nawet po naprawie #1, ten kandydat
+  // mial surowy top1.score=78 dla kolumny "falownik" (samo dopasowanie
+  // kontekstu/aliasu, BEZ zadnego dowodu wartosci) - stary
+  // classifyManualCandidate patrzyl na surowy wynik, nie na finalny fieldTier
+  // (ktory po bramce dowodowej w classifyTier i tak wychodzi 'unresolved'),
+  // wiec bezzasadnie zakladal "juz dobrze dopasowane do kolumny" i nigdy nie
+  // dawal szansy klasyfikacji manualnej.
+  const paragraphText = 'Dla falownika dobrano przewod YDY 5x4mm2 0,6/1kV o dopuszczalnym pradzie dlugotrwalym Iz = 27A. W celu zabezpieczenia Falownika dobrano wylacznik nadpradowy o charakterystyce B i pradzie In=16A, k - (wspolczynnik krotnosci pradu) dla wylacznikow nadpradowych o charakterystyce B,C i D - k=1,45';
+  const result = autoConfig.classifyManualCandidate({ text: 'Iz = 27A', paragraphText }, 'unresolved');
+  assert.equal(result.tier, 'review');
+});
+
+test('classifyManualCandidate: kandydat z dobrym dopasowaniem kolumny (fieldTier auto/review) nigdy nie jest manual, niezaleznie od slow', () => {
   const text = 'Obliczenia dla przewodu zasilajacego - dlugi blok tekstu technicznego o obciazeniu i zabezpieczeniu.';
-  const result = autoConfig.classifyManualCandidate({ text, paragraphText: text }, [{ score: 90 }]);
-  assert.equal(result.tier, 'none');
+  assert.equal(autoConfig.classifyManualCandidate({ text, paragraphText: text }, 'review').tier, 'none');
+  assert.equal(autoConfig.classifyManualCandidate({ text, paragraphText: text }, 'auto').tier, 'none');
 });
 
 test('detectConstantCandidate: powtarzajacy sie boilerplate bez dopasowania kolumny -> review, nigdy auto', () => {

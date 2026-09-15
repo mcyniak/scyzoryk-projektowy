@@ -33,6 +33,47 @@ function describeCandidateLocation(c) {
   return `${describePartUri(c.partUri)} · ${container}`;
 }
 
+// Podglad kandydata "w zdaniu" (sekcja "latwiej uzupelniac") - pokazuje
+// realny fragment dokumentu wokol podswietlenia zamiast samego wyrwanego z
+// kontekstu tekstu, zeby user od razu widzial O CO CHODZI, bez otwierania
+// samego Worda. Ucina brzegi kontekstu (paragraphPrefix/Suffix moga byc
+// calym akapitem, nawet kilkaset znakow) i zawsze pokazuje "..." na obcietym
+// koncu - to tylko WYCINEK, nie caly akapit.
+function truncateEdge(text, maxLen, fromEnd) {
+  const t = String(text || '').trim();
+  if (!t) return '';
+  if (t.length <= maxLen) return t;
+  return (fromEnd ? t.slice(-maxLen) : t.slice(0, maxLen)).trim();
+}
+function contrastTextColor(hexColor) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hexColor || '').trim());
+  if (!m) return '#111';
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.55 ? '#111' : '#fff';
+}
+function buildInlinePreviewHtml(candidate, { edgeLen = 60 } = {}) {
+  const markStyle = `background:${escapeHtml(candidate.displayColor || '#ffe58a')};color:${contrastTextColor(candidate.displayColor)}`;
+  const mark = `<mark class="candidate-inline-mark" style="${markStyle}">${escapeHtml(candidate.text)}</mark>`;
+  if (candidate.containerKind === 'tableCell') {
+    const left = truncateEdge(candidate.leftCellText, edgeLen, true);
+    const right = truncateEdge(candidate.rightCellText, edgeLen, false);
+    if (!left && !right) return null;
+    return `${left ? `…${escapeHtml(left)} | ` : ''}${mark}${right ? ` | ${escapeHtml(right)}…` : ''}`;
+  }
+  const prefix = truncateEdge(candidate.paragraphPrefix, edgeLen, true);
+  const suffix = truncateEdge(candidate.paragraphSuffix, edgeLen, false);
+  if (!prefix && !suffix) return null;
+  return `${prefix ? `…${escapeHtml(prefix)} ` : ''}${mark}${suffix ? ` ${escapeHtml(suffix)}…` : ''}`;
+}
+// Wrapper z bezpiecznym fallbackiem - gdy brak kontekstu (stare zeskanowane
+// joby sprzed dodania paragraphPrefix/Suffix, albo kandydat naprawde bez
+// sasiadow), pokaz chociaz sam tekst kandydata podswietlony, nigdy pusto.
+function renderCandidateInlinePreview(candidate, opts) {
+  return buildInlinePreviewHtml(candidate, opts) || `<mark class="candidate-inline-mark" style="background:${escapeHtml(candidate.displayColor || '#ffe58a')};color:${contrastTextColor(candidate.displayColor)}">${escapeHtml(candidate.text)}</mark>`;
+}
+
 // Krotki opis propozycji auto-konfiguracji (sekcja 26 promptu: karta
 // sugestii) - tylko etykieta typu + ewentualna kolumna, procent pewnosci
 // dolaczany osobno przez wywolujacego.
@@ -428,7 +469,7 @@ function renderCandidates() {
     return `<div class="candidate-row" data-candidate-id="${escapeHtml(c.id)}">
       <span class="candidate-swatch" style="background:${escapeHtml(c.displayColor)}"></span>
       <span class="candidate-body">
-        <div class="candidate-text">${escapeHtml(c.text)}</div>
+        <div class="candidate-text">${renderCandidateInlinePreview(c, { edgeLen: 36 })}</div>
         <div class="candidate-context">${escapeHtml(describeCandidateLocation(c))}</div>
         ${suggestionBadge}
         ${suggestionActions}
@@ -456,7 +497,7 @@ function openCandidateConfig(candidateId) {
   const candidate = state.job.candidates.find(c => c.id === candidateId);
   if (!candidate) return;
   $('#candidateConfigPanel').classList.remove('hidden');
-  $('#candidateConfigContext').textContent = `„${candidate.text}” (${describeCandidateLocation(candidate)})`;
+  $('#candidateConfigContext').innerHTML = `${renderCandidateInlinePreview(candidate, { edgeLen: 90 })}<br><span class="candidate-context">${escapeHtml(describeCandidateLocation(candidate))}</span>`;
   const decision = state.job.draft.candidates[candidateId] || { status: 'unresolved' };
 
   // Prefill z sugestii (sekcja 10) - TYLKO gdy user jeszcze nic recznie nie
