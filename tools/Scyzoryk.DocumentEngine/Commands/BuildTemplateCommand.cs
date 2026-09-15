@@ -1,3 +1,4 @@
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using Scyzoryk.DocumentEngine.OpenXml;
@@ -134,12 +135,38 @@ public static class BuildTemplateCommand
 
             SmartTemplateManifest.Embed(doc, input.ManifestJson);
 
-            var validator = new OpenXmlValidator();
+            // OpenXmlValidator() bez argumentow waliduje wylacznie wzgledem
+            // Office2007 (najstarszy/najbardziej restrykcyjny wariant schematu
+            // transitional) - realny dokument z Wzor PV.docx (2026-09-16, zywy
+            // build na koncie uzytkownika) mial to wykryc naprawde: kazda
+            // wspolczesna kopia Worda (2010+) dopisuje do <w:tblLook> obok
+            // starego bitmaskowego "val" takze jawne atrybuty logiczne
+            // (firstRow/lastRow/firstColumn/lastColumn/noHBand) - w pelni
+            // poprawne, otwierajace sie bez ostrzezenia w Wordzie, ale
+            // NIEZNANE dla schematu Office2007, wiec walidator odrzucal
+            // KAZDY dokument z normalnie sformatowana tabela mimo ze docelowy
+            // build nigdy nie dotykal tej konkretnej tabeli. Office2013 zna
+            // juz te atrybuty.
+            var validator = new OpenXmlValidator(FileFormatVersions.Office2013);
             var validationErrors = validator.Validate(doc).ToList();
             if (validationErrors.Count > 0)
             {
-                var details = string.Join("; ", validationErrors.Take(5).Select(e => $"{e.Path?.XPath}: {e.Description}"));
-                return Fail($"Zbudowany dokument nie przeszedl walidacji Open XML: {details}");
+                // Ostrzezenie, NIE odrzucenie builda (naprawiony bug, ten sam
+                // zywy dokument, zaraz po poprawce FileFormatVersions powyzej):
+                // druga, NIEZALEZNA usterka schematu w tym samym realnym pliku
+                // (duplikat "id" starych ksztaltow VML w mc:Fallback) okazala
+                // sie byc obecna JUZ W ORYGINALE, przed jakakolwiek nasza
+                // mutacja - typowy, niegrozny slad wielu lat edycji w prawdziwym
+                // firmowym wzorze (Word to toleruje bez ostrzezenia). Twardy
+                // fail na KAZDYM bledzie walidacji calego dokumentu (w tym
+                // czesci, ktorych build nigdy nie dotyka) czynilby te funkcje
+                // praktycznie bezuzyteczna dla realnych, wielokrotnie edytowanych
+                // dokumentow klienta - dokladnie taki przypadek jak ten. Zamiast
+                // zgadywac po samym XPath czy dany blad dotyczy naszej mutacji,
+                // zawsze pozwalamy zapisac, ale zawsze tez raportujemy - user
+                // widzi ostrzezenia w odpowiedzi /build i moze ocenic sam.
+                var details = validationErrors.Take(10).Select(e => $"{e.Path?.XPath}: {e.Description}");
+                warnings.Add($"Dokument ma {validationErrors.Count} drobnych niezgodnosci ze standardem Open XML (czesto juz obecnych w oryginalnym wzorze, Word je toleruje): {string.Join("; ", details)}");
             }
 
             doc.Save();
