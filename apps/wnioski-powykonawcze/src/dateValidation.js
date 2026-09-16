@@ -17,10 +17,10 @@ function isRealCalendarDate(day, month, year) {
 }
 
 // `allowEmpty` obsluguje tryb "Bez daty" (brak jakiejkolwiek daty w dokumencie -
-// zadna nie zostanie podmieniona, patrz convert-wm.ps1#Replace-AllDates, ktore
-// juz wczesniej po cichu pomijaly podmiane przy pustym DateText). Bez tej flagi
-// pusty wpis dalej jest bledem - "Bez daty" musi byc swiadomym wyborem w UI,
-// nie efektem ubocznym niewypelnionego pola.
+// kazda znaleziona data jest USUWANA razem z poprzedzajacym ja slowem "dnia"/
+// "dn.", patrz convert-wm.ps1#Replace-AllDates). Bez tej flagi pusty wpis
+// dalej jest bledem - "Bez daty" musi byc swiadomym wyborem w UI, nie efektem
+// ubocznym niewypelnionego pola.
 function normalizeDate(input, options) {
   const allowEmpty = Boolean(options && options.allowEmpty);
   const raw = String(input || '').trim();

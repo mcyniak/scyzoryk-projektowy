@@ -232,6 +232,30 @@ test('wnioski powykonawcze: convert-wm.ps1 przyjmuje pusty $DateText (real bug -
   }
 });
 
+test('wnioski powykonawcze: "Bez daty" faktycznie USUWA datę z dokumentu, nie zostawia oryginału (real bug zgłoszony przez użytkownika 2026-09-16 - "Kudrowice dn. 12.05.2026" zostawało z oryginalną datą zamiast dać samo "Kudrowice")', async () => {
+  const script = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'scripts', 'convert-wm.ps1'), 'utf8');
+  const fnStart = script.indexOf('function Replace-AllDates');
+  assert.ok(fnStart >= 0, 'funkcja Replace-AllDates powinna istnieć w convert-wm.ps1');
+  const nextFnStart = script.indexOf('\nfunction ', fnStart + 1);
+  assert.ok(nextFnStart > fnStart, 'nie znaleziono końca funkcji Replace-AllDates (kolejnej deklaracji function)');
+  const fnBody = script.slice(fnStart, nextFnStart);
+  // Stary błąd: `if ([string]::IsNullOrWhiteSpace($newDate)) { return $replacements }`
+  // zaraz po zebraniu $dates - pusty DateText kończył funkcję natychmiast, bez
+  // usunięcia czegokolwiek. Sprawdzamy, że ten wczesny bezwarunkowy return zniknął.
+  assert.doesNotMatch(
+    fnBody,
+    /IsNullOrWhiteSpace\(\$newDate\)\)\s*\{\s*return \$replacements\s*\}/,
+    'pusty $DateText ("Bez daty") nie może dawać natychmiastowego return - musi faktycznie usunąć datę z dokumentu'
+  );
+  // Nowa gałąź musi realnie kasować dopasowania (ReplaceText '' czyli usunięcie),
+  // razem ze słowem "dnia"/"dn." poprzedzającym datę, żeby nie zostały śmieciowe
+  // resztki typu "Kudrowice dn. " - kilka wariantów pisowni na różne szablony WM.
+  assert.match(fnBody, /\$datePrefixVariants\s*=\s*@\(/, 'powinna istnieć lista wariantów prefiksu daty do usunięcia razem z datą');
+  assert.match(fnBody, /'dnia '/);
+  assert.match(fnBody, /'dn\. '/);
+  assert.match(fnBody, /ReplaceText\s+''/, 'usuwanie daty w trybie "Bez daty" musi podmieniać na pusty string, nie na $newDate');
+});
+
 test('wnioski powykonawcze: podmiana tytułu dokumentu obejmuje TEŻ nagłówki/stopki, nie tylko główną treść (naprawiony realny błąd - stopka zostawała ze starym tytułem)', async () => {
   // Doc.Content w Word COM obejmuje WYLACZNIE glowny tekst dokumentu - naglowki
   // i stopki to osobne StoryRanges, ktorych Replace-InContent nigdy nie

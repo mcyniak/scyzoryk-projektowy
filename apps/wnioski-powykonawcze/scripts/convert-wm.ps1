@@ -310,11 +310,39 @@ function Replace-AllDates {
   $replacements = New-Object System.Collections.Generic.List[object]
   if ($null -eq $Doc) { return $replacements }
   $newDate = [string]$DateText
-  if ([string]::IsNullOrWhiteSpace($newDate)) { return $replacements }
 
-  # Najpierw zbierz widoczne daty z dokumentu i zamieniaj je literalnie.
+  # Najpierw zbierz widoczne daty z dokumentu - potrzebne w obu trybach nizej.
   # To jest pewniejsze niz sam Word wildcard, bo daty w WM-ach siedza w tabelach.
   $dates = Collect-DateTexts -Doc $Doc
+
+  if ([string]::IsNullOrWhiteSpace($newDate)) {
+    # Tryb "Bez daty": realny blad zgloszony przez uzytkownika (2026-09-16) -
+    # ta galaz wczesniej po prostu nic nie robila (return z pusta lista), wiec
+    # oryginalna data z WM-a zostawala w dokumencie nietknieta zamiast zniknac.
+    # "Bez daty" ma znaczyc "usun date calkowicie" (np. "Kudrowice dn. 12.05.2026"
+    # -> "Kudrowice"), nie "nie ruszaj oryginalu". Usuwamy date RAZEM z
+    # poprzedzajacym ja slowem "dnia"/"dn." (i ewentualnym przecinkiem/spacja
+    # przed nim), zeby nie zostaly smieciowe resztki typu "Kudrowice dn. " -
+    # kilka wariantow pisowni na wypadek roznych szablonow WM, MatchCase=$false
+    # w Invoke-ReplaceInRange juz i tak ignoruje wielkosc liter.
+    $datePrefixVariants = @(
+      ' dnia ', ' dn. ', ' dn ',
+      ', dnia ', ', dn. ', ', dn ',
+      'dnia ', 'dn. ', 'dn '
+    )
+    foreach ($oldDate in $dates) {
+      if ([string]::IsNullOrWhiteSpace($oldDate)) { continue }
+      foreach ($prefix in $datePrefixVariants) {
+        [void](Replace-InAllStories -Doc $Doc -FindText ($prefix + $oldDate) -ReplaceText '' -Wildcards $false)
+      }
+      # Fallback: sama data bez slowa "dnia"/"dn." obok (np. w osobnej komorce
+      # tabeli) - usuwamy tylko cyfry, bez zgadywania sasiedniego tekstu.
+      [void](Replace-InAllStories -Doc $Doc -FindText $oldDate -ReplaceText '' -Wildcards $false)
+      $replacements.Add([pscustomobject]@{ from = $oldDate; to = '' }) | Out-Null
+    }
+    return $replacements
+  }
+
   foreach ($oldDate in $dates) {
     if ([string]::IsNullOrWhiteSpace($oldDate)) { continue }
     if ($oldDate -eq $newDate) { continue }

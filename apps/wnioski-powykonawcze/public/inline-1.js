@@ -46,15 +46,17 @@ const $ = s => document.querySelector(s);
     // nazwa slowna z natywnego kalendarza (np. "lipiec" w polskiej lokalizacji).
     // Trzeci tryb "Bez daty" (zadana funkcja): zaden dokument nie ma "daty
     // dokumentacji powykonawczej" wymyslonej z powietrza - convert-wm.ps1's
-    // Replace-AllDates juz od dawna po cichu pomija podmiane przy pustym
-    // DateText, wiec wystarczy tu wyslac pusta wartosc (patrz dateValidation.js
-    // #normalizeDate, opcja allowEmpty).
+    // Replace-AllDates przy pustym DateText usuwa znalezione daty razem z
+    // poprzedzajacym slowem "dnia"/"dn." (real bug 2026-09-16: wczesniej po
+    // cichu NIC nie robila, wiec oryginalna data zostawala w dokumencie -
+    // dokladnie odwrotnie niz zaklada ta etykieta). Wystarczy tu wyslac pusta
+    // wartosc (patrz dateValidation.js#normalizeDate, opcja allowEmpty).
     function setDateMode(mode) {
       if (mode === 'none') {
         dateInput.hidden = true;
         dateInput.required = false;
         monthYearFields.style.display = 'none';
-        dateHint.textContent = 'Żadna data w dokumencie nie zostanie zmieniona - zostaje dokładnie taka, jak w oryginale.';
+        dateHint.textContent = 'Data zostanie całkowicie usunięta z dokumentu (razem ze słowem "dnia"/"dn.") - zostaje sama nazwa miejscowości.';
       } else if (mode === 'month') {
         dateInput.hidden = true;
         dateInput.required = false;
@@ -373,7 +375,7 @@ const $ = s => document.querySelector(s);
         wmFolderDateInput.hidden = true;
         wmFolderDateInput.required = false;
         wmFolderMonthYearFields.style.display = 'none';
-        wmFolderDateHint.textContent = 'Żadna data w dokumencie nie zostanie zmieniona - zostaje dokładnie taka, jak w oryginale.';
+        wmFolderDateHint.textContent = 'Data zostanie całkowicie usunięta z dokumentu (razem ze słowem "dnia"/"dn.") - zostaje sama nazwa miejscowości.';
       } else if (mode === 'month') {
         wmFolderDateInput.hidden = true;
         wmFolderDateInput.required = false;
