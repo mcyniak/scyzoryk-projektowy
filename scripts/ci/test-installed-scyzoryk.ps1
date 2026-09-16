@@ -553,7 +553,17 @@ if ($UpdateInstallerPath) {
     Assert-True $panelUp 'Panel nie odpowiedzial po restarcie z instalatora aktualizacyjnego.'
     Start-AllScyzorykApps -Slugs $script:AllAppSlugs
 
-    $deadline = (Get-Date).AddSeconds(90)
+    # Audyt 2026-09-16 (dwa kolejne fale v1.5.0): okno 90s + odpytywanie co 2s
+    # bylo krytycznie ciasne przy 14 apkach startujacych niemal rownoczesnie -
+    # panel sam sprawdza zdrowie kazdego dziecka z wlasnym 1.6s timeoutem
+    # (server.js#checkHealth), wiec pod chwilowym obciazeniem runnera (np.
+    # swiezo rozpakowane pliki skanowane przez Defendera) pojedyncza apka
+    # mogla nie zdazyc odpowiedziec w KAZDYM z ~45 kolejnych okien. Szersze
+    # okno (180s) + czestsze proby (1s) + ponawianie /start dla apek wciaz
+    # niezdrowych (idempotentne - patrz ensureChildStarted) zabezpiecza przed
+    # zgubionym/oderwanym pierwszym zadaniem startu bez maskowania realnej
+    # awarii (diagnostyka nizej i tak zadziala, jesli mimo to nie wystarczy).
+    $deadline = (Get-Date).AddSeconds(180)
     $healthy = $false
     $lastPayload = $null
     while ((Get-Date) -lt $deadline) {
@@ -561,8 +571,10 @@ if ($UpdateInstallerPath) {
         $response = Invoke-WebRequest -Uri 'http://127.0.0.1:3000/api/apps' -UseBasicParsing -TimeoutSec 3
         $lastPayload = $response.Content | ConvertFrom-Json
         if ($response.StatusCode -eq 200 -and @($lastPayload.apps | Where-Object { -not $_.health.ok }).Count -eq 0) { $healthy = $true; break }
+        $stillUnhealthy = @($lastPayload.apps | Where-Object { -not $_.health.ok } | ForEach-Object { $_.slug })
+        if ($stillUnhealthy.Count -gt 0) { Start-AllScyzorykApps -Slugs $stillUnhealthy }
       } catch {}
-      Start-Sleep -Seconds 2
+      Start-Sleep -Seconds 1
     }
     if (-not $healthy) {
       # Diagnostyka (audyt 2026-09-16): sam Assert-True mowil tylko "nie
