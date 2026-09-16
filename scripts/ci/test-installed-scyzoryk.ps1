@@ -93,7 +93,7 @@ function Start-AllScyzorykApps {
 $script:AllAppSlugs = @(
   'drukarka','pieczatki-pdf','formularze-ecodan','dokumenty-seryjne','wnioski-powykonawcze',
   'karty-katalogowe','drukarka-projekty','ocr-audytow','formularze-varmero','nazywarka-skanow',
-  'tworzenie-folderow','protokoly','pipeline'
+  'tworzenie-folderow','protokoly','pipeline','kreator-wzorow'
 )
 
 function Stop-Scyzoryk {
@@ -337,7 +337,8 @@ Run-Test 'Health-check wszystkich narzedzi i stan OCR' {
     @{ name='wnioski-powykonawcze'; port=3005; path='/api/health'; expectedName='wnioski-powykonawcze' },
     @{ name='karty-katalogowe'; port=3006; path='/api/health'; expectedName='karty-katalogowe' },
     @{ name='drukarka-projekty'; port=3010; path='/api/health'; expectedName='drukarka-projekty' },
-    @{ name='ocr-audytow'; port=3011; path='/api/health'; expectedName='ocr-audytow' }
+    @{ name='ocr-audytow'; port=3011; path='/api/health'; expectedName='ocr-audytow' },
+    @{ name='kreator-wzorow'; port=3016; path='/api/health'; expectedName='kreator-wzorow' }
   )
 
   Start-AllScyzorykApps -Slugs ($checks | Where-Object { $_.name -ne 'panel' } | ForEach-Object { $_.name })
