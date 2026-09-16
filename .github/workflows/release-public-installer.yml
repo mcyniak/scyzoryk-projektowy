@@ -124,6 +124,25 @@ jobs:
             -Status "📦 **DEPENDENCIES READY**" `
             -Details "Zależności wszystkich aplikacji zostały poprawnie zainstalowane."
 
+      # Testy regresyjne (nizej) zawieraja pelne testy HTTP e2e kreator-wzorow
+      # (upload -> scan -> build), ktore od migracji na Open XML (2026-09-14)
+      # wymagaja realnego Scyzoryk.DocumentEngine.exe pod
+      # tools/Scyzoryk.DocumentEngine/publish/ - bez tego kroku 11 testow
+      # grupy 26 failuje z "Nie znaleziono Scyzoryk.DocumentEngine.exe" (v1.5.0,
+      # pierwszy release po migracji, zlapane live na tym samym CI). Budowanie
+      # instalatora (dalej w tym joobie) i tak wywoluje ten sam skrypt, ale
+      # zbyt pozno - testy regresyjne musza go miec JUZ gotowego.
+      - name: Zbuduj silnik dokumentow (Open XML, wymagany przez testy regresyjne kreator-wzorow)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          powershell -File scripts/build-document-engine.ps1
+
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Budowanie silnika dokumentow (Scyzoryk.DocumentEngine.exe) nie powiodlo sie.'
+          }
+
       - name: Uruchom testy regresyjne
         shell: pwsh
         run: |
