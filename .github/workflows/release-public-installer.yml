@@ -393,17 +393,41 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
 
-          gh release create "$env:RELEASE_TAG" `
-            "$env:FULL_INSTALLER_PATH" `
-            "$env:FULL_SHA_PATH" `
-            "$env:UPDATE_INSTALLER_PATH" `
-            "$env:UPDATE_SHA_PATH" `
-            "$env:FINGERPRINT_PATH" `
-            --title "Scyzoryk $env:RELEASE_VERSION" `
-            --generate-notes
+          # Audyt 2026-09-16: push taga z tej sesji CI/agenta bywa zablokowany
+          # (proxy/API odrzuca KAZDY push taga, nie tylko force), wiec jedyna
+          # dzialajaca sciezka na cutowanie taga bywa: opublikowanie Release'u
+          # recznie przez GitHub UI (co samo tworzy tag i odpala ten workflow
+          # przez "on: push: tags:"). W takim wypadku "gh release create"
+          # nizej zawiedzie, bo Release dla tego taga juz istnieje (bez
+          # zadnych plikow). Idempotentnie: jesli release juz istnieje,
+          # dolaczamy pliki do niego (--clobber, bo build i tak jest juz
+          # zweryfikowany testami wyzej w tym samym jobie) zamiast failowac
+          # caly, w pelni przetestowany build na samym koncu.
+          gh release view "$env:RELEASE_TAG" *> $null
+          $releaseExists = ($LASTEXITCODE -eq 0)
+
+          if ($releaseExists) {
+            Write-Host "Release $env:RELEASE_TAG juz istnieje (utworzony recznie) - dolaczam pliki."
+            gh release upload "$env:RELEASE_TAG" `
+              "$env:FULL_INSTALLER_PATH" `
+              "$env:FULL_SHA_PATH" `
+              "$env:UPDATE_INSTALLER_PATH" `
+              "$env:UPDATE_SHA_PATH" `
+              "$env:FINGERPRINT_PATH" `
+              --clobber
+          } else {
+            gh release create "$env:RELEASE_TAG" `
+              "$env:FULL_INSTALLER_PATH" `
+              "$env:FULL_SHA_PATH" `
+              "$env:UPDATE_INSTALLER_PATH" `
+              "$env:UPDATE_SHA_PATH" `
+              "$env:FINGERPRINT_PATH" `
+              --title "Scyzoryk $env:RELEASE_VERSION" `
+              --generate-notes
+          }
 
           if ($LASTEXITCODE -ne 0) {
-            throw "gh release create zakonczylo sie kodem $LASTEXITCODE."
+            throw "gh release create/upload zakonczylo sie kodem $LASTEXITCODE."
           }
 
       - name: Discord - release opublikowany
