@@ -555,13 +555,31 @@ if ($UpdateInstallerPath) {
 
     $deadline = (Get-Date).AddSeconds(90)
     $healthy = $false
+    $lastPayload = $null
     while ((Get-Date) -lt $deadline) {
       try {
         $response = Invoke-WebRequest -Uri 'http://127.0.0.1:3000/api/apps' -UseBasicParsing -TimeoutSec 3
-        $payload = $response.Content | ConvertFrom-Json
-        if ($response.StatusCode -eq 200 -and @($payload.apps | Where-Object { -not $_.health.ok }).Count -eq 0) { $healthy = $true; break }
+        $lastPayload = $response.Content | ConvertFrom-Json
+        if ($response.StatusCode -eq 200 -and @($lastPayload.apps | Where-Object { -not $_.health.ok }).Count -eq 0) { $healthy = $true; break }
       } catch {}
       Start-Sleep -Seconds 2
+    }
+    if (-not $healthy) {
+      # Diagnostyka (audyt 2026-09-16): sam Assert-True mowil tylko "nie
+      # wystartowaly poprawnie", bez wskazania KTORA apka i dlaczego - przy
+      # dwoch kolejnych nieudanych releasach v1.5.0 nie dalo sie tego
+      # ustalic z samego logu CI. Zrzucamy pelny /api/apps (w tym
+      # child.lastError/circuitReason) do raportu i wypisujemy skrot w logu.
+      if ($lastPayload) {
+        $lastPayload | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $LogsDir 'reports\apps-status-po-instalatorze-aktualizacyjnym.json') -Encoding utf8
+        $unhealthy = @($lastPayload.apps | Where-Object { -not $_.health.ok })
+        $details = ($unhealthy | ForEach-Object {
+          "$($_.slug): health.ok=$($_.health.ok) statusCode=$($_.health.statusCode) timeout=$($_.health.timeout) error=$($_.health.error) processAlive=$($_.processAlive) restarts=$($_.child.restarts) failures=$($_.child.failures) lastError=$($_.child.lastError) circuitOpen=$($_.child.circuitOpen) circuitReason=$($_.child.circuitReason)"
+        }) -join ' || '
+        Write-Host "DIAGNOSTYKA niezdrowych aplikacji: $details"
+      } else {
+        Write-Host 'DIAGNOSTYKA: panel nie odpowiedzial ani razu na /api/apps w oknie 90s.'
+      }
     }
     Assert-True $healthy 'Panel/aplikacje nie wystartowaly poprawnie po instalatorze aktualizacyjnym.'
   }
