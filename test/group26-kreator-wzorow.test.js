@@ -667,6 +667,23 @@ test('templateManifest.js: mergeCandidatesIntoBlock laczy kilku kandydatow pod T
   assert.throws(() => tm.mergeCandidatesIntoBlock(draft, ['c'], { label: 'x', condition: {} }));
 });
 
+test('templateManifest.js: setCandidatePhotoGallery oznacza kandydata jako rozwiazanego, ale NIE dodaje wpisu do fields/placements/manualRegions (jak "constant" - brak wartosci/reguly runtime)', () => {
+  let draft = tm.emptyDraft({ templateName: 'Test', addressColumn: 'Adres' });
+  draft = tm.seedCandidates(draft, ['cand_1']);
+  assert.ok(tm.CANDIDATE_STATUSES.has('photoGallery'));
+
+  draft = tm.setCandidatePhotoGallery(draft, 'cand_1');
+  assert.equal(draft.candidates.cand_1.status, 'photoGallery');
+  assert.deepEqual(tm.unresolvedCandidateIds(draft, ['cand_1']), []);
+
+  const manifest = tm.buildManifestFromDraft(draft, [{ id: 'cand_1' }]);
+  const validation = rules.validateManifest(manifest);
+  assert.deepEqual(validation.errors, []);
+  assert.equal(manifest.fields.length, 0);
+  assert.equal(manifest.placements.length, 0);
+  assert.equal(manifest.manualRegions.length, 0);
+});
+
 test('templateManifest.js: nazwy mergeFieldName/bookmarkName pasuja do formatu wymaganego przez validateManifest', () => {
   assert.match(tm.generateMergeFieldName(), /^SCY_F_[0-9A-Fa-f]{6,16}$/);
   assert.match(tm.generateBookmarkName(), /^SCYB_[0-9A-Fa-f]{6,20}$/);
@@ -1878,6 +1895,62 @@ test('kreator-wzorow: pelny przeplyw upload -> scan-markings -> scan -> build pr
     const newPids = afterPids.filter(pid => !beforePids.includes(pid));
     assert.deepEqual(newPids, [], 'zaden NOWY WINWORD.EXE nie powinien powstac podczas scan/build');
   }
+});
+
+test('kreator-wzorow: kandydat "photoGallery" wstawia w build przez Open XML PRAWDZIWY MERGEFIELD Zdjecia_pomontazowe (real feature zgloszona przez uzytkownika 2026-09-21, ta sama galeria co Dokumenty seryjne juz obsluguja)', async (t) => {
+  const port = await withKreatorApp(t);
+
+  const form = new FormData();
+  form.append('template', new Blob([buildRealFixtureDocx()], { type: 'application/octet-stream' }), 'wzor.docx');
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-kreator-gallery-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const ExcelJSForGallery = require('../apps/ocr-audytow/node_modules/exceljs');
+  const wb = new ExcelJSForGallery.Workbook();
+  const ws = wb.addWorksheet('Dane');
+  ws.addRow(['Adres', 'Wartosc']);
+  ws.addRow(['Testowa 1', 'ABC']);
+  const xlsxPath = path.join(dir, 'dane.xlsx');
+  await wb.xlsx.writeFile(xlsxPath);
+  form.append('excel', new Blob([await fsp.readFile(xlsxPath)], { type: 'application/octet-stream' }), 'dane.xlsx');
+
+  const uploadRes = await fetch(`http://127.0.0.1:${port}/api/jobs`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+  const uploadJson = await uploadRes.json();
+  assert.equal(uploadRes.status, 200, JSON.stringify(uploadJson));
+  const jobId = uploadJson.jobId;
+
+  await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/scan-markings`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+  const scanRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/scan`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selectedMarkings: ['highlight:yellow'] }),
+  });
+  const scanJson = await scanRes.json();
+  assert.equal(scanRes.status, 200, JSON.stringify(scanJson));
+  const candidate = scanJson.candidates[0];
+
+  // Sciezka realnego uzytkownika: panel -> "ZDJĘCIA" -> POST .../photo-gallery
+  // (nie PUT /config bezposrednio), zeby test faktycznie pokrywal ten endpoint.
+  const decisionRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/candidates/${candidate.id}/photo-gallery`, {
+    method: 'POST', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' }, body: '{}',
+  });
+  const decisionJson = await decisionRes.json();
+  assert.equal(decisionRes.status, 200, JSON.stringify(decisionJson));
+  assert.equal(decisionJson.draft.candidates[candidate.id].status, 'photoGallery');
+
+  await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/config`, {
+    method: 'PUT', headers: { 'X-Scyzoryk-Request': '1', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ addressColumn: 'Adres', candidates: decisionJson.draft.candidates }),
+  });
+
+  const buildRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/build`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+  const buildJson = await buildRes.json();
+  assert.equal(buildRes.status, 200, JSON.stringify(buildJson));
+
+  const downloadRes = await fetch(`http://127.0.0.1:${port}/api/jobs/${jobId}/download/template`);
+  const builtBuffer = Buffer.from(await downloadRes.arrayBuffer());
+  const builtZip = new AdmZipForKreator(builtBuffer);
+  const builtDocXml = builtZip.readAsText('word/document.xml');
+  assert.match(builtDocXml, /MERGEFIELD Zdjecia_pomontazowe/);
+  assert.doesNotMatch(builtDocXml, /<w:highlight/); // oznaczenie wyczyszczone jak przy kazdym innym typie decyzji
 });
 
 // ===========================================================================

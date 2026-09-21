@@ -52,6 +52,7 @@ form > label > input, form > label > select { margin-top: 6px; }
 .candidate-badge.field { background: var(--success-50); color: var(--success-600); }
 .candidate-badge.block { background: #fef3c7; color: #92400e; }
 .candidate-badge.manual { background: var(--danger-50); color: var(--danger-600); }
+.candidate-badge.photoGallery { background: #ede9fe; color: #5b21b6; }
 .candidate-badge.unresolved { background: var(--bg-surface-muted); color: var(--text-tertiary); }
 
 /* Panel konfiguracji kandydata */

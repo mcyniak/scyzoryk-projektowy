@@ -24,7 +24,14 @@
 
 const crypto = require('crypto');
 
-const CANDIDATE_STATUSES = new Set(['unresolved', 'constant', 'field', 'block', 'manual']);
+const CANDIDATE_STATUSES = new Set(['unresolved', 'constant', 'field', 'block', 'manual', 'photoGallery']);
+
+// Nazwa MERGEFIELD, ktorej apps/dokumenty-seryjne juz szuka po nazwie (po
+// normalizacji spacji/podkreslen), zeby wstawic galerie zdjec dopasowanych po
+// adresie - patrz Replace-PhotoGalleryMergeField w
+// apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1. MUSI byc identyczna z
+// PhotoGalleryMergeFieldName w tools/Scyzoryk.DocumentEngine/Commands/BuildTemplateCommand.cs.
+const PHOTO_GALLERY_MERGE_FIELD_NAME = 'Zdjecia_pomontazowe';
 
 function generateMergeFieldName() {
   return `SCY_F_${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
@@ -73,6 +80,22 @@ function setCandidateManual(draft, candidateId, label) {
     candidates: {
       ...draft.candidates,
       [candidateId]: { status: 'manual', constantText: null, fieldId: null, blockId: null, label: label || null }
+    }
+  };
+}
+
+// "Zdjęcia" (galeria) - wstawia w tym miejscu DOKŁADNIE ten sam MERGEFIELD,
+// którego apps/dokumenty-seryjne już rozpoznaje i wypełnia zdjęciami z folderu
+// dopasowanego po adresie (patrz PHOTO_GALLERY_MERGE_FIELD_NAME wyżej). Jak
+// "constant" - NIE trafia do fields/manifestu, bo nie ma żadnej wartości ani
+// reguły runtime do policzenia: dokumenty-seryjne samo znajduje pole po
+// nazwie, niezależnie od manifestu Smart Template.
+function setCandidatePhotoGallery(draft, candidateId) {
+  return {
+    ...draft,
+    candidates: {
+      ...draft.candidates,
+      [candidateId]: { status: 'photoGallery', constantText: null, fieldId: null, blockId: null }
     }
   };
 }
@@ -222,6 +245,9 @@ function buildManifestFromDraft(draft, candidates) {
     // draftu (patrz komentarz na gorze pliku), block przez sam
     // candidate.id -> blockId w draft.candidates (uzywane przez
     // build-template.ps1 przy tworzeniu bookmarka, nie przez runtime).
+    // "photoGallery" tez nie potrzebuje wpisu tutaj - jak "constant", nie ma
+    // zadnej wartosci/reguly runtime (patrz komentarz przy
+    // setCandidatePhotoGallery i PHOTO_GALLERY_MERGE_FIELD_NAME).
   }
 
   return {
@@ -242,12 +268,14 @@ function buildManifestFromDraft(draft, candidates) {
 
 module.exports = {
   CANDIDATE_STATUSES,
+  PHOTO_GALLERY_MERGE_FIELD_NAME,
   generateMergeFieldName,
   generateBookmarkName,
   emptyDraft,
   seedCandidates,
   setCandidateConstant,
   setCandidateManual,
+  setCandidatePhotoGallery,
   createFieldForCandidate,
   assignCandidateToExistingField,
   createBlockForCandidate,

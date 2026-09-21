@@ -15,6 +15,16 @@ namespace Scyzoryk.DocumentEngine.Commands;
 // modelu Open XML po prostu nie istnieja).
 public static class BuildTemplateCommand
 {
+    // Nazwa pola galerii zdjec - MUSI byc identyczna (po normalizacji spacji/
+    // podkreslen, patrz Normalize-Address w mailmerge-to-pdf.ps1) z
+    // $script:GalleryFieldKey w apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1.
+    // To jest CALA integracja z galeria zdjec dokumentow seryjnych - dokumenty-seryjne
+    // szuka tego DOKLADNIE tego MERGEFIELD po nazwie i wstawia tam zdjecia z
+    // folderu dopasowanego po adresie (Replace-PhotoGalleryMergeField), zupelnie
+    // niezaleznie od manifestu Smart Template - kandydat "photoGallery" nie
+    // potrzebuje wiec zadnej wartosci/reguly runtime, dokladnie jak "constant".
+    private const string PhotoGalleryMergeFieldName = "Zdjecia_pomontazowe";
+
     public static BuildTemplateOutput Run(BuildTemplateInput input)
     {
         if (!File.Exists(input.TemplatePath))
@@ -93,6 +103,17 @@ public static class BuildTemplateCommand
                         if (decision.BlockId is null) { warnings.Add($"Kandydat {stored.Id}: brak blockId."); continue; }
                         if (!blockGroups.TryGetValue(decision.BlockId, out var group)) { group = new List<MarkRegion>(); blockGroups[decision.BlockId] = group; }
                         group.Add(fresh);
+                        continue;
+                    case "photoGallery":
+                        try
+                        {
+                            FieldWriter.InsertMergeField(fresh, PhotoGalleryMergeFieldName);
+                            TextReplacer.ClearMark(fresh);
+                        }
+                        catch (Exception ex)
+                        {
+                            warnings.Add($"Kandydat {stored.Id}: {ex.Message}");
+                        }
                         continue;
                 }
             }

@@ -187,10 +187,22 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     below for the architecture. `server.js`'s `/scan-markings`, `/scan` and `/build` routes call
     `documentEngine.scanTemplatePalette`/`scanTemplateCandidates`/`buildSmartTemplate` directly; none of
     them take a `withWordAutomationLease` lock any more (nothing to lock — no Word process involved).
-  - Each candidate gets one of five user decisions (constant / Excel column / lookup-or-composed variant /
-    conditional block / left untouched for the designer) — `src/templateManifest.js` assembles these into
-    the manifest shape `lib/smartTemplateRules.js#validateManifest` checks, generating the synthetic
-    `SCY_F_<hex>` merge-field and `SCYB_<hex>` bookmark names itself (the client never invents these).
+  - Each candidate gets one of six user decisions (constant / Excel column / lookup-or-composed variant /
+    conditional block / left untouched for the designer / photo gallery) — `src/templateManifest.js`
+    assembles these into the manifest shape `lib/smartTemplateRules.js#validateManifest` checks, generating
+    the synthetic `SCY_F_<hex>` merge-field and `SCYB_<hex>` bookmark names itself (the client never invents
+    these). **Photo gallery** (added 2026-09-21, user request: "same photo handling as Dokumenty seryjne")
+    is the one exception to the synthetic-name rule: it deliberately inserts a real MERGEFIELD with the
+    fixed literal name `Zdjecia_pomontazowe` (`BuildTemplateCommand.cs`'s `PhotoGalleryMergeFieldName`,
+    mirrored in `templateManifest.js`'s `PHOTO_GALLERY_MERGE_FIELD_NAME`) instead of a random `SCY_F_<hex>`
+    one — that literal name is exactly what `dokumenty-seryjne`'s already-existing
+    `Replace-PhotoGalleryMergeField`/`Test-GalleryFieldName` (`apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1`)
+    already searches for and fills with the address-matched photo folder, so this needed **zero** changes
+    in `dokumenty-seryjne` — it's the same mechanism as if a user had typed the mail-merge field into Word
+    by hand. Like `constant`, it needs no manifest entry at all (no value/runtime rule to compute — see
+    `setCandidatePhotoGallery`'s comment). Caveat: Kreator's own single-record `/preview` (Word-COM based,
+    see below) has no photo folder in that context, so the preview never shows a real photo — only real
+    generation in `dokumenty-seryjne` does.
     `src/candidateConfig.js#validateOverlaps` (Range.Start/.End-based) is **not currently wired into
     `runPreflight`** post-migration — the new candidate identity (`partUri`/`ordinal`/`structuralPath`,
     no comparable numeric position across mechanisms) doesn't fit its input shape 1:1; the common

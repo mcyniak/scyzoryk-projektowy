@@ -237,6 +237,59 @@ public class KreatorScanTests : IDisposable
     }
 
     [Fact]
+    public void Build_PhotoGallery_WstawiaPrawdziwyMergefieldZdjeciaPomontazowe()
+    {
+        // Kandydat "Zdjecia" (galeria) - real feature zgloszona przez uzytkownika
+        // (2026-09-21): chce miec te sama galerie zdjec co apps/dokumenty-seryjne
+        // juz obsluguje (MERGEFIELD "Zdjecia_pomontazowe"), ale wstawiana przez
+        // Kreator zamiast recznie w Wordzie. Kandydat nie potrzebuje ZADNEJ
+        // wartosci/reguly runtime (jak "constant") - dokumenty-seryjne samo
+        // znajduje to pole po nazwie i wypelnia je zdjeciami z folderu adresu.
+        var scanResult = ScanTemplateCommand.RunCandidates(new ScanCandidatesInput
+        {
+            TemplatePath = _fixturePath,
+            SelectedMarkings = FixtureBuilder.SelectedMarkings.ToList(),
+        });
+        Assert.True(scanResult.Ok, scanResult.Message);
+        var candidates = scanResult.Candidates!;
+        var xxxCandidates = candidates.Where(c => c.Text == "XXX").OrderBy(c => c.Ordinal).ToList();
+
+        var decisions = new Dictionary<string, CandidateDecisionDto>();
+        decisions[xxxCandidates[0].Id] = new CandidateDecisionDto { Status = "photoGallery" };
+        foreach (var c in candidates)
+        {
+            if (!decisions.ContainsKey(c.Id))
+                decisions[c.Id] = new CandidateDecisionDto { Status = "constant", ConstantText = $"STALA_{c.PaletteKey.Replace(":", "_")}" };
+        }
+
+        var outputPath = Path.Combine(Path.GetTempPath(), $"scyzoryk-built-gallery-{Guid.NewGuid():N}.docx");
+        try
+        {
+            var buildOutput = BuildTemplateCommand.Run(new BuildTemplateInput
+            {
+                TemplatePath = _fixturePath,
+                OutputPath = outputPath,
+                SelectedMarkings = FixtureBuilder.SelectedMarkings.ToList(),
+                StoredCandidates = candidates,
+                CandidateDecisions = decisions,
+                ManifestJson = "{\"schemaVersion\":1,\"templateId\":\"t1\",\"templateName\":\"Test\",\"fields\":[],\"blocks\":[],\"variantGroups\":[],\"placements\":[],\"manualRegions\":[]}",
+            });
+            Assert.True(buildOutput.Ok, buildOutput.Message);
+
+            using var built = WordprocessingDocument.Open(outputPath, false);
+            var validator = new OpenXmlValidator();
+            Assert.Empty(validator.Validate(built).ToList());
+
+            var fields = built.MainDocumentPart!.Document.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldCode>().ToList();
+            Assert.Contains(fields, f => f.Text.Contains("MERGEFIELD Zdjecia_pomontazowe"));
+        }
+        finally
+        {
+            try { File.Delete(outputPath); } catch { }
+        }
+    }
+
+    [Fact]
     public void Build_WzorZmienionyOdCzasuSkanowania_PrzerywaZCzytelnymBledem()
     {
         var scanResult = ScanTemplateCommand.RunCandidates(new ScanCandidatesInput

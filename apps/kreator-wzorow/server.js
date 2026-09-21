@@ -422,7 +422,7 @@ function applyManualCorrectionFeedback(job, candidateId, finalDecision) {
   return { feedbackEvents };
 }
 
-// Wszystkie 4 endpointy ponizej (reczna decyzja z panelu) robia to samo po
+// Wszystkie 5 endpointow ponizej (reczna decyzja z panelu) robia to samo po
 // zapisaniu draftu: ucza pamiec z korekty wzgledem OSTATNIEJ sugestii dla
 // tego kandydata (hardening sekcja 12/34) i oznaczaja origin='manual'
 // (sekcja 27) - user zawsze mial "ostatnie slowo" recznie, niezaleznie od
@@ -442,6 +442,16 @@ app.post('/api/jobs/:jobId/candidates/:candidateId/manual', (req, res) => {
   if (!job) return;
   const draft = tm.setCandidateManual(job.draft, req.params.candidateId, req.body?.label);
   const { feedbackEvents } = applyManualCorrectionFeedback(job, req.params.candidateId, { kind: 'manual', column: null });
+  const candidateDecisionMeta = setCandidateDecisionMeta(job, req.params.candidateId, { origin: 'manual', appliedAt: new Date().toISOString() });
+  jobStore.updateJob(job.id, { draft, candidateDecisionMeta, autoConfig: job.autoConfig ? { ...job.autoConfig, feedbackEvents } : job.autoConfig });
+  res.json({ ok: true, draft });
+});
+
+app.post('/api/jobs/:jobId/candidates/:candidateId/photo-gallery', (req, res) => {
+  const job = requireJob(req, res);
+  if (!job) return;
+  const draft = tm.setCandidatePhotoGallery(job.draft, req.params.candidateId);
+  const { feedbackEvents } = applyManualCorrectionFeedback(job, req.params.candidateId, { kind: 'photoGallery', column: null });
   const candidateDecisionMeta = setCandidateDecisionMeta(job, req.params.candidateId, { origin: 'manual', appliedAt: new Date().toISOString() });
   jobStore.updateJob(job.id, { draft, candidateDecisionMeta, autoConfig: job.autoConfig ? { ...job.autoConfig, feedbackEvents } : job.autoConfig });
   res.json({ ok: true, draft });

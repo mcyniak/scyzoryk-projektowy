@@ -299,7 +299,8 @@ const FILTERS = [
   { key: 'constant', label: 'Stałe' },
   { key: 'field', label: 'Excel' },
   { key: 'block', label: 'Warunek' },
-  { key: 'manual', label: 'Do projektanta' }
+  { key: 'manual', label: 'Do projektanta' },
+  { key: 'photoGallery', label: 'Zdjęcia' }
 ];
 
 // Auto-konfiguracja (PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md) - lokalny,
@@ -412,7 +413,7 @@ function renderCandidates() {
   const decisions = job.draft.candidates || {};
   const suggestions = new Map((job.autoConfig && job.autoConfig.candidateSuggestions || []).map(s => [s.candidateId, s]));
 
-  const counts = { all: job.candidates.length, unresolved: 0, auto: 0, review: 0, constant: 0, field: 0, block: 0, manual: 0 };
+  const counts = { all: job.candidates.length, unresolved: 0, auto: 0, review: 0, constant: 0, field: 0, block: 0, manual: 0, photoGallery: 0 };
   for (const c of job.candidates) {
     const status = (decisions[c.id] && decisions[c.id].status) || 'unresolved';
     counts[status] = (counts[status] || 0) + 1;
@@ -446,7 +447,7 @@ function renderCandidates() {
 
   $('#candidateList').innerHTML = filtered.map(c => {
     const decision = decisions[c.id] || { status: 'unresolved' };
-    const badgeText = { constant: 'Stałe', field: 'Excel', block: 'Warunek', manual: 'Projektant', unresolved: 'Brak decyzji' }[decision.status] || 'Brak decyzji';
+    const badgeText = { constant: 'Stałe', field: 'Excel', block: 'Warunek', manual: 'Projektant', photoGallery: 'Zdjęcia', unresolved: 'Brak decyzji' }[decision.status] || 'Brak decyzji';
     const suggestion = decision.status === 'unresolved' ? suggestions.get(c.id) : null;
     const hasSuggestion = suggestion && suggestion.tier !== 'unresolved';
     const topReason = hasSuggestion ? topReasonMessage(suggestion) : null;
@@ -551,6 +552,15 @@ function renderConfigTypeBody(type, candidate, decision, suggestion) {
     renderFieldConfig(candidate, decision, suggestion);
   } else if (type === 'block') {
     renderBlockConfig(candidate, decision);
+  } else if (type === 'photoGallery') {
+    body.innerHTML = `
+      <p class="hint">Wstawi w tym miejscu galerię zdjęć — dokładnie ten sam mechanizm, którego już używają <b>Dokumenty seryjne</b>: przy generowaniu dokumentu zostaną tu automatycznie wstawione wszystkie zdjęcia z folderu dopasowanego po adresie do danego wiersza.</p>
+      <p class="hint">Podgląd w Kreatorze nie pokaże prawdziwego zdjęcia (Kreator nie zna folderu ze zdjęciami) — zdjęcia pojawią się dopiero przy generowaniu dokumentów w Dokumentach seryjnych.</p>
+      <div class="hero-actions u-mt-3"><button type="button" class="btn btn-primary" id="savePhotoGalleryBtn">Zapisz</button></div>`;
+    $('#savePhotoGalleryBtn').addEventListener('click', async () => {
+      await apiJson('POST', `/api/jobs/${state.jobId}/candidates/${encodeURIComponent(candidate.id)}/photo-gallery`, {});
+      await afterCandidateSave();
+    });
   }
 }
 
