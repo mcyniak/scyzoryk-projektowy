@@ -1262,9 +1262,25 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
     // przez Scyzoryka (lib/smartTemplateRules.js), nie przez Worda. Wspiera
     // WYLACZNIE pojedynczy plik szablonu - dokladnie tak, jak buduje go
     // Kreator (jeden plik "<nazwa>_seryjny.docx"); paczka wielu plikow
-    // (multiTemplateFiles) zawsze idzie sciezka legacy.
+    // zawsze idzie sciezka legacy.
+    //
+    // REAL BUG (zgloszony przez uzytkownika 2026-09-24, "nie zapisuja sie
+    // wordy ani nie dodaja sie zdjecia jak trzeba"): warunek nizej pierwotnie
+    // sprawdzal `singleTemplateFiles.length === 1` (pole formularza `template`,
+    // liczba pojedyncza) - ale JEDYNA realna, osiagalna sciezka UI
+    // (public/inline-1.js#uploadFiles) ZAWSZE wysyla pliki szablonu pod polem
+    // `templates` (liczba mnoga, `fd.append('templates', f)`), nawet gdy user
+    // wybral dokladnie JEDEN plik. `singleTemplateFiles` bylo wiec ZAWSZE puste
+    // w praktyce -> ten warunek nigdy nie byl prawdziwy -> wykrywanie Smart
+    // Template bylo martwym kodem od (co najmniej) tego refaktoru UI: kazdy
+    // wzor z Kreatora szedl cicho sciezka legacy (puste pola SCY_F_* zamiast
+    // prawdziwych wartosci z Excela, brak wsparcia dla "Zdjecia_pomontazowe"
+    // jako pola Smart Template). Poprawka: liczy sie CALKOWITA liczba
+    // wgranych plikow szablonu (`templateInfos.length`), niezaleznie od tego,
+    // pod jakim polem formularza dotarly - dokladnie tak jak reszta tej
+    // funkcji juz konsekwentnie uzywa `templateInfos`, nie osobnych list.
     let smartManifest = null;
-    if (!multiTemplateFiles.length && singleTemplateFiles.length === 1) {
+    if (templateInfos.length === 1) {
       try {
         smartManifest = readSmartTemplateManifest(templateInfos[0].path);
       } catch (err) {

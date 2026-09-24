@@ -368,3 +368,121 @@ test('imageMatching.js: model folderow adresowych (dowolna liczba zdjec, natural
     assert.ok(groups[0].variants['PV_'], 'powiazanie z docx ma pierwszenstwo przed defaultSheet');
   });
 }
+
+// =====================================================================
+// Real bug zgloszony przez uzytkownika (2026-09-24, "nie zapisuja sie wordy
+// ani nie dodaja sie zdjecia jak trzeba"): /api/upload wykrywalo Smart
+// Template TYLKO gdy plik trafil pod polem formularza `template` (liczba
+// pojedyncza), ale JEDYNA realna, osiagalna sciezka UI
+// (public/inline-1.js#uploadFiles) ZAWSZE wysyla szablony pod polem
+// `templates` (liczba mnoga), nawet dla jednego pliku - `singleTemplateFiles`
+// bylo wiec ZAWSZE puste w praktyce i wykrywanie Smart Template bylo martwym
+// kodem. Ten test gania przez PRAWDZIWY endpoint HTTP dokladnie tak, jak
+// robi to realny upload z przegladarki (pole `templates`), nie tylko
+// jednostkowo readSmartTemplateManifest() w oderwaniu od routingu.
+// =====================================================================
+{
+  const http = require('node:http');
+  const os = require('node:os');
+  const XLSX = require(path.join(__dirname, '..', 'apps', 'ocr-audytow', 'node_modules', 'xlsx'));
+  const AdmZip = require(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'node_modules', 'adm-zip'));
+  const { app } = require('../apps/dokumenty-seryjne/server');
+
+  const SMART_MANIFEST = {
+    schemaVersion: 1, templateId: 't1', templateName: 'Test', addressColumn: 'Adres',
+    fields: [{ id: 'fld_adres', label: 'Adres', mergeFieldName: 'SCY_F_A1B2C3D4', required: true, emptyPolicy: 'error', unknownPolicy: 'error', valueSpec: { type: 'column', column: 'Adres' } }],
+    blocks: [], variantGroups: [], manualRegions: []
+  };
+
+  function buildSmartFixtureDocx(dir) {
+    const zip = new AdmZip();
+    zip.addFile('[Content_Types].xml', Buffer.from(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      '</Types>', 'utf8'));
+    zip.addFile('_rels/.rels', Buffer.from(
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+      '</Relationships>', 'utf8'));
+    zip.addFile('word/document.xml', Buffer.from('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p/></w:body></w:document>', 'utf8'));
+    const json = JSON.stringify(SMART_MANIFEST);
+    zip.addFile('customXml/item1.xml', Buffer.from(
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><scyzoryk:smartTemplate xmlns:scyzoryk="urn:scyzoryk:smart-template:v1" version="1"><![CDATA[${json}]]></scyzoryk:smartTemplate>`,
+      'utf8'));
+    const filePath = path.join(dir, 'Wzor_Test_seryjny.docx');
+    zip.writeZip(filePath);
+    return filePath;
+  }
+
+  // Kolumny ID/Beneficjent dolozone obok Adresu, zeby TA SAMA tabela dzialala
+  // zarowno w scenariuszu Smart Template (wymaga tylko "Adres"), jak i w
+  // scenariuszu legacy nizej (validateReferenceColumns wymaga ID/Adres/Beneficjenta).
+  function buildMatchingXlsx(dir) {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['ID', 'Adres', 'Beneficjent'], [1, 'Testowa 1', 'Jan Kowalski']]), 'Dane');
+    const xlsxPath = path.join(dir, 'dane.xlsx');
+    XLSX.writeFile(wb, xlsxPath);
+    return xlsxPath;
+  }
+
+  async function withTestServer(fn) {
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((resolve) => server.once('listening', resolve));
+    const port = server.address().port;
+    try {
+      await fn(port);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+
+  test('/api/upload: wykrywa Smart Template gdy plik przyjdzie pod polem `templates` (liczba mnoga) - DOKLADNIE tak, jak wysyla go prawdziwy UI (inline-1.js), nie tylko pod martwym polem `template`', async (t) => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ds-smart-upload-'));
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+    const docxPath = buildSmartFixtureDocx(dir);
+    const xlsxPath = buildMatchingXlsx(dir);
+
+    await withTestServer(async (port) => {
+      const form = new FormData();
+      form.append('excel', new Blob([await fsp.readFile(xlsxPath)]), 'dane.xlsx');
+      // DOKLADNIE jak public/inline-1.js#uploadFiles: `fd.append('templates', f)`,
+      // NIGDY pole `template` (liczba pojedyncza) - to jest sedno bledu.
+      form.append('templates', new Blob([await fsp.readFile(docxPath)]), 'Wzor_Test_seryjny.docx');
+
+      const res = await fetch(`http://127.0.0.1:${port}/api/upload`, {
+        method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form,
+      });
+      const json = await res.json();
+      assert.equal(res.status, 200, JSON.stringify(json));
+      assert.ok(json.ok, JSON.stringify(json));
+      assert.ok(json.smartTemplate, `oczekiwano wykrytego Smart Template, dostano: ${JSON.stringify(json.smartTemplate)}`);
+      assert.equal(json.smartTemplate.templateName, 'Test');
+      assert.equal(json.smartTemplate.fieldsCount, 1);
+    });
+  });
+
+  test('/api/upload: DWA pliki szablonu pod polem `templates` (prawdziwa paczka wariantow) dalej idzie sciezka legacy, nie probuje Smart Template', async (t) => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ds-smart-upload-multi-'));
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+    const docxPath1 = buildSmartFixtureDocx(dir);
+    const xlsxPath = buildMatchingXlsx(dir);
+
+    await withTestServer(async (port) => {
+      const form = new FormData();
+      form.append('excel', new Blob([await fsp.readFile(xlsxPath)]), 'dane.xlsx');
+      form.append('templates', new Blob([await fsp.readFile(docxPath1)]), 'Wariant_A.docx');
+      form.append('templates', new Blob([await fsp.readFile(docxPath1)]), 'Wariant_B.docx');
+
+      const res = await fetch(`http://127.0.0.1:${port}/api/upload`, {
+        method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form,
+      });
+      const json = await res.json();
+      assert.equal(res.status, 200, JSON.stringify(json));
+      assert.equal(json.smartTemplate, null, `wiele plikow szablonu nigdy nie powinno isc sciezka Smart Template: ${JSON.stringify(json.smartTemplate)}`);
+    });
+  });
+}

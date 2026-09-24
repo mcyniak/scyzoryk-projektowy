@@ -535,6 +535,20 @@ test('mailmerge-to-pdf.ps1: -SmartTemplateMode jest przekazywane z server.js TYL
   assert.match(source, /if \(job\.smartManifest\) args\.push\('-SmartTemplateMode'\);/);
 });
 
+test('wordSmartTemplate.ps1: KAZDY "return" w Apply-ScyzorykSmartBlocks uzywa operatora przecinka (",$result") - real bug zlapany na zywym dokumencie 2026-09-24 (pusta/jednoelementowa Generic.List zwrocona przez "return $result" zamienia sie u wywolujacego w $null/goly element, wiec $smartBlockIssues.Count w mailmerge-to-pdf.ps1 rzuca "The property \'Count\' cannot be found on this object" dla KAZDEGO rekordu wzoru bez blokow ("blocks: []" - normalny, czesty przypadek)', async () => {
+  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
+  const fnStart = source.indexOf('function Apply-ScyzorykSmartBlocks(');
+  assert.ok(fnStart >= 0, 'funkcja Apply-ScyzorykSmartBlocks powinna istnieć w lib/wordSmartTemplate.ps1');
+  const nextFnStart = source.indexOf('\nfunction ', fnStart + 1);
+  const fnBody = nextFnStart > fnStart ? source.slice(fnStart, nextFnStart) : source.slice(fnStart);
+
+  const returnLines = fnBody.split('\n').filter(line => !/^\s*#/.test(line) && /\breturn\b/.test(line) && /\$result\b/.test(line));
+  assert.ok(returnLines.length >= 5, `oczekiwano co najmniej 5 linii "return ...$result" w Apply-ScyzorykSmartBlocks, znaleziono ${returnLines.length}`);
+  for (const line of returnLines) {
+    assert.match(line, /return\s+,\$result\b/, `każdy return $result musi używać operatora przecinka (",$result"), inaczej pusta/jednoelementowa lista zamienia się w $null/goły element u wywołującego: ${line.trim()}`);
+  }
+});
+
 // ===========================================================================
 // lib/wordSmartTemplate.ps1 - regresja statyczna dla audytu "0 kandydatow"
 // (2026-09-10). Zywy Word na CI nie jest dostepny, wiec ponizsze sprawdzaja

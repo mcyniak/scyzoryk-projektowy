@@ -773,20 +773,39 @@ function Apply-ScyzorykSmartBlocks($doc, $record) {
   # zeby jeden zly bookmark nie przerywal calego rekordu w polowie generowania
   # calej paczki. Wywolujacy (petla per-record w mailmerge-to-pdf.ps1) decyduje,
   # co zrobic z wynikiem (np. dopisac do logu/debug-events.jsonl).
+  #
+  # REAL BUG (zlapany na zywym dokumencie klienta 2026-09-24, po naprawie
+  # niezaleznego bledu wykrywania Smart Template w server.js, ktory dotad
+  # maskowal ten): KAZDY `return $result` w tej funkcji byl bledny, nie tylko
+  # ten z komentarza przy Range.Delete() nizej. PowerShell "rozpakowuje"
+  # zwracana kolekcje IEnumerable na wyjsciu z funkcji - PUSTA
+  # Generic.List[object] (najczestszy przypadek: manifest bez zadnych blokow,
+  # `blocks: []`) staje sie u WYWOLUJACEGO gola wartoscia $null, a lista z
+  # DOKLADNIE JEDNYM elementem (np. pojedynczy blad odczytu _scyBlocksJson)
+  # zamienia sie w goly pojedynczy element (nie liste). W obu przypadkach
+  # `$smartBlockIssues.Count` w mailmerge-to-pdf.ps1 rzuca pod StrictMode
+  # "The property 'Count' cannot be found on this object" - i to dla KAZDEGO
+  # rekordu, bo `blocks: []` jest normalnym, czestym przypadkiem (wzor bez
+  # zadnego warunku). Zweryfikowane empirycznie (PowerShell 5.1: pusta lista
+  # zwrocona przez `return $lista` u wywolujacego to $null; z jednym
+  # elementem to goly element, NIE lista). Naprawa: jednoelementowy operator
+  # przecinka (`return ,$result`) wymusza zachowanie typu kolekcji niezaleznie
+  # od liczby elementow (0, 1 czy wiecej) - zastosowane przy KAZDYM return
+  # w tej funkcji, nie tylko przy tym z historycznego komentarza.
   $result = New-Object System.Collections.Generic.List[object]
-  if ($null -eq $doc -or $null -eq $record) { return $result }
+  if ($null -eq $doc -or $null -eq $record) { return ,$result }
 
   $blocksProp = $record.PSObject.Properties['_scyBlocksJson']
-  if ($null -eq $blocksProp -or [string]::IsNullOrWhiteSpace([string]$blocksProp.Value)) { return $result }
+  if ($null -eq $blocksProp -or [string]::IsNullOrWhiteSpace([string]$blocksProp.Value)) { return ,$result }
 
   $blocksState = $null
   try {
     $blocksState = [string]$blocksProp.Value | ConvertFrom-Json
   } catch {
     $result.Add([pscustomobject]@{ level = 'error'; message = "Nie udalo sie odczytac _scyBlocksJson: $($_.Exception.Message)" }) | Out-Null
-    return $result
+    return ,$result
   }
-  if ($null -eq $blocksState) { return $result }
+  if ($null -eq $blocksState) { return ,$result }
 
   # KROK 1: zbierz WSZYSTKIE potrzebne zakresy PRZED jakakolwiek mutacja
   # dokumentu. Usuwanie tresci/bookmarka przesuwa pozycje (Start/End) kazdego
@@ -847,5 +866,5 @@ function Apply-ScyzorykSmartBlocks($doc, $record) {
     }
   }
 
-  return $result
+  return ,$result
 }
