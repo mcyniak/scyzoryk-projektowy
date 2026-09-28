@@ -36,11 +36,11 @@
       </div>
     </header>
 
-    <section class="hero">
+    <section class="hero" id="heroSection">
       <div class="panel hero-main">
         <div class="kicker">Word → gotowy wzór seryjny</div>
         <h1>Przygotuj Worda do automatycznego generowania</h1>
-        <p class="lead">Wczytaj dokument z oznaczonymi fragmentami i przykładowy Excel. Wskaż, które kolory oznaczają pola robocze, określ skąd mają pochodzić dane, a Kreator przygotuje wzór do użycia w Dokumentach seryjnych.</p>
+        <p class="lead">Wczytaj dokument z zaznaczonymi kolorem fragmentami i przykładowy Excel. Kreator podpowie, skąd ma pochodzić każda wartość, a gotowy wzór wgrasz do Dokumentów seryjnych.</p>
       </div>
       <aside class="panel info-card">
         <h2>Jak działa?</h2>
@@ -52,14 +52,33 @@
       </aside>
     </section>
 
+    <div id="resumeBanner" class="alert alert-info hidden">
+      <svg class="icon"><use href="/shared/icons.svg#i-check-circle"/></svg>
+      <div class="alert-body">
+        <div class="alert-title">Masz niedokończony wzór</div>
+        <div class="alert-desc" id="resumeDesc"></div>
+        <div class="alert-actions">
+          <button type="button" id="resumeBtn" class="btn btn-primary btn-sm">Kontynuuj</button>
+          <button type="button" id="resumeDismissBtn" class="btn btn-ghost btn-sm">Zacznij od nowa</button>
+        </div>
+      </div>
+    </div>
+
+    <nav class="stepper kreator-stepper hidden" id="stepper" aria-label="Postęp">
+      <div class="step" data-step="1"><span class="step-index">1</span><span class="step-label"><small>Krok 1</small>Pliki</span></div>
+      <div class="step" data-step="2"><span class="step-index">2</span><span class="step-label"><small>Krok 2</small>Oznaczenia</span></div>
+      <div class="step" data-step="3"><span class="step-index">3</span><span class="step-label"><small>Krok 3</small>Konfiguracja</span></div>
+      <div class="step" data-step="4"><span class="step-index">4</span><span class="step-label"><small>Krok 4</small>Sprawdź i zbuduj</span></div>
+    </nav>
+
     <div id="globalNotice" class="panel notice hidden" role="alert"></div>
 
-    <!-- KROK 1: pliki + paleta + skan -->
-    <section class="panel" id="step1Panel">
+    <!-- KROK 1: pliki -->
+    <section class="panel" id="step1Panel" data-step-panel="1">
       <div class="panel-header">
         <div>
           <h2 class="panel-title"><span class="step-num">1</span>Wzór i przykładowy Excel</h2>
-          <p class="panel-desc">Oznaczenia mogą mieć dowolny kolor — sam fakt oznaczenia przez autora dokumentu wystarczy.</p>
+          <p class="panel-desc">Word z zaznaczonymi fragmentami i Excel z danymi kilku adresów tej inwestycji.</p>
         </div>
       </div>
       <form id="uploadForm">
@@ -72,9 +91,9 @@
           </label>
         </div>
         <div class="hero-actions u-mt-4">
-          <button type="submit" id="uploadBtn" class="btn btn-primary">Sprawdź pliki</button>
+          <button type="submit" id="uploadBtn" class="btn btn-primary">Wczytaj pliki</button>
         </div>
-        <div id="uploadStatus"></div>
+        <div id="uploadStatus" class="step-status"></div>
       </form>
 
       <div id="afterUpload" class="hidden u-mt-4">
@@ -86,123 +105,126 @@
           <div class="field">
             <label class="label" for="addressColumnSelect">Kolumna adresu</label>
             <select id="addressColumnSelect" class="input"></select>
+            <span class="field-help">Po tej kolumnie nazywane są pliki i dopasowywane zdjęcia.</span>
           </div>
         </div>
-        <div class="hero-actions u-mt-3">
-          <button type="button" id="detectMarkingsBtn" class="btn btn-secondary">Wykryj oznaczenia</button>
-        </div>
-        <div id="markingsStatus"></div>
-
-        <div id="markingsPaletteBox" class="hidden u-mt-4">
-          <h3 class="u-text-md">Które oznaczenia są polami roboczymi?</h3>
-          <p class="hint">Zaznacz kolory/rodzaje, które we wzorze oznaczają miejsca do wypełnienia. Niezaznaczone (np. nagłówki tabel, komórki informacyjne) zostaną pominięte.</p>
-          <div id="markingsList" class="markings-list"></div>
-          <div class="hero-actions u-mt-3">
-            <button type="button" id="scanBtn" class="btn btn-primary">Skanuj wybrane oznaczenia</button>
-          </div>
-          <div id="scanStatus"></div>
-        </div>
+        <div id="sheetInfo" class="hint"></div>
       </div>
     </section>
 
-    <!-- KROK 2: konfiguracja kandydatów -->
-    <section class="panel hidden" id="step2Panel">
+    <!-- KROK 2: paleta oznaczen -->
+    <section class="panel hidden" id="step2Panel" data-step-panel="2">
       <div class="panel-header">
         <div>
-          <h2 class="panel-title"><span class="step-num">2</span>Znalezione miejsca</h2>
-          <p class="panel-desc">Skonfiguruj każdy kandydat: STAŁE / Z EXCELA / WARIANT / WARUNEK / DO PROJEKTANTA.</p>
+          <h2 class="panel-title"><span class="step-num">2</span>Które oznaczenia są polami do wypełnienia?</h2>
+          <p class="panel-desc">Zaznaczone są wszystkie kolory poza tymi, które występują tylko w nagłówkach tabel.</p>
         </div>
       </div>
-      <div id="autoConfigPanel" class="alert alert-info hidden u-mt-3">
+      <div id="markingsStatus" class="step-status"></div>
+      <div id="markingsList" class="markings-list"></div>
+      <div class="hero-actions u-mt-4">
+        <button type="button" id="scanBtn" class="btn btn-primary">Znajdź miejsca do wypełnienia</button>
+        <button type="button" id="detectMarkingsBtn" class="btn btn-ghost btn-sm">Wykryj ponownie</button>
+      </div>
+      <div id="scanStatus" class="step-status"></div>
+    </section>
+
+    <!-- KROK 3: konfiguracja kandydatow -->
+    <section class="panel hidden" id="step3Panel" data-step-panel="3">
+      <div class="panel-header">
+        <div>
+          <h2 class="panel-title"><span class="step-num">3</span>Skąd ma pochodzić każda wartość?</h2>
+          <p class="panel-desc">Kliknij fragment na liście i wybierz jego źródło. Sugestie Kreatora zaakceptujesz jednym kliknięciem.</p>
+        </div>
+      </div>
+
+      <div id="autoConfigPanel" class="alert alert-info hidden">
         <svg class="icon"><use href="/shared/icons.svg#i-check-circle"/></svg>
         <div class="alert-body">
-          <div class="alert-title">Automatyczna analiza</div>
+          <div class="alert-title">Podpowiedzi Kreatora</div>
           <div class="alert-desc" id="autoConfigSummary"></div>
           <div class="alert-desc" id="sampleRowInfo"></div>
           <div class="alert-actions">
-            <button type="button" id="reanalyzeBtn" class="btn btn-secondary btn-sm">Przeanalizuj ponownie</button>
             <button type="button" id="applyHighConfidenceBtn" class="btn btn-primary btn-sm">Zastosuj pewne</button>
+            <button type="button" id="reanalyzeBtn" class="btn btn-secondary btn-sm">Przeanalizuj ponownie</button>
             <button type="button" id="undoAutoConfigBtn" class="btn btn-ghost btn-sm hidden">Cofnij automatyczne przypisania</button>
           </div>
           <p id="autoConfigStatus"></p>
         </div>
       </div>
-      <div class="candidate-metrics" id="candidateMetrics"></div>
-      <div class="candidate-filters" id="candidateFilters"></div>
-      <div class="candidate-list" id="candidateList"></div>
+
+      <div class="config-progress u-mt-4">
+        <div class="progress-meta"><span id="configProgressLabel"></span><strong id="configProgressPercent"></strong></div>
+        <div class="progress"><div class="bar" id="configProgressBar"></div></div>
+      </div>
+      <div class="candidate-filters u-mt-3" id="candidateFilters"></div>
+
+      <div class="config-grid">
+        <div class="candidate-list" id="candidateList" role="listbox" aria-label="Znalezione fragmenty"></div>
+
+        <aside class="config-side" id="candidateConfigPanel" aria-live="polite">
+          <div id="configEmpty" class="config-empty">
+            <strong>Wybierz fragment z listy</strong>
+            <span>Tu ustawisz, skąd ma pochodzić jego wartość w każdym dokumencie.</span>
+          </div>
+          <div id="configBody" class="hidden">
+            <div class="config-context" id="candidateConfigContext"></div>
+            <div class="config-type-choices" id="configTypeChoices" role="tablist">
+              <button type="button" class="config-type-btn" data-type="field"><strong>Z Excela</strong><span>inna wartość w każdym dokumencie</span></button>
+              <button type="button" class="config-type-btn" data-type="constant"><strong>Stały tekst</strong><span>taki sam wszędzie</span></button>
+              <button type="button" class="config-type-btn" data-type="block"><strong>Warunek</strong><span>fragment tylko gdy…</span></button>
+              <button type="button" class="config-type-btn" data-type="manual"><strong>Do projektanta</strong><span>zostaje do ręcznej edycji</span></button>
+              <button type="button" class="config-type-btn" data-type="photoGallery"><strong>Zdjęcia</strong><span>galeria po adresie</span></button>
+            </div>
+            <div id="configTypeBody" class="u-mt-4"></div>
+            <div id="configError" class="config-error hidden" role="alert"></div>
+            <div class="config-actions">
+              <button type="button" class="btn btn-primary" id="saveConfigBtn">Zapisz</button>
+              <label class="check config-autonext"><input type="checkbox" id="autoNextToggle" checked> potem następny bez decyzji</label>
+              <button type="button" class="btn btn-ghost btn-sm" id="closeConfigBtn">Zamknij</button>
+            </div>
+          </div>
+        </aside>
+      </div>
+
       <div class="hero-actions u-mt-4">
-        <button type="button" id="toStep3Btn" class="btn btn-primary">Sprawdź wzór</button>
+        <button type="button" id="toStep4Btn" class="btn btn-primary">Dalej: sprawdź i zbuduj</button>
       </div>
     </section>
 
-    <!-- panel konfiguracji kandydata (side panel prosty - pod lista) -->
-    <section class="panel hidden" id="candidateConfigPanel">
+    <!-- KROK 4: sprawdzenie, podglad, budowa -->
+    <section class="panel hidden" id="step4Panel" data-step-panel="4">
       <div class="panel-header">
         <div>
-          <h2 class="panel-title">Konfiguracja kandydata</h2>
-          <p class="panel-desc" id="candidateConfigContext"></p>
+          <h2 class="panel-title"><span class="step-num">4</span>Sprawdź i zbuduj wzór</h2>
+          <p class="panel-desc">Kreator sprawdza konfigurację na wszystkich wierszach przykładowego Excela.</p>
         </div>
+        <button type="button" id="validateBtn" class="btn btn-secondary btn-sm">Sprawdź ponownie</button>
       </div>
-      <p class="hint">Wybierz, skąd ma pochodzić ta wartość w każdym wygenerowanym dokumencie:</p>
-      <div class="config-type-choices" id="configTypeChoices">
-        <button type="button" class="config-type-btn" data-type="constant" title="Ten sam tekst we wszystkich dokumentach, niezależnie od wiersza w Excelu">STAŁE</button>
-        <button type="button" class="config-type-btn" data-type="field" title="Wartość pobierana z wybranej kolumny Excela, osobna dla każdego dokumentu">Z EXCELA</button>
-        <button type="button" class="config-type-btn" data-type="block" title="Fragment pojawia się tylko wtedy, gdy dane z Excela spełniają podany warunek">WARUNEK / BLOK</button>
-        <button type="button" class="config-type-btn" data-type="manual" title="Fragment zostaje bez zmian — projektant uzupełni go ręcznie po wygenerowaniu">DO PROJEKTANTA</button>
-        <button type="button" class="config-type-btn" data-type="photoGallery" title="Wstawi galerię zdjęć dopasowanych po adresie — ten sam mechanizm, którego już używają Dokumenty seryjne">ZDJĘCIA</button>
-      </div>
-      <div id="configTypeBody" class="u-mt-4"></div>
-      <div class="hero-actions u-mt-4">
-        <button type="button" id="closeConfigBtn" class="btn btn-secondary">Zamknij</button>
+      <div id="validationResult"></div>
+
+      <div class="final-grid u-mt-4">
+        <div class="final-card">
+          <h3 class="u-text-md">Próbka dla jednego adresu</h3>
+          <label class="label u-mt-2" for="previewRecordSelect">Wiersz z Excela</label>
+          <select id="previewRecordSelect" class="input"></select>
+          <div class="hero-actions u-mt-3">
+            <button type="button" id="previewBtn" class="btn btn-secondary">Wygeneruj próbkę</button>
+          </div>
+          <div id="previewResult" class="u-mt-3"></div>
+        </div>
+        <div class="final-card">
+          <h3 class="u-text-md">Gotowy wzór</h3>
+          <label class="label u-mt-2" for="templateNameInput">Nazwa wzoru</label>
+          <input type="text" id="templateNameInput" class="input" />
+          <span class="field-help">Plik zapisze się jako „&lt;nazwa&gt;_seryjny.docx”.</span>
+          <div class="hero-actions u-mt-3">
+            <button type="button" id="buildBtn" class="btn btn-primary">Zbuduj i pobierz wzór</button>
+          </div>
+          <div id="buildResult" class="u-mt-3"></div>
+        </div>
       </div>
     </section>
-
-    <!-- KROK 3: walidacja + podgląd -->
-    <section class="panel hidden" id="step3Panel">
-      <div class="panel-header">
-        <div>
-          <h2 class="panel-title"><span class="step-num">3</span>Sprawdzenie i podgląd</h2>
-          <p class="panel-desc">Walidacja przechodzi po rzeczywistych rekordach przykładowego arkusza.</p>
-        </div>
-      </div>
-      <div class="hero-actions">
-        <button type="button" id="validateBtn" class="btn btn-secondary">Sprawdź wzór</button>
-      </div>
-      <div id="validationResult" class="u-mt-4"></div>
-
-      <div class="u-mt-4">
-        <label class="label" for="previewRecordSelect">Rekord do próbki</label>
-        <select id="previewRecordSelect" class="input"></select>
-        <div class="hero-actions u-mt-3">
-          <button type="button" id="previewBtn" class="btn btn-secondary">Wygeneruj próbkę</button>
-        </div>
-        <div id="previewResult" class="u-mt-3"></div>
-      </div>
-
-      <div class="hero-actions u-mt-4">
-        <button type="button" id="toStep4Btn" class="btn btn-primary">Przejdź do budowy wzoru</button>
-      </div>
-    </section>
-
-    <!-- KROK 4: build -->
-    <section class="panel hidden" id="step4Panel">
-      <div class="panel-header">
-        <div>
-          <h2 class="panel-title"><span class="step-num">4</span>Zbuduj wzór</h2>
-          <p class="panel-desc">Gotowy plik wrzuć potem do „Dokumenty seryjne PDF”.</p>
-        </div>
-      </div>
-      <label>Nazwa wzoru
-        <input type="text" id="templateNameInput" class="input" />
-        <span class="field-help">Plik zapisze się jako „&lt;nazwa&gt;_seryjny.docx”.</span>
-      </label>
-      <div class="hero-actions u-mt-4">
-        <button type="button" id="buildBtn" class="btn btn-primary">Zbuduj wzór</button>
-      </div>
-      <div id="buildResult" class="u-mt-4"></div>
-    </section>
-
-    <div id="jobStatusBar" class="job-status-bar hidden"></div>
   </main>
 
   <script src="app.js"></script>

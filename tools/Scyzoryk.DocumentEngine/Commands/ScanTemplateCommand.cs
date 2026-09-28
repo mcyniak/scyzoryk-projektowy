@@ -27,6 +27,8 @@ public static class ScanTemplateCommand
                     RawValue = p.RawValue,
                     DisplayColor = p.DisplayColor,
                     Count = p.Count,
+                    HeaderRowCount = p.HeaderRowCount,
+                    Suggested = p.Suggested,
                     Examples = p.Examples.Select(e => new PaletteExample { Text = e }).ToList(),
                 }).ToList(),
             };

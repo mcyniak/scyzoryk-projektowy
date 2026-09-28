@@ -159,6 +159,39 @@ public class MigrationEngineTests : IDisposable
     }
 
     [Fact]
+    public void Paleta_KolorTylkoWNaglowkuTabeli_NieJestDomyslnieZaznaczony()
+    {
+        static TableCell Cell(string text, string? fill)
+        {
+            var cell = new TableCell();
+            if (fill is not null) cell.Append(new TableCellProperties(new Shading { Val = ShadingPatternValues.Clear, Color = "auto", Fill = fill }));
+            cell.Append(new Paragraph(new Run(new Text(text))));
+            return cell;
+        }
+        var path = Path.Combine(_dir, "paleta.docx");
+        using (var doc = WordprocessingDocument.Create(path, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var table = new Table(
+                new TableRow(Cell("Pozycja", "D9E2F3"), Cell("Wartość", "D9E2F3")),
+                new TableRow(Cell("Uczestnik projektu:", null), Cell("Jan Kowalski", "FFE599")),
+                new TableRow(Cell("Falownik:", null), Cell("SE5K", "FFE599")));
+            // Kolor danych, ktory WYSTEPUJE TEZ w naglowku - nadal proponowany.
+            var table2 = new Table(
+                new TableRow(Cell("Moc", "C6E0B4"), Cell("Typ", null)),
+                new TableRow(Cell("5,4", "C6E0B4"), Cell("x", null)));
+            main.Document = new Document(new Body(table, table2, new Paragraph(new Run(new Text("koniec"))), new SectionProperties()));
+            main.Document.Save();
+        }
+        using var read = WordprocessingDocument.Open(path, false);
+        var palette = Scyzoryk.DocumentEngine.OpenXml.PaletteScanner.ScanPalette(read).ToDictionary(p => p.Key);
+        Assert.False(palette["shading:D9E2F3"].Suggested);
+        Assert.Equal(2, palette["shading:D9E2F3"].HeaderRowCount);
+        Assert.True(palette["shading:FFE599"].Suggested);
+        Assert.True(palette["shading:C6E0B4"].Suggested);
+    }
+
+    [Fact]
     public void PdfRenderer_OnlyOfficeZJawnegoKatalogu_WordTylkoNaZadanie()
     {
         var fakeDir = Path.Combine(_dir, "onlyoffice");

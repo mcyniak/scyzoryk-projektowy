@@ -250,7 +250,7 @@ function scoreCandidateColumn(candidate, column, { sampleRowRecord, mappingPrior
 
   if (sampleCmp === 'strong') {
     score += 65;
-    reasons.push({ code: 'SAMPLE_ROW_EXACT', weight: 65, message: `Wartość (z jednostką, jeśli była) zgodna z wykrytym wierszem wzorcowym w kolumnie "${column.name}".` });
+    reasons.push({ code: 'SAMPLE_ROW_EXACT', weight: 65, message: `We wzorze jest dokładnie wartość z kolumny „${column.name}” wiersza, którym wypełniono wzór.` });
   } else if (sampleCmp === 'weak') {
     score += 40;
     reasons.push({ code: 'NUMERIC_VALUE_COMPATIBLE', weight: 40, message: `Ta sama liczba co w wykrytym wierszu wzorcowym w kolumnie "${column.name}", ale bez pewności co do jednostki.` });
@@ -263,7 +263,7 @@ function scoreCandidateColumn(candidate, column, { sampleRowRecord, mappingPrior
       const strictHits = column.strictValueIndex.get(numericMatchKey(parsed)) || [];
       if (strictHits.length > 0) {
         score += 30;
-        reasons.push({ code: 'EXACT_VALUE_AND_UNIT', weight: 30, message: `Wartość i jednostka znalezione w ${strictHits.length} wierszu/wierszach kolumny "${column.name}".` });
+        reasons.push({ code: 'EXACT_VALUE_AND_UNIT', weight: 30, message: `Ta wartość (z jednostką) występuje w kolumnie „${column.name}” (${strictHits.length} ${strictHits.length === 1 ? 'wiersz' : 'wierszy'}).` });
       } else {
         const weakHits = column.valueIndex.get(candNorm) || [];
         if (weakHits.length > 0) {
@@ -275,7 +275,7 @@ function scoreCandidateColumn(candidate, column, { sampleRowRecord, mappingPrior
       const hits = column.valueIndex.get(candNorm) || [];
       if (hits.length > 0) {
         score += 30;
-        reasons.push({ code: 'EXACT_MATCH_ANYWHERE', weight: 30, message: `Wartość znaleziona w ${hits.length} wierszu/wierszach kolumny "${column.name}".` });
+        reasons.push({ code: 'EXACT_MATCH_ANYWHERE', weight: 30, message: `Ta wartość występuje w kolumnie „${column.name}” (${hits.length} ${hits.length === 1 ? 'wiersz' : 'wierszy'}).` });
       }
     }
   }
@@ -484,7 +484,16 @@ function classifyManualCandidate(candidate, fieldTier) {
 
   // Krotki fragment dzielacy TYLKO slowo-klucz (np. samo "konstrukcja" w
   // niezwiazanym zdaniu) nie ma stac sie automatycznie "Do projektanta".
-  if (blockText.trim().length < MANUAL_MIN_BLOCK_LENGTH) return { tier: 'none' };
+  if (blockText.trim().length < MANUAL_MIN_BLOCK_LENGTH) {
+    // Krotka linia wyniku obliczen ("Spadek napiecia na odcinku DC: 0,87%") -
+    // wartosc WEWNATRZ akapitu z mocnym slowem-kluczem, nie caly akapit
+    // (przeglad UX 2026-09-28: zostawala bez zadnej podpowiedzi). Tylko review.
+    const ownText = String(candidate.text || '').trim();
+    if (hasStrong && ownText && ownText !== blockText.trim()) {
+      return { tier: 'review', reasons: [{ code: 'MANUAL_KEYWORD_CONTEXT', weight: 0, message: 'Wartość w linii z wynikiem obliczeń - zwykle uzupełnia ją projektant.' }] };
+    }
+    return { tier: 'none' };
+  }
 
   const reasons = [{ code: 'MANUAL_KEYWORD_CONTEXT', weight: 0, message: 'Kontekst zawiera język typowy dla obliczeń/opisu technicznego.' }];
   if (hasStrong && blockText.trim().length >= MANUAL_STRONG_MIN_LENGTH) {
@@ -495,7 +504,7 @@ function classifyManualCandidate(candidate, fieldTier) {
 
 // --- detekcja stalych (konserwatywna, nigdy auto w tej turze) ----------------
 
-function detectConstantCandidate(candidate, scoredColumns, repeatCount = 1, fieldTier = null) {
+function detectConstantCandidate(candidate, scoredColumns, repeatCount = 1, fieldTier = null, columnProfiles = null) {
   const bestScore = scoredColumns && scoredColumns.length ? scoredColumns[0].score : 0;
   // Jak w classifyManualCandidate - "wyraznie dynamiczne" znaczy realny dowod
   // (auto/review PO bramce dowodowej classifyTier), nie sam surowy top1.score
@@ -507,6 +516,19 @@ function detectConstantCandidate(candidate, scoredColumns, repeatCount = 1, fiel
   const norm = normalizeValue(candidate.text);
   if (!norm || isTrivialValue(norm)) return { tier: 'none' };
 
+  // Wartosc identyczna we WSZYSTKICH wierszach jakiejs kolumny (np. "Gmina
+  // Wierzchlas" w naglowku calej inwestycji) - nie zmienia sie miedzy
+  // dokumentami, wiec najprosciej zostawic ja jako stala (dodane 2026-09-28,
+  // przeglad UX Kreatora: taki kandydat zostawal wczesniej bez zadnej propozycji).
+  const uniformColumn = (columnProfiles || []).find((p) => p.totalCount >= 2 && p.emptyCount === 0 && p.uniqueCount === 1 && p.valueIndex.has(norm));
+  if (uniformColumn) {
+    return {
+      tier: 'review',
+      column: uniformColumn.name,
+      reasons: [{ code: 'CONSTANT_UNIFORM_COLUMN', weight: 1, message: `Ta sama wartość we wszystkich wierszach kolumny „${uniformColumn.name}” – nie zmienia się między dokumentami, może zostać stałym tekstem.` }],
+    };
+  }
+
   if (repeatCount > 1 && bestScore < 20) {
     return {
       tier: 'review',
@@ -514,6 +536,78 @@ function detectConstantCandidate(candidate, scoredColumns, repeatCount = 1, fiel
     };
   }
   return { tier: 'none' };
+}
+
+// --- propozycja WARUNKU/BLOKU (dodane 2026-09-28, przeglad UX Kreatora) --------
+//
+// Dluzszy fragment, ktory w dokumencie opisuje JEDEN z wariantow (np. "Instalacja
+// o mocy ponizej 6,5 kWp nie wymaga uzgodnienia...", "Budynek mieszkalny ..."),
+// a Excel ma kolumne, ktora ten wariant rozstrzyga. Zawsze tylko "review" -
+// uzytkownik widzi gotowy warunek i akceptuje go jednym kliknieciem albo
+// poprawia w panelu. Dwa wzorce, oba konserwatywne:
+//   1) prog liczbowy: "ponizej/powyzej/mniej niz/wiecej niz/ponad/do/od <liczba>
+//      <jednostka>", a jednostka wystepuje w nazwie liczbowej kolumny ("Moc kWp");
+//   2) kategoria: dokladnie JEDNA wartosc kolumny o malej liczbie wariantow
+//      (2-6, tekstowe) wystepuje w tekscie jako cale slowo.
+const BLOCK_MIN_LENGTH = 40;
+const THRESHOLD_RE = /(ponizej|powyzej|mniej niz|wiecej niz|nie wiecej niz|nie mniej niz|ponad|do|od)\s+(\d+(?:[.,]\d+)?)\s*([a-z][a-z0-9]*)/g;
+const THRESHOLD_OPERATORS = {
+  'ponizej': 'lt', 'mniej niz': 'lt', 'nie wiecej niz': 'lte', 'do': 'lte',
+  'powyzej': 'gt', 'wiecej niz': 'gt', 'ponad': 'gt', 'nie mniej niz': 'gte', 'od': 'gte',
+};
+const OPERATOR_LABELS = { lt: '<', lte: '≤', gt: '>', gte: '≥', equals: '=' };
+
+function stripForMatch(text) {
+  return String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l').replace(/Ł/g, 'L').toLowerCase().replace(/\s+/g, ' ');
+}
+
+function detectBlockCandidate(candidate, columnProfiles, fieldTier) {
+  if (fieldTier === 'auto' || fieldTier === 'review') return null;
+  const text = String(candidate.text || '');
+  if (text.trim().length < BLOCK_MIN_LENGTH) return null;
+  const plain = stripForMatch(text);
+  // Ta sama dlugosc co `plain` (NFD + usuniecie znakow laczacych daje dla
+  // polskich liter 1:1 z NFC) - do pokazania uzytkownikowi oryginalnej frazy.
+  const original = text.normalize('NFC').replace(/\s+/g, ' ');
+
+  // 1) prog liczbowy
+  const numericColumns = (columnProfiles || []).filter((p) => ['number', 'numeric', 'integer', 'decimal', 'number-with-unit'].includes(p.dominantType) || p.strictValueIndex.size > 0);
+  const thresholdHits = [];
+  for (const m of plain.matchAll(THRESHOLD_RE)) {
+    const unit = m[3];
+    if (!unit || unit.length < 2) continue;
+    const columns = numericColumns.filter((p) => tokenize(p.name).includes(unit));
+    const phrase = original.length === plain.length ? original.slice(m.index, m.index + m[0].length) : m[0];
+    if (columns.length === 1) thresholdHits.push({ column: columns[0].name, operator: THRESHOLD_OPERATORS[m[1]], value: m[2].replace(',', '.'), phrase });
+  }
+  if (thresholdHits.length === 1) {
+    const hit = thresholdHits[0];
+    return {
+      column: hit.column,
+      condition: { column: hit.column, operator: hit.operator, value: hit.value },
+      label: `${hit.column} ${OPERATOR_LABELS[hit.operator]} ${hit.value}`,
+      reasons: [{ code: 'BLOCK_THRESHOLD', weight: 1, message: `Tekst zawiera próg „${hit.phrase}” – pasuje do kolumny „${hit.column}”. Fragment pojawi się tylko gdy ${hit.column} ${OPERATOR_LABELS[hit.operator]} ${hit.value}.` }],
+    };
+  }
+
+  // 2) kategoria
+  const categoryHits = [];
+  for (const p of columnProfiles || []) {
+    if (p.uniqueCount < 2 || p.uniqueCount > 6 || p.strictValueIndex.size > 0) continue;
+    const values = [...p.valueIndex.values()].map((list) => String(list[0].rawValue).trim()).filter((v) => v.length >= 3);
+    const present = values.filter((v) => new RegExp(`(^|[^a-z0-9])${stripForMatch(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z0-9]|$)`).test(plain));
+    if (present.length === 1) categoryHits.push({ column: p.name, value: present[0] });
+  }
+  if (categoryHits.length === 1) {
+    const hit = categoryHits[0];
+    return {
+      column: hit.column,
+      condition: { column: hit.column, operator: 'equals', value: hit.value },
+      label: `${hit.column} = ${hit.value}`,
+      reasons: [{ code: 'BLOCK_CATEGORY', weight: 1, message: `Tekst opisuje wariant „${hit.value}” z kolumny „${hit.column}”. Fragment pojawi się tylko w dokumentach, gdzie ${hit.column} = ${hit.value}.` }],
+    };
+  }
+  return null;
 }
 
 // --- grupowanie powtarzajacych sie pol ----------------------------------------
@@ -620,7 +714,17 @@ function analyzeAutoConfiguration({ candidates, workbook, sheetName, draft, mapp
       };
     }
 
-    const constant = detectConstantCandidate(candidate, scored.alternatives, textCounts.get(normalizeValue(candidate.text)) || 1, fieldTier);
+    const block = detectBlockCandidate(candidate, columns, fieldTier);
+    if (block) {
+      return {
+        candidateId: candidate.id, kind: 'block', tier: 'review',
+        score: 75, finalScore: 75, rawTopScore: null, rawRunnerUpScore: null, margin: 0, bestColumn: block.column, fieldGroupId: null, concept: null,
+        proposedBlock: { label: block.label, condition: block.condition },
+        reasons: block.reasons,
+      };
+    }
+
+    const constant = detectConstantCandidate(candidate, scored.alternatives, textCounts.get(normalizeValue(candidate.text)) || 1, fieldTier, columns);
     if (constant.tier !== 'none') {
       return {
         candidateId: candidate.id, kind: 'constant', tier: constant.tier,
@@ -681,6 +785,7 @@ module.exports = {
   classifyTier,
   classifyManualCandidate,
   detectConstantCandidate,
+  detectBlockCandidate,
   groupRepeatedFields,
   analyzeAutoConfiguration,
 };

@@ -19,7 +19,7 @@ const { toAsciiSafe } = require('../../lib/diacritics');
 const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 const { withWordAutomationLease } = require('../../lib/wordAutomationCoordinator');
-const { evaluateSmartRecord, validateManifest, collectRequiredColumns } = require('../../lib/smartTemplateRules');
+const { evaluateSmartRecord, evaluateCondition, validateManifest, collectRequiredColumns } = require('../../lib/smartTemplateRules');
 // Migracja Word COM -> Open XML (CLAUDE.md, "Migracja Word COM -> Open XML",
 // audyt 2026-09-14): skanowanie/budowanie wzoru nie uzywa juz Worda w ogole -
 // patrz lib/documentEngine.js (fasada nad Scyzoryk.DocumentEngine.exe,
@@ -192,7 +192,7 @@ app.post('/api/jobs', heavyJobLimiter, upload.fields([{ name: 'template', maxCou
 
     const job = jobStore.createJob(jobId, {
       status: 'uploaded',
-      statusMessage: 'Pliki wczytane. Wykryj oznaczenia, żeby zobaczyć paletę kolorów użytych we wzorze.',
+      statusMessage: 'Pliki wczytane. Wybierz kolory, którymi oznaczono miejsca do wypełnienia.',
       templatePath: workingTemplatePath,
       templateOriginalName,
       templateHash,
@@ -495,6 +495,33 @@ app.post('/api/jobs/:jobId/candidates/:candidateId/assign-field', (req, res) => 
   }
 });
 
+// Edycja istniejacego pola (panel "Z Excela" z wczytana definicja) - ten sam
+// fieldId/mergeFieldName, zmiana dotyczy wszystkich miejsc tego pola.
+app.put('/api/jobs/:jobId/fields/:fieldId', (req, res) => {
+  const job = requireJob(req, res);
+  if (!job) return;
+  const body = req.body || {};
+  const label = String(body.label || '').trim();
+  if (!label) return res.status(400).json({ ok: false, message: 'Podaj nazwę pola.' });
+  const valueSpec = body.valueSpec;
+  if (!valueSpec || !['column', 'lookup', 'compose'].includes(valueSpec.type)) {
+    return res.status(400).json({ ok: false, message: 'Nieprawidłowy typ wartości pola.' });
+  }
+  try {
+    const draft = tm.updateField(job.draft, req.params.fieldId, {
+      label,
+      required: body.required !== false,
+      emptyPolicy: body.emptyPolicy === 'warn' ? 'warn' : 'error',
+      unknownPolicy: body.unknownPolicy === 'warn' ? 'warn' : 'error',
+      valueSpec
+    });
+    jobStore.updateJob(job.id, { draft });
+    res.json({ ok: true, draft });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+});
+
 app.post('/api/jobs/:jobId/variant-groups', (req, res) => {
   const job = requireJob(req, res);
   if (!job) return;
@@ -528,8 +555,76 @@ app.post('/api/jobs/:jobId/blocks', (req, res) => {
     } else {
       draft = tm.mergeCandidatesIntoBlock(job.draft, candidateIds, blockDef);
     }
-    jobStore.updateJob(job.id, { draft });
+    let candidateDecisionMeta = job.candidateDecisionMeta || {};
+    for (const id of candidateIds) candidateDecisionMeta = { ...candidateDecisionMeta, [id]: { origin: 'manual', appliedAt: new Date().toISOString() } };
+    jobStore.updateJob(job.id, { draft, candidateDecisionMeta });
     res.json({ ok: true, draft, blockId });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+});
+
+// Podglad warunku bloku na zywo (panel "Warunek"): w ilu wierszach
+// przykladowego Excela fragment sie pojawi - DOKLADNIE ta sama funkcja
+// evaluateCondition, ktorej uzywa generowanie (lib/smartTemplateRules.js),
+// zeby podpowiedz nigdy nie rozjechala sie z wynikiem.
+app.post('/api/jobs/:jobId/condition-preview', (req, res) => {
+  const job = jobStore.getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
+  const sheetName = String(req.body?.sheetName || job.draft.preferredSheet || job.workbook.defaultSheet || '').trim();
+  const sheet = job.workbook.sheets[sheetName];
+  if (!sheet) return res.status(404).json({ ok: false, message: 'Nie znaleziono arkusza.' });
+  const condition = req.body?.condition;
+  if (!condition || typeof condition.column !== 'string' || !condition.column.trim()) return res.status(400).json({ ok: false, message: 'Podaj kolumnę warunku.' });
+  const addressColumn = job.draft.addressColumn;
+  const matched = [];
+  const invalid = [];
+  for (const row of sheet.rows) {
+    const result = evaluateCondition(condition, { record: row });
+    const label = String((addressColumn && row[addressColumn]) || `wiersz ${row._record}`).trim();
+    if (!result.valid) invalid.push({ row: row._record, label, error: result.error });
+    else if (result.matched) matched.push({ row: row._record, label });
+  }
+  res.json({
+    ok: true,
+    total: sheet.rows.length,
+    matchedCount: matched.length,
+    matchedSample: matched.slice(0, 5),
+    invalidCount: invalid.length,
+    invalidSample: invalid.slice(0, 3)
+  });
+});
+
+// Edycja istniejacego bloku (nazwa/warunek/grupa) - ten sam blockId/bookmark.
+app.put('/api/jobs/:jobId/blocks/:blockId', (req, res) => {
+  const job = requireJob(req, res);
+  if (!job) return;
+  const body = req.body || {};
+  const label = String(body.label || '').trim();
+  if (!label) return res.status(400).json({ ok: false, message: 'Podaj nazwę bloku.' });
+  const condition = body.condition;
+  if (!condition || typeof condition.column !== 'string' || !condition.column.trim()) {
+    return res.status(400).json({ ok: false, message: 'Podaj kolumnę i warunek bloku.' });
+  }
+  try {
+    const draft = tm.updateBlock(job.draft, req.params.blockId, { label, condition, variantGroupId: body.variantGroupId || undefined });
+    jobStore.updateJob(job.id, { draft });
+    res.json({ ok: true, draft });
+  } catch (err) {
+    res.status(400).json({ ok: false, message: err.message });
+  }
+});
+
+// "Dolacz do istniejacego bloku" - kandydat rozszerza zakres juz
+// zdefiniowanego bloku (np. dwa akapity pokazywane przy tym samym warunku).
+app.post('/api/jobs/:jobId/candidates/:candidateId/assign-block', (req, res) => {
+  const job = requireJob(req, res);
+  if (!job) return;
+  try {
+    const draft = tm.assignCandidateToExistingBlock(job.draft, req.params.candidateId, String(req.body?.blockId || ''));
+    const candidateDecisionMeta = setCandidateDecisionMeta(job, req.params.candidateId, { origin: 'manual', appliedAt: new Date().toISOString() });
+    jobStore.updateJob(job.id, { draft, candidateDecisionMeta });
+    res.json({ ok: true, draft });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message });
   }
@@ -851,13 +946,29 @@ app.post('/api/jobs/:jobId/preview', heavyJobLimiter, async (req, res) => {
     const previewDir = path.join(job.outputDir, 'preview');
     await fsp.rm(previewDir, { recursive: true, force: true });
     await fsp.mkdir(previewDir, { recursive: true });
-    // Podglad idzie przez ten sam silnik co generowanie w Dokumentach
-    // seryjnych (polecenie mail-merge, bez Worda) - "jedno zrodlo prawdy" dla
-    // podgladu i generowania (sekcja 27 specyfikacji Kreatora). Lease Worda
-    // tylko gdy PDF zapisze jednak Word (brak ONLYOFFICE x2t).
+    // Podglad = DOKLADNIE to, co pozniej zrobia Dokumenty seryjne: najpierw
+    // budujemy wzor z biezacej konfiguracji (ten sam build-template co krok
+    // "Zbuduj", do katalogu podgladu - nierozwiazani kandydaci zostaja
+    // nietknieci, jak "Do projektanta"), potem mail-merge tego wzoru dla
+    // jednego rekordu. Real bug 2026-09-28: podglad szedl z ORYGINALNEGO Worda
+    // - pola z Excela nie byly podmieniane (wszystkie probki pokazywaly dane
+    // wiersza wzorcowego), a kazdy blok konczyl sie bledem "Brak bookmarka
+    // SCYB_..." (bookmarki powstaja dopiero w buildzie).
+    const previewTemplatePath = path.join(previewDir, 'wzor-podglad.docx');
+    const previewBuild = await documentEngine.buildSmartTemplate({
+      templatePath: job.templatePath,
+      outputPath: previewTemplatePath,
+      selectedMarkings: job.selectedMarkings || [],
+      storedCandidates: job.candidates,
+      draft: job.draft,
+      manifestJson: JSON.stringify(preflight.manifest),
+    });
+    if (!previewBuild.ok) throw new Error(previewBuild.message || 'Nie udało się przygotować wzoru do podglądu.');
+
+    // Lease Worda tylko gdy PDF zapisze jednak Word (brak ONLYOFFICE x2t).
     const runPreview = () => documentEngine.runEngineCommand('mail-merge', {
       ...documentEngine.pdfRendererInput(),
-      templatePath: job.templatePath,
+      templatePath: previewTemplatePath,
       outputDir: previewDir,
       addressColumn: preflight.manifest.addressColumn,
       records: [evaluated.record],
@@ -876,20 +987,27 @@ app.post('/api/jobs/:jobId/preview', heavyJobLimiter, async (req, res) => {
         { onWaiting: () => { if (waitLogged) return; waitLogged = true; jobStore.updateJob(job.id, { statusMessage: 'Word jest zajęty przez inne narzędzie - czekam na zwolnienie...' }); } }
       )
       : await runPreview();
-    if (!parsed || !parsed.ok || !(parsed.created || []).length) {
-      throw new Error((parsed && parsed.message) || 'Generowanie próbki nie powiodło się.');
+    // Konkretne przyczyny (np. problem z blokiem) zamiast samego "Zakonczono
+    // z bledami" - silnik zwraca je w errors[] per rekord.
+    const engineErrors = ((parsed && parsed.errors) || []).map(e => ({ message: String(e.message || e) }));
+    const buildWarnings = (previewBuild.warnings || []).map(w => ({ message: String(w.message || w) }));
+    const created = (parsed && parsed.created) || [];
+    if (!created.length) {
+      const reasons = engineErrors.map(e => e.message).join('; ');
+      throw new Error(`${(parsed && parsed.message) || 'Generowanie próbki nie powiodło się.'}${reasons ? ` ${reasons}` : ''}`);
     }
-    const createdDocx = (parsed.created || []).find(f => String(f.file).toLowerCase().endsWith('.docx'));
-    const createdPdf = (parsed.created || []).find(f => String(f.file).toLowerCase().endsWith('.pdf'));
+    const createdDocx = created.find(f => String(f.file).toLowerCase().endsWith('.docx'));
+    const createdPdf = created.find(f => String(f.file).toLowerCase().endsWith('.pdf'));
 
     const lastPreview = {
       docxPath: createdDocx ? createdDocx.path : null,
       pdfPath: createdPdf ? createdPdf.path : null,
-      warnings: evaluated.warnings,
-      errors: []
+      recordNumber: Number(record._record) || null,
+      warnings: [...evaluated.warnings, ...buildWarnings],
+      errors: engineErrors
     };
-    jobStore.updateJob(job.id, { status: 'configuring', statusMessage: 'Podgląd gotowy.', lastPreview });
-    res.json({ ok: true, preview: { warnings: evaluated.warnings, hasDocx: Boolean(lastPreview.docxPath), hasPdf: Boolean(lastPreview.pdfPath) } });
+    jobStore.updateJob(job.id, { status: 'configuring', statusMessage: engineErrors.length ? 'Podgląd gotowy, ale z problemami.' : 'Podgląd gotowy.', lastPreview });
+    res.json({ ok: true, preview: { recordNumber: lastPreview.recordNumber, warnings: lastPreview.warnings, errors: engineErrors, hasDocx: Boolean(lastPreview.docxPath), hasPdf: Boolean(lastPreview.pdfPath) } });
   } catch (err) {
     jobStore.updateJob(job.id, { status: 'configuring', statusMessage: err.message || 'Nie udało się wygenerować podglądu.' });
     res.status(400).json({ ok: false, message: err.message || 'Nie udało się wygenerować podglądu.' });
@@ -969,7 +1087,9 @@ function downloadPreviewFile(req, res, key, contentType) {
   const job = jobStore.getJob(req.params.jobId);
   const filePath = job && job.lastPreview && job.lastPreview[key];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ ok: false, message: 'Podgląd nie jest jeszcze dostępny.' });
-  res.setHeader('Content-Disposition', contentDispositionHeader('attachment', path.basename(filePath)));
+  // ?inline=1 - "Otworz PDF" w nowej karcie (podglad bez zapisywania pliku).
+  const disposition = req.query.inline === '1' ? 'inline' : 'attachment';
+  res.setHeader('Content-Disposition', contentDispositionHeader(disposition, path.basename(filePath)));
   res.setHeader('Content-Type', contentType);
   res.sendFile(filePath);
 }

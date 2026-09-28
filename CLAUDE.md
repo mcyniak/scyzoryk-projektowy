@@ -224,7 +224,27 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     `evaluateSmartRecord()` (same function `dokumenty-seryjne` uses at generation time) for one record, then
     runs the **same engine command** as real generation (`documentEngine.runEngineCommand('mail-merge',
     { smartTemplateMode: true, ... })`), so a preview can never silently diverge from what real generation
-    later produces. `withWordAutomationLease` only when PDF falls back to Word.
+    later produces. `withWordAutomationLease` only when PDF falls back to Word. **Since 2026-09-28 the
+    preview first builds the current draft into `<previewDir>/wzor-podglad.docx`
+    (`documentEngine.buildSmartTemplate`) and merges that** — previously it merged the raw, unbuilt source
+    DOCX, so fields/blocks were never actually visible in the preview. Returns `{hasDocx, hasPdf}`;
+    `GET .../preview/:file?inline=1` serves the PDF inline for the "Otwórz PDF" button.
+  - **UX pass 2026-09-28** (`test/group28-kreator-wzorow-ux.test.js`): the UI is a 4-step flow
+    (Pliki → Oznaczenia → Konfiguracja → Sprawdź i zbuduj) with a sticky stepper; steps 1–2 collapse once
+    done; step 3 is a candidate list + side config panel (card-style type choice, keyboard nav,
+    "auto-next unresolved"); step 4 auto-validates, previews a non-sample row, builds + downloads.
+    Last job id is kept in `localStorage` (`kreator-wzorow.lastJobId`) and offered for resume. No `alert()`.
+    Backend additions: `PUT /api/jobs/:id/fields/:fieldId` and `PUT .../blocks/:blockId` (edit in place,
+    keep `SCY_F_`/`SCYB_` names — `tm.updateField`/`tm.updateBlock`),
+    `POST .../candidates/:cid/assign-block` (`tm.assignCandidateToExistingBlock`),
+    `POST .../condition-preview` (live "matches N of M rows" via `evaluateCondition`).
+    `buildManifestFromDraft` now drops **orphan** fields/blocks/variant groups no candidate references
+    any more (they used to fail validation after a user changed a decision). Auto-config gained two
+    review-only suggestion kinds (never auto-applied): `constant` for a column with one uniform value
+    (`CONSTANT_UNIFORM_COLUMN`) and `block` (`detectBlockCandidate` — threshold phrases like
+    "poniżej 6,5 kWp" against a numeric column, or exactly one category value of a 2–6-value column
+    appearing in a ≥40-char paragraph). `PaletteScanner` marks a colour used only in table header rows
+    `suggested:false` (`headerRowCount`), so the palette leaves header shading unchecked by default.
   - **Migration status (Word COM → Open XML): complete as of 2026-09-28** (branch
     `feat/bez-worda-open-xml`). Kreator scan/build/preview, Dokumenty seryjne (legacy + Smart Template +
     photo gallery), Wnioski powykonawcze and the printers' DOCX→PDF all go through

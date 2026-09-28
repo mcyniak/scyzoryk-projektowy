@@ -163,6 +163,48 @@ function mergeCandidatesIntoBlock(draft, candidateIds, blockDef) {
   };
 }
 
+// Edycja ISTNIEJACEGO pola (np. inna kolumna, poprawiony lookup) - zachowuje
+// fieldId i mergeFieldName, wiec wszystkie miejsca uzywajace tego pola
+// ("Uzyj istniejacego pola") dostaja zmiane naraz, bez duplikatu definicji.
+function updateField(draft, fieldId, fieldDef) {
+  const current = draft.fields[fieldId];
+  if (!current) throw new Error(`Nie istnieje pole o id "${fieldId}".`);
+  return {
+    ...draft,
+    fields: { ...draft.fields, [fieldId]: { ...current, ...fieldDef, mergeFieldName: current.mergeFieldName } }
+  };
+}
+
+// Edycja ISTNIEJACEGO bloku (nazwa, warunek, grupa wariantow) - zachowuje
+// blockId i bookmarkName.
+function updateBlock(draft, blockId, blockDef) {
+  const current = draft.blocks[blockId];
+  if (!current) throw new Error(`Nie istnieje blok o id "${blockId}".`);
+  return {
+    ...draft,
+    blocks: { ...draft.blocks, [blockId]: { ...current, ...blockDef, bookmarkName: current.bookmarkName } }
+  };
+}
+
+// "Dolacz do istniejacego bloku" - kandydat dzieli blockId (a wiec jeden
+// bookmark obejmujacy wszystkie zakresy) z blokiem juz zdefiniowanym przy
+// innym kandydacie - ta sama semantyka co mergeCandidatesIntoBlock.
+function assignCandidateToExistingBlock(draft, candidateId, blockId) {
+  if (!draft.blocks[blockId]) throw new Error(`Nie istnieje blok o id "${blockId}".`);
+  return {
+    ...draft,
+    candidates: { ...draft.candidates, [candidateId]: { status: 'block', constantText: null, fieldId: null, blockId } }
+  };
+}
+
+// Ile kandydatow uzywa danego pola/bloku - UI ostrzega "zmiana dotyczy N miejsc".
+function countFieldUsage(draft, fieldId) {
+  return Object.values(draft.candidates || {}).filter(d => d && d.status === 'field' && d.fieldId === fieldId).length;
+}
+function countBlockUsage(draft, blockId) {
+  return Object.values(draft.candidates || {}).filter(d => d && d.status === 'block' && d.blockId === blockId).length;
+}
+
 function createVariantGroup(draft, label, policy) {
   const groupId = `vg_${crypto.randomBytes(6).toString('hex')}`;
   return {
@@ -206,7 +248,23 @@ function unresolveCandidate(draft, candidateId) {
 // i /build) robi to jawnie, zeby bledy walidacji byly raportowane oddzielnie
 // od samego sklejania struktury.
 function buildManifestFromDraft(draft, candidates) {
-  const fields = Object.entries(draft.fields).map(([id, def]) => ({
+  // Tylko definicje faktycznie UZYWANE przez kandydatow. Real bug 2026-09-28:
+  // ponowny zapis bloku/pola (albo "Cofnij automatyczne przypisania")
+  // zostawial w drafcie osierocona definicje, a ta trafiala do manifestu -
+  // blok bez zakresu w dokumencie dawal przy KAZDYM rekordzie blad "Brak
+  // bookmarka SCYB_...", a wymagane pole bez miejsca w dokumencie blokowalo
+  // rekordy z pusta wartoscia w tej kolumnie.
+  const usedFieldIds = new Set();
+  const usedBlockIds = new Set();
+  for (const decision of Object.values(draft.candidates || {})) {
+    if (decision && decision.status === 'field' && decision.fieldId) usedFieldIds.add(decision.fieldId);
+    if (decision && decision.status === 'block' && decision.blockId) usedBlockIds.add(decision.blockId);
+  }
+  const usedGroupIds = new Set(
+    Object.entries(draft.blocks || {}).filter(([id]) => usedBlockIds.has(id)).map(([, def]) => def.variantGroupId).filter(Boolean)
+  );
+
+  const fields = Object.entries(draft.fields).filter(([id]) => usedFieldIds.has(id)).map(([id, def]) => ({
     id,
     label: def.label,
     mergeFieldName: def.mergeFieldName,
@@ -216,7 +274,7 @@ function buildManifestFromDraft(draft, candidates) {
     valueSpec: def.valueSpec
   }));
 
-  const blocks = Object.entries(draft.blocks).map(([id, def]) => ({
+  const blocks = Object.entries(draft.blocks).filter(([id]) => usedBlockIds.has(id)).map(([id, def]) => ({
     id,
     label: def.label,
     bookmarkName: def.bookmarkName,
@@ -224,7 +282,7 @@ function buildManifestFromDraft(draft, candidates) {
     variantGroupId: def.variantGroupId || undefined
   }));
 
-  const variantGroups = Object.entries(draft.variantGroups).map(([id, def]) => ({
+  const variantGroups = Object.entries(draft.variantGroups).filter(([id]) => usedGroupIds.has(id)).map(([id, def]) => ({
     id,
     label: def.label,
     policy: def.policy
@@ -281,6 +339,11 @@ module.exports = {
   createBlockForCandidate,
   mergeCandidatesIntoBlock,
   createVariantGroup,
+  updateField,
+  updateBlock,
+  assignCandidateToExistingBlock,
+  countFieldUsage,
+  countBlockUsage,
   unresolvedCandidateIds,
   unresolveCandidate,
   buildManifestFromDraft

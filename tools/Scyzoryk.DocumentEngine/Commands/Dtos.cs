@@ -18,6 +18,8 @@ public sealed class PaletteEntryDto
     [JsonPropertyName("rawValue")] public string RawValue { get; set; } = "";
     [JsonPropertyName("displayColor")] public string DisplayColor { get; set; } = "";
     [JsonPropertyName("count")] public int Count { get; set; }
+    [JsonPropertyName("headerRowCount")] public int HeaderRowCount { get; set; }
+    [JsonPropertyName("suggested")] public bool Suggested { get; set; } = true;
     [JsonPropertyName("examples")] public List<PaletteExample> Examples { get; set; } = new();
 }
 

@@ -7,46 +7,68 @@ form > label > input, form > label > select { margin-top: 6px; }
 .field-help, .hint { display: block; color: var(--text-tertiary); font-size: 12px; font-weight: 600; margin-top: 7px; line-height: 1.35; }
 .label { display: block; font-weight: 700; font-size: var(--text-sm); color: var(--text-secondary); margin-bottom: 6px; }
 
-#uploadStatus, #markingsStatus, #scanStatus, #autoConfigStatus { margin-top: var(--space-3); font-weight: 700; font-size: var(--text-sm); }
-#uploadStatus.ok, #markingsStatus.ok, #scanStatus.ok, #autoConfigStatus.ok { color: var(--success-600); }
-#uploadStatus.err, #markingsStatus.err, #scanStatus.err, #autoConfigStatus.err { color: var(--danger-600); }
+.step-status { margin-top: var(--space-3); font-weight: 700; font-size: var(--text-sm); }
+.step-status:empty { display: none; }
+.step-status.ok { color: var(--success-600); }
+.step-status.err { color: var(--danger-600); }
+#autoConfigStatus { font-weight: 700; font-size: var(--text-sm); }
+#autoConfigStatus.ok { color: var(--success-600); }
+#autoConfigStatus.err { color: var(--danger-600); }
 #autoConfigStatus:empty { display: none; }
 
-/* Paleta oznaczeń (KROK 1) */
+/* Pasek kroków (klikalne ukończone/aktywne kroki) */
+.kreator-stepper { position: sticky; top: 60px; z-index: 30; background: var(--bg-page); margin-bottom: var(--space-4); }
+[data-step-panel] { scroll-margin-top: 130px; }
+
+/* Ukończone kroki 1-2 zwinięte do jednej linii (mniej przewijania w kroku 3/4) */
+.panel.is-collapsed { padding-top: var(--space-3); padding-bottom: var(--space-3); }
+.panel.is-collapsed > :not(.panel-header) { display: none !important; }
+.panel.is-collapsed .panel-header { margin-bottom: 0; align-items: center; }
+.panel-header .collapse-toggle { flex: none; }
+.step-summary { color: var(--text-secondary); font-weight: 600; font-size: var(--text-sm); }
+.kreator-stepper .step { cursor: pointer; }
+.kreator-stepper .step.is-locked { cursor: default; opacity: .6; }
+
+/* KROK 2 - paleta oznaczeń */
 .markings-list { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
-.marking-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-surface); }
+.marking-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3); border: 1.5px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-surface); cursor: pointer; }
+.marking-row.is-checked { border-color: var(--brand-500); }
 .marking-swatch { width: 28px; height: 28px; border-radius: var(--radius-sm); border: 1px solid var(--border-strong); flex: none; }
-.marking-meta { flex: 1; min-width: 0; }
-.marking-kind { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--text-tertiary); }
-.marking-count { font-weight: 700; }
-.marking-examples { color: var(--text-tertiary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.marking-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.marking-title { font-weight: 800; }
+.marking-count { font-weight: 600; color: var(--text-tertiary); }
+.marking-examples { display: flex; flex-wrap: wrap; gap: 6px; }
+.marking-example { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--text-secondary); background: var(--bg-surface-muted); border-radius: var(--radius-sm); padding: 2px 8px; }
 
-/* Auto-konfiguracja (panel podsumowania nad lista kandydatow, KROK 2) */
-#autoConfigSummary strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
-.candidate-suggestion-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.suggestion-reason { color: var(--text-tertiary); font-size: 12px; margin-top: 3px; }
-
-/* Podglad przykladowych wartosci kolumny (pole Z EXCELA / WARUNEK) */
-.value-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: var(--space-2); min-height: 0; }
-.value-preview-label { font-size: 12px; font-weight: 700; color: var(--text-tertiary); margin-right: 2px; }
-.value-chip { padding: 3px 10px; border-radius: var(--radius-full); background: var(--bg-surface-muted); border: 1px solid var(--border-default); font-size: 12px; font-weight: 600; color: var(--text-secondary); }
-.value-chip.more { color: var(--text-tertiary); font-weight: 700; background: none; border-style: dashed; }
-
-/* KROK 2 - metryki i filtry */
-.candidate-metrics { display: flex; gap: var(--space-4); flex-wrap: wrap; margin: var(--space-3) 0; }
-.candidate-metric { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--bg-surface-muted); font-size: var(--text-sm); font-weight: 700; }
+/* KROK 3 - postęp, filtry */
+.config-progress .progress-meta strong { font-variant-numeric: tabular-nums; }
 .candidate-filters { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-3); }
-.candidate-filters button { padding: 6px 12px; border-radius: var(--radius-full); border: 1px solid var(--border-default); background: var(--bg-surface); font-weight: 700; font-size: 12px; cursor: pointer; }
+.candidate-filters button { padding: 6px 12px; border-radius: var(--radius-full); border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); font-weight: 700; font-size: 12px; cursor: pointer; }
+.candidate-filters button span { opacity: .7; margin-left: 2px; font-variant-numeric: tabular-nums; }
 .candidate-filters button.active { background: var(--brand-500); color: #fff; border-color: var(--brand-500); }
 
-.candidate-list { display: flex; flex-direction: column; gap: var(--space-2); max-height: 560px; overflow-y: auto; }
-.candidate-row { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3); border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-surface); cursor: pointer; }
+/* KROK 3 - lista + panel obok (na wąskim ekranie panel pod listą) */
+.config-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-items: start; scroll-margin-top: 136px; }
+.candidate-list { display: flex; flex-direction: column; gap: var(--space-2); max-height: 640px; overflow-y: auto; padding-right: 2px; }
+/* Szeroki ekran: lista i panel obok siebie, oba mieszcza sie w oknie pod
+   paskiem naglowka i krokow (po 150px) - przewijaja sie niezaleznie. */
+@media (min-width: 1100px) {
+  .config-grid { grid-template-columns: minmax(0, 1fr) minmax(380px, 440px); }
+  .config-side { max-height: calc(100vh - 150px); overflow-y: auto; }
+  .candidate-list { max-height: calc(100vh - 150px); }
+}
+.candidate-row { display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-3); border: 1.5px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-surface); cursor: pointer; }
 .candidate-row:hover { border-color: var(--brand-400, var(--brand-500)); }
-.candidate-swatch { width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--border-strong); flex: none; margin-top: 3px; }
+.candidate-row:focus-visible { outline: 2px solid var(--info-500); outline-offset: 1px; }
+.candidate-row.is-selected { border-color: var(--brand-500); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-500) 18%, transparent); }
 .candidate-body { flex: 1; min-width: 0; }
-.candidate-text { font-weight: 500; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.candidate-context { color: var(--text-tertiary); font-size: 12px; }
+.candidate-text { font-weight: 500; color: var(--text-secondary); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.candidate-context { color: var(--text-tertiary); font-size: 12px; margin-top: 2px; }
+.candidate-decision { margin-top: 4px; font-size: 12px; font-weight: 700; color: var(--text-primary); }
 .candidate-inline-mark { padding: 1px 4px; border-radius: 3px; font-weight: 800; }
+.candidate-suggestion { margin-top: var(--space-2); }
+.candidate-suggestion-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-top: 6px; }
+.suggestion-reason { color: var(--text-tertiary); font-size: 12px; margin-top: 3px; }
 .candidate-badge { font-size: 11px; font-weight: 800; text-transform: uppercase; padding: 3px 8px; border-radius: var(--radius-full); background: var(--bg-surface-muted); flex: none; }
 .candidate-badge.constant { background: var(--info-50); color: var(--info-600); }
 .candidate-badge.field { background: var(--success-50); color: var(--success-600); }
@@ -55,19 +77,47 @@ form > label > input, form > label > select { margin-top: 6px; }
 .candidate-badge.photoGallery { background: #ede9fe; color: #5b21b6; }
 .candidate-badge.unresolved { background: var(--bg-surface-muted); color: var(--text-tertiary); }
 
-/* Panel konfiguracji kandydata */
-.config-type-choices { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.config-type-btn { padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); border: 1.5px solid var(--border-default); background: var(--bg-surface); font-weight: 800; cursor: pointer; }
-.config-type-btn.active { background: var(--brand-500); color: #fff; border-color: var(--brand-500); }
-.value-part-row { display: flex; gap: var(--space-2); align-items: center; margin-bottom: var(--space-2); }
+/* Panel konfiguracji */
+.config-side { border: 1.5px solid var(--border-default); border-radius: var(--radius-lg, var(--radius-md)); background: var(--bg-surface); padding: var(--space-4); }
+.config-empty { display: flex; flex-direction: column; gap: 6px; color: var(--text-tertiary); font-size: var(--text-sm); padding: var(--space-6) var(--space-2); text-align: center; }
+.config-empty strong { color: var(--text-primary); font-size: var(--text-md); }
+.config-context { padding-bottom: var(--space-3); margin-bottom: var(--space-3); border-bottom: 1px solid var(--border-default); }
+.config-context-text { line-height: 1.5; }
+.config-type-choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--space-2); }
+.config-type-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); border: 1.5px solid var(--border-default); background: var(--bg-surface); color: var(--text-primary); text-align: left; cursor: pointer; }
+.config-type-btn strong { font-size: var(--text-sm); }
+.config-type-btn span { font-size: 11px; font-weight: 600; color: var(--text-tertiary); }
+.config-type-btn.active { border-color: var(--brand-500); background: var(--brand-50, var(--bg-surface-muted)); }
+.config-type-btn.active strong { color: var(--brand-600, var(--brand-500)); }
+.config-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; margin-top: var(--space-4); padding: var(--space-3) 0 var(--space-1); border-top: 1px solid var(--border-default); position: sticky; bottom: calc(-1 * var(--space-4)); background: var(--bg-surface); }
+.config-autonext { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.config-actions #closeConfigBtn { margin-left: auto; }
+.config-error { margin-top: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--danger-50); color: var(--danger-600); font-weight: 700; font-size: var(--text-sm); }
+.suggestion-box { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); background: var(--info-50); color: var(--info-600); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.condition-row { display: grid; grid-template-columns: 1fr; gap: var(--space-2); }
+@media (min-width: 560px) { .condition-row { grid-template-columns: 1.3fr 1fr 1fr; } }
+.cond-match { margin-top: var(--space-2); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.cond-match:empty { display: none; }
+.cond-match.is-ok { color: var(--success-600); }
+.cond-match.is-warning { color: var(--warning-600, #92400e); }
+details summary { cursor: pointer; font-weight: 700; font-size: var(--text-sm); color: var(--text-secondary); }
+
+/* Podgląd przykładowych wartości kolumny */
+.value-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: var(--space-2); }
+.value-preview:empty { display: none; }
+.value-preview-label { font-size: 12px; font-weight: 700; color: var(--text-tertiary); margin-right: 2px; }
+.value-chip { padding: 3px 10px; border-radius: var(--radius-full); background: var(--bg-surface-muted); border: 1px solid var(--border-default); font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.value-chip.more { color: var(--text-tertiary); font-weight: 700; background: none; border-style: dashed; }
 .lookup-table { width: 100%; border-collapse: collapse; margin-top: var(--space-2); }
 .lookup-table td { padding: 6px 4px; border-bottom: 1px solid var(--border-default); }
 .lookup-table td:first-child { font-weight: 700; white-space: nowrap; }
-.variant-matrix { width: 100%; border-collapse: collapse; margin-top: var(--space-3); font-size: var(--text-sm); }
-.variant-matrix th, .variant-matrix td { padding: 6px 8px; border-bottom: 1px solid var(--border-default); text-align: left; }
 
-.job-status-bar { position: sticky; bottom: 0; margin-top: var(--space-4); padding: var(--space-3) var(--space-4); border-radius: var(--radius-md); background: var(--bg-surface-muted); font-weight: 700; font-size: var(--text-sm); }
-
-#validationResult .notice, #previewResult .notice, #buildResult .notice { margin-top: 0; }
+/* KROK 4 */
+.final-grid { display: grid; grid-template-columns: 1fr; gap: var(--space-4); }
+@media (min-width: 900px) { .final-grid { grid-template-columns: 1fr 1fr; } }
+.final-card { border: 1.5px solid var(--border-default); border-radius: var(--radius-md); padding: var(--space-4); background: var(--bg-surface); }
+#validationResult .alert + .alert { margin-top: var(--space-2); }
+#validationResult ul, #previewResult ul, #buildResult ul { margin: 6px 0 0 18px; font-size: var(--text-sm); }
 .record-error-row { padding: var(--space-2) 0; border-bottom: 1px solid var(--border-default); font-size: var(--text-sm); }
 .record-error-row:last-child { border-bottom: none; }
+#resumeBanner { margin-bottom: var(--space-4); }

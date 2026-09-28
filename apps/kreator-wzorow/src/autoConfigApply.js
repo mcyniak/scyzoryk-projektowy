@@ -45,13 +45,23 @@ function applyAutoConfiguration(draft, analysis, {
     if (suggestion.kind === 'manual') {
       nextDraft = tm.setCandidateManual(nextDraft, candidateId, null);
     } else if (suggestion.kind === 'constant') {
-      // detectConstantCandidate w autoConfigurator.js CELOWO nigdy nie
-      // zwraca tier:'auto' - to zawsze kategoria "review", bo sugestia nie
-      // zna docelowego tekstu stalej (tylko to, ze kandydat NA NIA wyglada).
-      // Zastosowanie wymagaloby zgadywania tekstu za uzytkownika, czego ten
-      // modul swiadomie nie robi - user ustawia stala recznie z panelu.
-      skipped.push({ suggestionId: candidateId, reason: 'constant-needs-manual-text' });
-      continue;
+      // detectConstantCandidate CELOWO nigdy nie zwraca tier:'auto'. Jawne
+      // "Akceptuj" przy tej jednej sugestii (suggestionIds) = "zostaw obecny
+      // tekst we wszystkich dokumentach" (constantText null - nic nie jest
+      // zgadywane). Masowe "Zastosuj pewne" nigdy nie ustawia stalych.
+      if (applyHighConfidence) {
+        skipped.push({ suggestionId: candidateId, reason: 'constant-needs-manual-text' });
+        continue;
+      }
+      nextDraft = tm.setCandidateConstant(nextDraft, candidateId, null);
+    } else if (suggestion.kind === 'block') {
+      // Tylko jawne "Akceptuj" (sugestie blokow sa zawsze "review").
+      const proposed = suggestion.proposedBlock;
+      if (applyHighConfidence || !proposed || !proposed.condition) {
+        skipped.push({ suggestionId: candidateId, reason: 'block-needs-review' });
+        continue;
+      }
+      nextDraft = tm.createBlockForCandidate(nextDraft, candidateId, { label: proposed.label, condition: proposed.condition }).draft;
     } else if (suggestion.kind === 'field') {
       if (!suggestion.bestColumn) {
         skipped.push({ suggestionId: candidateId, reason: 'no-column' });

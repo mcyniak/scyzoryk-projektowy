@@ -20,6 +20,13 @@ public static class PaletteScanner
         public string RawValue { get; init; } = "";
         public string DisplayColor { get; init; } = "";
         public int Count { get; set; }
+        // Ile wystapien lezy w wierszu naglowka tabeli (pierwszy wiersz tabeli
+        // z co najmniej dwoma wierszami albo wiersz z w:tblHeader). Kolor, ktory
+        // wystepuje WYLACZNIE w naglowkach, to prawie zawsze dekoracja (szare/
+        // niebieskie tlo "Pozycja | Wartosc"), nie pole robocze - UI Kreatora
+        // nie zaznacza go domyslnie (Suggested=false).
+        public int HeaderRowCount { get; set; }
+        public bool Suggested => !(HeaderRowCount > 0 && HeaderRowCount == Count);
         public List<string> Examples { get; } = new();
     }
 
@@ -41,14 +48,14 @@ public static class PaletteScanner
                     {
                         var key = ColorMaps.ConvertOoxmlHighlightToKey(highlightRaw.InnerText);
                         if (key is not null)
-                            AddOccurrence(palette, $"highlight:{key}", "highlight", key, ColorMaps.HighlightKeyToHex[key], text);
+                            AddOccurrence(palette, $"highlight:{key}", "highlight", key, ColorMaps.HighlightKeyToHex[key], text, IsInHeaderRow(run));
                     }
 
                     var runFill = run.RunProperties?.GetFirstChild<Shading>()?.Fill?.Value;
                     if (ColorMaps.IsVisibleShadingFill(runFill))
                     {
                         var hex = runFill!.ToUpperInvariant();
-                        AddOccurrence(palette, $"shading:{hex}", "shading", hex, $"#{hex}", text);
+                        AddOccurrence(palette, $"shading:{hex}", "shading", hex, $"#{hex}", text, IsInHeaderRow(run));
                     }
                 }
 
@@ -58,7 +65,7 @@ public static class PaletteScanner
                     var hex = paraFill!.ToUpperInvariant();
                     var text = string.Concat(paragraph.Elements<Run>().SelectMany(r => r.Elements<Text>()).Select(t => t.Text));
                     if (!string.IsNullOrEmpty(text))
-                        AddOccurrence(palette, $"shading:{hex}", "shading", hex, $"#{hex}", text);
+                        AddOccurrence(palette, $"shading:{hex}", "shading", hex, $"#{hex}", text, IsInHeaderRow(paragraph));
                 }
             }
 
@@ -69,7 +76,7 @@ public static class PaletteScanner
                 var hex = cellFill!.ToUpperInvariant();
                 var text = string.Concat(cell.Descendants<Text>().Select(t => t.Text));
                 if (!string.IsNullOrEmpty(text))
-                    AddOccurrence(palette, $"shading:{hex}", "shading", hex, $"#{hex}", text);
+                    AddOccurrence(palette, $"shading:{hex}", "shading", hex, $"#{hex}", text, IsInHeaderRow(cell));
             }
         }
 
@@ -79,7 +86,17 @@ public static class PaletteScanner
             .ToList();
     }
 
-    private static void AddOccurrence(Dictionary<string, PaletteEntry> palette, string key, string kind, string rawValue, string displayColor, string exampleText)
+    public static bool IsInHeaderRow(OpenXmlElement element)
+    {
+        var row = element.Ancestors<TableRow>().FirstOrDefault();
+        if (row is null) return false;
+        if (row.TableRowProperties?.GetFirstChild<TableHeader>() is not null) return true;
+        if (row.Parent is not Table table) return false;
+        var rows = table.Elements<TableRow>().ToList();
+        return rows.Count >= 2 && ReferenceEquals(rows[0], row);
+    }
+
+    private static void AddOccurrence(Dictionary<string, PaletteEntry> palette, string key, string kind, string rawValue, string displayColor, string exampleText, bool inHeaderRow)
     {
         if (!palette.TryGetValue(key, out var entry))
         {
@@ -87,6 +104,7 @@ public static class PaletteScanner
             palette[key] = entry;
         }
         entry.Count++;
+        if (inHeaderRow) entry.HeaderRowCount++;
         if (entry.Examples.Count < 3)
         {
             var trimmed = MarkScanner.NormalizeText(exampleText);
