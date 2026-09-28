@@ -38,7 +38,7 @@
 
     <div class="help-doc">
       <p class="help-tagline u-mt-6">Znajduje dokumentację dla adresów z Excela albo skanuje folder WM, układa pliki w kolejności i przygotowuje serię do druku.</p>
-      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">PDF/DOCX</span><span class="help-chip help-chip-req">Word dla DOCX</span></div>
+      <div class="help-chips"><span class="help-chip">XLSX</span><span class="help-chip">PDF/DOCX</span><span class="help-chip">Word tylko dla .doc</span></div>
 
       <div class="help-shot-wrap">
         <img class="help-shot" data-main-asset="/instrukcja-images/08-drukarka-projekty.png" alt="Aktualny ekran Drukarki projektów" loading="lazy">
@@ -90,7 +90,7 @@
         <div><dt>„Trwa drukowanie” / „Drukowanie już trwa” (kod PRINT_LOCK_BUSY)</dt><dd>Blokada druku jest wspólna w całym Scyzoryku — inny moduł (np. Drukarka dokumentów) albo inna karta przeglądarki właśnie drukuje. Poczekaj, aż tamta seria się skończy.</dd></div>
         <div><dt>„Za dużo pozycji w kolejce (X). Limit: Y. Podziel na mniejsze paczki”</dt><dd>Wybrano naraz więcej dokumentów niż dopuszczalny limit kolejki — zmniejsz liczbę zaznaczonych adresów albo wydrukuj kolejką w kilku mniejszych partiach.</dd></div>
         <div><dt>„Niektóre pliki nie istnieją na dysku”</dt><dd>Plik źródłowy został usunięty albo przeniesiony po dopasowaniu folderu, zanim trafił do kolejki druku — odśwież dopasowanie (krok 3/4) i spróbuj ponownie.</dd></div>
-        <div><dt>„Nie udało się połączyć PDF-ów: …”</dt><dd>Konwersja albo łączenie dokumentów w jedną kolejkę nie powiodło się (np. uszkodzony DOCX albo Word nie odpowiada) — sprawdź wskazany plik źródłowy i spróbuj ponownie.</dd></div>
+        <div><dt>„Nie udało się połączyć PDF-ów: …”</dt><dd>Konwersja albo łączenie dokumentów w jedną kolejkę nie powiodło się (np. uszkodzony albo zablokowany DOCX) — sprawdź wskazany plik źródłowy i spróbuj ponownie.</dd></div>
         <div><dt>„Nie udało się zapisać PDF-ów dla wszystkich adresów”</dt><dd>Dotyczy stemplowania jako dokumentacja powykonawcza — część plików w kolejce nie dała się ostemplować. Sprawdź szczegóły błędu przy poszczególnych pozycjach i spróbuj ponownie tylko dla nich.</dd></div>
       </dl>
     </div>

@@ -21,7 +21,6 @@ public sealed class ConvertWmInput
 {
     public string? DateText { get; set; }
     public bool SaveDocx { get; set; }
-    public bool VisibleWord { get; set; }
     public List<FileItem> Files { get; set; } = new();
     public string? PdfRenderer { get; set; }
     public string? OnlyOfficeDir { get; set; }

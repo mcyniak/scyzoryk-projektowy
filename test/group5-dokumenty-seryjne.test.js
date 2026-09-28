@@ -495,6 +495,10 @@ test('imageMatching.js: model folderow adresowych (dowolna liczba zdjec, natural
         { rel: `Zdjęcia/${nfdFolder}/ŹRÓDŁO 10.jpg`, encode: true },
         { rel: 'Zdjęcia/Źródlana 3 (100% gotowe)/foto.jpg', encode: false },
         { rel: 'Zdjęcia/../ucieczka.jpg', encode: true },
+        // Wybrany od razu folder JEDNEGO adresu: "<adres>/plik" (2 segmenty).
+        { rel: 'Kraków, Wąska 7/foto 1.jpg', encode: true },
+        // Sama nazwa pliku - brak folderu adresowego, pomijane z ostrzezeniem.
+        { rel: 'luźne.jpg', encode: true },
       ];
       const form = new FormData();
       for (const e of entries) form.append('images', new Blob([jpeg], { type: 'image/jpeg' }), path.posix.basename(e.rel));
@@ -502,12 +506,15 @@ test('imageMatching.js: model folderow adresowych (dowolna liczba zdjec, natural
       const res = await fetch(`http://127.0.0.1:${port}/api/images/${jobId}`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
       const json = await res.json();
       assert.equal(res.status, 200, JSON.stringify(json));
+      assert.equal(json.count, 4);
+      assert.equal(json.skipped, 2, 'pominiete: ".." i plik bez folderu');
+      assert.match(json.warning, /Pominieto 2 z 6 zdjec bez folderu adresowego/);
 
       const { getJob } = require('../apps/dokumenty-seryjne/server');
       const job = getJob(jobId);
       const manifest = JSON.parse((await fsp.readFile(job.imageManifestPath, 'utf8')).replace(/^\uFEFF/, ''));
       const byFolder = Object.fromEntries(manifest.files.map(f => [f.addressFolder, f]));
-      assert.deepEqual(Object.keys(byFolder).sort(), ['Gęślą Jaźń 2', 'Łódź, ul. Żółkiewskiego 5', 'Źródlana 3 (100% gotowe)'].sort(),
+      assert.deepEqual(Object.keys(byFolder).sort(), ['Gęślą Jaźń 2', 'Kraków, Wąska 7', 'Łódź, ul. Żółkiewskiego 5', 'Źródlana 3 (100% gotowe)'].sort(),
         `foldery adresowe po wgraniu: ${JSON.stringify(Object.keys(byFolder))}`);
       assert.equal(byFolder['Łódź, ul. Żółkiewskiego 5'].originalName, 'zdjęcie 1.jpg');
       assert.equal(byFolder['Gęślą Jaźń 2'].originalName, 'ŹRÓDŁO 10.jpg');
@@ -515,7 +522,8 @@ test('imageMatching.js: model folderow adresowych (dowolna liczba zdjec, natural
         assert.ok(require('node:fs').existsSync(f.storedPath), `brak pliku na dysku: ${f.storedPath}`);
         assert.ok(path.resolve(f.storedPath).startsWith(path.resolve(job.imageRoot) + path.sep), `plik poza katalogiem zdjec: ${f.storedPath}`);
       }
-      assert.equal(manifest.files.length, 3, '".." nie moze byc traktowane jako folder adresowy');
+      assert.equal(byFolder['Kraków, Wąska 7'].originalName, 'foto 1.jpg');
+      assert.equal(manifest.files.length, 4, '".." ani sama nazwa pliku nie sa folderem adresowym');
     });
   });
 }

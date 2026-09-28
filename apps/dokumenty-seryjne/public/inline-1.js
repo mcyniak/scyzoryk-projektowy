@@ -201,9 +201,10 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         $('filePrefix').value = '';
         renderWorkbook(data.workbook, data.suggestedAddressColumn); refreshUidColumnOptions(data.workbook.columns || []); renderTemplateGroups(data.templateGroups || [], data.workbook.columns || [], data.suggestedUidColumn || '');
 
+        let imageUpload = null;
         if (currentImageFiles.length) {
           status($('uploadStatus'), 'Wczytuję zdjęcia...', 'warn');
-          await uploadImages(currentJob);
+          imageUpload = await uploadImages(currentJob);
         }
 
         const ambiguous = data.ambiguousTemplates || [];
@@ -211,8 +212,8 @@ const headers = { 'X-Scyzoryk-Request': '1' };
           ? ` Uwaga: w ${ambiguous.length === 1 ? 'folderze' : 'folderach'} znaleziono więcej niż jeden pasujący plik tego samego typu (${ambiguous.map(a => a.resolved ? `"${a.relFolder}": użyto nowszego "${a.keptFile}" (starszy "${a.skippedFile}" zignorowano)` : `"${a.relFolder}": ${a.files.join(' / ')} — pominięto, sprawdź ręcznie`).join('; ')}).`
           : '';
         const ozcNote = data.ozcFoldersFound ? ` Znaleziono dane OZC/audytów — dodatkowe pola w szablonach będą uzupełniane automatycznie tam, gdzie to możliwe.` : '';
-        const imageNote = currentImageFiles.length ? ` Wczytano ${currentImageFiles.length} zdjęć.` : '';
-        status($('uploadStatus'), `Wczytano ${data.workbook.totalRows} rekordów.${ambiguousNote}${ozcNote}${imageNote}`, ambiguous.length ? 'warn' : 'ok');
+        const imageNote = imageUpload ? ` Wczytano ${imageUpload.count} zdjęć.${imageUpload.warning ? ' Uwaga: ' + imageUpload.warning : ''}` : '';
+        status($('uploadStatus'), `Wczytano ${data.workbook.totalRows} rekordów.${ambiguousNote}${ozcNote}${imageNote}`, (ambiguous.length || (imageUpload && imageUpload.warning)) ? 'warn' : 'ok');
         try { await fetchImageSummary(); renderImageSummary(imageSummary); } catch (_) {}
         show($('recordsPanel')); setJobPill('Gotowe');
         await pollJob();
@@ -462,7 +463,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       try {
         const res = await fetch(`/api/generate/${currentJob}`, {
           method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ selectedRows: rows, selectedGroups: selectedTemplateGroups(), uidColumn: $('uidColumn') ? $('uidColumn').value : '', sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value, filePrefix: $('filePrefix').value.trim(), visibleWord: $('visibleWord').checked, debugMode: $('debugMode').checked, saveWord: $('saveWord') ? $('saveWord').checked : false })
+          body: JSON.stringify({ selectedRows: rows, selectedGroups: selectedTemplateGroups(), uidColumn: $('uidColumn') ? $('uidColumn').value : '', sheetName: $('sheetSelect').value, addressColumn: $('addressColumn').value, filePrefix: $('filePrefix').value.trim(), debugMode: $('debugMode').checked, saveWord: $('saveWord') ? $('saveWord').checked : false })
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się rozpocząć generowania.');

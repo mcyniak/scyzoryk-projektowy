@@ -235,7 +235,7 @@ function registerFolderRoutes(app, deps) {
       persistJobsIndex();
       setProgress(job, { phase: "queued", current: 0, total: plan.length, percent: 0, message: "Zadanie czeka w kolejce.", queue: wordQueue.getState() });
 
-      wordQueue.run(() => runFolderPlan(job, plan, { visibleWord: body.visibleWord === true, adresColumn: columns.adres, rules })).catch(err => {
+      wordQueue.run(() => runFolderPlan(job, plan, { adresColumn: columns.adres, rules })).catch(err => {
         job.status = "error";
         job.result = { ok: false, message: err.message || "Nie udalo sie uruchomic generowania.", created: [], errors: [] };
         persistJobsIndex();

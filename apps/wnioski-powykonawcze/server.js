@@ -296,7 +296,6 @@ app.post('/api/jobs', heavyJobLimiter, upload.array('files', MAX_FILES), async (
     const dateText = normalizeDate(req.body.date, { allowEmpty: noDate });
     const prefix = cleanPrefix(req.body.prefix || 'WM dok.pod');
     const saveDocx = String(req.body.saveDocx || '').toLowerCase() === 'true';
-    const visibleWord = String(req.body.visibleWord || '').toLowerCase() === 'true';
 
     // docxPath lezy w TYM SAMYM folderze co pdfPath (nie w osobnym "debug"
     // katalogu jak wczesniej) - dzieki temu przy saveDocx=true plik DOCX
@@ -312,7 +311,7 @@ app.post('/api/jobs', heavyJobLimiter, upload.array('files', MAX_FILES), async (
 
     const inputJson = path.join(jobDir, 'input.json');
     const outputJson = path.join(jobDir, 'result.json');
-    writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx, visibleWord });
+    writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx });
     job.total = manifestFiles.length;
     job.dateText = dateText;
     job.prefix = prefix;
@@ -571,7 +570,7 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
 
     const inputJson = path.join(jobDir, 'input.json');
     const outputJson = path.join(jobDir, 'result.json');
-    writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx, visibleWord: false });
+    writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx });
 
     await wordQueue.run(() => runConvertScript(inputJson, outputJson));
     const result = readJsonFileNoBom(outputJson);

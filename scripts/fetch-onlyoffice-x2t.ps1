@@ -34,6 +34,10 @@ foreach ($p in @('include', 'docbuilder.jar', 'docbuilder.py', 'docbuilder.jni.d
 # pakujemy wersji z maszyny budujacej.
 Remove-Item (Join-Path $Dest 'sdkjs\common\AllFonts.js') -Force -ErrorAction SilentlyContinue
 Set-Content (Join-Path $Dest 'WERSJA.txt') "ONLYOFFICE DocumentBuilder $Version (AGPL v3), zrodlo: https://github.com/ONLYOFFICE/core" -Encoding UTF8
+# Tekst licencji AGPL v3 + informacja o zrodle jada razem z binariami (repo:
+# third-party/onlyoffice, patrz tamtejszy README.md).
+Copy-Item (Join-Path $Root 'third-party\onlyoffice\LICENSE.txt') (Join-Path $Dest 'LICENSE.txt') -Force
+Copy-Item (Join-Path $Root 'third-party\onlyoffice\README.md') (Join-Path $Dest 'README-SCYZORYK.md') -Force
 
 if (-not (Test-Path (Join-Path $Dest 'x2t.exe'))) { throw "Brak x2t.exe po rozpakowaniu $Url" }
 $size = [math]::Round(((Get-ChildItem $Dest -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB)

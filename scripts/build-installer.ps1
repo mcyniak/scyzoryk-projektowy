@@ -208,6 +208,10 @@ Copy-Item -Path $onlyOfficeSourceDir -Destination $onlyOfficeStagingDir -Recurse
 foreach ($generated in @('sdkjs\common\AllFonts.js', 'sdkjs\common\font_selection.bin', 'sdkjs\common\fonts.log')) {
   Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $onlyOfficeStagingDir $generated)
 }
+# Licencja AGPL v3 + informacja o zrodle zawsze z repo (third-party\onlyoffice),
+# niezaleznie od tego, czy tools\onlyoffice pobrano starsza wersja skryptu.
+Copy-Item (Join-Path $Root 'third-party\onlyoffice\LICENSE.txt') (Join-Path $onlyOfficeStagingDir 'LICENSE.txt') -Force
+Copy-Item (Join-Path $Root 'third-party\onlyoffice\README.md') (Join-Path $onlyOfficeStagingDir 'README-SCYZORYK.md') -Force
 if (-not (Test-Path (Join-Path $onlyOfficeStagingDir 'WERSJA.txt'))) {
   throw "Brak onlyoffice\WERSJA.txt w stagingu - bez niego runtime-fingerprint nie wykryje zmiany wersji konwertera."
 }

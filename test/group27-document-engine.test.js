@@ -130,6 +130,7 @@ test('cleanupStaleEngineTempFiles: usuwa tylko STARE pozostalosci silnika, nie s
     'docengine-in-mail-merge-1234-0123456789ab.json',
     'docengine-out-render-pdf-99-abcdefabcdef.json',
     'scyzoryk_pdf_0123456789abcdef0123456789abcdef.docx',
+    'scyzoryk_print_0123456789abcdef0123456789abcdef.pdf',
   ];
   for (const name of oldFiles) {
     await fsp.writeFile(path.join(dir, name), '{}');
@@ -189,6 +190,83 @@ test('printing.convertDocxBatchToPdf: blad silnika i limit czasu daja czytelne k
   await assert.rejects(printing.convertDocxBatchToPdf('op', files, { timeoutMs: 120000 }), /Przekroczono limit czasu konwersji DOCX->PDF \(2 min\)/);
 });
 
+// --- Druk DOCX bez Worda (lib/printing.js#printFileWindows) ---------------
+
+// Swiezy lib/printing.js z podmienionym runPowerShell (destrukturyzowany przy
+// require, wiec podmiana musi byc PRZED zaladowaniem modulu).
+function loadPrintingWithFakePowerShell(calls) {
+  const hardening = require('../lib/hardening');
+  const original = hardening.runPowerShell;
+  hardening.runPowerShell = async (script, args) => {
+    const filePath = args[args.indexOf('-FilePath') + 1];
+    calls.push({ script, args, filePath, head: fs.readFileSync(filePath).subarray(0, 5).toString('latin1') });
+    return { stdout: 'OK', stderr: '' };
+  };
+  delete require.cache[require.resolve('../lib/printing')];
+  try {
+    return require('../lib/printing');
+  } finally {
+    hardening.runPowerShell = original;
+    delete require.cache[require.resolve('../lib/printing')];
+  }
+}
+
+test('printFileWindows: DOCX idzie przez PDF z silnika (Sumatra/Ghostscript), .doc i brak x2t -> dawna sciezka Word', { skip: process.platform !== 'win32' && 'druk tylko na Windows' }, async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-printdocx-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const docx = path.join(dir, 'Łódź.docx');
+  const doc = path.join(dir, 'stary.doc');
+  await fsp.writeFile(docx, 'PK-atrapa');
+  await fsp.writeFile(doc, 'doc-atrapa');
+
+  const original = { render: documentEngine.renderDocxBatchToPdf, usesWord: documentEngine.engineUsesWord, available: documentEngine.isEngineAvailable };
+  t.after(() => Object.assign(documentEngine, { renderDocxBatchToPdf: original.render, engineUsesWord: original.usesWord, isEngineAvailable: original.available }));
+  documentEngine.isEngineAvailable = () => true;
+  documentEngine.engineUsesWord = () => false;
+  const renders = [];
+  documentEngine.renderDocxBatchToPdf = async (files) => {
+    renders.push(files);
+    for (const f of files) fs.writeFileSync(f.outputPath, '%PDF-1.7 atrapa');
+    return { ok: true, renderer: 'onlyoffice', results: files.map(f => ({ ok: true, input: f.inputPath, output: f.outputPath })) };
+  };
+
+  const calls = [];
+  const printing = loadPrintingWithFakePowerShell(calls);
+  await printing.printFileWindows(docx, 'Drukarka 1', { logDir: dir });
+  assert.equal(renders.length, 1);
+  assert.equal(renders[0][0].inputPath, docx);
+  assert.match(path.basename(calls[0].filePath), /^scyzoryk_print_[0-9a-f]{32}\.pdf$/);
+  assert.equal(calls[0].head, '%PDF-');
+  assert.deepEqual(calls[0].args.slice(2), ['-PrinterName', 'Drukarka 1', '-LogDir', dir]);
+  fs.rmSync(calls[0].filePath, { force: true });
+
+  await printing.printFileWindows(doc, '', {});
+  assert.equal(calls[1].filePath, doc, '.doc dalej przez Worda (x2t nie jest tu sprawdzony)');
+  assert.equal(renders.length, 1);
+
+  documentEngine.engineUsesWord = () => true;
+  await printing.printFileWindows(docx, '', {});
+  assert.equal(calls[2].filePath, docx, 'bez x2t DOCX drukuje Word jak dotad');
+
+  documentEngine.engineUsesWord = () => false;
+  documentEngine.renderDocxBatchToPdf = async () => ({ ok: true, results: [{ ok: false, input: docx, error: 'uszkodzony plik' }] });
+  await assert.rejects(printing.printFileWindows(docx, '', {}), /PRINT_PATH: Nie udalo sie przygotowac DOCX do druku \(Łódź\.docx\): uszkodzony plik/);
+  assert.equal(calls.length, 3, 'nieudana konwersja nie wysyla niczego do drukarki');
+});
+
+test('integracja: druk DOCX - prawdziwa konwersja silnikiem, do drukarki trafia PDF (PowerShell podmieniony)', { skip: !(process.platform === 'win32' && documentEngine.isEngineAvailable() && documentEngine.resolveOnlyOfficeDir()) && 'brak Scyzoryk.DocumentEngine.exe albo tools/onlyoffice (x2t)', timeout: 5 * 60 * 1000 }, async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'scyzoryk-printdocx-real-'));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const docx = path.join(dir, 'Oświadczenie Żółć.docx');
+  writeMinimalDocx(docx, ['Oświadczenie', 'Zażółć gęślą jaźń']);
+  const calls = [];
+  const printing = loadPrintingWithFakePowerShell(calls);
+  await printing.printFileWindows(docx, '', {});
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].head, '%PDF-');
+  fs.rmSync(calls[0].filePath, { force: true });
+});
+
 // --- Podpiecie apek pod silnik (statycznie - bez Worda w CI) ----------------
 
 test('stare skrypty Word COM usuniete i nigdzie nie wolane (mailmerge-to-pdf, convert-wm, docx-to-pdf, Kreator scan/build/test-word-com, wordSmartTemplate)', async () => {
@@ -215,6 +293,10 @@ test('stare skrypty Word COM usuniete i nigdzie nie wolane (mailmerge-to-pdf, co
     assert.doesNotMatch(src, /spawn\((?:'|")powershell\.exe/, `${rel} nie powinien uruchamiac powershell.exe do dokumentow`);
     assert.doesNotMatch(src, /(?:PS_SCRIPT|DOCX_TO_PDF_SCRIPT|DOKUMENTY_SERYJNE_MAILMERGE_SCRIPT)\b/, `${rel}: stala starego skryptu`);
     assert.doesNotMatch(src, /getDocumentEngineMode|SCYZORYK_DOKUMENTY_ENGINE/, `${rel}: przelacznik awaryjny na Worda juz nie istnieje`);
+    assert.doesNotMatch(src, /visibleWord/, `${rel}: opcja "Widoczny Word" nie ma juz sensu (Word nie jest uruchamiany)`);
+  }
+  for (const rel of ['apps/dokumenty-seryjne/public/index.html', 'apps/dokumenty-seryjne/public/inline-1.js', 'apps/wnioski-powykonawcze/public/inline-1.js']) {
+    assert.doesNotMatch(await readSrc(rel), /visibleWord/, `${rel}: pozostalosc "Widoczny Word"`);
   }
   const pkg = JSON.parse(await readSrc('package.json'));
   assert.equal(pkg.scripts['test:kreator-word'], undefined, 'skrypt npm dla usunietego test-word-com.ps1');
@@ -261,6 +343,12 @@ test('instalator: tools\\onlyoffice trafia do stagingu (bez indeksu czcionek z m
   assert.match(build, /Join-Path \$stagingDir 'onlyoffice'/);
   assert.match(build, /fetch-onlyoffice-x2t\.ps1/);
   assert.match(build, /sdkjs\\common\\AllFonts\.js/);
+  // AGPL v3: tekst licencji i informacja o zrodle jada razem z binariami.
+  assert.match(build, /third-party\\onlyoffice\\LICENSE\.txt'\) \(Join-Path \$onlyOfficeStagingDir 'LICENSE\.txt'\)/);
+  const license = await readSrc('third-party', 'onlyoffice', 'LICENSE.txt');
+  assert.match(license, /GNU AFFERO GENERAL PUBLIC LICENSE/);
+  assert.match(await readSrc('third-party', 'onlyoffice', 'README.md'), /github\.com\/ONLYOFFICE\/core/);
+  assert.match(await readSrc('scripts', 'fetch-onlyoffice-x2t.ps1'), /third-party\\onlyoffice\\LICENSE\.txt/);
   // Konwerter musi byc w stagingu PRZED policzeniem fingerprintu.
   assert.ok(build.indexOf("Join-Path $stagingDir 'onlyoffice'") < build.indexOf("'scripts\\generate-runtime-fingerprint.js'"));
 
@@ -317,7 +405,7 @@ test('integracja: convert-wm (Wnioski powykonawcze) bez Worda - DOCX i PDF obok 
   const docxPath = path.join(dir, 'WM dok.pod pompa ciepła.docx');
   let spawned = null;
   const output = await documentEngine.convertWniosekMaterialowy(
-    { dateText: '30.09.2026', saveDocx: true, visibleWord: false, files: [{ inputPath: input, originalName: 'WM pompa ciepła.docx', pdfPath, docxPath }] },
+    { dateText: '30.09.2026', saveDocx: true, files: [{ inputPath: input, originalName: 'WM pompa ciepła.docx', pdfPath, docxPath }] },
     { timeoutMs: 4 * 60 * 1000, onSpawn: child => { spawned = child; } }
   );
   assert.ok(spawned && typeof spawned.kill === 'function', 'onSpawn dostaje proces silnika (do anulowania)');

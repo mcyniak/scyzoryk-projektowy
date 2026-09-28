@@ -138,7 +138,10 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     `kreator-wzorow`, `wnioski-powykonawcze` and the printers' DOCX→PDF, `SCYZORYK_WORD_LOCK_TIMEOUT_MS`,
     default 60 min).
   - `/api/images/:jobId` (photo folders): the browser sends `encodeURIComponent(webkitRelativePath)`,
-    the server decodes, NFC-normalizes and rejects `.`/`..` segments (`parseImageRelativePath`).
+    the server decodes, NFC-normalizes and rejects `.`/`..` segments (`parseImageRelativePath`). Address
+    folder = 2nd segment for `Root/<adres>/file`, 1st for `<adres>/file` (user picked one address folder);
+    a bare file name has no address folder and is skipped — the response carries `skipped` + `warning`,
+    shown by `inline-1.js` in the upload status.
     Verified 2026-09-28 with a real HTTP test (group5) — Polish folder/file names (NFC and NFD) arrive
     intact.
 - `wnioski-powykonawcze` — converts DOCX "wniosek materiałowy" files into "dokumentacja powykonawcza" PDFs,
@@ -231,7 +234,8 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     `npm run test:kreator-word`) and the `SCYZORYK_DOKUMENTY_ENGINE=word` switch were **deleted** — git
     history (before commit that removed them) is the reference if a Word-behaviour question comes up.
     Remaining Word COM: only `Pdf/PdfRenderers.cs#WordPdfRenderer` (save-as-PDF fallback, no x2t) and
-    physical printing of DOCX in `lib/printing/PrintEngine.psm1` (not part of this migration).
+    printing legacy `.doc` files (`Invoke-PrintWithWordCom` in `lib/printing/PrintEngine.psm1`) — `.docx`
+    is printed via PDF (see Shared code → printing). The "Widoczny Word" (`visibleWord`) options are gone.
   - **Auto-configuration (added 2026-09-14, `PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md`)** — a local,
     deterministic (zero AI/network) heuristic engine that proposes a decision for most scanned candidates
     instead of forcing the user to classify every single one by hand. `POST /api/jobs/:id/auto-configure/analyze`
@@ -329,7 +333,11 @@ new app, copy this rather than inventing a new one:
   consolidated 2026-07-15 from two bit-identical per-app copies that had already started drifting
   (virtual-printer filter regex, which process names got closed after a batch). Each app passes its own
   `logDir` (`apps/<name>/data`) into `printFileWindows()` so `print-log.txt` stays per-app despite the
-  shared script. After sending the file, `print-file.ps1` polls the printer's own job queue
+  shared script. `.docx` is **never printed by Word** when the document engine + x2t are available:
+  `printFileWindows` first renders it to a temp PDF (`convertDocxBatchToPdf`, `%TEMP%\scyzoryk_print_*.pdf`,
+  deleted 5 min later / swept by `cleanupStaleEngineTempFiles`) and prints that PDF through the normal
+  Sumatra → Ghostscript path. Only `.doc`, or a machine without x2t, still goes to `Invoke-PrintWithWordCom`.
+  After sending the file, `print-file.ps1` polls the printer's own job queue
   (`Get-PrintJob`) for up to 20s to confirm a new job actually appeared before reporting success — no
   fire-and-forget confirmation.
   - Engine order: SumatraPDF (`-print-to`) first, **Ghostscript** (`mswinpr2` device, GDI printing) as the
@@ -356,6 +364,8 @@ new app, copy this rather than inventing a new one:
     2026-09-28 over LibreOffice (lost images), Syncfusion (paid for this company size) and DocumentBuilder
     (watermark)). `resolveOnlyOfficeDir()`: `SCYZORYK_ONLYOFFICE_DIR` → `<install>/onlyoffice` →
     `tools/onlyoffice` (dev, fetched by `scripts/fetch-onlyoffice-x2t.ps1`, gitignored, ~180 MB).
+    AGPL v3 text + source info live in the repo at `third-party/onlyoffice/` and are copied next to the
+    binaries by both the fetch script and the installer build.
     `getPdfRendererMode()` = `onlyoffice` when x2t is found, else `word` (Word COM only to save the finished
     DOCX as PDF); `SCYZORYK_PDF_RENDERER=onlyoffice|word` forces it. `pdfRendererInput()` is what every
     command gets (`pdfRenderer` + `onlyOfficeDir`). x2t needs a font index built from the *target*

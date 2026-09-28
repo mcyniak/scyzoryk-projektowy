@@ -237,7 +237,15 @@ function validateImageFile(file) {
 function parseImageRelativePath(relPath) {
   const parts = String(relPath || '').normalize('NFC').split(/[\\/]/).filter(Boolean);
   if (parts.some(part => part === '.' || part === '..')) return { addressFolder: '', originalName: '' };
-  if (parts.length < 2) return { addressFolder: parts[0] || '', originalName: '' };
+  // webkitRelativePath zawsze zaczyna sie od nazwy WYBRANEGO folderu:
+  //   "Zdjecia/<adres>/1.jpg" (wybrany folder ze zdjeciami wszystkich adresow)
+  //   -> folder adresowy = drugi segment;
+  //   "<adres>/1.jpg" (wybrany od razu folder JEDNEGO adresu) -> pierwszy
+  //   segment. Wczesniej ten drugi przypadek dawal folder adresowy o nazwie
+  //   PLIKU ("1.jpg"), wiec zdjecie nigdy nie pasowalo do zadnego adresu.
+  //   Sama nazwa pliku (brak listy sciezek) nie ma folderu adresowego.
+  if (parts.length < 2) return { addressFolder: '', originalName: parts[0] || '' };
+  if (parts.length === 2) return { addressFolder: parts[0], originalName: parts[1] };
   return { addressFolder: parts[1], originalName: parts[parts.length - 1] };
 }
 
@@ -246,6 +254,7 @@ async function storeUploadedImages(jobId, files, imagePaths) {
   await fsp.rm(imageRoot, { recursive: true, force: true }).catch(() => {});
   await fsp.mkdir(imageRoot, { recursive: true });
   const manifest = { root: imageRoot, files: [] };
+  const skipped = [];
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
@@ -259,6 +268,7 @@ async function storeUploadedImages(jobId, files, imagePaths) {
       : decodeOriginalName(file.originalname || '');
     const parsed = parseImageRelativePath(relPath);
     if (!parsed.addressFolder || !parsed.originalName) {
+      skipped.push(parsed.originalName || String(relPath || ''));
       await fsp.rm(file.path, { force: true }).catch(() => {});
       continue;
     }
@@ -281,7 +291,7 @@ async function storeUploadedImages(jobId, files, imagePaths) {
 
   const manifestPath = path.join(UPLOAD_DIR, jobId, 'images-manifest.json');
   saveManifest(manifestPath, manifest);
-  return { manifest, manifestPath, imageRoot };
+  return { manifest, manifestPath, imageRoot, skipped };
 }
 
 const storage = multer.diskStorage({
@@ -945,7 +955,6 @@ async function startGeneration(job, options) {
   // dalej wygrywa nad obydwoma.
   const addressColumn = String(options.addressColumn || (job.smartManifest && job.smartManifest.addressColumn) || guessAddressColumn(selectedSheet.columns || [])).trim() || 'Adres';
   const selectedRows = Array.isArray(options.selectedRows) ? options.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
-  const visibleWord = options.visibleWord === true;
   const debugMode = options.debugMode === true;
   const saveWord = options.saveWord === true;
   const filePrefix = cleanFilePrefix(options.filePrefix || '');
@@ -1018,7 +1027,6 @@ async function startGeneration(job, options) {
     addressColumn,
     selectedRows: selectedRows.length ? selectedRows : 'all',
     outputDir: job.outputDir,
-    visibleWord,
     debugMode,
     saveWord,
     filePrefix,
@@ -1497,16 +1505,20 @@ app.post('/api/images/:jobId', heavyJobLimiter, upload.array('images', 400), asy
       imagePaths = JSON.parse(req.body?.imagePaths || '[]');
     } catch (err) {
       imagePaths = [];
-      imagePathsWarning = `Nie udalo sie odczytac listy sciezek zdjec (${err?.message || err}). Zdjecia zapisano po samych nazwach plikow, bez struktury folderow - dopasowanie zdjec do adresow moze byc niepelne. Wczytaj zdjecia jeszcze raz.`;
+      imagePathsWarning = `Nie udalo sie odczytac listy sciezek zdjec (${err?.message || err}) - bez nazw folderow adresowych zdjecia nie moga byc przypisane do adresow. Wczytaj zdjecia jeszcze raz.`;
     }
     if (!files.length) return res.status(400).json({ ok: false, message: 'Nie wybrano żadnych zdjęć.' });
-    const { manifest, manifestPath, imageRoot } = await storeUploadedImages(job.id, files, imagePaths);
+    const { manifest, manifestPath, imageRoot, skipped } = await storeUploadedImages(job.id, files, imagePaths);
+    if (skipped.length) {
+      const skippedNote = `Pominieto ${skipped.length} z ${files.length} zdjec bez folderu adresowego (np. ${skipped.slice(0, 3).join(', ')}). Wybierz folder, w ktorym kazdy adres ma wlasny podfolder ze zdjeciami.`;
+      imagePathsWarning = imagePathsWarning ? `${imagePathsWarning} ${skippedNote}` : skippedNote;
+    }
     job.imageRoot = imageRoot;
     job.imageManifestPath = manifestPath;
     persistJobsIndex();
     appendLog(job, 'info', 'Wczytano zdjęcia.', { count: manifest.files.length });
     if (imagePathsWarning) appendLog(job, 'error', imagePathsWarning);
-    res.json({ ok: true, count: manifest.files.length, warning: imagePathsWarning || undefined });
+    res.json({ ok: true, count: manifest.files.length, skipped: skipped.length, warning: imagePathsWarning || undefined });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Błąd zapisu zdjęć.' });
   }
