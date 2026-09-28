@@ -8,7 +8,7 @@ public sealed class RenderPdfInput
 {
     public List<FileItem> Files { get; set; } = new();
     public string? PdfRenderer { get; set; }
-    public string? SyncfusionLicenseKey { get; set; }
+    public string? OnlyOfficeDir { get; set; }
 
     public sealed class FileItem
     {
@@ -39,7 +39,7 @@ public static class RenderPdfCommand
     {
         log ??= (level, msg) => Console.Error.WriteLine($"[{level}] {msg}");
         var output = new RenderPdfOutput { Ok = true };
-        using var renderer = PdfRendererFactory.Create(input.PdfRenderer, input.SyncfusionLicenseKey, log);
+        using var renderer = PdfRendererFactory.Create(input.PdfRenderer, input.OnlyOfficeDir, log);
         output.Renderer = renderer.Name;
         foreach (var item in input.Files)
         {

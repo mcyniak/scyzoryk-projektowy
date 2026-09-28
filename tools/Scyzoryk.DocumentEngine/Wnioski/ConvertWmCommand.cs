@@ -24,7 +24,7 @@ public sealed class ConvertWmInput
     public bool VisibleWord { get; set; }
     public List<FileItem> Files { get; set; } = new();
     public string? PdfRenderer { get; set; }
-    public string? SyncfusionLicenseKey { get; set; }
+    public string? OnlyOfficeDir { get; set; }
 
     public sealed class FileItem
     {
@@ -65,17 +65,20 @@ public static class ConvertWmCommand
 
     private static readonly Regex DateRe = new(@"(?<!\d)([0-3]?\d[\.\-/][01]?\d[\.\-/](?:19|20)\d{2})(?!\d)", RegexOptions.Compiled);
     // Odpowiedniki wildcardow Worda z convert-wm.ps1 ([0-9]{1,2}.[0-9]{1,2}.[0-9]{4} itd.).
+    // Granice cyfr (?<!\d)/(?!\d) konieczne: bez nich numer sprawy
+    // "ZP.271.3.2025" byl brany za date "71.3.2025" (zlapane porownaniem z
+    // wynikiem Worda na prawdziwym WM, 2026-09-28 - Word go nie ruszal).
     private static readonly Regex[] FallbackDatePatterns =
     {
-        new(@"\d{1,2}\.\d{1,2}\.\d{4}", RegexOptions.Compiled),
-        new(@"\d{1,2}/\d{1,2}/\d{4}", RegexOptions.Compiled),
+        new(@"(?<!\d)\d{1,2}\.\d{1,2}\.\d{4}(?!\d)", RegexOptions.Compiled),
+        new(@"(?<!\d)\d{1,2}/\d{1,2}/\d{4}(?!\d)", RegexOptions.Compiled),
     };
 
     public static ConvertWmOutput Run(ConvertWmInput input)
     {
         var output = new ConvertWmOutput { Ok = true };
         void Log(string level, string msg) => Console.Error.WriteLine($"[{level}] {msg}");
-        using var renderer = PdfRendererFactory.Create(input.PdfRenderer, input.SyncfusionLicenseKey, Log);
+        using var renderer = PdfRendererFactory.Create(input.PdfRenderer, input.OnlyOfficeDir, Log);
         output.Renderer = renderer.Name;
 
         foreach (var item in input.Files)

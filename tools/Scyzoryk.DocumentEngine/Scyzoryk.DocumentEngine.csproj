@@ -12,9 +12,9 @@
     mail-merge (Dokumenty seryjne + podglad Kreatora), convert-wm (Wnioski
     powykonawcze), render-pdf (DOCX -> PDF dla drukarek).
 
-    DOCX -> PDF bez Worda: Syncfusion DocIO Renderer (wymaga klucza licencji;
-    patrz Pdf/PdfRenderers.cs). SkiaSharp (zaleznosc renderera) sluzy tez do
-    skalowania/obracania zdjec galerii.
+    DOCX -> PDF bez Worda: ONLYOFFICE x2t.exe (darmowy, osobny proces, katalog
+    tools\onlyoffice - patrz scripts\fetch-onlyoffice-x2t.ps1 i Pdf/PdfRenderers.cs).
+    SkiaSharp sluzy do skalowania/obracania zdjec galerii.
   -->
 
   <PropertyGroup>
@@ -48,7 +48,6 @@
 
   <ItemGroup>
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.1.1" />
-    <PackageReference Include="Syncfusion.DocIORenderer.Net.Core" Version="34.2.9" />
     <PackageReference Include="SkiaSharp" Version="3.119.1" />
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="3.119.1" />
   </ItemGroup>

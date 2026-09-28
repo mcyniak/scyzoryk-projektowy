@@ -35,7 +35,7 @@ public sealed class MailMergeInput
     public string? LogPath { get; set; }
     public string? DebugJsonPath { get; set; }
     public string? PdfRenderer { get; set; }
-    public string? SyncfusionLicenseKey { get; set; }
+    public string? OnlyOfficeDir { get; set; }
 
     public sealed class RuleDto
     {
@@ -135,7 +135,7 @@ public sealed class MailMergeCommand
             var cleanTemplate = TemplateCleaner.CleanTemplate(_input.TemplatePath, Log);
             var gallery = PhotoGallery.Load(_input.ImageManifestPath, Log);
 
-            using var renderer = _input.SavePdf ? PdfRendererFactory.Create(_input.PdfRenderer, _input.SyncfusionLicenseKey, Log) : null;
+            using var renderer = _input.SavePdf ? PdfRendererFactory.Create(_input.PdfRenderer, _input.OnlyOfficeDir, Log) : null;
             Event("engine-start", renderer is null
                 ? "Uruchamiam silnik dokumentow (bez Worda)."
                 : $"Uruchamiam silnik dokumentow (bez Worda); PDF: {(renderer.Name == "word" ? "Word (tylko zapis PDF)" : "bez Worda")}.",

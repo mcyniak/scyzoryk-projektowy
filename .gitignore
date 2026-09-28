@@ -89,3 +89,6 @@ graphify-out/
 launcher/_Demo/
 
 .hermes/
+
+# Konwerter PDF ONLYOFFICE x2t (pobierany przez scripts/fetch-onlyoffice-x2t.ps1, nie trzymamy binariow w repo)
+tools/onlyoffice/
