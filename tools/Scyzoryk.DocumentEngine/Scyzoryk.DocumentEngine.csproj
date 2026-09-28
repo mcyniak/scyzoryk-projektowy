@@ -1,17 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Silnik strukturalnych operacji na DOCX przez Microsoft Open XML SDK - bez
-    Word/COM/WINWORD.EXE (patrz CLAUDE.md, sekcja "Migracja Word COM -> Open XML").
+    Silnik operacji na DOCX przez Microsoft Open XML SDK - bez Word/COM/WINWORD.EXE
+    (patrz CLAUDE.md, sekcja "Migracja Word COM -> Open XML").
     Wywolywany przez lib/documentEngine.js (Node) jako osobny proces: jeden plik
     JSON wejsciowy, jeden plik JSON wyjsciowy, exit code 0/1 - ten sam wzorzec co
     launcher/Scyzoryk.Launcher (self-contained, nie wymaga .NET Runtime u
     uzytkownika koncowego).
 
-    NIE jest to launcher/GUI - to jest silnik/CLI, dlatego OutputType=Exe (nie
-    WinExe) i TargetFramework=net8.0 (nie net8.0-windows) - DocumentFormat.OpenXml
-    dziala niezaleznie od platformy, jedynie publikacja jest scelowana w win-x64
-    (jedyna platforma, na ktorej dziala reszta Scyzoryka).
+    Polecenia: scan-palette / scan-candidates / build-template (Kreator wzorow),
+    mail-merge (Dokumenty seryjne + podglad Kreatora), convert-wm (Wnioski
+    powykonawcze), render-pdf (DOCX -> PDF dla drukarek).
+
+    DOCX -> PDF bez Worda: Syncfusion DocIO Renderer (wymaga klucza licencji;
+    patrz Pdf/PdfRenderers.cs). SkiaSharp (zaleznosc renderera) sluzy tez do
+    skalowania/obracania zdjec galerii.
   -->
 
   <PropertyGroup>
@@ -27,6 +30,8 @@
     <PublishSingleFile>true</PublishSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- Word COM (tylko awaryjny renderer PDF) przez late binding (dynamic). -->
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
 
     <!-- Wersja nadawana z zewnatrz (scripts\build-document-engine.ps1), ten sam
          wzorzec co Scyzoryk.Launcher - jedna wersja z package.json/instalatora. -->
@@ -43,6 +48,9 @@
 
   <ItemGroup>
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.1.1" />
+    <PackageReference Include="Syncfusion.DocIORenderer.Net.Core" Version="34.2.9" />
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="3.119.1" />
   </ItemGroup>
 
 </Project>

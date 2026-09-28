@@ -878,18 +878,45 @@ app.post('/api/jobs/:jobId/preview', heavyJobLimiter, async (req, res) => {
     ];
     fs.writeFileSync(path.join(previewDir, 'no-replacements.json'), JSON.stringify({ rules: [] }), 'utf8');
 
-    let waitLogged = false;
-    const result = await withWordAutomationLease(
-      { app: 'kreator-wzorow', operation: `podgląd: ${job.templateOriginalName}` },
-      () => runPowerShell(DOKUMENTY_SERYJNE_MAILMERGE_SCRIPT, args, { cwd: path.join(ROOT, '..', 'dokumenty-seryjne'), timeoutMs: Number(process.env.KREATOR_PS_TIMEOUT_MS || 20 * 60 * 1000) }),
-      { onWaiting: () => { if (waitLogged) return; waitLogged = true; jobStore.updateJob(job.id, { statusMessage: 'Word jest zajęty przez inne narzędzie - czekam na zwolnienie...' }); } }
-    );
-
-    const lines = String(result.stdout || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-    const finalLine = [...lines].reverse().find(l => l.startsWith('{') && l.endsWith('}') && l.includes('"created"'));
-    const parsed = finalLine ? JSON.parse(finalLine) : null;
+    // Migracja Word COM -> Open XML (ETAP 2): podglad idzie przez ten sam
+    // silnik co generowanie w Dokumentach seryjnych (polecenie mail-merge,
+    // bez Worda) - dalej "jedno zrodlo prawdy" dla podgladu i generowania.
+    // Przelacznik awaryjny SCYZORYK_DOKUMENTY_ENGINE=word wraca do skryptu
+    // PowerShell z Dokumentow seryjnych.
+    let parsed = null;
+    let resultStderr = '';
+    if (documentEngine.getDocumentEngineMode() === 'openxml') {
+      const runPreview = () => documentEngine.runEngineCommand('mail-merge', {
+        pdfRenderer: documentEngine.getPdfRendererMode(),
+        syncfusionLicenseKey: documentEngine.resolveSyncfusionLicenseKey() || null,
+        templatePath: job.templatePath,
+        outputDir: previewDir,
+        addressColumn: preflight.manifest.addressColumn,
+        records: [evaluated.record],
+        rules: [],
+        filePrefix: 'podglad',
+        smartTemplateMode: true,
+        saveWord: true,
+        logPath: path.join(previewDir, 'log.txt'),
+        debugJsonPath: path.join(previewDir, 'debug-events.jsonl')
+      }, { timeoutMs: Number(process.env.KREATOR_PS_TIMEOUT_MS || 20 * 60 * 1000) });
+      parsed = documentEngine.engineUsesWord()
+        ? await withWordAutomationLease({ app: 'kreator-wzorow', operation: `podgląd: ${job.templateOriginalName}` }, runPreview)
+        : await runPreview();
+    } else {
+      let waitLogged = false;
+      const result = await withWordAutomationLease(
+        { app: 'kreator-wzorow', operation: `podgląd: ${job.templateOriginalName}` },
+        () => runPowerShell(DOKUMENTY_SERYJNE_MAILMERGE_SCRIPT, args, { cwd: path.join(ROOT, '..', 'dokumenty-seryjne'), timeoutMs: Number(process.env.KREATOR_PS_TIMEOUT_MS || 20 * 60 * 1000) }),
+        { onWaiting: () => { if (waitLogged) return; waitLogged = true; jobStore.updateJob(job.id, { statusMessage: 'Word jest zajęty przez inne narzędzie - czekam na zwolnienie...' }); } }
+      );
+      resultStderr = result.stderr || '';
+      const lines = String(result.stdout || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const finalLine = [...lines].reverse().find(l => l.startsWith('{') && l.endsWith('}') && l.includes('"created"'));
+      parsed = finalLine ? JSON.parse(finalLine) : null;
+    }
     if (!parsed || !parsed.ok || !(parsed.created || []).length) {
-      throw new Error((parsed && parsed.message) || result.stderr || 'Generowanie próbki nie powiodło się.');
+      throw new Error((parsed && parsed.message) || resultStderr || 'Generowanie próbki nie powiodło się.');
     }
     const createdDocx = (parsed.created || []).find(f => String(f.file).toLowerCase().endsWith('.docx'));
     const createdPdf = (parsed.created || []).find(f => String(f.file).toLowerCase().endsWith('.pdf'));

@@ -38,6 +38,7 @@ const { detectImageMergeFields, summarizeImages, loadManifest, saveManifest } = 
 const { readSmartTemplateManifest, SmartTemplateError } = require('./src/smartTemplate');
 const { evaluateSmartRecord, collectRequiredColumns } = require('../../lib/smartTemplateRules');
 const { withWordAutomationLease } = require('../../lib/wordAutomationCoordinator');
+const documentEngine = require('../../lib/documentEngine');
 
 const AdmZip = require('adm-zip');
 
@@ -861,6 +862,9 @@ function handlePowerShellEvent(job, evt) {
   } else if (eventName === 'word-start') {
     setProgress(job, { phase: 'word', message: evt.message || 'Uruchamiam Worda.' });
     appendLog(job, 'info', evt.message || 'Uruchamiam Worda.', evt);
+  } else if (eventName === 'engine-start') {
+    setProgress(job, { phase: 'word', message: evt.message || 'Uruchamiam silnik dokumentów.' });
+    appendLog(job, 'info', evt.message || 'Uruchamiam silnik dokumentów.', evt);
   } else if (eventName === 'template-clean') {
     setProgress(job, { phase: 'prepare', message: evt.message || 'Przygotowuję szablon.' });
     appendLog(job, 'info', evt.message || 'Przygotowuję szablon.', evt);
@@ -1029,9 +1033,36 @@ async function startGeneration(job, options) {
   if (job.imageManifestPath && fs.existsSync(job.imageManifestPath)) args.push('-ImageManifestJson', job.imageManifestPath);
   if (job.smartManifest) args.push('-SmartTemplateMode');
 
+  // Migracja Word COM -> Open XML (ETAP 1): domyslnie dokumenty wypelnia
+  // Scyzoryk.DocumentEngine.exe (bez Worda), z tym samym protokolem linii JSON
+  // na stdout co dawny skrypt PowerShell - handlePowerShellEvent/parseJsonLines
+  // ponizej dzialaja bez zmian dla obu sciezek. Przelacznik awaryjny:
+  // SCYZORYK_DOKUMENTY_ENGINE=word (patrz lib/documentEngine.js).
+  const useEngine = documentEngine.getDocumentEngineMode() === 'openxml';
   const exe = process.env.POWERSHELL_EXE || 'powershell.exe';
   const psArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_SCRIPT, ...args];
-  appendLog(job, 'info', 'Uruchamiam PowerShell.', { exe, script: PS_SCRIPT });
+  const engineInput = {
+    templatePath: job.template.path,
+    outputDir: job.outputDir,
+    addressColumn,
+    records: rowsForOutput,
+    rules: textReplacements,
+    filePrefix,
+    imageManifestPath: job.imageManifestPath && fs.existsSync(job.imageManifestPath) ? job.imageManifestPath : null,
+    saveWord,
+    debugMode,
+    smartTemplateMode: Boolean(job.smartManifest),
+    logPath: job.logPath,
+    debugJsonPath
+  };
+  if (useEngine) {
+    appendLog(job, 'info', 'Uruchamiam silnik dokumentów (bez Worda).', { pdfRenderer: documentEngine.getPdfRendererMode() });
+  } else {
+    appendLog(job, 'info', 'Uruchamiam PowerShell (Word COM - tryb awaryjny).', { exe, script: PS_SCRIPT });
+  }
+  // Lease Worda tylko wtedy, gdy Word faktycznie wystartuje (stara sciezka
+  // albo PDF zapisywany jeszcze przez Worda, gdy nie ma klucza Syncfusion).
+  const needsWordLease = !useEngine || documentEngine.engineUsesWord();
 
   // Cross-process koordynacja Worda (lib/wordAutomationCoordinator.js) -
   // apps/kreator-wzorow moze rownolegle uruchamiac wlasna instancje Worda
@@ -1050,14 +1081,20 @@ async function startGeneration(job, options) {
     }
   };
 
-  return withWordAutomationLease(
-    { app: 'dokumenty-seryjne', operation: job.template.originalName },
-    () => new Promise(resolveGeneration => {
-  const child = spawn(exe, psArgs, {
-    cwd: ROOT,
-    windowsHide: !visibleWord,
-    env: { ...process.env }
-  });
+  const runGeneration = () => new Promise(resolveGeneration => {
+  let engineCleanup = null;
+  let child;
+  if (useEngine) {
+    const spawned = documentEngine.spawnMailMerge(engineInput, { cwd: ROOT });
+    child = spawned.child;
+    engineCleanup = spawned.cleanup;
+  } else {
+    child = spawn(exe, psArgs, {
+      cwd: ROOT,
+      windowsHide: !visibleWord,
+      env: { ...process.env }
+    });
+  }
   job.child = child;
   const state = { buffer: '', final: null, stderr: '' };
 
@@ -1103,7 +1140,7 @@ async function startGeneration(job, options) {
       persistJobsIndex();
       }
     } else {
-      const message = state.stderr || `PowerShell zakończył się bez wyniku JSON. Kod: ${code}`;
+      const message = state.stderr || `${useEngine ? 'Silnik dokumentów' : 'PowerShell'} zakończył się bez wyniku JSON. Kod: ${code}`;
       job.status = 'error';
       job.result = { ok: false, message, created: [], errors: [], code, logUrl: `/api/download/${job.id}/logs` };
       setProgress(job, { phase: 'error', percent: 100, message });
@@ -1112,7 +1149,12 @@ async function startGeneration(job, options) {
     }
     resolveGeneration(job.result);
   });
-  }),
+  });
+
+  if (!needsWordLease) return runGeneration();
+  return withWordAutomationLease(
+    { app: 'dokumenty-seryjne', operation: job.template.originalName },
+    runGeneration,
     leaseOptions
   );
 }

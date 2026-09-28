@@ -1,6 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using Scyzoryk.DocumentEngine.Commands;
+using Scyzoryk.DocumentEngine.Merge;
+using Scyzoryk.DocumentEngine.Pdf;
+using Scyzoryk.DocumentEngine.Wnioski;
 
 namespace Scyzoryk.DocumentEngine;
 
@@ -8,8 +11,9 @@ namespace Scyzoryk.DocumentEngine;
 // bez BOM na wejsciu, jeden na wyjsciu (sekcja 2 promptu migracji: "Node ma
 // uruchamiac helper przez pliki JSON UTF-8 bez BOM, nie przez duze argumenty
 // CLI"). Diagnostyka techniczna idzie na stderr (po polsku, jak wszedzie w
-// repo), stdout jest zarezerwowany na krotki komunikat "OK"/"BLAD" - caly
-// prawdziwy wynik jest w pliku OutputJson (machine-readable).
+// repo). stdout: dla scan/build krotki komunikat; dla mail-merge strumien
+// linii JSON (zdarzenia postepu - ten sam protokol co dawny
+// mailmerge-to-pdf.ps1), a caly wynik i tak laduje tez w OutputJson.
 //
 // Uzycie: Scyzoryk.DocumentEngine.exe <command> <inputJsonPath> <outputJsonPath>
 public static class Program
@@ -17,23 +21,29 @@ public static class Program
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
         WriteIndented = false,
     };
 
     public static int Main(string[] args)
     {
-        try { Console.OutputEncoding = Encoding.UTF8; } catch { /* ignore - np. gdy stdout jest przekierowany do pliku bez konsoli */ }
+        try { Console.OutputEncoding = new UTF8Encoding(false); } catch { /* ignore - np. gdy stdout jest przekierowany do pliku bez konsoli */ }
 
         if (args.Length != 3)
         {
             Console.Error.WriteLine("Uzycie: Scyzoryk.DocumentEngine <command> <inputJsonPath> <outputJsonPath>");
-            Console.Error.WriteLine("Dostepne polecenia: scan-palette, scan-candidates, build-template");
+            Console.Error.WriteLine("Dostepne polecenia: scan-palette, scan-candidates, build-template, mail-merge, render-pdf, convert-wm");
             return 1;
         }
 
         var command = args[0];
         var inputPath = args[1];
         var outputPath = args[2];
+
+        // Generowanie dokumentow nie moze "dusic" komputera, na ktorym ktos
+        // pracuje (zgloszenie uzytkownikow przy Word COM) - silnik zawsze
+        // chodzi z obnizonym priorytetem.
+        try { System.Diagnostics.Process.GetCurrentProcess().PriorityClass = System.Diagnostics.ProcessPriorityClass.BelowNormal; } catch { }
 
         try
         {
@@ -60,6 +70,28 @@ public static class Program
                     WriteOutput(outputPath, output);
                     return output.Ok ? 0 : 1;
                 }
+                case "mail-merge":
+                {
+                    var input = ReadInput<MailMergeInput>(inputPath);
+                    var result = new MailMergeCommand(input, Console.Out).Run();
+                    File.WriteAllText(outputPath, result.ToJsonString(), new UTF8Encoding(false));
+                    if (result["fatal"] is not null) return 1;
+                    return result["ok"]!.GetValue<bool>() ? 0 : 2;
+                }
+                case "render-pdf":
+                {
+                    var input = ReadInput<RenderPdfInput>(inputPath);
+                    var output = RenderPdfCommand.Run(input);
+                    WriteOutput(outputPath, output);
+                    return output.Ok ? 0 : 1;
+                }
+                case "convert-wm":
+                {
+                    var input = ReadInput<ConvertWmInput>(inputPath);
+                    var output = ConvertWmCommand.Run(input);
+                    WriteOutput(outputPath, output);
+                    return output.Ok ? 0 : 1;
+                }
                 default:
                     Console.Error.WriteLine($"Nieznane polecenie: {command}");
                     return 1;
@@ -70,7 +102,7 @@ public static class Program
             Console.Error.WriteLine($"Nieoczekiwany blad: {ex}");
             try
             {
-                WriteOutput(outputPath, new { ok = false, message = $"Nieoczekiwany blad silnika dokumentow: {ex.Message}" });
+                WriteOutput(outputPath, new { ok = false, message = $"Nieoczekiwany blad silnika dokumentow: {ex.Message}", error = ex.Message });
             }
             catch { /* nawet zapis bledu sie nie udal - stderr powyzej to jedyna diagnostyka */ }
             return 1;
@@ -79,7 +111,7 @@ public static class Program
 
     private static T ReadInput<T>(string path)
     {
-        var json = File.ReadAllText(path, Encoding.UTF8);
+        var json = File.ReadAllText(path, Encoding.UTF8).TrimStart('﻿');
         return JsonSerializer.Deserialize<T>(json, JsonOptions)
             ?? throw new InvalidOperationException($"Nie udalo sie odczytac wejscia JSON: {path}");
     }
