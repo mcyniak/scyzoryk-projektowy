@@ -14,7 +14,6 @@ oraz przez przycisk **Pomoc** na panelu głównym.
 ## 1. Co jest potrzebne
 
 - Windows 10 lub Windows 11 w wersji 64-bitowej,
-- Microsoft Word dla narzędzi **Dokumenty seryjne PDF** i **Wnioski powykonawcze PDF**,
 - dostęp do używanej drukarki,
 - pliki z Dysku Google ustawione jako dostępne offline,
 - internet dla Doborów myEcodan/Varmero (zewnętrzne formularze producentów) oraz dla OCR audytów, jeśli używasz automatycznego rozpoznawania tekstu (Gemini/OpenAI) — tryb ręczny OCR działa bez internetu.
@@ -137,7 +136,7 @@ Scyzoryk nie powinien zamykać ani minimalizować prywatnych dokumentów Worda u
 9. Kliknij **Utwórz PDF-y**.
 10. Pobierz pojedyncze pliki albo ZIP.
 
-Microsoft Word musi być zainstalowany i aktywowany.
+Microsoft Word nie jest potrzebny — dokumenty i PDF tworzy wbudowany silnik dokumentów.
 
 ## 9. Wnioski powykonawcze PDF
 

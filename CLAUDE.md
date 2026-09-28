@@ -100,45 +100,51 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
   state, `src/automation/{session,steps,product}.js` drive the browser, `excel.js`/`rules.js` parse and
   validate input, `telemetry.js`/`debug.js` for diagnostics). ESM (`"type": "module"` in its
   `package.json`), unlike the other apps which are CommonJS.
-- `dokumenty-seryjne` — Word+Excel mail-merge: produces one PDF per address/row via Word COM automation
-  in `scripts/mailmerge-to-pdf.ps1`. **Has two parallel, largely-duplicate UI code paths — only one is
+- `dokumenty-seryjne` — Word+Excel mail-merge: produces one PDF per address/row **without Word** —
+  `server.js` spawns `Scyzoryk.DocumentEngine.exe mail-merge` via `lib/documentEngine.js#spawnMailMerge`
+  (the old `scripts/mailmerge-to-pdf.ps1` Word COM script was deleted 2026-09-28; the engine speaks the same
+  JSON-lines stdout protocol, so `parseJsonLines`/`handlePowerShellEvent` are unchanged). The dead
+  `src/folderRoutes.js` path goes through the same engine command. **Has two parallel, largely-duplicate UI code paths — only one is
   reachable.** `public/index.html` + `public/inline-1.js` (calling `/api/upload`, `/api/generate/:jobId`,
   `/api/placeholders/:jobId` in `server.js`) is served at `/` and is the one users actually reach.
   `public/folder.html` + `public/folder.js` (calling `/api/folder-upload`, `/api/folder-generate/:jobId`
   in `src/folderRoutes.js`) is **not linked from anywhere** — dead code. When debugging this app, check
   `inline-1.js` first; don't assume `folder.js` reflects current behavior.
-  - Real templates fill placeholders via **table-cell position**, not text search: `mailmerge-to-pdf.ps1`'s
-    `Fill-HighlightedTableCells` reads the yellow-highlighted table cell's value and looks at the
+  - Real templates fill placeholders via **table-cell position**, not text search: the engine's
+    `Merge/LegacyFillers.cs` (port of the old `Fill-HighlightedTableCells`) reads the yellow-highlighted table cell's value and looks at the
     **previous cell in the same row** as the field label (e.g. `"Uczestnik projektu:"` → next cell is
     the name). This label vocabulary is consistent across investments/document types (verified against
-    real data from 4 investments × 3 doc types) — see `$script:LabelFieldCandidates` in the script for
-    the label→Excel-column mapping. This runs automatically for every generated document; no user
-    configuration needed. Do NOT use `Table.Rows`/`.Cells` for this kind of table walk — if the table
-    has any vertically-merged cell anywhere, Word COM throws for *every* row, not just the merged one;
-    use `Table.Range.Cells` (flat, reading-order) instead. Also: apply detected fills in a separate pass
-    sorted by position descending, never mutate cell text while still iterating the table.
+    real data from 4 investments × 3 doc types) — see the label→Excel-column table in `LegacyFillers.cs`.
+    This runs automatically for every generated document; no user configuration needed. Apply detected
+    fills in a separate pass, never mutate cell text while still iterating the table.
   - Polish "ł" doesn't decompose under Unicode NFD the way ą/ę/ć/ń/ś/ź/ż do, so the shared `Normalize-Name`
-    PS helper turns "Działka" into `dzia_ka`, not `dzialka` — any new ASCII label/column candidate
-    containing "ł" needs both spellings considered.
+    helper (now `Merge/TextNormalize.cs`, and `src/imageMatching.js#normalizeAddress` on the Node side)
+    must map it explicitly — any new ASCII label/column candidate containing "ł" needs that.
   - **Smart Template mode** (added with `kreator-wzorow`, below): a DOCX built by the Kreator carries an
     embedded manifest (Custom XML Part, `apps/dokumenty-seryjne/src/smartTemplate.js#readSmartTemplateManifest`
     detects it at upload time). When present, `server.js` takes a **separate** code path from legacy —
     skips `groupMailMergeTemplates`/`validateReferenceColumns` (smart templates need `addressColumn` +
     `collectRequiredColumns(manifest)` from `lib/smartTemplateRules.js` instead), and before spawning
-    PowerShell, augments every selected row via `evaluateSmartRecord(manifest, row)` (adds synthetic
+    the engine, augments every selected row via `evaluateSmartRecord(manifest, row)` (adds synthetic
     `SCY_F_xxx` merge-field properties + `_scyBlocksJson`) and preflights **all** selected rows — any
     row with a blocking error refuses the whole batch rather than generating some documents with silently
-    wrong content. `mailmerge-to-pdf.ps1 -SmartTemplateMode` then skips `Fill-HighlightedTableCells`/
-    `Fill-NarrativeBlanks` (smart templates' colored marks are Kreator fields/blocks, not legacy
-    label-cells) and calls `Apply-ScyzorykSmartBlocks` (in `lib/wordSmartTemplate.ps1`, shared with the
-    Kreator's own scripts) instead, right before the existing `Replace-AllMergeFields`. Legacy templates
+    wrong content. With `smartTemplateMode: true` the engine skips the legacy fillers (smart templates'
+    colored marks are Kreator fields/blocks, not legacy label-cells) and applies smart blocks
+    (`Merge/SmartBlockApplier.cs`) right before merge-field substitution. Legacy templates
     (no manifest) are completely unaffected — same fillers, same validation, same everything.
-  - Word COM itself is now coordinated **across processes**, not just within this app's own
-    `wordQueue = createSerialQueue(...)` (which only serializes within one Node process): both this app
-    and `kreator-wzorow` can independently spin up `Word.Application`, so `startGeneration()`'s PowerShell
-    spawn is wrapped in `lib/wordAutomationCoordinator.js#withWordAutomationLease` — waits for the other
-    app to finish (with a `SCYZORYK_WORD_LOCK_TIMEOUT_MS`, default 60 min) instead of colliding.
-- `wnioski-powykonawcze` — converts DOCX "wniosek materiałowy" files into "dokumentacja powykonawcza" PDFs.
+  - Word is now only a **fallback PDF renderer** (machine without ONLYOFFICE x2t, see "Document engine"
+    below). Only then (`documentEngine.engineUsesWord()`) is the engine spawn wrapped in
+    `lib/wordAutomationCoordinator.js#withWordAutomationLease` (cross-process lock shared with
+    `kreator-wzorow`, `wnioski-powykonawcze` and the printers' DOCX→PDF, `SCYZORYK_WORD_LOCK_TIMEOUT_MS`,
+    default 60 min).
+  - `/api/images/:jobId` (photo folders): the browser sends `encodeURIComponent(webkitRelativePath)`,
+    the server decodes, NFC-normalizes and rejects `.`/`..` segments (`parseImageRelativePath`).
+    Verified 2026-09-28 with a real HTTP test (group5) — Polish folder/file names (NFC and NFD) arrive
+    intact.
+- `wnioski-powykonawcze` — converts DOCX "wniosek materiałowy" files into "dokumentacja powykonawcza" PDFs,
+  without Word: `runConvertScript` → `documentEngine.convertWniosekMaterialowy` → engine command
+  `convert-wm` (`Wnioski/ConvertWmCommand.cs`, port of the deleted `scripts/convert-wm.ps1`; same
+  input.json/result.json shape). `job.child` is the engine process, so "Przerwij" still kills it.
 - `karty-katalogowe` — matches a UID column in an Excel sheet to product spec-sheet files and copies them
   into per-client folders.
 - `ocr-audytow` — OCR for scanned audit PDFs (incl. Polish handwriting): extracts form-field values into a
@@ -195,13 +201,12 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     is the one exception to the synthetic-name rule: it deliberately inserts a real MERGEFIELD with the
     fixed literal name `Zdjecia_pomontazowe` (`BuildTemplateCommand.cs`'s `PhotoGalleryMergeFieldName`,
     mirrored in `templateManifest.js`'s `PHOTO_GALLERY_MERGE_FIELD_NAME`) instead of a random `SCY_F_<hex>`
-    one — that literal name is exactly what `dokumenty-seryjne`'s already-existing
-    `Replace-PhotoGalleryMergeField`/`Test-GalleryFieldName` (`apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1`)
+    one — that literal name is exactly what `dokumenty-seryjne`'s photo gallery
+    (`tools/Scyzoryk.DocumentEngine/Merge/PhotoGallery.cs`, formerly `Replace-PhotoGalleryMergeField`)
     already searches for and fills with the address-matched photo folder, so this needed **zero** changes
     in `dokumenty-seryjne` — it's the same mechanism as if a user had typed the mail-merge field into Word
     by hand. Like `constant`, it needs no manifest entry at all (no value/runtime rule to compute — see
-    `setCandidatePhotoGallery`'s comment). Caveat: Kreator's own single-record `/preview` (Word-COM based,
-    see below) has no photo folder in that context, so the preview never shows a real photo — only real
+    `setCandidatePhotoGallery`'s comment). Caveat: Kreator's own single-record `/preview` has no photo folder in that context, so the preview never shows a real photo — only real
     generation in `dokumenty-seryjne` does.
     `src/candidateConfig.js#validateOverlaps` (Range.Start/.End-based) is **not currently wired into
     `runPreflight`** post-migration — the new candidate identity (`partUri`/`ordinal`/`structuralPath`,
@@ -214,27 +219,19 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     modelled as a rule.
   - Preview (`POST /api/jobs/:id/preview`) doesn't reimplement rendering — it calls
     `evaluateSmartRecord()` (same function `dokumenty-seryjne` uses at generation time) for one record, then
-    shells out to **`apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1`** directly (the one deliberate
-    cross-app script reference in this repo — everywhere else, apps are independent), so a preview can never
-    silently diverge from what real generation later produces. This is the **one remaining Word COM
-    dependency** in this app — it still needs `withWordAutomationLease` and Microsoft Word, because Smart
-    Template *runtime* generation (evaluating a record into a finished document, in `dokumenty-seryjne`)
-    has not been migrated to Open XML yet (see migration status below).
-  - **Migration status (Word COM → Open XML, started 2026-09-14, after the "0 kandydatów" audit below)**:
-    Kreator scan/build is now **fully Open XML, zero `WINWORD.EXE` launches** — verified by
-    `tools/Scyzoryk.DocumentEngine.Tests` (6 xUnit tests, no Word, includes an explicit
-    zero-WINWORD-process-delta assertion) and by `test/group26-kreator-wzorow.test.js`'s full HTTP
-    end-to-end test (upload → scan-markings → scan → configure → build → download, also asserting no new
-    `WINWORD.EXE` PID appears). **Not migrated yet**: Kreator's own `/preview` (still Word COM, see above),
-    and — much bigger — Smart Template *runtime* generation in `dokumenty-seryjne`
-    (`Apply-ScyzorykSmartBlocks`/merge-field substitution, still Word COM), `wnioski-powykonawcze`'s
-    `convert-wm.ps1` mutation, and the shared DOCX→PDF renderer (`lib/printing/docx-to-pdf.ps1`, currently
-    the *only* correct way to get a PDF, and likely to stay Word-COM-based long-term as "the renderer" per
-    the migration's own stated non-goal: "nie chodzi o usunięcie Worda za wszelką cenę"). The now-superseded
-    Word-COM scan/build scripts (`apps/kreator-wzorow/scripts/{scan,build}-template.ps1`,
-    `lib/wordSmartTemplate.ps1`, `apps/kreator-wzorow/scripts/test-word-com.ps1`,
-    `npm run test:kreator-word`) are **still present in the repo but no longer called by `server.js`** —
-    kept only as reference/rollback material for now, not wired into any route.
+    runs the **same engine command** as real generation (`documentEngine.runEngineCommand('mail-merge',
+    { smartTemplateMode: true, ... })`), so a preview can never silently diverge from what real generation
+    later produces. `withWordAutomationLease` only when PDF falls back to Word.
+  - **Migration status (Word COM → Open XML): complete as of 2026-09-28** (branch
+    `feat/bez-worda-open-xml`). Kreator scan/build/preview, Dokumenty seryjne (legacy + Smart Template +
+    photo gallery), Wnioski powykonawcze and the printers' DOCX→PDF all go through
+    `Scyzoryk.DocumentEngine.exe`; PDF is rendered by ONLYOFFICE x2t. The old Word COM scripts
+    (`mailmerge-to-pdf.ps1`, `convert-wm.ps1`, `lib/printing/docx-to-pdf.ps1`,
+    `apps/kreator-wzorow/scripts/{scan,build}-template.ps1`, `test-word-com.ps1`, `lib/wordSmartTemplate.ps1`,
+    `npm run test:kreator-word`) and the `SCYZORYK_DOKUMENTY_ENGINE=word` switch were **deleted** — git
+    history (before commit that removed them) is the reference if a Word-behaviour question comes up.
+    Remaining Word COM: only `Pdf/PdfRenderers.cs#WordPdfRenderer` (save-as-PDF fallback, no x2t) and
+    physical printing of DOCX in `lib/printing/PrintEngine.psm1` (not part of this migration).
   - **Auto-configuration (added 2026-09-14, `PROMPT_CLAUDE_AUTO_KONFIGURACJA_KREATORA.md`)** — a local,
     deterministic (zero AI/network) heuristic engine that proposes a decision for most scanned candidates
     instead of forcing the user to classify every single one by hand. `POST /api/jobs/:id/auto-configure/analyze`
@@ -348,6 +345,33 @@ new app, copy this rather than inventing a new one:
     old Acrobat hide-loop was) — runs with `SAFER` left at its (gs 9.50+) default and only
     `--permit-devices=mswinpr2` granted, deliberately never `-dNOSAFER`, since this interprets
     user-uploaded PDF content.
+
+- **Document engine (Open XML, no Word COM)** — `lib/documentEngine.js` is the only Node entry point to
+  `tools/Scyzoryk.DocumentEngine` (C#/.NET 8, Open XML SDK; built by `scripts/build-document-engine.ps1`,
+  which runs `tools/Scyzoryk.DocumentEngine.Tests` first). One JSON file in, one JSON file out (UTF-8, no
+  BOM, in `%TEMP%`), exit code 0/1; commands: `scan-palette`, `scan-candidates`, `build-template`,
+  `mail-merge` (streams JSON lines on stdout), `render-pdf`, `convert-wm`. Exe lookup:
+  `SCYZORYK_DOCUMENT_ENGINE_PATH` → `<install>/Scyzoryk.DocumentEngine.exe` → `tools/.../publish/`.
+  - **PDF renderer**: ONLYOFFICE `x2t.exe` (AGPL v3, run as a separate unmodified program — chosen
+    2026-09-28 over LibreOffice (lost images), Syncfusion (paid for this company size) and DocumentBuilder
+    (watermark)). `resolveOnlyOfficeDir()`: `SCYZORYK_ONLYOFFICE_DIR` → `<install>/onlyoffice` →
+    `tools/onlyoffice` (dev, fetched by `scripts/fetch-onlyoffice-x2t.ps1`, gitignored, ~180 MB).
+    `getPdfRendererMode()` = `onlyoffice` when x2t is found, else `word` (Word COM only to save the finished
+    DOCX as PDF); `SCYZORYK_PDF_RENDERER=onlyoffice|word` forces it. `pdfRendererInput()` is what every
+    command gets (`pdfRenderer` + `onlyOfficeDir`). x2t needs a font index built from the *target*
+    machine's fonts (`sdkjs/common/AllFonts.js`) — the engine builds it on first use via `docbuilder.exe`;
+    never ship the build machine's copy.
+  - Installer: `build-installer.ps1` step 3c copies `tools/onlyoffice` → staging `onlyoffice/` (fetching it
+    if missing, dropping `AllFonts.js`/`font_selection.bin`/`fonts.log`); `scyzoryk.iss` installs it in
+    the **full** variant only, and `generate-runtime-fingerprint.js` hashes `onlyoffice/WERSJA.txt`, so a
+    new x2t version forces the full installer on update.
+  - Temp files: the engine's JSON files are removed on process close/error; once per Node process
+    `cleanupStaleEngineTempFiles()` sweeps leftovers older than 6 h (`docengine-*.json`,
+    `scyzoryk_x2t_*`, `scyzoryk_pdf_*`, `scyzoryk_fonts_*`) from `%TEMP%` (hard-killed runs).
+  - The engine never truncates `logPath`/`debugJsonPath` — Node owns their lifecycle (multi-template
+    batches append to one log).
+  - Tests: `tools/Scyzoryk.DocumentEngine.Tests` (xUnit, no Word/x2t) and `test/group27-document-engine.test.js`
+    (Node; its two integration tests run the real exe + x2t when both exist, otherwise skip).
 
 ### Native launcher (`launcher/Scyzoryk.Launcher`, installed as `Scyzoryk.exe`)
 

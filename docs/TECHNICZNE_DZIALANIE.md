@@ -167,7 +167,7 @@ interfejs HTML/JavaScript
   logika w server.js/src
           │
           ├── pliki lokalne
-          ├── Microsoft Word przez PowerShell
+          ├── silnik dokumentów Scyzoryk.DocumentEngine.exe (Open XML + ONLYOFFICE x2t, bez Worda)
           ├── drukarki systemu Windows
           ├── zewnętrzny formularz przez Playwright
           └── Google Gemini / OpenAI dla OCR (opcjonalnie — dostępny tez tryb ręczny bez AI)
@@ -211,19 +211,20 @@ Aplikacje drukujące korzystają ze wspólnej warstwy w `lib/printing.js` oraz z
 
 - `lib/smartTemplateRules.js` — czysty moduł JS (bez zależności npm) interpretujący reguły wzoru: wylicza wartość każdego pola dla konkretnego rekordu, ocenia warunki bloków, waliduje strukturę manifestu. Używany zarówno przez Kreatora (podgląd/build), jak i przez Dokumenty seryjne (prawdziwe generowanie) — jedno wspólne miejsce, żeby oba narzędzia nigdy nie interpretowały tych samych reguł inaczej.
 - `lib/wordAutomationCoordinator.js` — blokada międzyprocesowa na plikach (ten sam wzorzec co `lib/printCoordinator.js`), żeby dwie niezależne aplikacje (Kreator, Dokumenty seryjne) nie uruchomiły Worda jednocześnie. Od migracji Open XML (patrz niżej) Kreator sam już Worda nie potrzebuje do skanu/budowy — blokada zostaje w użyciu wyłącznie dla `/preview` Kreatora (renderuje przez `dokumenty-seryjne`) i dla samych Dokumentów seryjnych.
-- `lib/wordSmartTemplate.ps1` — **wersja historyczna, nieużywana przez żadną trasę `server.js`** od migracji Open XML: skanowanie/budowa Kreatora poszły przez `lib/documentEngine.js`. Zostaje w repo jako materiał referencyjny/rollback, nie jest już wywoływana.
+- `lib/wordSmartTemplate.ps1` i pozostałe skrypty Word COM (`mailmerge-to-pdf.ps1`, `convert-wm.ps1`, `lib/printing/docx-to-pdf.ps1`, `scan/build-template.ps1`, `test-word-com.ps1`) — **usunięte 2026-09-28** po zakończeniu migracji Open XML; ich zachowanie przejął silnik dokumentów (poniżej). Wcześniejsza wersja jest w historii gita.
 
 ### Silnik dokumentów Open XML (bez Worda) — `tools/Scyzoryk.DocumentEngine`
 
 Od 2026-09-14 (po audycie "0 kandydatów" — patrz `CLAUDE.md`) strukturalne operacje na DOCX Kreatora (skan palety kolorów, skan kandydatów, budowa Smart Template) idą przez własny, mały silnik .NET 8 zamiast przez automatyzację Worda:
 
-- `tools/Scyzoryk.DocumentEngine/` — konsolowa aplikacja C#/.NET 8 korzystająca z **Microsoft Open XML SDK** (`DocumentFormat.OpenXml`), publikowana jako self-contained, pojedynczy plik `Scyzoryk.DocumentEngine.exe` (ten sam wzorzec co natywny launcher `Scyzoryk.exe`) — użytkownik końcowy nie potrzebuje .NET Runtime. Trzy polecenia: `scan-palette`, `scan-candidates`, `build-template`, wywoływane przez jeden plik JSON wejściowy i jeden wyjściowy (bez dużych argumentów w linii poleceń).
+- `tools/Scyzoryk.DocumentEngine/` — konsolowa aplikacja C#/.NET 8 korzystająca z **Microsoft Open XML SDK** (`DocumentFormat.OpenXml`), publikowana jako self-contained, pojedynczy plik `Scyzoryk.DocumentEngine.exe` (ten sam wzorzec co natywny launcher `Scyzoryk.exe`) — użytkownik końcowy nie potrzebuje .NET Runtime. Polecenia: `scan-palette`, `scan-candidates`, `build-template` (Kreator), `mail-merge` (Dokumenty seryjne i podgląd Kreatora), `convert-wm` (Wnioski powykonawcze), `render-pdf` (DOCX→PDF w drukarkach), wywoływane przez jeden plik JSON wejściowy i jeden wyjściowy (bez dużych argumentów w linii poleceń).
   - `OpenXml/MarkScanner.cs` — wykrywa highlight (`w:rPr/w:highlight`, poziom runu), cieniowanie runu (`w:rPr/w:shd`), cieniowanie akapitu (`w:pPr/w:shd`) i cieniowanie komórki tabeli (`w:tcPr/w:shd`), scalając sąsiadujące runy o tym samym oznaczeniu w jednego kandydata. Textboxy (VML i DrawingML) nie wymagają osobnej ścieżki — `<w:txbxContent>` to zwykły węzeł w drzewie, który zwykłe przejście po akapitach i tak odwiedza.
   - `OpenXml/{FieldWriter,BookmarkWriter,TextReplacer,SmartTemplateManifest}.cs` — wstawianie pola `MERGEFIELD` (complex field), tworzenie `bookmarkStart`/`bookmarkEnd`, podmiana treści z zachowaniem formatowania pierwszego runu, osadzanie manifestu jako Custom XML Part (`urn:scyzoryk:smart-template:v1`, ten sam namespace co poprzednio — `apps/dokumenty-seryjne/src/smartTemplate.js` nadal go wykrywa bez zmian, jedynie regex nazwy pliku części poszerzony o wariant bez cyfry, `item.xml`, bo tak nazywa część SDK, gdy jest tylko jedna).
   - Kluczowa różnica wobec Word COM: mutacje działają na **bezpośrednich referencjach obiektów** zebranych w tej samej sesji skanowania, nie na współrzędnych liczbowych (`Range.Start`/`.End`) — więc kolejność przetwarzania kandydatów w buildzie nie ma znaczenia (poza jednym wyjątkiem: jednostki w kształtach/textboxach są przetwarzane pierwsze, bo podmiana tekstu w kształcie może skasować go całkowicie, jeśli akapit-kotwica zmienił się wcześniej gdzie indziej).
   - `tools/Scyzoryk.DocumentEngine.Tests/` — testy xUnit uruchamiane bez Worda w ogóle: fixture DOCX budowany programowo przez samo SDK (`Fixtures/FixtureBuilder.cs`), pełne pokrycie wszystkich czterech mechanizmów + header/footer/textbox/tabela ze scaleniem komórek + jawna asercja "żaden nowy `WINWORD.EXE` nie powstał".
-  - `lib/documentEngine.js` — fasada Node nad tym plikiem wykonywalnym (`scanTemplatePalette`/`scanTemplateCandidates`/`buildSmartTemplate`), wywoływana wprost z `apps/kreator-wzorow/server.js`. Szuka `Scyzoryk.DocumentEngine.exe` obok `Scyzoryk.exe` (układ zainstalowany) albo w `tools/Scyzoryk.DocumentEngine/publish/` (układ deweloperski, po ręcznym `scripts/build-document-engine.ps1`) — brak pliku daje czytelny komunikat z instrukcją budowy, nie surowy `ENOENT`.
-  - **Nie migrowane jeszcze**: renderowanie DOCX→PDF (`lib/printing/docx-to-pdf.ps1`, wciąż Word COM — to zamierzony, docelowy "renderer"), generowanie Smart Template w czasie rzeczywistym w Dokumentach seryjnych (`Apply-ScyzorykSmartBlocks`), mutacje Wniosków powykonawczych (`convert-wm.ps1`) i podgląd Kreatora (`/preview`, wciąż woła `mailmerge-to-pdf.ps1` przez Word COM).
+  - `lib/documentEngine.js` — fasada Node nad tym plikiem wykonywalnym (`scanTemplatePalette`/`scanTemplateCandidates`/`buildSmartTemplate`, `spawnMailMerge`, `convertWniosekMaterialowy`, `renderDocxBatchToPdf`), jedyne miejsce, przez które aplikacje rozmawiają z silnikiem. Szuka `Scyzoryk.DocumentEngine.exe` obok `Scyzoryk.exe` (układ zainstalowany) albo w `tools/Scyzoryk.DocumentEngine/publish/` (układ deweloperski, po ręcznym `scripts/build-document-engine.ps1`) — brak pliku daje czytelny komunikat z instrukcją budowy, nie surowy `ENOENT`.
+  - **Renderer PDF**: ONLYOFFICE `x2t.exe` (AGPL v3, uruchamiany jako osobny, niezmodyfikowany program; `scripts/fetch-onlyoffice-x2t.ps1` → `tools/onlyoffice`, w instalacji `<katalog instalacji>\onlyoffice`). Indeks czcionek budowany jest na komputerze docelowym przy pierwszej konwersji. Gdy x2t brak, PDF zapisuje Word (tylko ten ostatni krok, z blokadą `withWordAutomationLease`). Wymuszenie: `SCYZORYK_PDF_RENDERER=onlyoffice|word`, katalog: `SCYZORYK_ONLYOFFICE_DIR`.
+  - **Migracja zakończona (2026-09-28)**: Dokumenty seryjne (w tym Smart Template i galeria zdjęć), podgląd Kreatora, Wnioski powykonawcze i DOCX→PDF w drukarkach działają bez Worda. Word COM zostaje tylko jako awaryjny zapis PDF (brak x2t) i przy fizycznym drukowaniu DOCX (`lib/printing/PrintEngine.psm1`).
 
 ### Auto-konfiguracja Kreatora (bez AI/sieci) — `apps/kreator-wzorow/src/autoConfigurator.js`
 
@@ -298,9 +299,9 @@ Narzędzie przygotowuje osobny dokument dla każdego wiersza lub adresu.
 - folder inwestycji,
 - dokumenty OZC i audyty.
 
-Microsoft Word jest sterowany przez skrypt PowerShell i mechanizm COM. Program odnajduje właściwe miejsca w tabelach oraz tekstach szablonu i zastępuje je danymi rekordu.
+Dokument wypełnia silnik dokumentów (`Scyzoryk.DocumentEngine.exe`, Open XML) — bez uruchamiania Worda. Program odnajduje właściwe miejsca w tabelach oraz tekstach szablonu i zastępuje je danymi rekordu, a PDF zapisuje konwerter ONLYOFFICE x2t.
 
-Ważne jest zachowanie istniejącego formatowania dokumentów. Dlatego uzupełnianie wykonywane jest w programie Word, a nie przez budowanie dokumentów od zera.
+Ważne jest zachowanie istniejącego formatowania dokumentów. Dlatego silnik modyfikuje oryginalny szablon DOCX w miejscu, a nie buduje dokumentów od zera.
 
 ### 7.5a Kreator wzorów seryjnych
 

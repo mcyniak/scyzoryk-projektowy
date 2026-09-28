@@ -98,7 +98,6 @@ Każdy moduł działa jako osobny proces. Dłuższe zadanie w jednym narzędziu 
 ## Wymagania użytkownika końcowego
 
 - Windows 10 lub Windows 11 x64,
-- Microsoft Word dla Dokumentów seryjnych i Wniosków powykonawczych,
 - drukarka dla funkcji drukowania,
 - pliki z Dysku Google dostępne offline (dla narzędzi pracujących na folderach adresów),
 - internet dla Doborów myEcodan/Varmero (zewnętrzne formularze) oraz dla OCR audytów, jeśli używasz automatycznego rozpoznawania (Gemini/OpenAI) — tryb ręczny OCR działa całkowicie offline.
@@ -131,7 +130,7 @@ Wymagania deweloperskie:
 - Git,
 - Node.js 22 LTS lub 24 LTS (Node 18/20 są już nieaktualne — bez wsparcia bezpieczeństwa; sprawdź aktualny status na [nodejs.org](https://nodejs.org/en/about/previous-releases)),
 - npm,
-- Microsoft Word do testów funkcji Word COM,
+- konwerter PDF ONLYOFFICE x2t w `tools/onlyoffice` (`powershell -File scripts/fetch-onlyoffice-x2t.ps1`; instalator pobiera go sam, gdy brak),
 - Inno Setup 6 do lokalnego budowania instalatora Windows,
 - .NET SDK 8 do budowania natywnego launchera (`launcher/Scyzoryk.Launcher`) i silnika dokumentów Open XML (`tools/Scyzoryk.DocumentEngine`, `scripts/build-document-engine.ps1`).
 

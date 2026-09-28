@@ -38,7 +38,7 @@
 
     <div class="help-doc">
       <p class="help-tagline u-mt-6">Przerabia firmowe wnioski materialowe Word na dokumentacje powykonawcza i zapisuje gotowe PDF-y.</p>
-      <div class="help-chips"><span class="help-chip">DOCX</span><span class="help-chip">PDF</span><span class="help-chip help-chip-req">wymaga Worda</span></div>
+      <div class="help-chips"><span class="help-chip">DOCX</span><span class="help-chip">PDF</span><span class="help-chip">bez Worda</span></div>
 
       <div class="help-shot-wrap">
         <img class="help-shot" data-main-asset="/instrukcja-images/06-wnioski.png" alt="Aktualny ekran Wnioskow powykonawczych" loading="lazy">
@@ -51,13 +51,13 @@
         <li>Ustaw date dokumentacji: pelna date, tylko miesiac i rok, albo "Bez daty" (data zostanie calkowicie usunieta z dokumentu, zostaje sama nazwa miejscowosci).</li>
         <li>Jesli oprocz PDF-a potrzebujesz tez pliku Word, zaznacz "Dodaj tez wersje Word (DOCX)" - powstanie ten sam dokument w obu formatach.</li>
         <li>Wybierz kategorie lub pliki, ktore maja zostac przerobione.</li>
-        <li>Kliknij <strong>Utwórz PDF-y</strong> i poczekaj na zakonczenie pracy Worda.</li>
+        <li>Kliknij <strong>Utwórz PDF-y</strong> i poczekaj na zakonczenie pracy.</li>
         <li>Pobierz pojedyncze pliki (PDF, a przy zaznaczonym DOCX takze Word) albo paczke ZIP z wynikami.</li>
       </ol>
 
       <div class="help-callout warn">
-        <span class="help-callout-label">Word COM</span>
-        <p>Podczas generowania nie zamykaj recznie Microsoft Worda. Program uruchamia go w tle i sam konczy prace po przetworzeniu dokumentow.</p>
+        <span class="help-callout-label">Bez Worda</span>
+        <p>Dokumenty i PDF-y tworzy wbudowany silnik dokumentow - Microsoft Word nie jest potrzebny i nie jest uruchamiany. Pierwsza konwersja po instalacji trwa dluzej (budowanie indeksu czcionek).</p>
       </div>
 
       <h3>Szczegóły pól i ekranów</h3>
@@ -71,7 +71,7 @@
         <div><dt>"Nie znaleziono folderu: ..."</dt><dd>Sprawdz sciezke do folderu WM. Jesli to dysk sieciowy albo Google Drive, otworz go najpierw w Eksploratorze Windows.</dd></div>
         <div><dt>"Wybierz przynajmniej jedna kategorie do przerobienia."</dt><dd>Po skanowaniu folderu zaznacz minimum jedna kategorie lub pozycje.</dd></div>
         <div><dt>"Sesja skanowania folderu wygasla..."</dt><dd>Przeskanuj folder ponownie. Lista plikow jest przechowywana tylko dla aktualnej sesji pracy.</dd></div>
-        <div><dt>Blad Worda, WINWORD albo PowerShell</dt><dd>Upewnij sie, ze Word jest zainstalowany i aktywowany. Zamknij recznie wiszace okna Worda, a potem uruchom generowanie ponownie.</dd></div>
+        <div><dt>Blad silnika dokumentow</dt><dd>Sprawdz, czy plik otwiera sie poprawnie i nie jest zablokowany przez inny program, a potem uruchom generowanie ponownie. Szczegoly bledu sa w logu zadania.</dd></div>
       </dl>
     </div>
   </main>
