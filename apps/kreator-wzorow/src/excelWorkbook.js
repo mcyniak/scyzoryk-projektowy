@@ -12,19 +12,9 @@ const AdmZip = require('adm-zip');
 const MAX_UNIQUE_VALUES = 100;
 const MAX_PREVIEW_ROWS = 500;
 
-function formatExcelDate(value) {
-  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return '';
-  const dd = String(value.getDate()).padStart(2, '0');
-  const mm = String(value.getMonth() + 1).padStart(2, '0');
-  const yyyy = value.getFullYear();
-  return `${dd}.${mm}.${yyyy}`;
-}
-
-function cellText(value) {
-  if (value == null) return '';
-  if (value instanceof Date) return formatExcelDate(value);
-  return String(value).trim();
-}
+// Ten sam format co Dokumenty seryjne (4,32 zamiast 4.32) - podglad w Kreatorze
+// musi dac dokladnie to samo, co pozniejsze generowanie.
+const { excelCellText: cellText } = require('../../../lib/excelCellText');
 
 function decodeXmlEntities(text) {
   return String(text || '')

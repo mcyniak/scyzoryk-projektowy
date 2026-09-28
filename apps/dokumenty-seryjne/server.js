@@ -38,6 +38,7 @@ const { readSmartTemplateManifest, SmartTemplateError } = require('./src/smartTe
 const { evaluateSmartRecord, collectRequiredColumns } = require('../../lib/smartTemplateRules');
 const { withWordAutomationLease } = require('../../lib/wordAutomationCoordinator');
 const documentEngine = require('../../lib/documentEngine');
+const { excelCellText } = require('../../lib/excelCellText');
 
 const AdmZip = require('adm-zip');
 
@@ -357,19 +358,7 @@ function setProgress(job, patch) {
 
 
 
-function formatExcelDate(value) {
-  if (!(value instanceof Date) || Number.isNaN(value.getTime())) return '';
-  const dd = String(value.getDate()).padStart(2, '0');
-  const mm = String(value.getMonth() + 1).padStart(2, '0');
-  const yyyy = value.getFullYear();
-  return `${dd}.${mm}.${yyyy}`;
-}
-
-function excelCellText(value) {
-  if (value == null) return '';
-  if (value instanceof Date) return formatExcelDate(value);
-  return String(value).trim();
-}
+// excelCellText: lib/excelCellText.js (liczby z przecinkiem dziesietnym, daty dd.mm.rrrr)
 
 // Arkusze robione recznie przez ludzi czasem maja DWIE kolumny o tej samej
 // nazwie (identycznej albo roznej tylko wielkoscia liter, np. "zdjecia" i

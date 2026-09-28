@@ -245,6 +245,11 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
     "poniżej 6,5 kWp" against a numeric column, or exactly one category value of a 2–6-value column
     appearing in a ≥40-char paragraph). `PaletteScanner` marks a colour used only in table header rows
     `suggested:false` (`headerRowCount`), so the palette leaves header shading unchecked by default.
+  - **Excel numbers → text** (both Kreator and `dokumenty-seryjne`): `lib/excelCellText.js#excelCellText`
+    is the single cell→text formatter — fractions get a Polish decimal comma (`4.32` → `"4,32"`) with
+    float noise removed (12 significant digits), integers stay ungrouped (NIP/phone/postcode untouched),
+    dates `dd.mm.rrrr`. `parseSmartNumber` accepts the comma, so block conditions are unaffected
+    (`test/group29-excel-liczby.test.js`).
   - **Migration status (Word COM → Open XML): complete as of 2026-09-28** (branch
     `feat/bez-worda-open-xml`). Kreator scan/build/preview, Dokumenty seryjne (legacy + Smart Template +
     photo gallery), Wnioski powykonawcze and the printers' DOCX→PDF all go through
