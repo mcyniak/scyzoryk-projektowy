@@ -22,13 +22,14 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, readJsonFileNoBom, writeJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
 const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const wmFolderScan = require('./src/wmFolderScan');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
 const { createTelemetryService } = require('../../lib/telemetry');
 const { estimateManualMs } = require('../../lib/timeBenchmarks');
+const documentEngine = require('../../lib/documentEngine');
+const { withWordAutomationLease } = require('../../lib/wordAutomationCoordinator');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3005);
@@ -46,7 +47,6 @@ const wordQueue = createSerialQueue('wnioski-word');
 const DATA_DIR = path.join(APP_DATA_ROOT, 'data');
 const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
 const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
-const PS_SCRIPT = path.join(ROOT, 'scripts', 'convert-wm.ps1');
 const MAX_FILE_MB = Number(process.env.WM_MAX_FILE_MB || 50);
 const MAX_FILES = Number(process.env.WM_MAX_FILES || 100);
 const JOB_TTL_MS = Number(process.env.WM_JOB_TTL_MS || 24 * 60 * 60 * 1000);
@@ -231,31 +231,35 @@ async function cleanupOldJobs() {
 }
 setInterval(() => cleanupOldJobs().catch(err => console.error('[wm-cleanup]', err?.message || err)), 60 * 60 * 1000).unref();
 
+// Konwersja WM -> "Dokumentacja powykonawcza" bez Worda: polecenie convert-wm
+// silnika dokumentow (tools/Scyzoryk.DocumentEngine/Wnioski/ConvertWmCommand.cs,
+// nastepca dawnego scripts/convert-wm.ps1 na Word COM). Wejscie/wyjscie JSON
+// maja ten sam ksztalt co dotad (input.json -> result.json), wiec reszta
+// server.js czyta wynik bez zmian. job.child = proces silnika, zeby "Przerwij"
+// (/api/jobs/:id/cancel) dalej mogl go zabic. Lease Worda tylko wtedy, gdy
+// PDF zapisze jednak Word (brak konwertera ONLYOFFICE x2t).
 async function runConvertScript(inputJson, outputJson, job = null) {
   const timeoutMs = Number(process.env.WM_TIMEOUT_MS || 60 * 60 * 1000);
-  return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', [
-      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_SCRIPT,
-      '-InputJson', inputJson, '-OutputJson', outputJson
-    ], { cwd: ROOT, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    if (job) job.child = child;
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
-    child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
-    const timer = setTimeout(() => {
-      try { child.kill(); } catch {}
-      reject(new Error(`Przekroczono limit czasu konwersji (${Math.round(timeoutMs / 60000)} min).`));
-    }, timeoutMs);
-    timer.unref();
-    child.on('error', error => { clearTimeout(timer); reject(error); });
-    child.on('close', code => {
-      clearTimeout(timer);
+  const input = readJsonFileNoBom(inputJson);
+  const run = async () => {
+    try {
+      const output = await documentEngine.convertWniosekMaterialowy(input, {
+        timeoutMs,
+        onSpawn: child => { if (job) job.child = child; }
+      });
+      writeJsonFileNoBom(outputJson, output);
+      return { recoveredFromOutputJson: false };
+    } catch (err) {
+      if (/limit czasu/i.test(err.message || '')) {
+        throw new Error(`Przekroczono limit czasu konwersji (${Math.round(timeoutMs / 60000)} min).`);
+      }
+      throw err;
+    } finally {
       if (job) job.child = null;
-      if (code === 0 || fs.existsSync(outputJson)) return resolve({ code, stdout, stderr, recoveredFromOutputJson: code !== 0 });
-      reject(new Error(stderr.trim() || `PowerShell zakonczyl sie kodem ${code}.`));
-    });
-  });
+    }
+  };
+  if (!documentEngine.engineUsesWord()) return run();
+  return withWordAutomationLease({ app: 'wnioski-powykonawcze', operation: `WM: ${(input.files || []).length} plik(ów)` }, run);
 }
 
 async function zipDirectory(sourceDir, zipPath) {

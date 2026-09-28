@@ -52,6 +52,16 @@ function computeRuntimeFingerprint(nodeVersion, root = ROOT) {
     }
     hash.update(`${app}:${hashFile(lockPath)}\n`);
   }
+  // Konwerter PDF ONLYOFFICE x2t (onlyoffice/ w katalogu instalacji, tylko w
+  // wariancie "full" instalatora) - jego wersja jest czescia runtime: nowa
+  // wersja albo pierwsze pojawienie sie konwertera musi wymusic pelny
+  // instalator przy aktualizacji. Brak katalogu (repo bez
+  // fetch-onlyoffice-x2t.ps1) nie zmienia fingerprintu wzgledem dawnych wersji.
+  const onlyOfficeVersionPath = path.join(root, 'onlyoffice', 'WERSJA.txt');
+  if (fs.existsSync(onlyOfficeVersionPath)) {
+    const version = fs.readFileSync(onlyOfficeVersionPath, 'utf8').replace(/^\uFEFF/, '').trim();
+    hash.update(`onlyoffice:${version}\n`);
+  }
   return hash.digest('hex');
 }
 

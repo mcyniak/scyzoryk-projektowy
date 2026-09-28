@@ -668,7 +668,7 @@ async function buildSaveAsPdfOutputs(req, queue, onProgress) {
         if (result && result.ok && fs.existsSync(job.outputPath)) {
           job.item.path = job.outputPath;
         } else {
-          errors.push({ label: job.label, message: (result && result.error) || "Konwersja DOCX->PDF nie powiodla sie - Word nie zwrocil wyniku dla tego pliku." });
+          errors.push({ label: job.label, message: (result && result.error) || "Konwersja DOCX->PDF nie powiodla sie - silnik dokumentow nie zwrocil wyniku dla tego pliku." });
         }
       }
       if (errors.length) return { ok: false, errors };
@@ -703,7 +703,7 @@ function powykonawczaOpFilePath(opDir, idx, originalFullPath, forceExt) {
   return path.join(opDir, `${idx}_${nameNoExt}${ext}`);
 }
 
-// Konwersja DOCX->PDF przez Word COM wyciagnieta do lib/printing.js
+// Konwersja DOCX->PDF (silnik dokumentow, bez Worda) wyciagnieta do lib/printing.js
 // (2026-08-19, apps/drukarka dostalo wlasna opcje "Zapisz jako PDF" i
 // potrzebowalo tej samej logiki - patrz convertDocxBatchToPdf tam).
 // Ponizej domyslnego HTTP requestTimeout serwera (10 min, lib/hardening.js)
@@ -711,6 +711,7 @@ function powykonawczaOpFilePath(opDir, idx, originalFullPath, forceExt) {
 // zamiast czytelnego bledu "Przekroczono limit czasu..." z lib/printing.js.
 function convertDocxBatchToPdf(opDir, files) {
   return printService.convertDocxBatchToPdf(opDir, files, {
+    app: 'drukarka-projekty',
     timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_DOCX_TIMEOUT_MS || 5 * 60 * 1000)
   });
 }
@@ -723,7 +724,7 @@ function convertDocxBatchToPdf(opDir, files) {
 // drukarki. Teraz KAZDY plik jest weryfikowany, a przy pierwszym
 // niepowodzeniu ZADEN plik z tej paczki nie idzie do druku (blad zawiera
 // liste WSZYSTKICH niepowodzen, nie tylko pierwszego, z nazwa pliku i
-// etapem: format / konwersja Word / stemplowanie / brak pliku na koncu).
+// etapem: format / konwersja DOCX->PDF / stemplowanie / brak pliku na koncu).
 //
 // Retry-safety (P2): funkcja NIGDY nie mutuje sourceQueue (kopiuje kazdy
 // element) i ZAWSZE pracuje w NOWYM katalogu operacji (newPowykonawczaOpDir)
@@ -774,7 +775,7 @@ async function prepareStampedQueue(req, sourceQueue) {
     }
     if (conversionError) {
       for (const job of docxJobs) {
-        errors.push({ label: job.label, stage: "konwersja DOCX->PDF (Word)", message: conversionError.message || String(conversionError) });
+        errors.push({ label: job.label, stage: "konwersja DOCX->PDF", message: conversionError.message || String(conversionError) });
       }
     } else {
       const byInput = new Map(results.map(r => [r.input, r]));
@@ -787,8 +788,8 @@ async function prepareStampedQueue(req, sourceQueue) {
         } else {
           errors.push({
             label: job.label,
-            stage: "konwersja DOCX->PDF (Word)",
-            message: (result && result.error) || "Konwersja nie powiodla sie - Word nie zwrocil wyniku dla tego pliku."
+            stage: "konwersja DOCX->PDF",
+            message: (result && result.error) || "Konwersja nie powiodla sie - silnik dokumentow nie zwrocil wyniku dla tego pliku."
           });
         }
       }

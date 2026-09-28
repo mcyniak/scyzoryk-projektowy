@@ -14,7 +14,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 
-const { setupProcessDiagnostics, applyHttpTimeouts, runPowerShell, scheduleCleanup } = require('../../lib/hardening');
+const { setupProcessDiagnostics, applyHttpTimeouts, scheduleCleanup } = require('../../lib/hardening');
 const { toAsciiSafe } = require('../../lib/diacritics');
 const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localRequestSecurity');
@@ -23,10 +23,10 @@ const { evaluateSmartRecord, validateManifest, collectRequiredColumns } = requir
 // Migracja Word COM -> Open XML (CLAUDE.md, "Migracja Word COM -> Open XML",
 // audyt 2026-09-14): skanowanie/budowanie wzoru nie uzywa juz Worda w ogole -
 // patrz lib/documentEngine.js (fasada nad Scyzoryk.DocumentEngine.exe,
-// tools/Scyzoryk.DocumentEngine, Open XML SDK). withWordAutomationLease
-// zostaje w tym pliku WYLACZNIE dla /preview (nadal renderuje przez
-// dokumenty-seryjne/mailmerge-to-pdf.ps1, Word COM - migracja runtime Smart
-// Template to kolejny, jeszcze nie wykonany etap, patrz raport koncowy).
+// tools/Scyzoryk.DocumentEngine, Open XML SDK). Podglad (/preview) tez idzie
+// przez silnik (polecenie mail-merge, jak Dokumenty seryjne);
+// withWordAutomationLease zostaje tylko na wypadek komputera bez konwertera
+// ONLYOFFICE x2t, gdzie PDF zapisuje jeszcze Word.
 const documentEngine = require('../../lib/documentEngine');
 
 const { createJobStore } = require('./src/jobStore');
@@ -52,14 +52,6 @@ const UPLOAD_DIR = path.join(APP_DATA_ROOT, 'uploads');
 const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
 const MAX_FILE_MB = Number(process.env.KREATOR_MAX_FILE_MB || 80);
 const JOB_TTL_MS = Number(process.env.KREATOR_JOB_TTL_MS || 24 * 60 * 60 * 1000);
-// Preview (KROK 4A) uzywa DOKLADNIE tego samego runtime co prawdziwe
-// generowanie w Dokumentach seryjnych (sekcja 27 specyfikacji) - zamiast
-// pisac drugi, niezalezny renderer smart-template, ktory z czasem rozjedzie
-// sie z prawdziwym. To jedyne miejsce w repo, gdzie jeden child app siega
-// wprost po skrypt INNEGO child app - swiadomy wyjatek od "apki sa
-// niezalezne", bo to jest jedyny sposob, zeby podglad NAPRAWDE odpowiadal
-// temu, co pozniej zrobi wlasciwy modul.
-const DOKUMENTY_SERYJNE_MAILMERGE_SCRIPT = path.join(ROOT, '..', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1');
 
 for (const dir of [DATA_DIR, UPLOAD_DIR, OUTPUT_DIR]) fs.mkdirSync(dir, { recursive: true });
 scheduleCleanup([UPLOAD_DIR, OUTPUT_DIR], JOB_TTL_MS, 60 * 60 * 1000);
@@ -838,7 +830,7 @@ app.post('/api/jobs/:jobId/validate', (req, res) => {
 app.post('/api/jobs/:jobId/preview', heavyJobLimiter, async (req, res) => {
   const job = requireJob(req, res);
   if (!job) return;
-  if (process.platform !== 'win32') return res.status(400).json({ ok: false, message: 'Podgląd działa tylko na Windows z zainstalowanym Microsoft Word.' });
+  if (process.platform !== 'win32') return res.status(400).json({ ok: false, message: 'Podgląd działa tylko na Windows.' });
   const sheetName = String(req.body?.sheetName || job.draft.preferredSheet || job.workbook.defaultSheet || '').trim();
   const recordNumber = Number(req.body?.recordNumber);
   const sheet = job.workbook.sheets[sheetName];
@@ -859,64 +851,33 @@ app.post('/api/jobs/:jobId/preview', heavyJobLimiter, async (req, res) => {
     const previewDir = path.join(job.outputDir, 'preview');
     await fsp.rm(previewDir, { recursive: true, force: true });
     await fsp.mkdir(previewDir, { recursive: true });
-    const dataJsonPath = path.join(previewDir, 'merge-data.json');
-    fs.writeFileSync(dataJsonPath, JSON.stringify({ sheetName, addressColumn: preflight.manifest.addressColumn, records: [evaluated.record] }), 'utf8');
-
-    const args = [
-      '-TemplatePath', job.templatePath,
-      '-ExcelPath', job.excelPath,
-      '-OutputDir', previewDir,
-      '-SheetName', sheetName,
-      '-AddressColumn', preflight.manifest.addressColumn,
-      '-DataJson', dataJsonPath,
-      '-LogPath', path.join(previewDir, 'log.txt'),
-      '-DebugJsonPath', path.join(previewDir, 'debug-events.jsonl'),
-      '-ReplacementJson', path.join(previewDir, 'no-replacements.json'),
-      '-FilePrefix', 'podglad',
-      '-SmartTemplateMode',
-      '-SaveWord'
-    ];
-    fs.writeFileSync(path.join(previewDir, 'no-replacements.json'), JSON.stringify({ rules: [] }), 'utf8');
-
-    // Migracja Word COM -> Open XML (ETAP 2): podglad idzie przez ten sam
-    // silnik co generowanie w Dokumentach seryjnych (polecenie mail-merge,
-    // bez Worda) - dalej "jedno zrodlo prawdy" dla podgladu i generowania.
-    // Przelacznik awaryjny SCYZORYK_DOKUMENTY_ENGINE=word wraca do skryptu
-    // PowerShell z Dokumentow seryjnych.
-    let parsed = null;
-    let resultStderr = '';
-    if (documentEngine.getDocumentEngineMode() === 'openxml') {
-      const runPreview = () => documentEngine.runEngineCommand('mail-merge', {
-        pdfRenderer: documentEngine.getPdfRendererMode(),
-        syncfusionLicenseKey: documentEngine.resolveSyncfusionLicenseKey() || null,
-        templatePath: job.templatePath,
-        outputDir: previewDir,
-        addressColumn: preflight.manifest.addressColumn,
-        records: [evaluated.record],
-        rules: [],
-        filePrefix: 'podglad',
-        smartTemplateMode: true,
-        saveWord: true,
-        logPath: path.join(previewDir, 'log.txt'),
-        debugJsonPath: path.join(previewDir, 'debug-events.jsonl')
-      }, { timeoutMs: Number(process.env.KREATOR_PS_TIMEOUT_MS || 20 * 60 * 1000) });
-      parsed = documentEngine.engineUsesWord()
-        ? await withWordAutomationLease({ app: 'kreator-wzorow', operation: `podgląd: ${job.templateOriginalName}` }, runPreview)
-        : await runPreview();
-    } else {
-      let waitLogged = false;
-      const result = await withWordAutomationLease(
+    // Podglad idzie przez ten sam silnik co generowanie w Dokumentach
+    // seryjnych (polecenie mail-merge, bez Worda) - "jedno zrodlo prawdy" dla
+    // podgladu i generowania (sekcja 27 specyfikacji Kreatora). Lease Worda
+    // tylko gdy PDF zapisze jednak Word (brak ONLYOFFICE x2t).
+    const runPreview = () => documentEngine.runEngineCommand('mail-merge', {
+      ...documentEngine.pdfRendererInput(),
+      templatePath: job.templatePath,
+      outputDir: previewDir,
+      addressColumn: preflight.manifest.addressColumn,
+      records: [evaluated.record],
+      rules: [],
+      filePrefix: 'podglad',
+      smartTemplateMode: true,
+      saveWord: true,
+      logPath: path.join(previewDir, 'log.txt'),
+      debugJsonPath: path.join(previewDir, 'debug-events.jsonl')
+    }, { timeoutMs: Number(process.env.KREATOR_PS_TIMEOUT_MS || 20 * 60 * 1000) });
+    let waitLogged = false;
+    const parsed = documentEngine.engineUsesWord()
+      ? await withWordAutomationLease(
         { app: 'kreator-wzorow', operation: `podgląd: ${job.templateOriginalName}` },
-        () => runPowerShell(DOKUMENTY_SERYJNE_MAILMERGE_SCRIPT, args, { cwd: path.join(ROOT, '..', 'dokumenty-seryjne'), timeoutMs: Number(process.env.KREATOR_PS_TIMEOUT_MS || 20 * 60 * 1000) }),
+        runPreview,
         { onWaiting: () => { if (waitLogged) return; waitLogged = true; jobStore.updateJob(job.id, { statusMessage: 'Word jest zajęty przez inne narzędzie - czekam na zwolnienie...' }); } }
-      );
-      resultStderr = result.stderr || '';
-      const lines = String(result.stdout || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-      const finalLine = [...lines].reverse().find(l => l.startsWith('{') && l.endsWith('}') && l.includes('"created"'));
-      parsed = finalLine ? JSON.parse(finalLine) : null;
-    }
+      )
+      : await runPreview();
     if (!parsed || !parsed.ok || !(parsed.created || []).length) {
-      throw new Error((parsed && parsed.message) || resultStderr || 'Generowanie próbki nie powiodło się.');
+      throw new Error((parsed && parsed.message) || 'Generowanie próbki nie powiodło się.');
     }
     const createdDocx = (parsed.created || []).find(f => String(f.file).toLowerCase().endsWith('.docx'));
     const createdPdf = (parsed.created || []).find(f => String(f.file).toLowerCase().endsWith('.pdf'));

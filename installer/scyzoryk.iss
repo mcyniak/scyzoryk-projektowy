@@ -141,7 +141,7 @@ Name: "autostart"; Description: "Uruchamiaj Scyzoryka automatycznie przy logowan
 ; nie kompiluje sie - "No files found matching...") - dlatego kazda apka ma
 ; swoja jawna linie Source nizej zamiast jednego wzorca. Excludes NATOMIAST
 ; wspiera taki wzorzec poprawnie.
-Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "\node-runtime\*,\apps\*\node_modules\*"
+Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion; Excludes: "\node-runtime\*,\apps\*\node_modules\*,\onlyoffice\*"
 
 #if BuildVariant == "full"
 ; Runtime (portable Node + node_modules kazdej aplikacji, w tym Chromium dla
@@ -151,6 +151,10 @@ Source: "{#StagingDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubd
 ; ten sam duch co rejestrowanie nowej apki w kilku miejscach root server.js
 ; (patrz CLAUDE.md).
 Source: "{#StagingDir}\node-runtime\*"; DestDir: "{app}\node-runtime"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Konwerter PDF bez Worda (ONLYOFFICE x2t, ~180 MB) - jak runtime: tylko w
+; wariancie pelnym. Zmiana jego wersji zmienia runtime-fingerprint
+; (onlyoffice\WERSJA.txt), wiec aktualizacja i tak pobierze pelny instalator.
+Source: "{#StagingDir}\onlyoffice\*"; DestDir: "{app}\onlyoffice"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\dokumenty-seryjne\node_modules\*"; DestDir: "{app}\apps\dokumenty-seryjne\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\drukarka\node_modules\*"; DestDir: "{app}\apps\drukarka\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion
 Source: "{#StagingDir}\apps\drukarka-projekty\node_modules\*"; DestDir: "{app}\apps\drukarka-projekty\node_modules"; Flags: recursesubdirs createallsubdirs ignoreversion

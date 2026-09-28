@@ -167,7 +167,7 @@ public sealed class WordPdfRenderer : IPdfRenderer
     {
         if (_word is not null) return _word;
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Zapis PDF przez Worda dziala tylko na Windows.");
-        var type = Type.GetTypeFromProgID("Word.Application") ?? throw new InvalidOperationException("Brak Microsoft Word na tym komputerze, a nie skonfigurowano renderera PDF bez Worda (klucz Syncfusion).");
+        var type = Type.GetTypeFromProgID("Word.Application") ?? throw new InvalidOperationException("Brak Microsoft Word na tym komputerze, a nie znaleziono konwertera PDF bez Worda (ONLYOFFICE x2t.exe - scripts/fetch-onlyoffice-x2t.ps1).");
         var before = Process.GetProcessesByName("WINWORD").Select(p => p.Id).ToHashSet();
         _word = Activator.CreateInstance(type)!;
         _word.Visible = false;

@@ -502,7 +502,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         <div class="result-item">
           <div><strong>${esc(item.file)}</strong><small>Adres: ${esc(item.address)} · rekord ${esc(item.row)}</small></div>
           <a class="button ghost" href="${item.url}">Pobierz</a>
-        </div>`).join('') : '<div class="status err">Nie utworzono żadnych PDF-ów. Kliknij „Pobierz logi”, żeby zobaczyć dokładny błąd Worda/PowerShella.</div>';
+        </div>`).join('') : '<div class="status err">Nie utworzono żadnych PDF-ów. Kliknij „Pobierz logi”, żeby zobaczyć dokładny błąd silnika dokumentów.</div>';
       if ((result.errors || []).length) {
         status($('resultStatus'), `Część dokumentów nie została utworzona. Otwórz pomoc techniczną i pobierz logi.`, 'err');
         show($('resultLogsLink'));

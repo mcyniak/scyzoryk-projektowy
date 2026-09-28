@@ -195,7 +195,7 @@ test('prepareStampedQueue: blad konwersji JEDNEGO DOCX blokuje CALA paczke (inne
   const result = await prepareStampedQueue(fakeReq, items);
 
   assert.equal(result.ok, false);
-  assert.ok(result.errors.some(e => e.label === 'Zly DOCX' && e.stage === 'konwersja DOCX->PDF (Word)'), JSON.stringify(result.errors));
+  assert.ok(result.errors.some(e => e.label === 'Zly DOCX' && e.stage === 'konwersja DOCX->PDF'), JSON.stringify(result.errors));
   assert.deepEqual(await fsp.readFile(goodPath), goodBytesBefore);
 });
 

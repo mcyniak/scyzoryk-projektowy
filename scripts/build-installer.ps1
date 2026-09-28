@@ -183,6 +183,35 @@ if ($LASTEXITCODE -ne 0 -or -not $documentEngineExePath -or -not (Test-Path $doc
 }
 Copy-Item -Path $documentEngineExePath -Destination (Join-Path $stagingDir 'Scyzoryk.DocumentEngine.exe') -Force
 
+# --- 3c) Konwerter PDF bez Worda (ONLYOFFICE x2t, AGPL v3) ---
+# Silnik (Pdf/PdfRenderers.cs#FindDirectory) i lib/documentEngine.js
+# (resolveOnlyOfficeDir) szukaja go w <katalog instalacji>\onlyoffice, obok
+# Scyzoryk.DocumentEngine.exe. tools\onlyoffice nie jest w repo (.gitignore,
+# ~180 MB binariow), wiec nie przychodzi z git archive - kopiujemy go tu
+# jawnie, a gdy na maszynie budujacej go brak, pobieramy oficjalna paczke
+# (scripts\fetch-onlyoffice-x2t.ps1). Indeks czcionek (AllFonts.js,
+# font_selection.bin, fonts.log) jest budowany na komputerze DOCELOWYM przy
+# pierwszej konwersji - nie pakujemy wersji z maszyny budujacej (inne czcionki).
+# Trafia tylko do wariantu "full" (scyzoryk.iss); zmiana wersji ONLYOFFICE
+# zmienia runtime-fingerprint (WERSJA.txt), wiec aktualizacja wymusi pelny
+# instalator (patrz generate-runtime-fingerprint.js).
+$onlyOfficeSourceDir = Join-Path $Root 'tools\onlyoffice'
+if (-not (Test-Path (Join-Path $onlyOfficeSourceDir 'x2t.exe'))) {
+  Write-Host "Brak tools\onlyoffice\x2t.exe - pobieram konwerter ONLYOFFICE."
+  & (Join-Path $Root 'scripts\fetch-onlyoffice-x2t.ps1')
+  if (-not (Test-Path (Join-Path $onlyOfficeSourceDir 'x2t.exe'))) {
+    throw "Nie udalo sie przygotowac konwertera PDF (tools\onlyoffice\x2t.exe) - uruchom recznie scripts\fetch-onlyoffice-x2t.ps1."
+  }
+}
+$onlyOfficeStagingDir = Join-Path $stagingDir 'onlyoffice'
+Copy-Item -Path $onlyOfficeSourceDir -Destination $onlyOfficeStagingDir -Recurse -Force
+foreach ($generated in @('sdkjs\common\AllFonts.js', 'sdkjs\common\font_selection.bin', 'sdkjs\common\fonts.log')) {
+  Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $onlyOfficeStagingDir $generated)
+}
+if (-not (Test-Path (Join-Path $onlyOfficeStagingDir 'WERSJA.txt'))) {
+  throw "Brak onlyoffice\WERSJA.txt w stagingu - bez niego runtime-fingerprint nie wykryje zmiany wersji konwertera."
+}
+
 # --- 4) Zaleznosci kazdej aplikacji (npm install + Chromium dla Playwrighta) ---
 # Audyt 2026-08-06 (Podejrzenie B): to kiedys robil ukryty CMD na komputerze
 # UZYTKOWNIKA (installer\instaluj-zaleznosci.cmd, usuniety z [Run] w

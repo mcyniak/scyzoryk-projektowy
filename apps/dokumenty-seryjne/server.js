@@ -26,7 +26,6 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
 const { setupProcessDiagnostics, applyHttpTimeouts, createSerialQueue, stripBom, writeJsonFileNoBom, readJsonFileNoBom, scheduleCleanup } = require('../../lib/hardening');
 const { toAsciiSafe } = require('../../lib/diacritics');
 const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
@@ -61,7 +60,6 @@ const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
 const MAX_FILE_MB = Number(process.env.SERYJNE_MAX_FILE_MB || 80);
 const MAX_ROWS = Number(process.env.SERYJNE_MAX_ROWS || 500);
 const JOB_TTL_MS = Number(process.env.SERYJNE_JOB_TTL_MS || 24 * 60 * 60 * 1000);
-const PS_SCRIPT = path.join(ROOT, 'scripts', 'mailmerge-to-pdf.ps1');
 const SCAN_SCRIPT = path.join(ROOT, 'scripts', 'scan-placeholders.ps1');
 
 for (const dir of [DATA_DIR, UPLOAD_DIR, OUTPUT_DIR]) fs.mkdirSync(dir, { recursive: true });
@@ -229,8 +227,16 @@ function validateImageFile(file) {
   if (!isJpeg && !isPng) throw new Error(`Plik ${original} nie wygląda na poprawne zdjęcie JPG/PNG.`);
 }
 
+// Sprawdzone 2026-09-28 (test/group5 "/api/images: polskie znaki..."): polskie
+// znaki w folderach i nazwach zdjec przechodza poprawnie. Dwie poprawki z tego
+// przegladu: (1) NFC - folder spakowany na macOS/niektore ZIP-y przychodzi w
+// NFD ("e" + laczacy ogonek); dopasowanie do adresu i tak ignoruje diakrytyki,
+// ale nazwa folderu w manifescie/logach/na dysku ma byc ta sama co w Excelu;
+// (2) segment "." / ".." nie jest folderem adresowym - bez tego sciezka
+// "Zdjecia/../x.jpg" zapisywala plik POZA katalogiem zdjec zadania.
 function parseImageRelativePath(relPath) {
-  const parts = String(relPath || '').split(/[\\/]/).filter(Boolean);
+  const parts = String(relPath || '').normalize('NFC').split(/[\\/]/).filter(Boolean);
+  if (parts.some(part => part === '.' || part === '..')) return { addressFolder: '', originalName: '' };
   if (parts.length < 2) return { addressFolder: parts[0] || '', originalName: '' };
   return { addressFolder: parts[1], originalName: parts[parts.length - 1] };
 }
@@ -246,8 +252,11 @@ async function storeUploadedImages(jobId, files, imagePaths) {
     validateImageFile(file);
     // Frontend wysyla sciezki encodeURIComponent (czysty ASCII, patrz komentarz
     // przy decodeURIComponentSafe) - tu je dekodujemy z powrotem do polskich znakow.
-    const rawPath = imagePaths[i] || file.originalname;
-    const relPath = typeof rawPath === 'string' ? decodeURIComponentSafe(rawPath) : rawPath;
+    // Fallback na nazwe pliku z multipart: multer (defParamCharset latin1)
+    // daje ja jako latin1 - decodeOriginalName przywraca UTF-8 (polskie znaki).
+    const relPath = imagePaths[i]
+      ? (typeof imagePaths[i] === 'string' ? decodeURIComponentSafe(imagePaths[i]) : imagePaths[i])
+      : decodeOriginalName(file.originalname || '');
     const parsed = parseImageRelativePath(relPath);
     if (!parsed.addressFolder || !parsed.originalName) {
       await fsp.rm(file.path, { force: true }).catch(() => {});
@@ -919,7 +928,7 @@ function parseJsonLines(job, chunk, state) {
         if (parsed?.event) handlePowerShellEvent(job, parsed);
         if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'ok')) state.final = parsed;
       } catch (err) {
-        appendLog(job, 'warn', 'Nie udało się odczytać linii JSON z PowerShell.', { line, error: err.message });
+        appendLog(job, 'warn', 'Nie udało się odczytać linii JSON z silnika dokumentów.', { line, error: err.message });
       }
     } else {
       appendLog(job, 'info', line);
@@ -936,7 +945,6 @@ async function startGeneration(job, options) {
   // dalej wygrywa nad obydwoma.
   const addressColumn = String(options.addressColumn || (job.smartManifest && job.smartManifest.addressColumn) || guessAddressColumn(selectedSheet.columns || [])).trim() || 'Adres';
   const selectedRows = Array.isArray(options.selectedRows) ? options.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
-  const rowsCsv = selectedRows.join(',');
   const visibleWord = options.visibleWord === true;
   const debugMode = options.debugMode === true;
   const saveWord = options.saveWord === true;
@@ -985,6 +993,9 @@ async function startGeneration(job, options) {
   const debugJsonPath = path.join(job.outputDir, 'debug-events.jsonl');
   const replacementJsonPath = path.join(job.outputDir, 'text-replacements.json');
   const textReplacements = cleanTextReplacements(options.textReplacements, selectedSheet.columns || [], addressColumn);
+  // Tylko diagnostyka ("Pobierz logi", listJobLogFiles) - silnik dostaje dane
+  // we wlasnym pliku wejsciowym w %TEMP% (sprzatanym po zakonczeniu procesu).
+  // Te dwa pliki leza w katalogu zadania i znikaja razem z nim (JOB_TTL_MS).
   writeJsonFileNoBom(dataJsonPath, { sheetName, addressColumn, records: rowsForOutput });
   writeJsonFileNoBom(replacementJsonPath, { rules: textReplacements });
   if (!options._keepLog) fs.writeFileSync(job.logPath, '', 'utf8');
@@ -1014,33 +1025,10 @@ async function startGeneration(job, options) {
     textReplacements: textReplacements.map(r => ({ find: r.find, column: r.column, occurrence: r.occurrence || 'all' }))
   });
 
-  const args = [
-    '-TemplatePath', job.template.path,
-    '-ExcelPath', job.excel.path,
-    '-OutputDir', job.outputDir,
-    '-SheetName', sheetName,
-    '-AddressColumn', addressColumn,
-    '-DataJson', dataJsonPath,
-    '-LogPath', job.logPath,
-    '-DebugJsonPath', debugJsonPath,
-    '-ReplacementJson', replacementJsonPath
-  ];
-  if (filePrefix) args.push('-FilePrefix', filePrefix);
-  if (rowsCsv) args.push('-RowsCsv', rowsCsv);
-  if (visibleWord) args.push('-VisibleWord');
-  if (debugMode) args.push('-DebugMode');
-  if (saveWord) args.push('-SaveWord');
-  if (job.imageManifestPath && fs.existsSync(job.imageManifestPath)) args.push('-ImageManifestJson', job.imageManifestPath);
-  if (job.smartManifest) args.push('-SmartTemplateMode');
-
-  // Migracja Word COM -> Open XML (ETAP 1): domyslnie dokumenty wypelnia
-  // Scyzoryk.DocumentEngine.exe (bez Worda), z tym samym protokolem linii JSON
-  // na stdout co dawny skrypt PowerShell - handlePowerShellEvent/parseJsonLines
-  // ponizej dzialaja bez zmian dla obu sciezek. Przelacznik awaryjny:
-  // SCYZORYK_DOKUMENTY_ENGINE=word (patrz lib/documentEngine.js).
-  const useEngine = documentEngine.getDocumentEngineMode() === 'openxml';
-  const exe = process.env.POWERSHELL_EXE || 'powershell.exe';
-  const psArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_SCRIPT, ...args];
+  // Migracja Word COM -> Open XML: dokumenty wypelnia Scyzoryk.DocumentEngine.exe
+  // (bez Worda), z tym samym protokolem linii JSON na stdout co dawny skrypt
+  // mailmerge-to-pdf.ps1 - handlePowerShellEvent/parseJsonLines ponizej
+  // dzialaja bez zmian. PDF zapisuje ONLYOFFICE x2t (lib/documentEngine.js).
   const engineInput = {
     templatePath: job.template.path,
     outputDir: job.outputDir,
@@ -1055,14 +1043,10 @@ async function startGeneration(job, options) {
     logPath: job.logPath,
     debugJsonPath
   };
-  if (useEngine) {
-    appendLog(job, 'info', 'Uruchamiam silnik dokumentów (bez Worda).', { pdfRenderer: documentEngine.getPdfRendererMode() });
-  } else {
-    appendLog(job, 'info', 'Uruchamiam PowerShell (Word COM - tryb awaryjny).', { exe, script: PS_SCRIPT });
-  }
-  // Lease Worda tylko wtedy, gdy Word faktycznie wystartuje (stara sciezka
-  // albo PDF zapisywany jeszcze przez Worda, gdy nie ma klucza Syncfusion).
-  const needsWordLease = !useEngine || documentEngine.engineUsesWord();
+  appendLog(job, 'info', 'Uruchamiam silnik dokumentów (bez Worda).', { pdfRenderer: documentEngine.getPdfRendererMode() });
+  // Lease Worda tylko wtedy, gdy Word faktycznie wystartuje - PDF zapisuje
+  // jeszcze Word, bo na tym komputerze brak konwertera ONLYOFFICE x2t.
+  const needsWordLease = documentEngine.engineUsesWord();
 
   // Cross-process koordynacja Worda (lib/wordAutomationCoordinator.js) -
   // apps/kreator-wzorow moze rownolegle uruchamiac wlasna instancje Worda
@@ -1082,25 +1066,30 @@ async function startGeneration(job, options) {
   };
 
   const runGeneration = () => new Promise(resolveGeneration => {
-  let engineCleanup = null;
   let child;
-  if (useEngine) {
+  let engineCleanup = () => {};
+  try {
     const spawned = documentEngine.spawnMailMerge(engineInput, { cwd: ROOT });
     child = spawned.child;
     engineCleanup = spawned.cleanup;
-  } else {
-    child = spawn(exe, psArgs, {
-      cwd: ROOT,
-      windowsHide: !visibleWord,
-      env: { ...process.env }
-    });
+  } catch (err) {
+    // Brak Scyzoryk.DocumentEngine.exe (resolveEnginePath) - czytelny
+    // komunikat zamiast nieobsluzonego wyjatku w Promise.
+    job.status = 'error';
+    job.endedAt = Date.now();
+    job.result = { ok: false, message: err.message || 'Nie udało się uruchomić silnika dokumentów.', created: [], errors: [] };
+    setProgress(job, { phase: 'error', percent: 100, message: job.result.message });
+    appendLog(job, 'error', job.result.message);
+    persistJobsIndex();
+    resolveGeneration(job.result);
+    return;
   }
   job.child = child;
   const state = { buffer: '', final: null, stderr: '' };
 
   const timeoutMs = Number(process.env.SERYJNE_TIMEOUT_MS || 60 * 60 * 1000);
   const timer = setTimeout(() => {
-    appendLog(job, 'error', 'Przekroczono limit czasu. Zatrzymuję PowerShell.', { timeoutMs });
+    appendLog(job, 'error', 'Przekroczono limit czasu. Zatrzymuję silnik dokumentów.', { timeoutMs });
     try { child.kill(); } catch {}
   }, timeoutMs);
 
@@ -1112,15 +1101,22 @@ async function startGeneration(job, options) {
   });
   child.on('error', err => {
     clearTimeout(timer);
+    engineCleanup();
     job.status = 'error';
     job.endedAt = Date.now();
-    setProgress(job, { phase: 'error', percent: 100, message: err.message || 'Nie udało się uruchomić PowerShell.' });
-    job.result = { ok: false, message: err.message || 'Nie udało się uruchomić PowerShell.', created: [], errors: [] };
+    job.child = null;
+    const message = `Nie udało się uruchomić silnika dokumentów: ${err.message || 'nieznany błąd'}`;
+    setProgress(job, { phase: 'error', percent: 100, message });
+    job.result = { ok: false, message, created: [], errors: [] };
     appendLog(job, 'error', job.result.message);
     resolveGeneration(job.result);
   });
   child.on('close', code => {
     clearTimeout(timer);
+    // Pliki JSON silnika w %TEMP% (dane adresowe z Excela) - sprzatane zawsze,
+    // tez po przekroczeniu limitu czasu i po "Przerwij" (spawnMailMerge robi
+    // to samo przy 'close'; cleanup jest idempotentny).
+    engineCleanup();
     if (state.buffer.trim()) parseJsonLines(job, '\n', state);
     job.endedAt = Date.now();
     job.child = null;
@@ -1140,7 +1136,7 @@ async function startGeneration(job, options) {
       persistJobsIndex();
       }
     } else {
-      const message = state.stderr || `${useEngine ? 'Silnik dokumentów' : 'PowerShell'} zakończył się bez wyniku JSON. Kod: ${code}`;
+      const message = state.stderr.trim() || `Silnik dokumentów zakończył się bez wyniku JSON. Kod: ${code}`;
       job.status = 'error';
       job.result = { ok: false, message, created: [], errors: [], code, logUrl: `/api/download/${job.id}/logs` };
       setProgress(job, { phase: 'error', percent: 100, message });
@@ -1268,7 +1264,7 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
 
 const { registerFolderRoutes } = require('./src/folderRoutes');
 registerFolderRoutes(app, {
-  multer, storage, MAX_FILE_MB, heavyJobLimiter, jobs, OUTPUT_DIR, ROOT, PS_SCRIPT, SCAN_SCRIPT, wordQueue,
+  multer, storage, MAX_FILE_MB, heavyJobLimiter, jobs, OUTPUT_DIR, ROOT, SCAN_SCRIPT, wordQueue,
   decodeOriginalName, validateOfficeFile, loadExcelWorkbook, parseWorkbook, getWorkbookSheet,
   getJob, persistJobsIndex, setProgress, nowIso, writeJsonFileNoBom, stripBom,
   // folder.html/folderRoutes.js jest martwym, nieosiagalnym z UI kodem (patrz CLAUDE.md) -
@@ -1557,8 +1553,8 @@ app.post('/api/images/:jobId/summary', async (req, res) => {
 app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
   const job = getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania. Wczytaj pliki ponownie.' });
-  if (process.platform !== 'win32') return res.status(400).json({ ok: false, message: 'Generowanie przez Word działa tylko na Windows z zainstalowanym Microsoft Office.' });
-  if (job.status === 'running' || job.status === 'queued') return res.status(409).json({ ok: false, message: 'To zadanie już trwa albo czeka w kolejce Word.', queue: wordQueue.getState() });
+  if (process.platform !== 'win32') return res.status(400).json({ ok: false, message: 'Generowanie dokumentów działa tylko na Windows.' });
+  if (job.status === 'running' || job.status === 'queued') return res.status(409).json({ ok: false, message: 'To zadanie już trwa albo czeka w kolejce.', queue: wordQueue.getState() });
 
   try {
     await fsp.mkdir(job.outputDir, { recursive: true });
@@ -1608,7 +1604,7 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
     job.result = null;
     job.status = 'queued';
     persistJobsIndex();
-    setProgress(job, { phase: 'queued', message: 'Zadanie czeka w kolejce Word. Word robi tylko jeden dokument naraz.', queue: wordQueue.getState() });
+    setProgress(job, { phase: 'queued', message: 'Zadanie czeka w kolejce. Generowanie idzie po jednym zadaniu naraz.', queue: wordQueue.getState() });
     wordQueue.run(() => runMultiTemplateGeneration(job, tasks, body, skippedGroups)).catch(err => {
       job.status = 'error';
       job.endedAt = Date.now();
@@ -1624,7 +1620,7 @@ app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
         errorCode: 'queue-failed'
       });
     });
-    res.status(202).json({ ok: true, jobId: job.id, status: job.status, progress: job.progress, queue: wordQueue.getState(), message: 'Dodano do kolejki. Word przetwarza zadania pojedynczo.' });
+    res.status(202).json({ ok: true, jobId: job.id, status: job.status, progress: job.progress, queue: wordQueue.getState(), message: 'Dodano do kolejki. Zadania są przetwarzane pojedynczo.' });
   } catch (err) {
     job.status = 'error';
     job.result = { ok: false, message: err.message || 'Nie udało się uruchomić generowania.', created: [], errors: [] };

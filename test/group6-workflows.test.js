@@ -216,60 +216,17 @@ test('wnioski powykonawcze: normalizeDate z {allowEmpty:true} zwraca pusty strin
   assert.equal(normalizeDate('15.02.2026', { allowEmpty: true }), '15.02.2026');
 });
 
-test('wnioski powykonawcze: convert-wm.ps1 przyjmuje pusty $DateText (real bug - "Bez daty" rzucało "Cannot bind argument to parameter \'DateText\' because it is an empty string")', async () => {
-  // server.js poprawnie przepuszcza pusty string przez normalizeDate({allowEmpty:true})
-  // dla "Bez daty" (test wyzej), ale sama funkcja PowerShell ma osobny,
-  // NIEZALEZNY punkt odrzucenia: [Parameter(Mandatory=$true)][string]$DateText
-  // bez [AllowEmptyString()] odrzuca pusty string juz na etapie BINDOWANIA
-  // parametru, zanim funkcja w ogole dostanie szanse cokolwiek zrobic - wiec
-  // sama poprawnosc JS-owej walidacji nic tu nie dawala. Zlapane realnie na
-  // pierwszym uzyciu "Bez daty" po wydaniu tej opcji.
-  const script = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'scripts', 'convert-wm.ps1'), 'utf8');
-  const dateTextParamLines = script.split('\n').filter(line => /\[string\]\$DateText\b/.test(line) && /Parameter\(Mandatory/.test(line));
-  assert.equal(dateTextParamLines.length, 2, 'oczekiwane dokladnie 2 deklaracje parametru $DateText (Replace-AllDates, Convert-ToPowykonawczy)');
-  for (const line of dateTextParamLines) {
-    assert.match(line, /\[AllowEmptyString\(\)\]/, `$DateText musi miec [AllowEmptyString()], inaczej Mandatory string odrzuca pusty wpis z "Bez daty": ${line}`);
-  }
+test('wnioski powykonawcze: konwersja WM idzie przez silnik dokumentow (convert-wm, bez Worda) - "Bez daty", tytul w stopce i daty pokrywaja testy C# (MigrationEngineTests)', async () => {
+  const server = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'server.js'), 'utf8');
+  assert.match(server, /documentEngine\.convertWniosekMaterialowy\(/);
+  assert.equal(fs.existsSync(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'scripts', 'convert-wm.ps1')), false);
+  const tests = await fsp.readFile(path.join(__dirname, '..', 'tools', 'Scyzoryk.DocumentEngine.Tests', 'MigrationEngineTests.cs'), 'utf8');
+  assert.match(tests, /ConvertWm_BezDaty_UsuwaDateRazemZDn/);
+  assert.match(tests, /ConvertWm_TytulUwagiDataIUsuniecieOdZatwierdzam/);
+  assert.match(tests, /ConvertWm_TytulWStopceTezPodmieniony/);
 });
 
-test('wnioski powykonawcze: "Bez daty" faktycznie USUWA datę z dokumentu, nie zostawia oryginału (real bug zgłoszony przez użytkownika 2026-09-16 - "Kudrowice dn. 12.05.2026" zostawało z oryginalną datą zamiast dać samo "Kudrowice")', async () => {
-  const script = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'scripts', 'convert-wm.ps1'), 'utf8');
-  const fnStart = script.indexOf('function Replace-AllDates');
-  assert.ok(fnStart >= 0, 'funkcja Replace-AllDates powinna istnieć w convert-wm.ps1');
-  const nextFnStart = script.indexOf('\nfunction ', fnStart + 1);
-  assert.ok(nextFnStart > fnStart, 'nie znaleziono końca funkcji Replace-AllDates (kolejnej deklaracji function)');
-  const fnBody = script.slice(fnStart, nextFnStart);
-  // Stary błąd: `if ([string]::IsNullOrWhiteSpace($newDate)) { return $replacements }`
-  // zaraz po zebraniu $dates - pusty DateText kończył funkcję natychmiast, bez
-  // usunięcia czegokolwiek. Sprawdzamy, że ten wczesny bezwarunkowy return zniknął.
-  assert.doesNotMatch(
-    fnBody,
-    /IsNullOrWhiteSpace\(\$newDate\)\)\s*\{\s*return \$replacements\s*\}/,
-    'pusty $DateText ("Bez daty") nie może dawać natychmiastowego return - musi faktycznie usunąć datę z dokumentu'
-  );
-  // Nowa gałąź musi realnie kasować dopasowania (ReplaceText '' czyli usunięcie),
-  // razem ze słowem "dnia"/"dn." poprzedzającym datę, żeby nie zostały śmieciowe
-  // resztki typu "Kudrowice dn. " - kilka wariantów pisowni na różne szablony WM.
-  assert.match(fnBody, /\$datePrefixVariants\s*=\s*@\(/, 'powinna istnieć lista wariantów prefiksu daty do usunięcia razem z datą');
-  assert.match(fnBody, /'dnia '/);
-  assert.match(fnBody, /'dn\. '/);
-  assert.match(fnBody, /ReplaceText\s+''/, 'usuwanie daty w trybie "Bez daty" musi podmieniać na pusty string, nie na $newDate');
-});
 
-test('wnioski powykonawcze: podmiana tytułu dokumentu obejmuje TEŻ nagłówki/stopki, nie tylko główną treść (naprawiony realny błąd - stopka zostawała ze starym tytułem)', async () => {
-  // Doc.Content w Word COM obejmuje WYLACZNIE glowny tekst dokumentu - naglowki
-  // i stopki to osobne StoryRanges, ktorych Replace-InContent nigdy nie
-  // dotyka (patrz definicja obu funkcji w tym samym pliku). Replace-InAllStories
-  // to dokladnie ta sama funkcja, ktorej podmiana dat kilka linii nizej juz
-  // uzywa - tam stopka zawsze dzialala poprawnie.
-  const script = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'scripts', 'convert-wm.ps1'), 'utf8');
-  const titleReplaceLines = script.split('\n').filter(line => /\$TITLE[123]\b/.test(line) && /ReplaceText \$POW\b/.test(line));
-  assert.equal(titleReplaceLines.length, 3, 'powinny być dokładnie 3 podmiany tytułu (TITLE1/TITLE2/TITLE3)');
-  for (const line of titleReplaceLines) {
-    assert.match(line, /Replace-InAllStories\b/, `podmiana tytułu musi objąć też stopkę: ${line}`);
-    assert.doesNotMatch(line, /Replace-InContent\b/, `Replace-InContent NIE obejmuje stopki: ${line}`);
-  }
-});
 
 test('wnioski powykonawcze: DOCX wynikowy trafia do TEGO SAMEGO folderu co PDF (nie do oddzielnego "debug" katalogu, który nigdzie nie był udostępniany do pobrania)', async () => {
   const server = await fsp.readFile(path.join(__dirname, '..', 'apps', 'wnioski-powykonawcze', 'server.js'), 'utf8');

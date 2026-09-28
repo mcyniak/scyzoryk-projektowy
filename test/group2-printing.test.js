@@ -335,17 +335,16 @@ test('lib/printing/ghostscript: wendorowany runtime jest kompletny i ma dolaczon
 
 // convertDocxBatchToPdf zostalo wyciagniete z apps/drukarka-projekty/server.js
 // do lib/printing.js (2026-08-19), zeby apps/drukarka mogla tez zaoferowac
-// wlasna opcje "Zapisz jako PDF" bez trzymania drugiej, driftujacej kopii
-// konwersji DOCX->PDF (patrz analogiczny test w
-// test/group13-drukarka-projekty-powykonawcza.test.js, ktory sprawdza ze
-// drukarka-projekty faktycznie deleguje do TEJ funkcji, nie wlasnej kopii).
-test('lib/printing: convertDocxBatchToPdf istnieje, uzywa skryptu z lib/printing/, i nie-detached spawn (bezpieczny wobec bledu Windows/Node: detached:true zawsze zglasza kod wyjscia 0)', () => {
+// wlasna opcje "Zapisz jako PDF". Od migracji Word COM -> Open XML konwersje
+// robi silnik dokumentow (render-pdf, ONLYOFFICE x2t) - zachowanie funkcji
+// testuje test/group27-document-engine.test.js.
+test('lib/printing: convertDocxBatchToPdf istnieje i deleguje do silnika dokumentow (bez powershell.exe / docx-to-pdf.ps1)', () => {
   assert.equal(typeof printing.convertDocxBatchToPdf, 'function');
-  assert.ok(fs.existsSync(printing.DOCX_TO_PDF_SCRIPT), 'lib/printing/docx-to-pdf.ps1 powinien istniec');
+  assert.equal(printing.DOCX_TO_PDF_SCRIPT, undefined);
+  assert.equal(fs.existsSync(path.resolve(__dirname, '..', 'lib', 'printing', 'docx-to-pdf.ps1')), false);
   const src = fs.readFileSync(path.resolve(__dirname, '..', 'lib', 'printing.js'), 'utf8');
-  const spawnMatch = src.match(/spawn\('powershell\.exe'[\s\S]{0,400}\}\);/);
-  assert.ok(spawnMatch, 'nie znaleziono wywolania powershell.exe dla docx-to-pdf w lib/printing.js');
-  assert.doesNotMatch(spawnMatch[0], /detached:\s*true/);
+  assert.match(src, /documentEngine\.renderDocxBatchToPdf\(/);
+  assert.doesNotMatch(src, /spawn\('powershell\.exe'/);
 });
 
 // Audyt rozdz. 10/11, P0: scalanie sasiadujacych PDF-ow przy druku

@@ -109,8 +109,11 @@ public sealed class MailMergeCommand
         {
             if (!File.Exists(_input.TemplatePath)) throw new FileNotFoundException($"Nie znaleziono szablonu Word: {_input.TemplatePath}");
             Directory.CreateDirectory(outputDir);
-            if (!string.IsNullOrWhiteSpace(_input.LogPath)) File.WriteAllText(_input.LogPath, "", new UTF8Encoding(false));
-            if (!string.IsNullOrWhiteSpace(_input.DebugJsonPath)) File.WriteAllText(_input.DebugJsonPath, "", new UTF8Encoding(false));
+            // LogPath/DebugJsonPath NIE sa tu czyszczone: cyklem zycia tych plikow
+            // zarzadza Node (Dokumenty seryjne czyszcza je raz na zadanie, a przy
+            // paczce kilku szablonow - _keepLog - i w trybie "folder" dopisuja
+            // kolejne szablony do tego samego logu). Czyszczenie tutaj kasowalo
+            // diagnostyke wczesniejszych szablonow z tej samej paczki.
 
             var rules = (_input.Rules ?? new())
                 .Select(r => new TextMarkerReplacer.Rule(r.Find ?? "", r.Column ?? "", ParseOccurrence(r.Occurrence)))

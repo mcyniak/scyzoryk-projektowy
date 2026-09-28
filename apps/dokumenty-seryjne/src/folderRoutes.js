@@ -4,6 +4,8 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 const templateScan = require("./templateScan");
+const documentEngine = require("../../../lib/documentEngine");
+const { withWordAutomationLease } = require("../../../lib/wordAutomationCoordinator");
 const folderGen = require("./folderGeneration");
 
 // Rejestruje endpointy dla trybu "folder wzorow -> foldery per adres".
@@ -11,7 +13,7 @@ const folderGen = require("./folderGeneration");
 // server.js - dostaje z niego wszystko czego potrzebuje jako "deps".
 function registerFolderRoutes(app, deps) {
   const {
-    multer, storage, MAX_FILE_MB, heavyJobLimiter, jobs, OUTPUT_DIR, ROOT, PS_SCRIPT, SCAN_SCRIPT,
+    multer, storage, MAX_FILE_MB, heavyJobLimiter, jobs, OUTPUT_DIR, ROOT, SCAN_SCRIPT,
     wordQueue, decodeOriginalName, validateOfficeFile, loadExcelWorkbook, parseWorkbook,
     getWorkbookSheet, getJob, persistJobsIndex, setProgress, nowIso, writeJsonFileNoBom, stripBom
   } = deps;
@@ -125,67 +127,42 @@ function registerFolderRoutes(app, deps) {
     }
   });
 
-  async function runOneTemplate(job, templatePath, outputDir, sheetName, addressColumn, filePrefix, recordNumber, visibleWord, replacementJsonPath) {
-    const dataJsonPath = path.join(job.outputDir, `merge-data-${recordNumber}-${Date.now()}.json`);
-    const debugJsonPath = job.debugJsonPath;
+  // Jeden szablon dla jednego rekordu (jednego folderu klienta) - polecenie
+  // mail-merge silnika dokumentow (bez Worda), nastepca wywolania dawnego
+  // scripts/mailmerge-to-pdf.ps1. Wynik ({ok, created, errors, message})
+  // ma ten sam ksztalt co dotad. Pliki JSON silnika sprzata documentEngine.
+  async function runOneTemplate(job, templatePath, outputDir, sheetName, addressColumn, filePrefix, recordNumber, replacementRules) {
     const row = (getWorkbookSheet(job.workbook, sheetName).rows || []).find(r => Number(r._record) === recordNumber);
-    writeJsonFileNoBom(dataJsonPath, { sheetName, addressColumn, records: row ? [row] : [] });
-
-    const args = [
-      "-TemplatePath", templatePath,
-      "-ExcelPath", job.excel.path,
-      "-OutputDir", outputDir,
-      "-SheetName", sheetName,
-      "-AddressColumn", addressColumn,
-      "-DataJson", dataJsonPath,
-      "-LogPath", job.logPath,
-      "-DebugJsonPath", debugJsonPath,
-      "-ReplacementJson", replacementJsonPath,
-      "-FilePrefix", filePrefix,
-      "-RowsCsv", String(recordNumber)
-    ];
-    const exe = process.env.POWERSHELL_EXE || "powershell.exe";
-    const psArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", PS_SCRIPT, ...args];
-
-    return new Promise(resolveOne => {
-      const child = spawn(exe, psArgs, { cwd: ROOT, windowsHide: !visibleWord, env: { ...process.env } });
-      let buffer = "", final = null, stderr = "";
-      child.stdout.on("data", d => {
-        buffer += d.toString("utf8");
-        const parts = buffer.split(/\r?\n/); buffer = parts.pop() || "";
-        for (const raw of parts) {
-          const line = stripBom(raw).trim();
-          if (line.startsWith("{") && line.endsWith("}")) {
-            try { const parsed = JSON.parse(line); if (parsed && Object.prototype.hasOwnProperty.call(parsed, "ok")) final = parsed; } catch (_) {}
-          }
-        }
-      });
-      child.stderr.on("data", d => { stderr += d.toString("utf8"); });
-      child.on("error", err => resolveOne({ ok: false, message: err.message }));
-      child.on("close", () => {
-        try { fs.unlinkSync(dataJsonPath); } catch (_) {}
-        resolveOne(final || { ok: false, message: stderr || "Brak wyniku z PowerShell." });
-      });
-    });
+    if (!row) return { ok: false, message: `Nie znaleziono rekordu ${recordNumber} w arkuszu ${sheetName}.` };
+    const run = () => documentEngine.runEngineCommand("mail-merge", {
+      ...documentEngine.pdfRendererInput(),
+      templatePath,
+      outputDir,
+      addressColumn,
+      records: [row],
+      rules: replacementRules,
+      filePrefix,
+      logPath: job.logPath,
+      debugJsonPath: job.debugJsonPath || null
+    }, { timeoutMs: Number(process.env.SERYJNE_TIMEOUT_MS || 60 * 60 * 1000) });
+    const result = documentEngine.engineUsesWord()
+      ? await withWordAutomationLease({ app: "dokumenty-seryjne", operation: `folder: ${path.basename(templatePath)}` }, run)
+      : await run();
+    return result || { ok: false, message: "Brak wyniku z silnika dokumentów." };
   }
 
   async function runFolderPlan(job, plan, options) {
     const created = [];
     const errors = [];
-    const visibleWord = options.visibleWord === true;
     const addressColumn = String(options.adresColumn || "").trim() || "_record";
     let doneCount = 0;
 
-    // Reguly zamiany sa wspolne dla calego zadania (nie per-szablon), wiec
-    // plik z niimi piszemy raz, przed petla, zamiast za kazdym wywolaniem
-    // PowerShell osobno.
-    const replacementJsonPath = path.join(job.outputDir, "replacement-rules.json");
+    // Reguly zamiany sa wspolne dla calego zadania (nie per-szablon).
     const rules = Array.isArray(options.rules)
       ? options.rules
           .map(r => ({ find: String(r?.find || "").trim(), column: String(r?.column || "").trim() }))
           .filter(r => r.find && r.column)
       : [];
-    writeJsonFileNoBom(replacementJsonPath, { rules });
 
     job.status = "running";
     job.startedAt = Date.now();
@@ -209,7 +186,7 @@ function registerFolderRoutes(app, deps) {
       for (const task of item.generateTasks) {
         setProgress(job, { phase: "records", current: doneCount, total: plan.length, percent: Math.round((doneCount / plan.length) * 100), message: `Generuję: ${item.folderName} / ${task.groupName}` });
         try {
-          const result = await runOneTemplate(job, task.entry.path, clientDir, job.workbook.sheetName, addressColumn, task.groupName, item.row._record, visibleWord, replacementJsonPath);
+          const result = await runOneTemplate(job, task.entry.path, clientDir, job.workbook.sheetName, addressColumn, task.groupName, item.row._record, rules);
           if (result.ok && result.created && result.created.length) {
             created.push({ folder: item.folderName, file: result.created[0].file });
           } else {
@@ -233,7 +210,7 @@ function registerFolderRoutes(app, deps) {
   app.post("/api/folder-generate/:jobId", heavyJobLimiter, async (req, res) => {
     const job = getJob(req.params.jobId);
     if (!job) return res.status(404).json({ ok: false, message: "Nie znaleziono zadania." });
-    if (process.platform !== "win32") return res.status(400).json({ ok: false, message: "Generowanie dziala tylko na Windows z zainstalowanym Wordem." });
+    if (process.platform !== "win32") return res.status(400).json({ ok: false, message: "Generowanie dokumentów działa tylko na Windows." });
     if (job.status === "running" || job.status === "queued") return res.status(409).json({ ok: false, message: "Zadanie juz trwa.", queue: wordQueue.getState() });
 
     try {
@@ -256,7 +233,7 @@ function registerFolderRoutes(app, deps) {
 
       job.status = "queued";
       persistJobsIndex();
-      setProgress(job, { phase: "queued", current: 0, total: plan.length, percent: 0, message: "Zadanie czeka w kolejce Word.", queue: wordQueue.getState() });
+      setProgress(job, { phase: "queued", current: 0, total: plan.length, percent: 0, message: "Zadanie czeka w kolejce.", queue: wordQueue.getState() });
 
       wordQueue.run(() => runFolderPlan(job, plan, { visibleWord: body.visibleWord === true, adresColumn: columns.adres, rules })).catch(err => {
         job.status = "error";

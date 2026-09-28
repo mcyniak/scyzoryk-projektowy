@@ -1,7 +1,7 @@
 function friendlyErrorMessage(message){
   const text = String(message || '');
   if (/archiver|zip/i.test(text)) return 'Nie udało się utworzyć paczki ZIP z wynikami.';
-  if (/PowerShell|WINWORD|Word/i.test(text)) return 'Nie udało się przygotować dokumentu w Wordzie.';
+  if (/PowerShell|WINWORD|Word|silnik dokument/i.test(text)) return 'Nie udało się przygotować dokumentu.';
   return text || 'Wystąpił błąd podczas generowania.';
 }
 
@@ -199,7 +199,7 @@ const $ = s => document.querySelector(s);
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wygenerować PDF-ów.');
         activeJobId = data.jobId;
         $('#cancelJob').hidden = false;
-        showStatus('Zadanie czeka w kolejce Word.', '');
+        showStatus('Zadanie czeka w kolejce.', '');
         await pollManualJob();
         if (activeJobId) manualPollTimer = setInterval(pollManualJob, 1200);
       } catch (err) {

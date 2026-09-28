@@ -160,7 +160,9 @@ test('obsluga zdjec: endpointy istnieja, manifest ma oryginalne nazwy plikow, ge
   // adresowych wychodzily raz jako mojibake ("Po\uFFFDudniowa"), raz inaczej
   // ("Aaszew"). Frontend wysyla teraz encodeURIComponent (czysty ASCII),
   // serwer dekoduje bezpiecznym decodeURIComponentSafe.
-  assert.match(source, /const relPath = typeof rawPath === 'string' \? decodeURIComponentSafe\(rawPath\) : rawPath;/);
+  assert.match(source, /typeof imagePaths\[i\] === 'string' \? decodeURIComponentSafe\(imagePaths\[i\]\) : imagePaths\[i\]/);
+  // Fallback bez listy sciezek: nazwa z multipart (latin1 w multerze) -> UTF-8.
+  assert.match(source, /: decodeOriginalName\(file\.originalname \|\| ''\);/);
   assert.match(source, /function decodeURIComponentSafe\(value\)/);
   const inlineSrc = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'public', 'inline-1.js'), 'utf8');
   assert.match(inlineSrc, /currentImagePaths = currentImageFiles\.map\(f => encodeURIComponent\(f\.webkitRelativePath \|\| f\.name\)\);/);
@@ -168,13 +170,13 @@ test('obsluga zdjec: endpointy istnieja, manifest ma oryginalne nazwy plikow, ge
   assert.ok(generateRoute, 'nie znaleziono trasy /api/generate/:jobId');
   // Plan sect. 20: zdjecia opcjonalne - generate nie moze zwracac 400 przez brak zdjec.
   assert.ok(!generateRoute[0].includes('Szablon wymaga zdjęć'), 'generate nie moze blokowac przez zdjecia');
-  assert.match(source, /'-ImageManifestJson', job\.imageManifestPath/);
+  assert.match(source, /imageManifestPath: job\.imageManifestPath && fs\.existsSync\(job\.imageManifestPath\) \? job\.imageManifestPath : null,/);
 });
 
-test('saveWord: opcja "Zapisuj takze do Word (.docx)" jest przekazywana przez UI do PowerShell i zwracana w ZIP-ie', async () => {
+test('saveWord: opcja "Zapisuj takze do Word (.docx)" jest przekazywana przez UI do silnika dokumentow i zwracana w ZIP-ie', async () => {
   const serverSource = await fsp.readFile(serverPath, 'utf8');
   assert.match(serverSource, /const saveWord = options\.saveWord === true;/);
-  assert.match(serverSource, /if \(saveWord\) args\.push\('-SaveWord'\);/);
+  assert.match(serverSource, /const engineInput = \{[\s\S]*?\r?\n    saveWord,\r?\n/);
   assert.ok(serverSource.includes('(/\\.pdf$/i.test(file) || /\\.docx$/i.test(file))'));
   assert.ok(serverSource.includes("contentType = /\\.docx$/i.test(file)"));
 
@@ -185,34 +187,14 @@ test('saveWord: opcja "Zapisuj takze do Word (.docx)" jest przekazywana przez UI
   assert.ok(htmlSource.includes('id="saveWord"'));
   assert.ok(htmlSource.includes('Zapisuj także do Word (.docx)'));
 
-  const psSource = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1'), 'utf8');
-  assert.ok(psSource.includes('[switch]$SaveWord'));
-  assert.ok(psSource.includes('if ($SaveWord)'));
 });
 
-test('obsluga zdjec: galeria Zdjecia_pomontazowe - PowerShell podmienia pole przed tekstem i chroni je przed Replace-MergeFieldsInRange', async () => {
-  const psPath = path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1');
-  const source = await fsp.readFile(psPath, 'utf8');
-  assert.match(source, /\[string\]\$ImageManifestJson/);
-  assert.match(source, /function Load-ImageManifest/);
-  // Plan sect. 15: nowa funkcja galerii.
-  assert.match(source, /function Replace-PhotoGalleryMergeField/);
-  assert.match(source, /Replace-PhotoGalleryMergeField \$mergedDoc \$record \$imageFieldDebug/);
-  assert.match(source, /\$fieldDebug = Replace-AllMergeFields \$mergedDoc \$record/);
-  const indexGallery = source.indexOf('Replace-PhotoGalleryMergeField $mergedDoc $record $imageFieldDebug');
-  const indexMerge = source.indexOf('$fieldDebug = Replace-AllMergeFields $mergedDoc $record');
-  assert.ok(indexGallery >= 0 && indexMerge >= 0 && indexGallery < indexMerge, 'galeria musi byc obsluzona przed polami tekstowymi');
-  // Plan sect. 14: zwykla podmiana tekstowa MUSI ignorowac pole galerii.
-  assert.match(source, /if \(Test-GalleryFieldName \$name\) \{ continue \}/);
-  // Real bug 2026-08-27: klucz galerii zhardkodowany z podkreslnikiem
-  // ("zdjecia_pomontazowe") nigdy nie pasowal do Normalize-Address (ktory
-  // zamienia "_" na spacje) - pole cicho znikalo po zwyklej podmianie MERGEFIELD,
-  // dokument wychodzil z pustym naglowkiem "Zdjecia pomontazowe:" i bez zdjec.
-  assert.match(source, /\$script:GalleryFieldKey = \(Normalize-Address 'Zdjecia_pomontazowe'\)/);
-  // Brak zdjec -> pole usuwane, dokument generuje sie normalnie (plan sect. 13).
-  assert.match(source, /function Remove-GalleryFieldSafely/);
-  // Stara logika per-pozycyjnych pol nie wraca.
-  assert.ok(!source.includes('function Replace-AllImageMergeFields'), 'stara funkcja Replace-AllImageMergeFields powinna zniknac');
+test('obsluga zdjec: galeria Zdjecia_pomontazowe - manifest zdjec trafia do silnika dokumentow (Merge/PhotoGallery.cs, nastepca Replace-PhotoGalleryMergeField)', async () => {
+  const source = await fsp.readFile(serverPath, 'utf8');
+  assert.match(source, /job\.imageManifestPath = manifestPath;/);
+  const gallery = await fsp.readFile(path.join(__dirname, '..', 'tools', 'Scyzoryk.DocumentEngine', 'Merge', 'PhotoGallery.cs'), 'utf8');
+  assert.match(gallery, /Zdjecia_pomontazowe/i);
+  assert.equal(require('node:fs').existsSync(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1')), false);
 });
 
 test('imageMatching.js: model folderow adresowych (dowolna liczba zdjec, natural sort, ambiguity)', async () => {
@@ -483,6 +465,57 @@ test('imageMatching.js: model folderow adresowych (dowolna liczba zdjec, natural
       const json = await res.json();
       assert.equal(res.status, 200, JSON.stringify(json));
       assert.equal(json.smartTemplate, null, `wiele plikow szablonu nigdy nie powinno isc sciezka Smart Template: ${JSON.stringify(json.smartTemplate)}`);
+    });
+  });
+
+  // Zadanie 2026-09-28: czy polskie znaki w nazwach folderow zdjec psuja sie
+  // przy wgrywaniu (/api/images). Test przez PRAWDZIWY endpoint, z polami
+  // multipart dokladnie jak public/inline-1.js (images + imagePaths
+  // encodeURIComponent(webkitRelativePath)), plus stary klient bez kodowania,
+  // folder w NFD (macOS/niektore archiwa ZIP) i proba wyjscia ".." z katalogu.
+  test('/api/images: polskie znaki w folderach adresowych i nazwach zdjec przechodza bez zmian (NFC/NFD, stary klient bez encodeURIComponent), ".." nie wychodzi poza katalog zdjec', async (t) => {
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ds-images-pl-'));
+    t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+    const docxPath = buildSmartFixtureDocx(dir);
+    const xlsxPath = buildMatchingXlsx(dir);
+    const jpeg = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0xFF, 0xD9]);
+
+    await withTestServer(async (port) => {
+      const up = new FormData();
+      up.append('excel', new Blob([await fsp.readFile(xlsxPath)]), 'dane.xlsx');
+      up.append('templates', new Blob([await fsp.readFile(docxPath)]), 'Wzor_Test_seryjny.docx');
+      const upRes = await fetch(`http://127.0.0.1:${port}/api/upload`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: up });
+      const upJson = await upRes.json();
+      assert.equal(upRes.status, 200, JSON.stringify(upJson));
+      const jobId = upJson.jobId;
+
+      const nfdFolder = 'Gęślą Jaźń 2'.normalize('NFD');
+      const entries = [
+        { rel: 'Zdjęcia/Łódź, ul. Żółkiewskiego 5/zdjęcie 1.jpg', encode: true },
+        { rel: `Zdjęcia/${nfdFolder}/ŹRÓDŁO 10.jpg`, encode: true },
+        { rel: 'Zdjęcia/Źródlana 3 (100% gotowe)/foto.jpg', encode: false },
+        { rel: 'Zdjęcia/../ucieczka.jpg', encode: true },
+      ];
+      const form = new FormData();
+      for (const e of entries) form.append('images', new Blob([jpeg], { type: 'image/jpeg' }), path.posix.basename(e.rel));
+      form.append('imagePaths', JSON.stringify(entries.map(e => (e.encode ? encodeURIComponent(e.rel) : e.rel))));
+      const res = await fetch(`http://127.0.0.1:${port}/api/images/${jobId}`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: form });
+      const json = await res.json();
+      assert.equal(res.status, 200, JSON.stringify(json));
+
+      const { getJob } = require('../apps/dokumenty-seryjne/server');
+      const job = getJob(jobId);
+      const manifest = JSON.parse((await fsp.readFile(job.imageManifestPath, 'utf8')).replace(/^\uFEFF/, ''));
+      const byFolder = Object.fromEntries(manifest.files.map(f => [f.addressFolder, f]));
+      assert.deepEqual(Object.keys(byFolder).sort(), ['Gęślą Jaźń 2', 'Łódź, ul. Żółkiewskiego 5', 'Źródlana 3 (100% gotowe)'].sort(),
+        `foldery adresowe po wgraniu: ${JSON.stringify(Object.keys(byFolder))}`);
+      assert.equal(byFolder['Łódź, ul. Żółkiewskiego 5'].originalName, 'zdjęcie 1.jpg');
+      assert.equal(byFolder['Gęślą Jaźń 2'].originalName, 'ŹRÓDŁO 10.jpg');
+      for (const f of manifest.files) {
+        assert.ok(require('node:fs').existsSync(f.storedPath), `brak pliku na dysku: ${f.storedPath}`);
+        assert.ok(path.resolve(f.storedPath).startsWith(path.resolve(job.imageRoot) + path.sep), `plik poza katalogiem zdjec: ${f.storedPath}`);
+      }
+      assert.equal(manifest.files.length, 3, '".." nie moze byc traktowane jako folder adresowy');
     });
   });
 }

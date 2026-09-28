@@ -499,129 +499,17 @@ test('smartTemplate.js: strukturalnie niepoprawny manifest (np. zly mergeFieldNa
 });
 
 // ===========================================================================
-// apps/dokumenty-seryjne/scripts/mailmerge-to-pdf.ps1 - statyczne sprawdzenie
-// struktury (bez Worda w CI, patrz sekcja 36 specyfikacji): smart mode ma
-// pomijac legacy fillery i wywolywac Apply-ScyzorykSmartBlocks, legacy ma
-// zachowac stare zachowanie 1:1.
+// Runtime Smart Template (dawniej mailmerge-to-pdf.ps1 + lib/wordSmartTemplate.ps1,
+// Word COM) jest w silniku dokumentow: Merge/SmartBlockApplier.cs. Dokumenty
+// seryjne przekazuja smartTemplateMode TYLKO dla wzoru z Kreatora.
 // ===========================================================================
 
-test('mailmerge-to-pdf.ps1: -SmartTemplateMode istnieje, dot-source robi lib/wordSmartTemplate.ps1', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1'), 'utf8');
-  assert.match(source, /\[switch\]\$SmartTemplateMode/);
-  assert.match(source, /\.\s*\(Join-Path \$PSScriptRoot ".*wordSmartTemplate\.ps1"\)/);
-});
-
-test('mailmerge-to-pdf.ps1: smart mode POMIJA Fill-HighlightedTableCells/Fill-NarrativeBlanks i WYWOLUJE Apply-ScyzorykSmartBlocks - legacy dalej ma stare fillery', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'scripts', 'mailmerge-to-pdf.ps1'), 'utf8');
-  const ifIndex = source.indexOf('if ($SmartTemplateMode) {');
-  const elseIndex = source.indexOf('} else {', ifIndex);
-  const endIndex = source.indexOf('Write-Log "info" "Podmieniam pola MERGEFIELD."', elseIndex);
-  assert.ok(ifIndex > 0 && elseIndex > ifIndex && endIndex > elseIndex, 'nie znaleziono bloku if($SmartTemplateMode)/else w oczekiwanym ksztalcie');
-
-  const smartBranch = source.slice(ifIndex, elseIndex);
-  const legacyBranch = source.slice(elseIndex, endIndex);
-
-  assert.match(smartBranch, /Apply-ScyzorykSmartBlocks \$mergedDoc \$record/);
-  assert.doesNotMatch(smartBranch, /Fill-HighlightedTableCells/);
-  assert.doesNotMatch(smartBranch, /Fill-NarrativeBlanks/);
-
-  assert.match(legacyBranch, /Fill-HighlightedTableCells \$mergedDoc \$record \$tableFieldDebug/);
-  assert.match(legacyBranch, /Fill-NarrativeBlanks \$mergedDoc \$record \$narrativeFieldDebug/);
-  assert.doesNotMatch(legacyBranch, /Apply-ScyzorykSmartBlocks/);
-});
-
-test('mailmerge-to-pdf.ps1: -SmartTemplateMode jest przekazywane z server.js TYLKO gdy job.smartManifest istnieje', async () => {
+test('smart mode: smartTemplateMode przekazywany z server.js Dokumentow seryjnych TYLKO gdy job.smartManifest istnieje', async () => {
   const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'dokumenty-seryjne', 'server.js'), 'utf8');
-  assert.match(source, /if \(job\.smartManifest\) args\.push\('-SmartTemplateMode'\);/);
-});
-
-test('wordSmartTemplate.ps1: KAZDY "return" w Apply-ScyzorykSmartBlocks uzywa operatora przecinka (",$result") - real bug zlapany na zywym dokumencie 2026-09-24 (pusta/jednoelementowa Generic.List zwrocona przez "return $result" zamienia sie u wywolujacego w $null/goly element, wiec $smartBlockIssues.Count w mailmerge-to-pdf.ps1 rzuca "The property \'Count\' cannot be found on this object" dla KAZDEGO rekordu wzoru bez blokow ("blocks: []" - normalny, czesty przypadek)', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
-  const fnStart = source.indexOf('function Apply-ScyzorykSmartBlocks(');
-  assert.ok(fnStart >= 0, 'funkcja Apply-ScyzorykSmartBlocks powinna istnieć w lib/wordSmartTemplate.ps1');
-  const nextFnStart = source.indexOf('\nfunction ', fnStart + 1);
-  const fnBody = nextFnStart > fnStart ? source.slice(fnStart, nextFnStart) : source.slice(fnStart);
-
-  const returnLines = fnBody.split('\n').filter(line => !/^\s*#/.test(line) && /\breturn\b/.test(line) && /\$result\b/.test(line));
-  assert.ok(returnLines.length >= 5, `oczekiwano co najmniej 5 linii "return ...$result" w Apply-ScyzorykSmartBlocks, znaleziono ${returnLines.length}`);
-  for (const line of returnLines) {
-    assert.match(line, /return\s+,\$result\b/, `każdy return $result musi używać operatora przecinka (",$result"), inaczej pusta/jednoelementowa lista zamienia się w $null/goły element u wywołującego: ${line.trim()}`);
+  assert.match(source, /smartTemplateMode: Boolean\(job\.smartManifest\),/);
+  for (const rel of ['lib/wordSmartTemplate.ps1', 'apps/kreator-wzorow/scripts/build-template.ps1', 'apps/kreator-wzorow/scripts/scan-template.ps1']) {
+    assert.equal(require('node:fs').existsSync(path.join(__dirname, '..', rel)), false, `${rel} powinien byc usuniety`);
   }
-});
-
-// ===========================================================================
-// lib/wordSmartTemplate.ps1 - regresja statyczna dla audytu "0 kandydatow"
-// (2026-09-10). Zywy Word na CI nie jest dostepny, wiec ponizsze sprawdzaja
-// TYLKO ze zrodlo nie wraca do udowodnionych na zywo, blednych wzorcow -
-// pierwotny bug byl spowodowany dwiema WLASCIWOSCIAMI COM, ktore w ogole NIE
-// ISTNIEJA na obiekcie Find (Find.Font.HighlightColorIndex, Find.Shading),
-// polykanymi przez `catch { break }`, co zamienialo kazdy blad w cichy "0
-// kandydatow" zamiast kontrolowanego bledu. Prawdziwy test akceptacyjny na
-// zywym Wordzie pozostaje obowiazkiem `npm run test:kreator-word` (patrz
-// scripts/test-kreator-word-com.ps1 i CLAUDE.md).
-// ===========================================================================
-
-test('wordSmartTemplate.ps1: NIE uzywa Find.Font.HighlightColorIndex ani bezposredniego Find.Shading - obie wlasciwosci nie istnieja na obiekcie Find (potwierdzone live, audyt 2026-09-10)', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
-  assert.doesNotMatch(source, /\$f(ind)?\.Font\.HighlightColorIndex/i, 'Find.Font.HighlightColorIndex nie istnieje na obiekcie Find - rzuca ArgumentException na zywym Wordzie');
-  // Find.Shading (bez posrednictwa .Font/.ParagraphFormat) tez nie istnieje -
-  // dozwolone sa TYLKO Find.Font.Shading i Find.ParagraphFormat.Shading.
-  assert.doesNotMatch(source, /\$f\.Shading\s*=/, 'Find.Shading (bez .Font/.ParagraphFormat) nie istnieje jako wlasciwosc Find');
-});
-
-test('wordSmartTemplate.ps1: highlight jest wykrywany recznym character-walkiem po HighlightColorIndex (Find.Highlight okazal sie live niestabilny - falszywe dopasowania po wyczerpaniu prawdziwych highlightow), nie przez nieistniejacy Find.Font.HighlightColorIndex', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
-  const fnMatch = source.match(/function Find-ScyzorykHighlightCandidates[\s\S]*?\n\}/);
-  assert.ok(fnMatch, 'nie znaleziono funkcji Find-ScyzorykHighlightCandidates');
-  assert.match(fnMatch[0], /Get-ScyzorykCharWalkRanges/, 'skaner highlightu powinien uzywac sprawdzonego character-walka (Get-ScyzorykCharWalkRanges), nie Find - Find.Highlight=$true okazal sie live zwracac falszywe dopasowania po wyczerpaniu prawdziwych highlightow (audyt 2026-09-10)');
-  assert.match(fnMatch[0], /HighlightColorIndex/, 'musi odczytywac HighlightColorIndex per-znak');
-});
-
-test('wordSmartTemplate.ps1: run/paragraph shading uzywaja Find.Font.Shading / Find.ParagraphFormat.Shading (zweryfikowane live), nie golego Find.Shading', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
-  assert.match(source, /\$f\.Font\.Shading\.BackgroundPatternColor/, 'run shading powinien uzywac Find.Font.Shading (Find.Shading nie istnieje)');
-  assert.match(source, /\$f\.ParagraphFormat\.Shading\.BackgroundPatternColor/, 'paragraph shading powinien uzywac Find.ParagraphFormat.Shading');
-});
-
-test('wordSmartTemplate.ps1: brak ogolnego "catch { break }" bezposrednio wokol Find.Execute(), ktory moglby po cichu zamienic prawdziwy blad COM w "0 kandydatow"', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
-  // Pierwotny bug: `} catch { break }` bezposrednio po Find.Execute(). Po
-  // naprawie kazdy mechanizm ma wlasny, szerszy try/catch WOKOL calej petli
-  // (zapisujacy blad do mechanismErrors), a nie pojedynczy catch->break
-  // polykajacy wyjatek z samego wywolania Execute().
-  assert.doesNotMatch(source, /\$found\s*=\s*\$f\.Execute\(\)\s*\r?\n\s*\}\s*catch\s*\{\s*break\s*\}/, 'Execute() nie moze byc opakowane w pojedynczy catch { break } - to dokladnie ten wzorzec, ktory ukrywal bledy COM jako "0 kandydatow"');
-});
-
-test('wordSmartTemplate.ps1: skaner StoryRanges iteruje CALA kolekcje (kazdy typ story) + NextStoryRange lancuch, nie tylko Item(1)', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
-  assert.match(source, /foreach\s*\(\$story\s+in\s+\$doc\.StoryRanges\)/, 'musi iterowac cala kolekcje doc.StoryRanges (kazdy obecny typ story), nie tylko Item(1)');
-  assert.match(source, /NextStoryRange/, 'musi podazac lancuchem NextStoryRange dla wielokrotnych wystapien tego samego typu story (np. wiele sekcji)');
-});
-
-test('wordSmartTemplate.ps1: Get-ScyzorykStoryKey ma poprawne, zweryfikowane live wartosci WdStoryType (2=footnotes, 3=endnotes, nie 6/7 jak w pierwotnym, blednym kodzie)', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
-  const fnMatch = source.match(/function Get-ScyzorykStoryKey[\s\S]*?\n\}/);
-  assert.ok(fnMatch, 'nie znaleziono funkcji Get-ScyzorykStoryKey');
-  const fn = fnMatch[0];
-  assert.match(fn, /2\s*\{\s*return\s*'footnotes'\s*\}/, 'WdStoryType 2 = footnotes (pierwotny kod mial blednie 6)');
-  assert.match(fn, /3\s*\{\s*return\s*'endnotes'\s*\}/, 'WdStoryType 3 = endnotes (pierwotny kod mial blednie 7)');
-});
-
-test('wordSmartTemplate.ps1: $doc.Range(start,end) NIE jest uzywane w kodzie (poza komentarzami ostrzegawczymi) do adresowania innej story niz main (kazda inna story ma wlasna, niezalezna numeracje pozycji - potwierdzone live)', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'lib', 'wordSmartTemplate.ps1'), 'utf8');
-  const codeOnly = source.split('\n').filter(line => !line.trim().startsWith('#')).join('\n');
-  assert.doesNotMatch(codeOnly, /\$doc\.Range\(/, 'lib/wordSmartTemplate.ps1 nie powinien wolac $doc.Range(...) bezposrednio w kodzie wykonywalnym - musi uzywac Get-ScyzorykStoryRangeCopy, ktory poprawnie lokalizuje wlasciwa story/shape przed zawezeniem Start/End');
-});
-
-test('build-template.ps1: $doc.Range(start,end) NIE jest uzywane do rekonstrukcji zapisanej pozycji kandydata (musi przechodzic przez Get-ScyzorykStoryRangeCopy, story-aware)', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'kreator-wzorow', 'scripts', 'build-template.ps1'), 'utf8');
-  assert.doesNotMatch(source, /\$doc\.Range\(\$unit\./, 'build-template.ps1 nie powinien odtwarzac zakresu kandydata przez $doc.Range($unit....) - to jest poprawne WYLACZNIE dla story "main", a bledne dla header/footer/textframe (kazda ma wlasna numeracje pozycji)');
-  assert.match(source, /Get-ScyzorykStoryRangeCopy/, 'musi uzywac Get-ScyzorykStoryRangeCopy do story-aware rekonstrukcji zakresu');
-});
-
-test('build-template.ps1: blok laczacy kandydatow z ROZNYCH story jest jawnie odrzucany (nie probuje zgadywac wspolnego zakresu miedzy niezaleznymi numeracjami pozycji)', async () => {
-  const source = await fsp.readFile(path.join(__dirname, '..', 'apps', 'kreator-wzorow', 'scripts', 'build-template.ps1'), 'utf8');
-  assert.match(source, /distinctStories\.Count\s*-gt\s*1/, 'musi wykrywac i odrzucac blok laczacy fragmenty z roznych story');
 });
 
 // ===========================================================================
