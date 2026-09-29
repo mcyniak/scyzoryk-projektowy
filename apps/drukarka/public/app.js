@@ -1,3 +1,4 @@
+const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, c) : `${n} ${c}`;
 const fileInput = document.getElementById("fileInput");
 const addBtn = document.getElementById("addBtn");
 const clearBtn = document.getElementById("clearBtn");
@@ -128,7 +129,7 @@ function countPrintUnits(copies, copyMode, mergeFiles) {
 function updateJobSummary() {
   const options = getPrintOptions();
   const sides = options.sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
-  const copiesText = options.copies === 1 ? "1 kopia" : `${options.copies} kopie`;
+  const copiesText = P(options.copies, "kopia", "kopie", "kopii");
   const modeText = options.copyMode === "set"
     ? "najpierw komplet, potem kolejna kopia kompletu"
     : "kopia przy każdym pliku";
@@ -360,34 +361,47 @@ async function uploadFiles(files) {
   }
 
   const form = new FormData();
+  let rejected = 0;
 
   for (const file of files) {
     const e = fileExt(file.name);
 
     if ([".pdf", ".doc", ".docx"].includes(e)) {
       form.append("files", file);
+    } else {
+      rejected += 1;
     }
   }
 
-  if (!form.has("files")) return;
+  const rejectedNote = rejected ? ` Pominięto ${P(rejected, "plik", "pliki", "plików")} (dozwolone: PDF, DOC, DOCX).` : "";
+  if (!form.has("files")) {
+    if (rejected) statusText.textContent = rejectedNote.trim();
+    return;
+  }
 
   statusText.textContent = "Wgrywanie plików...";
 
-  const res = await fetch("/api/upload", {
-    method: "POST",
-    headers: { "X-Scyzoryk-Request": "1" },
-    body: form
-  });
-
-  const data = await res.json().catch(() => ({}));
+  let res;
+  let data = {};
+  try {
+    res = await fetch("/api/upload", {
+      method: "POST",
+      headers: { "X-Scyzoryk-Request": "1" },
+      body: form
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (err) {
+    statusText.textContent = window.ScyzorykUI ? window.ScyzorykUI.friendlyError(err) : "Nie udało się połączyć z aplikacją.";
+    return;
+  }
 
   if (!res.ok) {
-    statusText.textContent = data.message || "Nie udało się dodać plików";
+    statusText.textContent = (data.message || "Nie udało się dodać plików") + rejectedNote;
     return;
   }
 
   queue = data.queue || [];
-  statusText.textContent = `Dodano plików: ${(data.added || []).length}`;
+  statusText.textContent = `Dodano ${P((data.added || []).length, "plik", "pliki", "plików")}.${rejectedNote}`;
 
   render();
 }
@@ -440,6 +454,9 @@ async function pollStatus() {
     clearInterval(statusTimer);
     statusTimer = null;
     setPrintingUi(false);
+    // Serwer zostawia w kolejce pliki, ktorych nie zdazyl wyslac - pokaz je.
+    await loadQueue().catch(() => {});
+    statusText.textContent = s.message || "Błąd drukowania";
   }
 }
 
@@ -453,7 +470,7 @@ fileInput.addEventListener("change", async () => {
 });
 
 clearBtn.addEventListener("click", async () => {
-  if (queue.length && !confirm(`Wyczyścić kolejkę (${queue.length} plików)?`)) return;
+  if (queue.length && !confirm(`Wyczyścić kolejkę (${P(queue.length, "plik", "pliki", "plików")})?`)) return;
   const res = await fetch("/api/clear", {
     method: "POST",
     headers: { "X-Scyzoryk-Request": "1" }
@@ -482,8 +499,8 @@ printBtn.addEventListener("click", async () => {
 
   const options = getPrintOptions();
   const confirmText = isSaveAsPdfMode()
-    ? `Zapisać ${queue.length} plików jako PDF (bez drukowania)?`
-    : `Wysłać do druku ${queue.length} plików, ${options.copies} kopii?`;
+    ? `Zapisać ${P(queue.length, "plik", "pliki", "plików")} jako PDF (bez drukowania)?`
+    : `Wysłać do druku ${P(queue.length, "plik", "pliki", "plików")}, ${P(options.copies, "kopia", "kopie", "kopii")}?`;
   if (!confirm(confirmText)) return;
 
   const res = await fetch("/api/print", {
@@ -591,6 +608,18 @@ updateJobSummary();
 
 loadQueue();
 
+// Po odswiezeniu strony w trakcie drukowania - zablokuj przyciski i pokazuj
+// postep dalej (wczesniej strona udawala "Gotowy", a proby dodania plikow
+// konczyly sie bledami 409).
+fetch("/api/status").then(r => r.json()).then(s => {
+  if (s && s.printing) {
+    setPrintingUi(true);
+    statusBox.classList.add("is-printing");
+    if (!statusTimer) statusTimer = setInterval(pollStatus, 800);
+    pollStatus();
+  }
+}).catch(() => {});
+
 // Ten sam sentinel co server.js (SAVE_AS_PDF_SENTINEL) - nigdy nie trafia do
 // prawdziwej listy drukarek, wiec dopisywany tu, po stronie klienta, zawsze
 // (nawet gdy listPrinters() nie znajdzie zadnej fizycznej drukarki).
@@ -609,9 +638,35 @@ async function loadPrinters() {
   } catch (e) {
     if (printerSelectInput) printerSelectInput.innerHTML += SAVE_AS_PDF_OPTION;
   }
+  restorePrintPrefs();
   updatePrintModeUi();
 }
 loadPrinters();
+
+// Zapamietane ustawienia druku (drukarka, strony, tryb kopii, laczenie) -
+// wczesniej przy kazdym otwarciu trzeba bylo wybierac je od nowa.
+const PRINT_PREFS_KEY = "drukarka.printPrefs";
+function restorePrintPrefs() {
+  let prefs = null;
+  try { prefs = JSON.parse(localStorage.getItem(PRINT_PREFS_KEY) || "null"); } catch (_) { prefs = null; }
+  if (!prefs) return;
+  if (printerSelectInput && prefs.printerName && [...printerSelectInput.options].some(o => o.value === prefs.printerName)) printerSelectInput.value = prefs.printerName;
+  if (prefs.sideMode && [...sideModeInput.options].some(o => o.value === prefs.sideMode)) sideModeInput.value = prefs.sideMode;
+  if (prefs.copyMode && [...copyModeInput.options].some(o => o.value === prefs.copyMode)) copyModeInput.value = prefs.copyMode;
+  if (typeof prefs.mergeFiles === "boolean") mergeFilesInput.checked = prefs.mergeFiles;
+  updateJobSummary();
+}
+function savePrintPrefs() {
+  try {
+    localStorage.setItem(PRINT_PREFS_KEY, JSON.stringify({
+      printerName: printerSelectInput ? printerSelectInput.value : "",
+      sideMode: sideModeInput.value,
+      copyMode: copyModeInput.value,
+      mergeFiles: mergeFilesInput.checked
+    }));
+  } catch (_) {}
+}
+[printerSelectInput, sideModeInput, copyModeInput, mergeFilesInput].forEach(input => input && input.addEventListener("change", savePrintPrefs));
 
 // Kopie/strony/tryb kopiowania nie maja znaczenia przy zapisie do PDF (nie ma
 // fizycznej drukarki ani duplexu) - ukrywamy je, zeby nie sugerowac, ze

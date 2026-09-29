@@ -480,7 +480,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
   }
 
   if (!queue.length) {
-    return res.status(400).json({ ok: false, message: "Brak plikow" });
+    return res.status(400).json({ ok: false, message: "Brak plików w kolejce - dodaj pliki do wydruku." });
   }
 
   // "Zapisz jako PDF" nigdy nie dotyka fizycznej drukarki ani withPrintLease
@@ -509,16 +509,19 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
         status.percent = total ? Math.round((i / total) * 100) : 0;
         status.message = label ? `Zapisuje ${i + 1}/${total}: ${label}` : `Zapisano ${i}/${total}.`;
       });
-      status.message = `✅ Zapisano ${result.outputs.length} plik(ow) PDF do ${SAVE_AS_PDF_OUTPUT_DIR}`;
+      status.message = `✅ Zapisano PDF-y (${result.outputs.length}) do ${SAVE_AS_PDF_OUTPUT_DIR}`;
       status.percent = 100;
       status.done = true;
       status.savedFolder = SAVE_AS_PDF_OUTPUT_DIR;
-    } catch (err) {
-      status.error = String(err.message || err);
-      status.message = "❌ Blad zapisu PDF: " + status.error;
-    } finally {
       cleanupFiles(itemsToSave);
       queue = [];
+    } catch (err) {
+      // Przeglad 2026-09-29: blad zapisu NIE czysci juz kolejki ani wgranych
+      // plikow - wczesniej trzeba bylo wgrywac wszystko od nowa. Nic nie
+      // zostalo wyslane do drukarki, wiec ponowna proba jest bezpieczna.
+      status.error = String(err.message || err);
+      status.message = "❌ Błąd zapisu PDF: " + status.error + " Pliki zostały w kolejce - możesz spróbować ponownie.";
+    } finally {
       printing = false;
       status.printing = false;
     }
@@ -547,6 +550,9 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
       };
 
       let itemsToPrint = originalItems;
+      let printJobsForRecovery = [];
+      let sentJobs = 0;
+      let keepForRetry = [];
       try {
         res.json({ ok: true });
 
@@ -568,6 +574,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
         }
 
         const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
+        printJobsForRecovery = printJobs;
         status.total = printJobs.length;
 
         await printService.withPrinterSides(sideMode, printerName, async printerSetup => {
@@ -583,13 +590,14 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
             status.current = i + 1;
             status.total = printJobs.length;
             status.percent = Math.round((i / printJobs.length) * 100);
-            status.message = `Wysylam do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
+            status.message = `Wysyłam do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
 
             await printService.printFileWindows(item.path, printerName, {
               cwd: __dirname,
               logDir: DATA_DIR,
               timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000)
             });
+            sentJobs = i + 1;
 
             status.percent = Math.round(((i + 1) / printJobs.length) * 100);
             status.message = `Dodano do kolejki ${i + 1}/${printJobs.length}${copyInfo}: ${item.originalName}`;
@@ -600,24 +608,37 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
           }
         });
 
-        status.message = `✅ Wszystkie zadania wyslane do kolejki drukowania (${printJobs.length})`;
+        status.message = `✅ Wszystkie zadania wysłane do kolejki drukowania (${printJobs.length})`;
         status.percent = 100;
         status.done = true;
       } catch (err) {
         status.error = String(err.message || err);
-        status.message = "❌ Blad drukowania: " + status.error;
+        // Przeglad 2026-09-29: pliki, ktorych zadania NIE zostaly jeszcze
+        // wyslane, zostaja w kolejce (wczesniej jeden blad w polowie serii
+        // kasowal cala kolejke i trzeba bylo wgrywac wszystko od nowa).
+        // Pliki juz wyslane NIE wracaja - ponowny "Drukuj" nie wydrukuje ich
+        // drugi raz. Przy polaczonych PDF-ach (pozycje "merged") nie da sie
+        // bezpiecznie ustalic, co poszlo - wtedy jak dotad nic nie wraca.
+        if (!itemsToPrint.some(it => it.merged) && printJobsForRecovery.length) {
+          const sentIds = new Set(printJobsForRecovery.slice(0, sentJobs).map(j => j.item.id));
+          const pendingIds = new Set(printJobsForRecovery.slice(sentJobs).map(j => j.item.id));
+          keepForRetry = originalItems.filter(it => pendingIds.has(it.id) && !sentIds.has(it.id));
+        }
+        const kept = keepForRetry.length ? ` Niewysłane pliki (${keepForRetry.length}) zostały w kolejce - popraw przyczynę i kliknij Drukuj ponownie.` : "";
+        status.message = `❌ Błąd drukowania (wysłano ${sentJobs} z ${printJobsForRecovery.length || originalItems.length}): ${status.error}${kept}`;
       } finally {
         // Kolejka i sprzatanie plikow ida TUTAJ (nie tylko na sciezce sukcesu) -
         // bez tego blad w polowie serii zostawial stara kolejke w pamieci, wiec
         // ponowne kliknieccie "drukuj" potrafilo wyslac do druku po raz drugi
         // pliki, ktore juz sie realnie wydrukowaly przed bledem.
-        queue = [];
+        queue = keepForRetry;
+        const keptIds = new Set(keepForRetry.map(it => it.id));
         // Nie usuwamy plikow natychmiast po wyslaniu do druku.
         // Acrobat/Windows potrafi jeszcze doczytywac duze PDF-y po dodaniu zadania do kolejki.
         // Natychmiastowe kasowanie uploadow moglo powodowac znikanie/anulowanie duzych zadan.
         const cleanupDelayMs = 30 * 60 * 1000;
         setTimeout(() => {
-          cleanupFiles(originalItems);
+          cleanupFiles(originalItems.filter(it => !keptIds.has(it.id)));
           cleanupFiles(itemsToPrint.filter(it => it.merged));
         }, cleanupDelayMs).unref?.();
         printing = false;

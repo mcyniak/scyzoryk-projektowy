@@ -1,3 +1,4 @@
+const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, c) : `${n} ${c}`;
 let activeJob = null;
 let pollTimer = null;
 let cancelRequested = false;
@@ -277,7 +278,7 @@ document.querySelector('#batchForm').addEventListener('submit', async (event) =>
   const fileCheck = validateExcelChoice(file);
   if (!fileCheck.ok) {
     showAddressLoadProblem(fileCheck.message);
-    alert(fileCheck.message);
+    showStartNotice(fileCheck.message);
     return;
   }
   // Puste pole strefy lapie natywna walidacja `required` na selekcie
@@ -291,14 +292,20 @@ document.querySelector('#batchForm').addEventListener('submit', async (event) =>
   data.set('skipExisting', getFormField(form, 'skipExisting').checked ? 'true' : 'false');
   const chosenRows = previewRecords.length ? Array.from(selectedRows).sort((a, b) => a - b) : [];
   if (previewRecords.length && !chosenRows.length) {
-    alert('Nie zaznaczono żadnego adresu. Zaznacz minimum jeden adres do zgłoszenia.');
+    showStartNotice('Nie zaznaczono żadnego adresu. Zaznacz minimum jeden adres do zgłoszenia.');
     return;
   }
   data.set('selectedRows', JSON.stringify(chosenRows));
   document.querySelector('#selectedRowsInput').value = JSON.stringify(chosenRows);
 
-  const countText = previewRecords.length ? `${chosenRows.length} wybranych adresów` : 'adresów z Excela';
-  if (!confirm(`Uruchomić zgłoszenia dla ${countText}? Każdy wiersz to prawdziwe zgłoszenie do kalkulatora Varmero z oczekiwaniem na maila - może potrwać kilka minut na wiersz.`)) return;
+  const countText = previewRecords.length ? P(chosenRows.length, 'wybranego adresu', 'wybranych adresów', 'wybranych adresów') : 'adresów z Excela';
+  const where = [
+    `gmina: ${getFormField(form, 'gminaName').value || '(brak)'}`,
+    `kod: ${getFormField(form, 'postalCode').value || '(brak)'}`,
+    `strefa: ${getFormField(form, 'zone').value || '(brak)'}`
+  ].join(', ');
+  hideStartNotice();
+  if (!confirm(`Uruchomić zgłoszenia dla ${countText}?\n\nDane dla całej paczki - ${where}.\n\nKażdy wiersz to prawdziwe zgłoszenie do kalkulatora Varmero z oczekiwaniem na maila - może potrwać kilka minut na wiersz.`)) return;
 
   document.querySelector('#startBatch').disabled = true;
   cancelRequested = false;
@@ -312,22 +319,73 @@ document.querySelector('#batchForm').addEventListener('submit', async (event) =>
   autoOpenedForJob = null;
   document.querySelector('#statusBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-  const res = await fetch('/api/batch/start', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
-  const json = await res.json().catch(() => null);
+  let res = null;
+  let json = null;
+  try {
+    res = await fetch('/api/batch/start', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
+    json = await res.json().catch(() => null);
+  } catch (error) {
+    json = { ok: false, error: window.ScyzorykUI ? window.ScyzorykUI.friendlyError(error) : String(error) };
+  }
   if (!json || !json.ok) {
     const message = json?.error || 'Nie udało się uruchomić zadania.';
     if (/skrzynka pocztowa/i.test(message)) showImapNotice(message);
-    else alert(message);
+    else showStartNotice(message);
+    if (json && json.activeJobId) attachToJob(json.activeJobId);
     document.querySelector('#startBatch').disabled = false;
     document.querySelector('#cancelBatch').disabled = true;
     document.querySelector('#statusBox').classList.add('hidden');
     return;
   }
 
-  activeJob = json.jobId;
+  attachToJob(json.jobId);
+});
+
+// Komunikat pod przyciskiem Start (zamiast blokujacego alert()).
+function showStartNotice(message) {
+  let el = document.querySelector('#startNotice');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'startNotice';
+    el.className = 'notice';
+    el.setAttribute('role', 'alert');
+    el.style.marginTop = '10px';
+    document.querySelector('#startBatch').insertAdjacentElement('afterend', el);
+  }
+  el.textContent = message;
+  el.classList.remove('hidden');
+}
+function hideStartNotice() {
+  document.querySelector('#startNotice')?.classList.add('hidden');
+}
+
+// Podpina strone pod trwajace zadanie (po starcie albo po odswiezeniu
+// strony w trakcie zglaszania - wczesniej po F5 zadanie bylo niewidoczne i
+// mozna bylo uruchomic drugie, dublujac nieodwracalne zgloszenia).
+function attachToJob(jobId) {
+  activeJob = jobId;
+  pollFailures = 0;
+  document.querySelector('#startBatch').disabled = true;
+  document.querySelector('#cancelBatch').disabled = false;
+  document.querySelector('#statusBox').classList.remove('hidden');
+  if (pollTimer) clearInterval(pollTimer);
   pollStatus();
   pollTimer = setInterval(pollStatus, 1500);
-});
+}
+let pollFailures = 0;
+
+(async function resumeRunningJob() {
+  try {
+    const res = await fetch('/api/batch/jobs');
+    const json = await res.json();
+    const running = (json.jobs || []).filter(j => ['queued', 'reading-excel', 'running', 'cancelling'].includes(j.status))
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    if (running) {
+      document.querySelector('#finishInfo').textContent = `Trwa zgłaszanie z pliku ${running.sourceFile || ''} - pokazuję jego postęp.`;
+      attachToJob(running.id);
+    }
+  } catch { /* brak polaczenia - zwykly start strony */ }
+})();
 
 function closeFolderBrowser() {
   document.querySelector('#folderBrowseModal')?.classList.remove('open');
@@ -466,7 +524,7 @@ async function loadAddressPreview() {
       .map(([key, count]) => `${skipLabels[key] || key}: ${count}`)
       .join(', ');
     const zoneWarning = json.zoneKnown === false ? ' · UWAGA: nie podano poprawnej strefy klimatycznej (1-5)' : '';
-    document.querySelector('#selectorInfo').textContent = `Arkusz: ${json.sheetName || '-'} · znaleziono ${previewRecords.length} adresów${skippedTotal ? ` · pominięto ${skippedTotal} wierszy (${skipBreakdown})` : ''}${zoneWarning}.`;
+    document.querySelector('#selectorInfo').textContent = `Arkusz: ${json.sheetName || '-'} · znaleziono ${P(previewRecords.length, 'adres', 'adresy', 'adresów')}${skippedTotal ? ` · pominięto ${P(skippedTotal, 'wiersz', 'wiersze', 'wierszy')} (${skipBreakdown})` : ''}${zoneWarning}.`;
     renderAddressRows();
   } catch (error) {
     previewRecords = [];
@@ -561,7 +619,20 @@ document.querySelector('#cancelBatch').addEventListener('click', async () => {
 
 async function pollStatus() {
   if (!activeJob) return;
-  const res = await fetch(`/api/batch/status/${activeJob}`);
+  let res;
+  try {
+    res = await fetch(`/api/batch/status/${activeJob}`);
+    pollFailures = 0;
+  } catch (error) {
+    pollFailures += 1;
+    if (pollFailures >= 5) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      document.querySelector('#finishInfo').textContent = 'Brak połączenia z narzędziem - zgłaszanie mogło zostać przerwane. Odśwież stronę, gdy Scyzoryk znów działa (trwające zadanie zostanie pokazane automatycznie).';
+      document.querySelector('#startBatch').disabled = false;
+    }
+    return;
+  }
   if (res.status === 404) {
     clearInterval(pollTimer);
     pollTimer = null;
@@ -605,7 +676,9 @@ async function pollStatus() {
   document.querySelector('#previewRows').innerHTML = rows.map(row => {
     const status = row.ok
       ? `<span class="badge ${row.skippedExisting ? 'skip' : 'ok'}">${row.skippedExisting ? 'Pominięto' : 'Karta gotowa'}</span>`
-      : `<span class="badge bad">Błąd</span><div class="small">${escapeHtml(row.error || '')}</div>`;
+      : row.cancelled
+        ? `<span class="badge skip">Przerwano</span><div class="small">Wiersz mógł już zostać zgłoszony do Varmero - sprawdź skrzynkę, zanim zgłosisz go ponownie.</div>`
+        : `<span class="badge bad">Błąd</span><div class="small">${escapeHtml(row.error || '')}</div>`;
     return `<tr><td>${row.rowNumber || ''}</td><td>${escapeHtml(row.name || '')}</td><td>${escapeHtml(row.address || '')}</td><td>${status}</td></tr>`;
   }).join('');
 
@@ -629,10 +702,10 @@ async function pollStatus() {
       document.querySelector('#finishInfo').textContent = job.fatalReason || 'Nie udało się rozpocząć albo zakończyć zgłaszania.';
     } else if (job.status === 'finished-with-errors') {
       const skipped = job.skippedExisting ? `, ${job.skippedExisting} pominięto jako już gotowe` : '';
-      document.querySelector('#finishInfo').textContent = `Zakończono z błędami. ${job.ok || 0} kart gotowych${skipped}, ${job.failed || 0} nieudanych.`;
+      document.querySelector('#finishInfo').textContent = `Zakończono z błędami. Gotowe: ${P(job.ok || 0, 'karta', 'karty', 'kart')}${skipped}, nieudane: ${job.failed || 0}.`;
     } else {
       const skipped = job.skippedExisting ? `, pominięto ${job.skippedExisting} już gotowych` : '';
-      document.querySelector('#finishInfo').textContent = `Zakończono. Wygenerowano ${job.ok || 0} kart${skipped}.`;
+      document.querySelector('#finishInfo').textContent = `Zakończono. Wygenerowano ${P(job.ok || 0, 'kartę', 'karty', 'kart')}${skipped}.`;
     }
   }
 }
@@ -663,13 +736,13 @@ function getFormField(form, name) {
 
 function saveSettings() {
   const form = document.querySelector('#batchForm');
+  // Przeglad 2026-09-29: gmina, kod pocztowy, strefa i nazwa inwestycji NIE
+  // sa juz zapamietywane - dotyczyly poprzedniej inwestycji i po cichu
+  // trafialy do nieodwracalnych zgloszen nastepnej. Zostaja tylko ustawienia
+  // "narzedzia" (folder wynikow, wojewodztwo, rownoleglosc, pomijanie).
   const settings = {
-    investmentName: getFormField(form, 'investmentName').value || '',
     outputPath: getFormField(form, 'outputPath').value || '',
-    zone: getFormField(form, 'zone').value || '',
     wojewodztwo: getFormField(form, 'wojewodztwo').value || '',
-    gminaName: getFormField(form, 'gminaName').value || '',
-    postalCode: getFormField(form, 'postalCode').value || '',
     concurrency: getFormField(form, 'concurrency').value || '1',
     skipExisting: getFormField(form, 'skipExisting').checked
   };
@@ -680,12 +753,8 @@ function loadSettings() {
   try {
     const settings = JSON.parse(localStorage.getItem('varmeroGeneratorSettings') || '{}');
     const form = document.querySelector('#batchForm');
-    if (settings.investmentName) getFormField(form, 'investmentName').value = settings.investmentName;
     if (settings.outputPath) getFormField(form, 'outputPath').value = settings.outputPath;
-    if (settings.zone) getFormField(form, 'zone').value = settings.zone;
     if (settings.wojewodztwo) getFormField(form, 'wojewodztwo').value = settings.wojewodztwo;
-    if (settings.gminaName) getFormField(form, 'gminaName').value = settings.gminaName;
-    if (settings.postalCode) getFormField(form, 'postalCode').value = settings.postalCode;
     if (settings.concurrency) getFormField(form, 'concurrency').value = settings.concurrency;
     if (typeof settings.skipExisting === 'boolean') getFormField(form, 'skipExisting').checked = settings.skipExisting;
   } catch {}

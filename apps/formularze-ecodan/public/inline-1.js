@@ -1,3 +1,4 @@
+const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, c) : `${n} ${c}`;
 let activeJob = null;
     let pollTimer = null;
     let cancelRequested = false;
@@ -8,6 +9,25 @@ let activeJob = null;
 
     loadSettings();
 
+    // Po odswiezeniu strony w trakcie generowania - pokaz trwajace zadanie
+    // zamiast pustej strony (i ryzyka uruchomienia drugiego).
+    (async function resumeRunningJob() {
+      try {
+        const res = await fetch('/api/batch/jobs');
+        const json = await res.json();
+        const running = (json.jobs || []).filter(j => ['queued', 'reading-excel', 'running', 'cancelling'].includes(j.status))
+          .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+        if (!running) return;
+        activeJob = running.id;
+        document.querySelector('#startBatch').disabled = true;
+        document.querySelector('#cancelBatch').disabled = false;
+        document.querySelector('#statusBox').classList.remove('hidden');
+        document.querySelector('#finishInfo').textContent = `Trwa generowanie z pliku ${running.sourceFile || ''} - pokazuję jego postęp.`;
+        pollStatus();
+        pollTimer = setInterval(pollStatus, 1500);
+      } catch { /* zwykly start strony */ }
+    })();
+
     document.querySelector('#scrollHelp')?.addEventListener('click', () => document.querySelector('#saveHelp')?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
 
     // Swiadomie BEZ auto-sprawdzania na 'change' pliku/lokalizacji (bylo:
@@ -16,6 +36,20 @@ let activeJob = null;
     // wylacznie na klikniecie #checkAddresses albo #reloadPreview, ten sam
     // wzorzec co "Sprawdz tabele" w karty-katalogowe.
     document.querySelector('#checkAddresses').addEventListener('click', () => loadAddressPreview());
+    // Przeglad 2026-09-29: po zmianie pliku albo lokalizacji stara lista
+    // adresow (i zaznaczone numery wierszy!) zostawala na ekranie i trafiala
+    // do generowania dla NOWEGO pliku. Teraz lista jest czyszczona z prosba
+    // o ponowne sprawdzenie.
+    function invalidateAddressPreview(reason) {
+      if (!previewRecords.length) return;
+      previewRecords = [];
+      selectedRows = new Set();
+      document.querySelector('#addressRows').innerHTML = '';
+      document.querySelector('#selectorInfo').textContent = reason;
+      updateSelectedSummary();
+    }
+    document.querySelector('#excelFile').addEventListener('change', () => invalidateAddressPreview('Wybrano inny plik - kliknij „Sprawdź adresy”, żeby wczytać jego listę adresów.'));
+    document.querySelector('#location').addEventListener('change', () => invalidateAddressPreview('Zmieniono lokalizację - kliknij „Sprawdź adresy” ponownie.'));
     document.querySelector('#reloadPreview').addEventListener('click', () => loadAddressPreview());
     document.querySelector('#addressSearch').addEventListener('input', () => renderAddressRows());
     // Audyt UX na zywo 2026-08-24: dwa osobne przyciski "Zaznacz wszystkie"/
@@ -65,7 +99,7 @@ let activeJob = null;
 
     document.querySelector('#saveSettings')?.addEventListener('click', () => {
       saveSettings();
-      alert('Ustawienia zapisane w tej przeglądarce.');
+      showStartNotice('Ustawienia zapisane w tej przeglądarce.');
     });
 
     function showStartNotice(message) {
@@ -88,7 +122,13 @@ let activeJob = null;
       const fileCheck = validateExcelChoice(file);
       if (!fileCheck.ok) {
         showAddressLoadProblem(fileCheck.message);
-        alert(fileCheck.message);
+        showStartNotice(fileCheck.message);
+        return;
+      }
+      if (!previewRecords.length) {
+        // Serwer i tak odrzuca start bez wybranych adresow - mowimy to od razu,
+        // zamiast mylacego pytania "dla WSZYSTKICH wierszy?" i bledu po OK.
+        showStartNotice('Najpierw kliknij „Sprawdź adresy” i zaznacz adresy do wygenerowania.');
         return;
       }
 
@@ -108,10 +148,9 @@ let activeJob = null;
       // Bez wczytanego podgladu adresow generowanie idzie po CALYM Excelu -
       // confirm musi to mowic wprost, zeby uzytkownik nie odpalil zadania
       // dla wszystkich wierszy przez pomylke.
-      const countText = previewRecords.length
-        ? `${chosenRows.length} wybranych raportów`
-        : 'raportów dla WSZYSTKICH wierszy z Excela (adresy nie zostały sprawdzone)';
-      if (!confirm(`Uruchomić generowanie ${countText}? Wyniki zostaną zapisane w bezpiecznym folderze zadania.`)) return;
+      const outputChoice = (getFormField(form, 'outputPath').value || '').trim();
+      const countText = P(chosenRows.length, 'raportu', 'raportów', 'raportów');
+      if (!confirm(`Uruchomić generowanie ${countText}? Wyniki zostaną zapisane ${outputChoice ? `w: ${outputChoice}` : 'w folderze zadania (do pobrania jako ZIP)'}.`)) return;
 
       document.querySelector('#startBatch').disabled = true;
       cancelRequested = false;
@@ -125,8 +164,13 @@ let activeJob = null;
       document.querySelector('#previewRows').innerHTML = '';
       document.querySelector('#statusBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-      const res = await fetch('/api/batch/start', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
-      const json = await res.json();
+      let json;
+      try {
+        const res = await fetch('/api/batch/start', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
+        json = await res.json();
+      } catch (error) {
+        json = { ok: false, error: window.ScyzorykUI ? window.ScyzorykUI.friendlyError(error) : String(error) };
+      }
       if (!json.ok) {
         // Audyt UX 2026-08-24: blad startu inline (zamiast alert) - widac go
         // obok przycisku Start i nie znika, dopoki uzytkownik nie poprawi.
@@ -276,7 +320,7 @@ let activeJob = null;
         const locationWarning = (Number(skipped.missingLocation) > 0 && !locationValue.trim())
           ? ' · UWAGA: wypełnij pole „Lokalizacja / kod pocztowy” powyżej (ten arkusz nie ma własnej kolumny lokalizacji) i sprawdź adresy ponownie'
           : '';
-        document.querySelector('#selectorInfo').textContent = `Arkusz: ${json.sheetName || '-'} · znaleziono ${previewRecords.length} adresów${skippedTotal ? ` · pominięto ${skippedTotal} wierszy (${skipBreakdown})` : ''}${locationWarning}.`;
+        document.querySelector('#selectorInfo').textContent = `Arkusz: ${json.sheetName || '-'} · znaleziono ${P(previewRecords.length, 'adres', 'adresy', 'adresów')}${skippedTotal ? ` · pominięto ${P(skippedTotal, 'wiersz', 'wiersze', 'wierszy')} (${skipBreakdown})` : ''}${locationWarning}.`;
         renderAddressRows();
       } catch (error) {
         previewRecords = [];
@@ -325,7 +369,7 @@ let activeJob = null;
       document.querySelector('#selectedRowsInput').value = JSON.stringify(Array.from(selectedRows).sort((a, b) => a - b));
       document.querySelector('#selectedSummary').textContent = total ? `Zaznaczono: ${count} z ${total}` : 'Zaznaczono: 0';
       const btn = document.querySelector('#startBatch');
-      btn.textContent = total ? `Utwórz ${count} PDF${count === 1 ? '' : '-y'}` : 'Start generowania PDF';
+      btn.textContent = total ? `Utwórz ${P(count, 'PDF', 'PDF-y', 'PDF-ów')}` : 'Start generowania PDF';
     }
 
     function normalizeSearch(value) {
@@ -351,9 +395,23 @@ let activeJob = null;
       pollStatus();
     });
 
+    let pollFailures = 0;
     async function pollStatus() {
       if (!activeJob) return;
-      const res = await fetch(`/api/batch/status/${activeJob}`);
+      let res;
+      try {
+        res = await fetch(`/api/batch/status/${activeJob}`);
+        pollFailures = 0;
+      } catch (error) {
+        pollFailures += 1;
+        if (pollFailures >= 5) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          document.querySelector('#finishInfo').textContent = 'Brak połączenia z generatorem. Odśwież stronę, gdy Scyzoryk znów działa - trwające zadanie pokaże się automatycznie.';
+          document.querySelector('#startBatch').disabled = false;
+        }
+        return;
+      }
       if (res.status === 404) {
         clearInterval(pollTimer);
         pollTimer = null;
@@ -436,9 +494,12 @@ let activeJob = null;
         if (job.status === 'cancelled') {
           document.querySelector('#finishInfo').innerHTML = `Przerwano generowanie. Gotowe PDF-y można pobrać jako paczkę ZIP.${zipLink}`;
         } else if (job.status === 'fatal-error') {
-          document.querySelector('#finishInfo').innerHTML = `Nie udało się rozpocząć albo zakończyć generowania raportów. Sprawdź plik Excel albo pobierz ZIP z logiem dla pomocy technicznej.${zipLink}`;
+          const reason = job.fatalReason ? ` Powód: ${escapeHtml(job.fatalReason)}.` : '';
+          document.querySelector('#finishInfo').innerHTML = `Nie udało się rozpocząć albo zakończyć generowania raportów.${reason} Sprawdź plik Excel albo pobierz ZIP z logiem dla pomocy technicznej.${zipLink}`;
+        } else if (job.status === 'finished-with-errors') {
+          document.querySelector('#finishInfo').innerHTML = `Zakończono z błędami: gotowe ${job.ok || 0}, nieudane ${job.failed || 0} - szczegóły w tabeli poniżej.${lastPdfDir ? ` Pliki: ${escapeHtml(lastPdfDir)}.` : ''}${zipLink}`;
         } else {
-          document.querySelector('#finishInfo').innerHTML = `Zakończono. Raporty są gotowe do pobrania jako paczka ZIP. Każdy raport jest skrócony do pierwszych 3 stron.${zipLink}`;
+          document.querySelector('#finishInfo').innerHTML = `Zakończono. Raporty są gotowe${lastPdfDir ? ` w: ${escapeHtml(lastPdfDir)}` : ''} (każdy skrócony do pierwszych 3 stron).${zipLink}`;
         }
       }
     }

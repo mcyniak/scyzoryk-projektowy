@@ -12,6 +12,7 @@ const multer = require('multer');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
+const { polishErrorMessage } = require('../../lib/uploadErrors');
 const { setupProcessDiagnostics, scheduleCleanup } = require('../../lib/hardening');
 const { getDataRoot, getAppDataDir } = require('../../lib/appPaths');
 const { browseFolder } = require('../../lib/folderBrowse');
@@ -213,6 +214,7 @@ app.post('/api/create', (req, res, next) => {
     const created = [];
     const alreadyExisted = [];
     const rejected = [];
+    const failed = [];
     for (const folder of withStatus) {
       // Druga warstwa ochrony obok sanityzacji segmentow w folderPlan.js -
       // nawet gdyby sanityzacja kiedys zawiodla, nie pozwalamy wyjsc poza
@@ -226,8 +228,14 @@ app.post('/api/create', (req, res, next) => {
         alreadyExisted.push(folder.relativePath);
         continue;
       }
-      await fsp.mkdir(folder.fullPath, { recursive: true });
-      created.push(folder.relativePath);
+      // Blad jednego folderu (uprawnienia, za dluga sciezka) nie przerywa juz
+      // calej operacji w polowie - reszta powstaje, a nieudane sa wypisane.
+      try {
+        await fsp.mkdir(folder.fullPath, { recursive: true });
+        created.push(folder.relativePath);
+      } catch (err) {
+        failed.push({ path: folder.relativePath, reason: polishErrorMessage(err) });
+      }
     }
     const durationMs = Date.now() - operationStartedAt;
     telemetryService.recordEvent({
@@ -237,7 +245,7 @@ app.post('/api/create', (req, res, next) => {
       estimatedManualMs: estimateManualMs('tworzenie-folderow', addressCount),
       success: true
     });
-    res.json({ ok: true, investmentFolder, created, alreadyExisted, rejected });
+    res.json({ ok: true, investmentFolder, created, alreadyExisted, rejected, failed });
   } catch (error) {
     telemetryService.recordEvent({
       tool: 'tworzenie-folderow',
@@ -298,10 +306,6 @@ app.post('/api/simple-create', uploadMiddleware('excel'), async (req, res) => {
     if (!fs.existsSync(targetFolder) || !fs.statSync(targetFolder).isDirectory()) {
       throw new Error(`Folder docelowy nie istnieje: ${targetFolder}. Utwórz go najpierw (ma być pusty).`);
     }
-    const istniejace = await fsp.readdir(targetFolder);
-    if (istniejace.length > 0) {
-      throw new Error(`Folder docelowy musi być pusty - w środku znaleziono ${istniejace.length} elementów: ${targetFolder}.`);
-    }
     const sheetName = cleanText(req.body.sheetName, 300);
     await validateXlsxFile(req.file);
     const sheets = await readAddressSheets(req.file.path);
@@ -311,16 +315,30 @@ app.post('/api/simple-create', uploadMiddleware('excel'), async (req, res) => {
     }
     const { folders, skippedEmpty, duplicates } = buildSimpleFolderNames(chosen.addresses);
     if (!folders.length) throw new Error('Z tego arkusza nie wychodzi żaden folder - brak adresów po sanityzacji.');
+    // Folder docelowy musi byc pusty - WYJATEK: sa w nim wylacznie foldery z
+    // tego samego arkusza (dokonczenie przerwanej operacji). Wczesniej po bledzie
+    // w polowie nie dalo sie powtorzyc tworzenia bez recznego sprzatania.
+    const istniejace = await fsp.readdir(targetFolder, { withFileTypes: true });
+    const planowane = new Set(folders.map(n => n.toLowerCase()));
+    const obce = istniejace.filter(e => !(e.isDirectory() && planowane.has(e.name.toLowerCase())));
+    if (obce.length > 0) {
+      throw new Error(`Folder docelowy musi być pusty - w środku znaleziono ${obce.length} innych elementów (np. „${obce[0].name}”): ${targetFolder}.`);
+    }
 
     const created = [];
     const alreadyExisted = [];
     const rejected = [];
+    const failed = [];
     for (const name of folders) {
       const fullPath = path.join(targetFolder, name);
       if (!isPathInsideFolder(fullPath, targetFolder)) { rejected.push(name); continue; }
       if (fs.existsSync(fullPath)) { alreadyExisted.push(name); continue; }
-      await fsp.mkdir(fullPath, { recursive: true });
-      created.push(name);
+      try {
+        await fsp.mkdir(fullPath, { recursive: true });
+        created.push(name);
+      } catch (err) {
+        failed.push({ path: name, reason: polishErrorMessage(err) });
+      }
     }
     const durationMs = Date.now() - operationStartedAt;
     telemetryService.recordEvent({
@@ -330,7 +348,7 @@ app.post('/api/simple-create', uploadMiddleware('excel'), async (req, res) => {
       estimatedManualMs: estimateManualMs('tworzenie-folderow', created.length),
       success: true
     });
-    res.json({ ok: true, targetFolder, sheetName, created, alreadyExisted, rejected, skippedEmpty, duplicates, total: folders.length });
+    res.json({ ok: true, targetFolder, sheetName, created, alreadyExisted, rejected, failed, skippedEmpty, duplicates, total: folders.length });
   } catch (error) {
     telemetryService.recordEvent({
       tool: 'tworzenie-folderow',

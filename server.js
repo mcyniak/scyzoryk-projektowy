@@ -199,6 +199,26 @@ const childMeta = new Map();
 function logLine(app, type, data) {
   const text = String(data || '').split(/\r?\n/).filter(Boolean);
   for (const line of text) console.log(`[${app.slug}:${type === 'err' ? 'ERR' : 'LOG'}] ${line}`);
+  // Ostatnie linie bledow procesu - z nich panel tlumaczy uzytkownikowi,
+  // DLACZEGO narzedzie sie nie uruchomilo (np. zajety port).
+  if (type === 'err' && text.length) {
+    const meta = getChildMeta(app.slug);
+    meta.stderrTail = (String(meta.stderrTail || '') + '\n' + text.join('\n')).slice(-2000);
+  }
+}
+
+// Polski, zrozumialy powod ostatniej awarii narzedzia (przeglad 2026-09-29) -
+// wczesniej panel pokazywal "awaria - uruchom ponownie Scyzoryka", co przy
+// zajetym porcie w ogole nie pomagalo.
+function describeChildProblem(app, meta) {
+  const tail = String(meta.stderrTail || '');
+  if (/EADDRINUSE/i.test(tail)) return `Port ${app.port} jest zajęty przez inny program (albo drugie okno Scyzoryka). Zamknij go albo uruchom ponownie komputer.`;
+  if (/EACCES|EPERM/.test(tail) && /listen/i.test(tail)) return `Brak dostępu do portu ${app.port} - sprawdź program antywirusowy lub zaporę.`;
+  if (/Cannot find module|MODULE_NOT_FOUND/.test(tail)) return 'Brakuje plików programu - zainstaluj Scyzoryka ponownie (instalator naprawi pliki).';
+  if (/ENOSPC/.test(tail)) return 'Brak miejsca na dysku.';
+  if (meta.lastError && meta.lastError.message) return `Nie udało się uruchomić procesu: ${meta.lastError.message}`;
+  if (meta.lastExit && meta.lastExit.code) return `Narzędzie zakończyło się błędem (kod ${meta.lastExit.code}). Szczegóły są w dzienniku panelu.`;
+  return null;
 }
 
 function getChildMeta(slug) {
@@ -514,7 +534,8 @@ async function getAppsStatus(req) {
         startedAt: meta.startedAt,
         nextRestartAt: meta.nextRestartAt,
         circuitOpen: meta.circuitOpen,
-        circuitReason: meta.circuitReason
+        circuitReason: meta.circuitReason,
+        problem: (!health.ok && (meta.lastExit || meta.lastError)) ? describeChildProblem(app, meta) : null
       }
     };
   }));
@@ -561,8 +582,9 @@ const server = http.createServer(async (req, res) => {
     targetMeta.circuitOpen = false;
     targetMeta.circuitReason = null;
     targetMeta.failureTimestamps = [];
+    targetMeta.stderrTail = '';
     if (!ensureChildStarted(targetApp)) {
-      return sendJson(res, 503, { ok: false, message: `Nie mozna uruchomic narzedzia: brak pliku server.js w ${targetApp.dir}.` });
+      return sendJson(res, 503, { ok: false, message: 'Nie można uruchomić narzędzia: brakuje jego plików. Zainstaluj Scyzoryka ponownie (instalator naprawi pliki).' });
     }
     return sendJson(res, 202, { ok: true, message: 'Uruchamianie rozpoczete.' });
   }

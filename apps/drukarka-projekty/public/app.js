@@ -1,3 +1,4 @@
+const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, c) : `${n} ${c}`;
 (function () {
   "use strict";
 
@@ -142,6 +143,18 @@
 
   function enablePanel(id) { $(id).classList.remove("disabled"); }
   function disablePanel(id) { $(id).classList.add("disabled"); }
+
+  // Przeglad 2026-09-29: druk idzie z kolejki utworzonej przy "Zatwierdź" -
+  // zmiana kolejnosci/zaznaczenia/usuniecie pozycji PO zatwierdzeniu nie
+  // trafiala do druku (drukowala sie stara kolejka). Kazda taka zmiana
+  // blokuje teraz panel druku do ponownego zatwierdzenia.
+  function markQueueStale(errorBoxId) {
+    if ($("panelPrint").classList.contains("disabled")) return;
+    disablePanel("panelPrint");
+    state.confirmedQueue = null;
+    updateQueueStatus("Zmieniono kolejność lub zaznaczenie - zatwierdź kolejkę ponownie, żeby wydrukować to, co widzisz.");
+    if (errorBoxId) showError(errorBoxId, "Zmieniono kolejność lub zaznaczenie po zatwierdzeniu - kliknij przycisk zatwierdzenia ponownie przed drukiem.");
+  }
 
   async function setMode(mode) {
     // Audyt rozdz. 11, P0/P1: kolejka po stronie serwera (session.queue) i
@@ -516,7 +529,7 @@
     }
     renderBatch(buildBatchSummary());
     buildPendingGroups();
-    updateQueueStatus(state.pendingGroups.length ? `Kolejka gotowa: ${state.pendingGroups.reduce((sum, g) => sum + g.items.length, 0)} pozycji.` : "Kolejka jest pusta.");
+    markQueueStale("orderError");
   }
 
   function renderOrderList(gIdx) {
@@ -549,6 +562,7 @@
         const item = state.batchResults.filter(r => r.ok)[Number(checkbox.dataset.gidx)]?.order?.[Number(checkbox.dataset.idx)];
         if (item) item.includeInPrint = checkbox.checked;
         buildPendingGroups();
+        markQueueStale("orderError");
       });
     });
     list.querySelectorAll(".preview-btn").forEach(btn => {
@@ -592,6 +606,7 @@
         const moved = result.order.splice(dragSrc.idx, 1)[0];
         result.order.splice(targetIdx, 0, moved);
         renderOrderList(targetGIdx);
+        markQueueStale("orderError");
       });
     });
   }
@@ -641,7 +656,8 @@
         showError("orderError", data?.message || "Nie udało się utworzyć kolejki.");
         return;
       }
-      updateQueueStatus(`Kolejka gotowa: ${data.queue?.length || 0} pozycji.`);
+      updateQueueStatus(`Kolejka gotowa: ${P(data.queue?.length || 0, "pozycja", "pozycje", "pozycji")}.`);
+      state.confirmedQueue = { groups: groups.length, items: data.queue?.length || 0, unit: ["adres", "adresy", "adresów"] };
       enablePanel("panelPrint");
       setStep(5);
       window.scrollTo({ top: document.querySelector("#panelPrint").offsetTop, behavior: "smooth" });
@@ -650,7 +666,7 @@
       // dopasowaniem a tym potwierdzeniem) trzeba pokazac, nie tylko cichy
       // "Kolejka gotowa" jakby wszystko sie udalo.
       if (data.missing?.length) {
-        showError("orderError", `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie zostal" : "plikow nie zostalo"} dodanych (zniknely albo przestaly pasowac): ${data.missing.join(", ")}`);
+        showError("orderError", `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie został dodany" : "plików nie zostało dodanych"} (zniknęły albo przestały pasować): ${data.missing.join(", ")}`);
       } else {
         showSuccess("orderError", "Kolejka została utworzona. Możesz teraz kliknąć DRUKUJ.");
       }
@@ -795,6 +811,7 @@
         const moved = group.items.splice(wmDragSrc.idx, 1)[0];
         group.items.splice(targetIdx, 0, moved);
         renderWmItemList(targetGIdx);
+        markQueueStale("wmError");
       });
     });
   }
@@ -849,13 +866,14 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ groups })
       });
-      updateQueueStatus(`Kolejka gotowa: ${data.queue?.length || 0} pozycji.`);
+      updateQueueStatus(`Kolejka gotowa: ${P(data.queue?.length || 0, "pozycja", "pozycje", "pozycji")}.`);
+      state.confirmedQueue = { groups: groups.length, items: data.queue?.length || 0, unit: ["kategoria", "kategorie", "kategorii"] };
       enablePanel("panelPrint");
       setStep(3, "stepperWm");
       window.scrollTo({ top: document.querySelector("#panelPrint").offsetTop, behavior: "smooth" });
       // Audyt 2026-08-21: patrz komentarz przy poprzednim wywolaniu set-merged.
       if (data.missing?.length) {
-        showError("wmError", `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie zostal" : "plikow nie zostalo"} dodanych (zniknely albo przestaly pasowac): ${data.missing.join(", ")}`);
+        showError("wmError", `Kolejka utworzona, ALE ${data.missing.length} ${data.missing.length === 1 ? "plik nie został dodany" : "plików nie zostało dodanych"} (zniknęły albo przestały pasować): ${data.missing.join(", ")}`);
       } else {
         showSuccess("wmError", "Kolejka została utworzona. Możesz teraz kliknąć DRUKUJ.");
       }
@@ -867,16 +885,33 @@
     }
   }
 
-  $("clearBtn").addEventListener("click", () => window.location.reload());
+  $("clearBtn").addEventListener("click", () => {
+    const hasWork = (state.batchResults || []).length || (state.wmGroups || []).length;
+    if (hasWork && !confirm("Zacząć od nowa? Dopasowania i ustawiona kolejność zostaną wyczyszczone.")) return;
+    window.location.reload();
+  });
+
+  // Wiersz WM odznaczony/zaznaczony po dodaniu do kolejki - kolejka nieaktualna.
+  $("wmResults")?.addEventListener("change", (e) => {
+    if (e.target.classList && e.target.classList.contains("wm-item-checkbox")) markQueueStale("wmError");
+  });
+
+  // Po odswiezeniu strony w trakcie druku - pokaz postep dalej.
+  api("/api/status").then(s => {
+    if (s && s.printing) { $("printBtn").disabled = true; pollStatus(); }
+  }).catch(() => {});
 
   $("printBtn").addEventListener("click", async () => {
-    const groups = buildPendingGroups();
     const kopie = Number($("copiesInput").value || 1);
+    const cq = state.confirmedQueue;
     // Audyt UX 2026-08-21: to najbardziej krytyczna apka drukowania (realny
     // papier/toner, konkretna kolejnosc dokumentow per klient), a mimo to
     // byla jedynym miejscem w tym repo bez potwierdzenia przed wyslaniem do
     // druku - patrz analogiczny confirm() w prostszej apce drukarka.
-    if (!confirm(`Wysłać do druku ${groups.length} ${groups.length === 1 ? "adres" : "adresów"}, ${kopie} ${kopie === 1 ? "kopia" : "kopie/kopii"}?`)) return;
+    // Liczba z KOLEJKI ZATWIERDZONEJ na serwerze (to ona sie drukuje) - w
+    // trybie WM wczesniej liczono adresy z trybu Projekty ("0 adresów").
+    const what = cq ? `${P(cq.groups, ...cq.unit)} (${P(cq.items, "plik", "pliki", "plików")})` : "zatwierdzoną kolejkę";
+    if (!confirm(`Wysłać do druku ${what}, ${P(kopie, "kopia", "kopie", "kopii")}?`)) return;
     $("printBtn").disabled = true;
     try {
       await api("/api/print", {
@@ -888,7 +923,7 @@
           printerName: $("printerSelect").value || "",
           copyMode: "file",
           delaySeconds: 1,
-          groups,
+          groups: buildPendingGroups(),
           stampPowykonawcza: $("stampPowykonawczaCheckbox").checked
         })
       });

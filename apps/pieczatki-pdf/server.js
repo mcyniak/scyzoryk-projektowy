@@ -570,13 +570,18 @@ app.post('/api/stamp', heavyJobLimiter, upload.array('pdfs', MAX_FILES), async (
   } catch (err) {
     await removeFiles([...cleanup, jobDir, zipPath]);
     console.error(err);
-    res.status(500).json({ error: err.message || 'Nie udalo sie ostemplowac PDF.' });
+    res.status(500).json({ error: err.message || 'Nie udało się ostemplować PDF.' });
   }
 });
 
+const MULTER_MESSAGES = {
+  LIMIT_FILE_SIZE: 'Plik jest za duży - wybierz mniejszy PDF.',
+  LIMIT_FILE_COUNT: 'Za dużo plików naraz - wybierz mniej plików.',
+  LIMIT_UNEXPECTED_FILE: 'Nieoczekiwany plik w formularzu.'
+};
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(400).json({ error: err.message || 'Blad przesylania plikow.' });
+  res.status(400).json({ error: (err.code && MULTER_MESSAGES[err.code]) || err.message || 'Błąd przesyłania plików.' });
 });
 
 // require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany

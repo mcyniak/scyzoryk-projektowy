@@ -4,14 +4,16 @@ function fmtTime(ts) {
   const date = new Date(ts);
   return Number.isNaN(date.getTime()) ? 'brak' : date.toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' });
 }
+// Przeglad 2026-09-29: zamiast technicznego "proces martwy • 2 ms" na kazdej
+// karcie - tylko to, co uzytkownik moze zrozumiec i z czym cos zrobic.
 function appMeta(app) {
   const bits = [];
-  bits.push(app.processAlive ? 'proces żywy' : 'proces martwy');
-  if (app.queue) bits.push(`kolejka: ${app.queue.queued || 0}${app.queue.active ? ' + aktywne' : ''}`);
-  if (app.child?.circuitOpen) bits.push(`blokada restartów: ${app.child.circuitReason || 'wymagany restart Scyzoryka'}`);
-  if (app.child?.restarts) bits.push(`restarty: ${app.child.restarts}`);
-  if (app.child?.lastExit) bits.push(`ostatnie wyjście: ${fmtTime(app.child.lastExit.at)}`);
-  if (app.health?.ms != null) bits.push(`${app.health.ms} ms`);
+  if (app.child?.problem && !app.running) bits.push(app.child.problem);
+  else if (!app.running && app.child?.lastExit && app.child.lastExit.code) bits.push(`Narzędzie samo się wyłączyło o ${fmtTime(app.child.lastExit.at)}.`);
+  if (app.running && app.queue && (app.queue.queued || app.queue.active)) {
+    const waiting = Number(app.queue.queued || 0);
+    bits.push(app.queue.active ? `pracuje${waiting ? `, w kolejce: ${waiting}` : ''}` : `w kolejce: ${waiting}`);
+  }
   return bits.join(' • ');
 }
 function setText(selector, value) {
@@ -47,7 +49,7 @@ async function refreshStatus() {
         badge.textContent = app.running
           ? 'gotowe'
           : app.child?.circuitOpen
-            ? 'awaria — uruchom ponownie Scyzoryka'
+            ? 'nie uruchamia się — szczegóły poniżej'
             : app.processAlive
               ? 'uruchamianie…'
               : dormant
@@ -80,25 +82,48 @@ async function openTool(event) {
   const slug = card?.dataset.app;
   const url = link.href;
   if (!slug || !url) return;
+  // Ctrl/Shift/srodkowy przycisk = otworz w nowej karcie (jak zwykly link).
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.button === 1) {
+    fetch(`/api/apps/${encodeURIComponent(slug)}/start`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } }).catch(() => {});
+    return;
+  }
   event.preventDefault();
+  if (link.dataset.starting === '1') return;
+  link.dataset.starting = '1';
 
   const badge = card.querySelector('.badge');
-  const originalBadgeText = badge?.textContent;
+  const meta = card.querySelector('.card-meta');
+  const startedAt = Date.now();
+  const tick = () => { if (badge) badge.textContent = `uruchamiam… (${Math.round((Date.now() - startedAt) / 1000)} s)`; };
+  tick();
+  const ticker = setInterval(tick, 1000);
   try {
-    if (badge) badge.textContent = 'uruchamiam…';
-    await fetch(`/api/apps/${encodeURIComponent(slug)}/start`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+    const startRes = await fetch(`/api/apps/${encodeURIComponent(slug)}/start`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } });
+    if (!startRes.ok) {
+      const data = await startRes.json().catch(() => ({}));
+      throw new Error(data.message || 'Nie udało się uruchomić narzędzia.');
+    }
     const deadline = Date.now() + 30000;
+    let lastApp = null;
     while (Date.now() < deadline) {
       try {
         const res = await fetch('/api/apps', { cache: 'no-store' });
         const data = await res.json();
-        if (data.apps?.find(a => a.slug === slug)?.running) { window.location.href = url; return; }
+        lastApp = data.apps?.find(a => a.slug === slug) || null;
+        if (lastApp?.running) { window.location.href = url; return; }
+        // Proces padl i ma znany powod (np. zajety port) - nie czekamy 30 s.
+        if (lastApp?.child?.problem && !lastApp.processAlive) break;
       } catch (_) { /* przejsciowy blad sieci - kolejna proba za chwile */ }
       await new Promise(resolve => setTimeout(resolve, 700));
     }
-    if (badge) badge.textContent = 'awaria — spróbuj ponownie';
+    if (badge) badge.textContent = 'nie udało się uruchomić';
+    if (meta) meta.textContent = lastApp?.child?.problem || 'Narzędzie nie odpowiedziało w ciągu 30 s. Spróbuj ponownie; jeśli to się powtarza, uruchom ponownie Scyzoryka.';
   } catch (error) {
-    if (badge) badge.textContent = originalBadgeText || 'błąd uruchamiania';
+    if (badge) badge.textContent = 'nie udało się uruchomić';
+    if (meta) meta.textContent = error.message === 'Failed to fetch' ? 'Brak połączenia z panelem Scyzoryka.' : error.message;
+  } finally {
+    clearInterval(ticker);
+    delete link.dataset.starting;
   }
 }
 for (const card of cards.values()) {

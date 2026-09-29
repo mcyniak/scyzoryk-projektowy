@@ -620,7 +620,7 @@ app.get('/api/jobs/:id/files/:file', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  res.status(400).json({ ok: false, message: err.message || 'Błąd przetwarzania.' });
+  res.status(400).json({ ok: false, message: require('../../lib/uploadErrors').polishErrorMessage(err, 'Błąd przetwarzania.') });
 });
 
 // require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany

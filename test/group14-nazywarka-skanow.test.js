@@ -91,7 +91,8 @@ test('sanitizeBaseName: odrzuca windowsowe znaki niedozwolone, nazwy zarezerwowa
   for (const bad of ['a<b', 'a>b', 'a:b', 'a"b', 'a|b', 'a?b', 'a*b']) {
     assert.equal(sanitizeBaseName(bad).ok, false, `powinno odrzucic: ${bad}`);
   }
-  assert.equal(sanitizeBaseName('a/b').ok, false);
+  // 2026-09-29: "/" (numer lokalu "Polna 5/7") jest zamieniany na "-" zamiast bledu.
+  assert.deepEqual(sanitizeBaseName('Polna 5/7'), { ok: true, value: 'Polna 5-7' });
   assert.equal(sanitizeBaseName('a\\b').ok, false);
   assert.equal(sanitizeBaseName('CON').ok, false);
   assert.equal(sanitizeBaseName('con').ok, false);
@@ -178,7 +179,7 @@ test('nazywarka-skanow: konflikt nazwy jest twardym bledem - NIGDY cichym nadpis
   // Kolejnosc alfabetyczna: a.pdf, b.pdf, zajete.pdf -> currentIndex 0 = a.pdf
   const rename = await call(port, 'POST', '/api/rename', { body: { newName: 'zajete' }, cookie });
   assert.equal(rename.status, 409);
-  assert.match(rename.json.message, /juz istnieje/);
+  assert.match(rename.json.message, /już istnieje/);
   // Zaden plik nie mogl zostac cicho nadpisany ani dostac numeru (2)/(3).
   assert.ok(fs.existsSync(path.join(dir, 'a.pdf')), 'oryginalny plik zostaje nietkniety po odrzuceniu');
   assert.equal(fs.readFileSync(path.join(dir, 'zajete.pdf'), 'utf8'), '%PDF-zajete', 'istniejacy plik nie zostal nadpisany');

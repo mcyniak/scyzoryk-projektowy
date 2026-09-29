@@ -1508,7 +1508,7 @@ app.post('/api/run', uploadWieloplikowy.fields([
 });
 
 app.use((err, req, res, next) => {
-  res.status(400).json({ ok: false, message: err.message || 'Blad przetwarzania.' });
+  res.status(400).json({ ok: false, message: require('../../lib/uploadErrors').polishErrorMessage(err, 'Błąd przetwarzania.') });
 });
 
 // require.main === module: uruchomienie serwera TYLKO gdy plik jest

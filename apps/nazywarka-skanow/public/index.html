@@ -71,6 +71,7 @@
         <span class="state-icon"><svg class="icon icon-lg"><use href="/shared/icons.svg#i-file"/></svg></span>
         <span>W tym folderze nie znaleziono żadnych plików PDF.</span>
       </div>
+      <div class="u-mt-3"><button class="btn btn-secondary" type="button" data-change-folder>Zmień folder</button></div>
     </section>
 
     <section class="panel" id="workPanel" style="display:none;">
@@ -81,7 +82,8 @@
         </div>
         <div class="nav-actions">
           <button id="prevBtn" class="btn btn-secondary" type="button">← Poprzedni</button>
-          <button id="nextBtn" class="btn btn-secondary" type="button">Następny →</button>
+          <button id="nextBtn" class="btn btn-secondary" type="button" title="Następny plik (PageDown)">Następny →</button>
+          <button class="btn btn-ghost" type="button" data-change-folder>Zmień folder</button>
         </div>
       </div>
 
@@ -123,6 +125,7 @@
         <span class="state-icon"><svg class="icon icon-lg"><use href="/shared/icons.svg#i-check-circle"/></svg></span>
         <span>Wszystkie pliki w tym folderze mają nadaną nazwę. Możesz wrócić do dowolnego pliku z listy, żeby ją poprawić.</span>
       </div>
+      <div class="u-mt-3"><button class="btn btn-primary" type="button" data-change-folder>Otwórz kolejny folder</button></div>
     </section>
   </main>
 

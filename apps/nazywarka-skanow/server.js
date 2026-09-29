@@ -99,13 +99,16 @@ function sanitizeBaseName(raw) {
   // nietkniete). Dlatego koncowa spacja nigdy nie dotrze do sprawdzenia
   // ponizej - jedynym prawdziwym twardym bledem zwiazanym z koncem nazwy
   // jest kropka (Windows naprawde nie pozwala na plik konczacy sie kropka).
-  const trimmed = String(raw || "").trim();
-  if (!trimmed) return { ok: false, message: "Podaj nazwe pliku." };
+  // Przeglad 2026-09-29: "/" w numerze lokalu ("Polna 5/7") to najczestszy
+  // powod odrzucenia nazwy - zamieniamy go na "-" zamiast bledu (Windows i tak
+  // nie pozwala na "/" w nazwie pliku). Wielokrotne spacje - jedna spacja.
+  const trimmed = String(raw || "").replace(/\s*\/\s*/g, "-").replace(/\s{2,}/g, " ").trim();
+  if (!trimmed) return { ok: false, message: "Podaj nazwę pliku." };
   if (trimmed === "." || trimmed === "..") return { ok: false, message: "Niepoprawna nazwa pliku." };
-  if (trimmed.includes("/") || trimmed.includes("\\")) return { ok: false, message: "Nazwa nie moze zawierac separatorow sciezki (/ \\)." };
+  if (trimmed.includes("\\")) return { ok: false, message: "Nazwa nie może zawierać znaku \\ (ukośnik wsteczny)." };
   if (ILLEGAL_CHARS_RE.test(trimmed)) return { ok: false, message: 'Nazwa zawiera niedozwolone znaki (< > : " | ? *).' };
-  if (RESERVED_NAMES_RE.test(trimmed)) return { ok: false, message: "Ta nazwa jest zarezerwowana przez system Windows - wybierz inna." };
-  if (trimmed.endsWith(".")) return { ok: false, message: "Nazwa nie moze konczyc sie kropka (Windows tego nie obsluguje)." };
+  if (RESERVED_NAMES_RE.test(trimmed)) return { ok: false, message: "Ta nazwa jest zarezerwowana przez system Windows - wybierz inną." };
+  if (trimmed.endsWith(".")) return { ok: false, message: "Nazwa nie może kończyć się kropką (Windows tego nie obsługuje)." };
   return { ok: true, value: trimmed };
 }
 
@@ -115,7 +118,7 @@ function sessionSummary(session) {
     total: session.files.length,
     currentIndex: session.currentIndex,
     previewToken: session.previewToken,
-    files: session.files.map((f, i) => ({ index: i, originalName: f.originalName, currentName: f.currentName, renamed: f.renamed }))
+    files: session.files.map((f, i) => ({ index: i, originalName: f.originalName, currentName: f.currentName, renamed: f.renamed, processed: Boolean(f.processed) }))
   };
 }
 
@@ -173,12 +176,12 @@ app.post("/api/open-folder", (req, res) => {
 });
 
 app.get("/api/state", (req, res) => {
-  if (!req.session.folderPath) return res.status(404).json({ ok: false, message: "Folder nie zostal jeszcze otwarty." });
+  if (!req.session.folderPath) return res.status(404).json({ ok: false, message: "Folder nie został jeszcze otwarty." });
   res.json({ ok: true, ...sessionSummary(req.session) });
 });
 
 app.post("/api/goto", (req, res) => {
-  if (!req.session.folderPath) return res.status(400).json({ ok: false, message: "Folder nie zostal otwarty." });
+  if (!req.session.folderPath) return res.status(400).json({ ok: false, message: "Folder nie został otwarty." });
   const idx = Number(req.body?.index);
   if (!Number.isInteger(idx) || idx < 0 || idx >= req.session.files.length) {
     return res.status(400).json({ ok: false, message: "Niepoprawny numer pliku." });
@@ -188,19 +191,19 @@ app.post("/api/goto", (req, res) => {
 });
 
 app.post("/api/next", (req, res) => {
-  if (!req.session.folderPath) return res.status(400).json({ ok: false, message: "Folder nie zostal otwarty." });
+  if (!req.session.folderPath) return res.status(400).json({ ok: false, message: "Folder nie został otwarty." });
   req.session.currentIndex = Math.min(req.session.currentIndex + 1, Math.max(0, req.session.files.length - 1));
   res.json({ ok: true, ...sessionSummary(req.session) });
 });
 
 app.post("/api/prev", (req, res) => {
-  if (!req.session.folderPath) return res.status(400).json({ ok: false, message: "Folder nie zostal otwarty." });
+  if (!req.session.folderPath) return res.status(400).json({ ok: false, message: "Folder nie został otwarty." });
   req.session.currentIndex = Math.max(req.session.currentIndex - 1, 0);
   res.json({ ok: true, ...sessionSummary(req.session) });
 });
 
 app.get("/api/preview/:index", (req, res) => {
-  if (!req.session.folderPath) return res.status(404).send("Folder nie zostal otwarty.");
+  if (!req.session.folderPath) return res.status(404).send("Folder nie został otwarty.");
   const idx = Number(req.params.index);
   const entry = req.session.files[idx];
   if (!entry) return res.status(404).send("Nie znaleziono pliku.");
@@ -236,9 +239,9 @@ app.get("/api/preview/:index", (req, res) => {
 });
 
 app.post("/api/rename", (req, res) => {
-  if (!req.session.folderPath) return res.status(400).json({ ok: false, message: "Folder nie zostal otwarty." });
+  if (!req.session.folderPath) return res.status(400).json({ ok: false, message: "Folder nie został otwarty." });
   const entry = req.session.files[req.session.currentIndex];
-  if (!entry) return res.status(400).json({ ok: false, message: "Brak biezacego pliku do zmiany nazwy." });
+  if (!entry) return res.status(400).json({ ok: false, message: "Brak bieżącego pliku do zmiany nazwy." });
 
   const ext = path.extname(entry.currentName);
   const rawBase = stripRedundantExtension(String(req.body?.newName || ""), ext);
@@ -250,10 +253,10 @@ app.post("/api/rename", (req, res) => {
   const newPath = path.join(req.session.folderPath, newName);
 
   if (!isPathInsideFolder(oldPath, req.session.folderPath) || !isPathInsideFolder(newPath, req.session.folderPath)) {
-    return res.status(400).json({ ok: false, message: "Niepoprawna sciezka pliku." });
+    return res.status(400).json({ ok: false, message: "Niepoprawna ścieżka pliku." });
   }
   if (!fs.existsSync(oldPath)) {
-    return res.status(404).json({ ok: false, message: "Plik zrodlowy juz nie istnieje na dysku - otworz folder ponownie." });
+    return res.status(404).json({ ok: false, message: "Plik źródłowy już nie istnieje na dysku - otwórz folder ponownie." });
   }
 
   if (newName !== entry.currentName) {
@@ -262,7 +265,7 @@ app.post("/api/rename", (req, res) => {
     // -> "Skan.pdf") falszywie wygladalaby jak kolizja z samym soba, bo
     // Windows jest case-insensitive.
     if (newName.toLowerCase() !== entry.currentName.toLowerCase() && fs.existsSync(newPath)) {
-      return res.status(409).json({ ok: false, message: `Plik "${newName}" juz istnieje w tym folderze - sprawdz nazwe jeszcze raz.` });
+      return res.status(409).json({ ok: false, message: `Plik "${newName}" już istnieje w tym folderze - sprawdź nazwę jeszcze raz.` });
     }
     try {
       fs.renameSync(oldPath, newPath);
@@ -274,7 +277,11 @@ app.post("/api/rename", (req, res) => {
         success: false,
         errorCode: 'rename-failed'
       });
-      return res.status(500).json({ ok: false, message: `Nie udalo sie zmienic nazwy: ${err.message || err}` });
+      const code = err && err.code;
+      const hint = (code === "EBUSY" || code === "EPERM" || code === "EACCES")
+        ? "Plik jest otwarty w innym programie (np. w podglądzie PDF) albo brak uprawnień do folderu - zamknij go i spróbuj ponownie."
+        : (err.message || String(err));
+      return res.status(500).json({ ok: false, message: `Nie udało się zmienić nazwy: ${hint}` });
     }
     entry.currentName = newName;
     entry.renamed = true;

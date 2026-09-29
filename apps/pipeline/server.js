@@ -245,6 +245,23 @@ app.post('/api/pipeline/start', withUploadFields([
       }
     }
 
+    // Zaznaczony krok bez wymaganego folderu byl po cichu pomijany (patrz
+    // src/runs.js) - odrzucamy start z jasnym komunikatem (przeglad 2026-09-29).
+    const WYMAGANE_SCIEZKI = [
+      ['tworzenieFolderow', 'Tworzenie folderów', { investmentFolder }],
+      ['solary', 'Karty katalogowe (Solary)', { rootPathSolary }],
+      ['pompy', 'Karty katalogowe (Pompy)', { rootPathPompy }],
+      ['audytySolary', 'Audyty (Solary)', { audytyPath, rootPathSolary }],
+      ['audytyPompy', 'Audyty (Pompy)', { audytyPath, rootPathPompy }],
+      ['dokSeryjneSolary', 'Dokumenty seryjne (Solary)', { rootPathSolary }],
+      ['dokSeryjnePompy', 'Dokumenty seryjne (Pompy)', { rootPathPompy }]
+    ];
+    for (const [krok, nazwa, pola] of WYMAGANE_SCIEZKI) {
+      if (!kroki[krok]) continue;
+      const brak = Object.entries(pola).filter(([, v]) => !v).map(([k]) => `„${ETYKIETY_POL_SCIEZEK[k] || k}”`);
+      if (brak.length) throw new Error(`Krok „${nazwa}” wymaga pola: ${brak.join(', ')}.`);
+    }
+
     const selection = parseJsonField(req.body.selection, null);
     // Audyt 2026-08-21 (real incydent - przypadkowy start na 70 adresow):
     // brakujaca/zla selekcja NIGDY nie moze po cichu oznaczac "przetworz

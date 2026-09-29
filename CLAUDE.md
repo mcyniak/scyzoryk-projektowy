@@ -366,6 +366,23 @@ new app, copy this rather than inventing a new one:
   with UTF-8 output forced, since Windows PowerShell 5.1's pipe encoding mangles Polish characters),
   `scheduleCleanup`/`cleanupOldFiles` (periodic sweep of upload/output/tmp dirs), `createSerialQueue`,
   JSON-line log helpers. Treat this file as the one place to fix cross-cutting infra behavior.
+- `shared-styles/theme.js` (loaded blocking in `<head>` of every page, incl. pomoc pages) — besides the dark-mode
+  toggle it now (UX pass 2026-09-29, `test/group31-ux-przeglad.test.js`) stores the theme in a **cookie**
+  (`scyzorykTheme`, port-independent, so one choice applies to all tools; localStorage is only a fallback),
+  exposes `window.ScyzorykUI = { plural, escapeHtml, friendlyError }` (Polish plural forms; raw
+  `Failed to fetch`/`EBUSY`/`EPERM`/`ENOENT`/multer texts → Polish with a next step) and installs a global
+  guard so a file dropped *outside* a drop zone no longer navigates the browser away from the tool
+  (native `<input type=file>` untouched). Server-side counterpart: `lib/uploadErrors.js#polishErrorMessage`.
+  Same pass, notable behaviour changes: Varmero no longer remembers gmina/kod/strefa/nazwa inwestycji and
+  refuses a second concurrent batch (409 + UI re-attaches to the running job after F5, also in Ecodan);
+  both formularze previews are outside `heavyJobLimiter`; Ecodan clears the address list when the Excel/
+  location changes; drukarka keeps unsent files in the queue after a print/save error and remembers
+  printer settings; drukarka-projekty disables printing after any change made after "Zatwierdź"
+  (`markQueueStale`); pieczątki autosave the current stamps (`pieczatki.biezace`); OCR shows status/errors
+  in the active step and warns before unload; nazywarka turns "/" into "-" and has "Zmień folder";
+  pipeline rejects ticked steps without their folder (client + server) and shows `bladOgolny`;
+  tworzenie-folderow reports per-folder failures and lets simple mode finish a partially created set;
+  the panel explains why a tool failed to start (`describeChildProblem`, e.g. EADDRINUSE).
 - `shared-styles/base.css` — intended single source of truth for panel CSS, but per its own README is
   **not yet wired up** to any app; each app currently still has its own inline/`styles.css`. Don't assume
   editing `shared-styles/base.css` affects any running app yet — check `shared-styles/README.md` before

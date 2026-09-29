@@ -1,3 +1,4 @@
+const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, c) : `${n} ${c}`;
 let lastPlan = null;
 
 // Przegladarka folderow w stronie zamiast recznego wpisywania sciezki -
@@ -120,9 +121,13 @@ async function loadSimplePreview() {
     const json = await res.json().catch(() => null);
     if (!json || !json.ok) { showTopNotice(json?.error || 'Nie udało się wczytać arkuszy.'); return; }
     simpleSheets = json;
+    simpleSheetsFileKey = fileIdentity(file);
     const select = document.querySelector('#simpleSheet');
+    // Zachowaj wybrany arkusz - wczesniej wybor folderu (Przegladaj/blur)
+    // przeladowywal liste i po cichu wracal do domyslnego arkusza.
+    const keep = json.sheets.some(sh => sh.sheetName === select.value) ? select.value : json.defaultSheet;
     select.innerHTML = json.sheets.map(s =>
-      `<option value="${escapeHtml(s.sheetName)}"${s.sheetName === json.defaultSheet ? ' selected' : ''}>${escapeHtml(s.sheetName)}${s.headerFound ? ` (${s.addressCount} adresów)` : ' - brak kolumny Adres'}</option>`
+      `<option value="${escapeHtml(s.sheetName)}"${s.sheetName === keep ? ' selected' : ''}>${escapeHtml(s.sheetName)}${s.headerFound ? ` (${P(s.addressCount, 'adres', 'adresy', 'adresów')})` : ' - brak kolumny Adres'}</option>`
     ).join('');
     document.querySelector('#simpleSheetBox').classList.remove('hidden');
     const summary = document.querySelector('#sheetSummary');
@@ -132,6 +137,11 @@ async function loadSimplePreview() {
   } catch (error) {
     showTopNotice(String(error.message || error));
   }
+}
+
+let simpleSheetsFileKey = null;
+function fileIdentity(file) {
+  return file ? `${file.name}|${file.size}|${file.lastModified}` : null;
 }
 
 function currentFile() {
@@ -180,8 +190,20 @@ async function maybeLoadPreview() {
   const investmentFolder = document.querySelector('#investmentFolder').value.trim();
   const file = currentFile();
   if (!file) return;
-  if (currentMode() === 'simple') return loadSimplePreview();
-  if (!investmentFolder) return;
+  if (currentMode() === 'simple') {
+    // Zmiana samego folderu nie wymaga ponownego czytania arkuszy.
+    if (simpleSheets && simpleSheetsFileKey === fileIdentity(file)) {
+      document.querySelector('#createBtn').disabled = !document.querySelector('#simpleSheet').value;
+      return;
+    }
+    return loadSimplePreview();
+  }
+  if (!investmentFolder) {
+    const summary = document.querySelector('#sheetSummary');
+    summary.classList.remove('hidden');
+    summary.innerHTML = '<div class="sheet-pill">Wskaż folder inwestycji (pole wyżej albo „Przeglądaj…”), żeby zobaczyć plan folderów.</div>';
+    return;
+  }
 
   if (isGoogleSheetShortcut(file)) {
     showTopNotice('Wybrano plik .gsheet, czyli skrót do Google Sheets, a nie prawdziwy Excel. Otwórz ten arkusz w Google Sheets i wybierz: Plik → Pobierz → Microsoft Excel (.xlsx), a potem wskaż pobrany plik .xlsx.');
@@ -253,7 +275,7 @@ document.querySelector('#planForm').addEventListener('submit', async (event) => 
   const investmentFolder = document.querySelector('#investmentFolder').value.trim();
   if (!investmentFolder) return;
 
-  if (!confirm(`Utworzyć ${lastPlan.toCreate} folderów w:\n${investmentFolder}\n\nJuż istniejące foldery zostaną pominięte, nic nie zostanie nadpisane.`)) return;
+  if (!confirm(`Utworzyć ${P(lastPlan.toCreate, 'folder', 'foldery', 'folderów')} w:\n${investmentFolder}\n\nJuż istniejące foldery zostaną pominięte, nic nie zostanie nadpisane.`)) return;
 
   const btn = document.querySelector('#createBtn');
   btn.disabled = true;
@@ -274,12 +296,14 @@ document.querySelector('#planForm').addEventListener('submit', async (event) => 
     }
     document.querySelector('#resultBox').classList.remove('hidden');
     document.querySelector('#resultInfo').innerHTML =
-      `Utworzono <strong>${json.created.length}</strong> nowych folderów w <code>${escapeHtml(json.investmentFolder)}</code>` +
-      (json.alreadyExisted.length ? ` (${json.alreadyExisted.length} już istniało, pominięto).` : '.');
+      `Utworzono <strong>${P(json.created.length, 'nowy folder', 'nowe foldery', 'nowych folderów')}</strong> w <code>${escapeHtml(json.investmentFolder)}</code>` +
+      (json.alreadyExisted.length ? ` (już istniało: ${json.alreadyExisted.length}, pominięto).` : '.') +
+      problemyHtml(json);
     document.querySelector('#resultBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    btn.textContent = 'Gotowe ✓';
+    if ((json.failed || []).length) { btn.disabled = false; btn.textContent = 'Utwórz brakujące foldery'; }
+    else btn.textContent = 'Gotowe ✓';
   } catch (error) {
-    showTopNotice(String(error.message || error));
+    showTopNotice(window.ScyzorykUI ? window.ScyzorykUI.friendlyError(error) : String(error.message || error));
     btn.disabled = false;
     btn.textContent = 'Utwórz foldery';
   }
@@ -316,15 +340,27 @@ async function submitSimple(file) {
     if (json.skippedEmpty) extras.push(`${json.skippedEmpty} pustych wierszy pominięto`);
     document.querySelector('#resultBox').classList.remove('hidden');
     document.querySelector('#resultInfo').innerHTML =
-      `Utworzono <strong>${json.created.length}</strong> folderów z adresów (arkusz "${escapeHtml(json.sheetName)}") w <code>${escapeHtml(json.targetFolder)}</code>` +
-      (extras.length ? ` <br><span class="small">${escapeHtml(extras.join(' · '))}.</span>` : '.');
+      `Utworzono <strong>${P(json.created.length, 'folder', 'foldery', 'folderów')}</strong> z adresów (arkusz "${escapeHtml(json.sheetName)}") w <code>${escapeHtml(json.targetFolder)}</code>` +
+      (extras.length ? ` <br><span class="small">${escapeHtml(extras.join(' · '))}.</span>` : '.') +
+      problemyHtml(json);
     document.querySelector('#resultBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    btn.textContent = 'Gotowe ✓';
+    if ((json.failed || []).length) { btn.disabled = false; btn.textContent = 'Utwórz brakujące foldery'; }
+    else btn.textContent = 'Gotowe ✓';
   } catch (error) {
-    showTopNotice(String(error.message || error));
+    showTopNotice(window.ScyzorykUI ? window.ScyzorykUI.friendlyError(error) : String(error.message || error));
     btn.disabled = false;
     btn.textContent = 'Utwórz foldery';
   }
+}
+
+// Foldery, ktorych nie udalo sie utworzyc albo ktore zostaly odrzucone -
+// wczesniej "rejected" nie byl nigdzie pokazywany.
+function problemyHtml(json) {
+  const lines = [];
+  for (const f of json.failed || []) lines.push(`<li><code>${escapeHtml(f.path)}</code> - ${escapeHtml(f.reason)}</li>`);
+  for (const r of json.rejected || []) lines.push(`<li><code>${escapeHtml(r)}</code> - niedozwolona nazwa (wychodzi poza folder docelowy), pominięto</li>`);
+  if (!lines.length) return '';
+  return `<div class="notice u-mt-3"><strong>Nie utworzono ${P(lines.length, 'folderu', 'folderów', 'folderów')}:</strong><ul>${lines.join('')}</ul>Popraw przyczynę i kliknij „Utwórz foldery” ponownie - istniejące foldery zostaną pominięte.</div>`;
 }
 
 function escapeHtml(value) {

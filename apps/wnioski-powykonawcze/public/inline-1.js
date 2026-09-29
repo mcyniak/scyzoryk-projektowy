@@ -1,9 +1,14 @@
 function friendlyErrorMessage(message){
-  const text = String(message || '');
+  const text = String((message && message.message) || message || '');
   if (/archiver|zip/i.test(text)) return 'Nie udało się utworzyć paczki ZIP z wynikami.';
-  if (/PowerShell|WINWORD|Word|silnik dokument/i.test(text)) return 'Nie udało się przygotować dokumentu.';
+  if (window.ScyzorykUI) {
+    const friendly = window.ScyzorykUI.friendlyError(text);
+    if (friendly !== text) return friendly;
+  }
   return text || 'Wystąpił błąd podczas generowania.';
 }
+const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, c) : `${n} ${c}`;
+const JOB_STATUS_PL = { queued: 'w kolejce', running: 'przetwarzanie', cancelling: 'przerywanie', finished: 'gotowe', 'finished-with-errors': 'gotowe z błędami', cancelled: 'przerwane', 'fatal-error': 'błąd', interrupted: 'przerwane' };
 
 
 // Wspolny powrot do panelu glownego w tej samej karcie.
@@ -94,7 +99,7 @@ const $ = s => document.querySelector(s);
 
     function updateSubmitText() {
       const count = selectedFiles.length;
-      submitBtn.textContent = count === 1 ? 'Utwórz 1 PDF' : count ? `Utwórz ${count} PDF-y` : 'Utwórz PDF-y';
+      submitBtn.textContent = count ? `Utwórz ${P(count, 'PDF', 'PDF-y', 'PDF-ów')}` : 'Utwórz PDF-y';
     }
 
     function fileKey(f){ return `${f.name}|${f.size}|${f.lastModified}`; }
@@ -115,7 +120,7 @@ const $ = s => document.querySelector(s);
         existing.add(key);
         added += 1;
       }
-      if (skipped) showStatus(`Dodano ${added} plików, pominięto duplikaty: ${skipped}.`, '');
+      if (skipped) showStatus(`Dodano ${P(added, 'plik', 'pliki', 'plików')}, pominięto duplikaty: ${skipped}.`, '');
       else statusBox.hidden = true;
       resultBox.innerHTML = '';
       renderFiles();
@@ -190,7 +195,7 @@ const $ = s => document.querySelector(s);
       fd.append('saveDocx', saveDocxEl && saveDocxEl.checked ? 'true' : 'false');
       submitBtn.disabled = true;
       resultBox.innerHTML = '';
-      showStatus(`Przygotowuję ${files.length} plików w Wordzie. Word działa pojedynczo, więc większa paczka może potrwać.`, '');
+      showStatus(`Przygotowuję ${P(files.length, 'plik', 'pliki', 'plików')}. Pliki są przerabiane po kolei, więc większa paczka może potrwać.`, '');
       try {
         const res = await fetch('/api/jobs', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: fd });
         const data = await res.json().catch(() => ({}));
@@ -203,15 +208,29 @@ const $ = s => document.querySelector(s);
       } catch (err) {
         selectedFiles.forEach(f => f._state = 'błąd');
         renderFiles();
-        showStatus(err.message || 'Błąd generowania.', 'err');
+        showStatus(friendlyErrorMessage(err) || 'Błąd generowania.', 'err');
       } finally {
         if (!activeJobId) submitBtn.disabled = false;
       }
     });
 
+    let manualJobStartedAt = 0;
+    let manualPollFailures = 0;
     async function pollManualJob() {
       if (!activeJobId) return;
-      const res = await fetch(`/api/jobs/${activeJobId}`);
+      if (!manualJobStartedAt) manualJobStartedAt = Date.now();
+      let res;
+      try {
+        res = await fetch(`/api/jobs/${activeJobId}`);
+        manualPollFailures = 0;
+      } catch (err) {
+        manualPollFailures += 1;
+        if (manualPollFailures >= 5) {
+          stopManualPolling();
+          showStatus('Brak połączenia z narzędziem - generowanie mogło zostać przerwane. Uruchom Scyzoryka i spróbuj ponownie.', 'err');
+        }
+        return;
+      }
       if (res.status === 404) {
         stopManualPolling();
         showStatus('Zadanie nie istnieje (prawdopodobnie restart panelu). Uruchom je ponownie.', 'err');
@@ -224,7 +243,9 @@ const $ = s => document.querySelector(s);
         return;
       }
       const job = data.job;
-      showStatus(`Status: ${job.status}. Gotowe: ${job.done || 0} / ${job.total || 0}.`, '');
+      const elapsed = Math.round((Date.now() - manualJobStartedAt) / 1000);
+      const elapsedText = elapsed >= 60 ? `${Math.floor(elapsed / 60)} min ${elapsed % 60} s` : `${elapsed} s`;
+      showStatus(`Stan: ${JOB_STATUS_PL[job.status] || job.status} · gotowe ${job.done || 0} z ${job.total || 0} · trwa ${elapsedText}.`, '');
       if (job.status === 'interrupted') {
         stopManualPolling();
         showStatus('Zadanie zostało przerwane przez restart panelu. Uruchom je ponownie.', 'err');
@@ -232,14 +253,22 @@ const $ = s => document.querySelector(s);
       }
       if (!['finished', 'finished-with-errors', 'cancelled', 'fatal-error'].includes(job.status)) return;
       stopManualPolling();
+      manualJobStartedAt = 0;
       if (job.status === 'cancelled') return showStatus('Generowanie zostało przerwane.', '');
-      if (job.status === 'fatal-error') return showStatus(job.error || 'Generowanie nie powiodło się.', 'err');
+      if (job.status === 'fatal-error') return showStatus(friendlyErrorMessage(job.error) || 'Generowanie nie powiodło się.', 'err');
 
       const failedList = job.failed || [];
       const failedText = failedList.map(x => String(x.input || x.error || '')).join(' ');
       selectedFiles.forEach(f => { f._state = failedText.includes(f.name) ? 'błąd' : 'gotowe'; });
       renderFiles();
-      showStatus(`Gotowe. Utworzono PDF-y: ${(job.files || []).length}.`, job.status === 'finished-with-errors' ? '' : 'ok');
+      showStatus(`Gotowe. Utworzono ${P((job.files || []).length, 'plik', 'pliki', 'plików')}.${failedList.length ? ` Nieudane: ${failedList.length} - popraw je i kliknij „Utwórz” ponownie (gotowe pliki zostały usunięte z listy).` : ''}`, job.status === 'finished-with-errors' ? '' : 'ok');
+      // Na liscie zostaja tylko pliki z bledem - ponowne "Utworz" nie przerabia
+      // juz gotowych (wczesniej trzeba bylo usuwac je recznie).
+      if (failedList.length) {
+        selectedFiles = selectedFiles.filter(f => f._state === 'błąd');
+        renderFiles();
+        updateSubmitText();
+      }
       const failed = failedList.length ? `<p class="status err">Niektóre pliki miały błąd: ${escapeHtml(failedList.map(x => x.error).join(' | '))}</p>` : '';
       // Przy zipUrl DOCX-y sa juz w srodku ZIP-a (leza w tym samym pdfDir co
       // PDF-y, patrz server.js) - osobny link "Pobierz DOCX" ma sens tylko przy
@@ -458,7 +487,7 @@ const $ = s => document.querySelector(s);
           showWmScanStatus(`Nie znaleziono żadnego podfolderu z plikiem "WM ..." w: ${folderPath}`, 'err');
           return;
         }
-        wmResultsHint.textContent = `Znaleziono ${data.categoriesFound} kategorii WM, do przerobienia: ${toConvert.length}.`;
+        wmResultsHint.textContent = `Znaleziono ${P(data.categoriesFound, 'kategorię', 'kategorie', 'kategorii')} WM, do przerobienia: ${toConvert.length}.`;
         wmToConvertList.innerHTML = toConvert.length
           ? toConvert.map(i => renderWmRow(i, { withCheckbox: true })).join('')
           : '<div class="empty">Brak nowych kategorii do przerobienia - wszystkie mają już wersję powykonawczą albo brakuje pliku źródłowego.</div>';
@@ -470,9 +499,9 @@ const $ = s => document.querySelector(s);
         wmAmbiguousList.innerHTML = ambiguous.map(i => renderWmRow(i, { withCheckbox: false })).join('');
         wmResultsCard.hidden = false;
         wmConvertBtn.disabled = !toConvert.length;
-        showWmScanStatus(`Gotowe. Znaleziono ${data.categoriesFound} kategorii.`, 'ok');
+        showWmScanStatus(`Gotowe. Znaleziono ${P(data.categoriesFound, 'kategorię', 'kategorie', 'kategorii')}.`, 'ok');
       } catch (err) {
-        showWmScanStatus(err.message || 'Błąd skanowania folderu.', 'err');
+        showWmScanStatus(friendlyErrorMessage(err) || 'Błąd skanowania folderu.', 'err');
       } finally {
         wmScanBtn.disabled = false;
       }
@@ -490,11 +519,11 @@ const $ = s => document.querySelector(s);
       // folderach klienta (czesto na dysku sieciowym), bez zadnego kroku
       // pobierania/przegladu - jedyne takie miejsce w tym repo bez
       // potwierdzenia, w odroznieniu np. od tworzenie-folderow.
-      if (!confirm(`Przerobić ${items.length} ${items.length === 1 ? 'kategorię' : 'kategorii'} i zapisać PDF-y bezpośrednio w folderach klientów? Tej operacji nie da się cofnąć.`)) return;
+      if (!confirm(`Przerobić ${P(items.length, 'kategorię', 'kategorie', 'kategorii')} i zapisać PDF-y bezpośrednio w folderach klientów? Tej operacji nie da się cofnąć.`)) return;
 
       wmConvertBtn.disabled = true;
       wmConvertResult.innerHTML = '';
-      showWmConvertStatus(`Przerabiam ${items.length} ${items.length === 1 ? 'kategorię' : 'kategorii'} w Wordzie i zapisuję w folderach...`, '');
+      showWmConvertStatus(`Przerabiam ${P(items.length, 'kategorię', 'kategorie', 'kategorii')} i zapisuję w folderach... To może potrwać kilka minut - nie zamykaj tej karty.`, '');
       try {
         const res = await fetch('/api/wm-folder/convert', {
           method: 'POST',
@@ -519,7 +548,7 @@ const $ = s => document.querySelector(s);
         // renderChangesSummary), wiec uzywamy samego .html, zawsze rozwinietego.
         wmConvertResult.innerHTML = `<div class="list">${okLines}${failLines}</div>${renderChangesSummary(data.files || []).html}`;
       } catch (err) {
-        showWmConvertStatus(err.message || 'Błąd przerabiania dokumentów.', 'err');
+        showWmConvertStatus(friendlyErrorMessage(err) || 'Błąd przerabiania dokumentów.', 'err');
       } finally {
         wmConvertBtn.disabled = false;
       }

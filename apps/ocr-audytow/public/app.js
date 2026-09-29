@@ -180,9 +180,48 @@
   }
 
   clearBtn.addEventListener('click', resetAll);
-  cancelReviewBtn.addEventListener('click', resetAll);
+  // "Anuluj" w kroku 3 porzuca tylko podzial - wybrane PDF-y zostaja na liscie
+  // (wczesniej trzeba bylo wybierac wszystkie pliki od nowa).
+  cancelReviewBtn.addEventListener('click', () => {
+    analysisId = null;
+    analysisFiles = [];
+    fieldsFiles = [];
+    reviewFilesEl.innerHTML = '';
+    reviewPanel.hidden = true;
+    fieldsPanel.hidden = true;
+    fieldsBlocksEl.innerHTML = '';
+    errorBox.innerHTML = '';
+    statusBox.hidden = true;
+    renderFileList();
+    document.getElementById('ocrUploadPanel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  // Przeglad 2026-09-29: status i bledy krokow 3-5 pojawialy sie w panelu
+  // kroku 2 (czesto poza ekranem) - np. nieudany zapis pola byl niewidoczny.
+  // Przenosimy je do OSTATNIEGO widocznego kroku i pokazujemy na ekranie.
+  const FEEDBACK_PANELS = ['resultsPanel', 'fieldsPanel', 'reviewPanel', 'ocrUploadPanel'];
+  function placeFeedbackInActivePanel() {
+    const panel = FEEDBACK_PANELS.map(id => document.getElementById(id)).find(el => el && !el.hidden);
+    if (!panel) return;
+    if (statusBox.parentElement !== panel) panel.appendChild(statusBox);
+    if (errorBox.parentElement !== panel) panel.appendChild(errorBox);
+  }
+  new MutationObserver(() => {
+    if (!errorBox.innerHTML.trim()) return;
+    placeFeedbackInActivePanel();
+    errorBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }).observe(errorBox, { childList: true, subtree: true });
+
+  // Odswiezenie strony w trakcie pracy kasowalo caly odczyt (juz oplacony w AI)
+  // i wszystkie poprawki - przegladarka pyta teraz przed opuszczeniem strony.
+  window.addEventListener('beforeunload', (event) => {
+    if (!analysisId || !resultsPanel.hidden) return;
+    event.preventDefault();
+    event.returnValue = '';
+  });
 
   function setStatus(text, percent) {
+    placeFeedbackInActivePanel();
     statusBox.hidden = false;
     statusText.textContent = text;
     // components.css ukrywa .progress, dopoki #statusBox (.status-box) nie ma
@@ -220,7 +259,7 @@
         headers: { 'Content-Type': 'application/json', 'X-Scyzoryk-Request': '1' },
         body: JSON.stringify({ excelPath, family })
       });
-      tableChecklistIntro.textContent = `Znaleziono ${data.rowCount} ${data.rowCount === 1 ? 'wiersz' : 'wierszy'} w tabeli. Odznacz pola, których nie chcesz teraz szukać - zaznaczone domyślnie to te, których gdzieś brakuje.`;
+      tableChecklistIntro.textContent = `Znaleziono ${window.ScyzorykUI ? window.ScyzorykUI.plural(data.rowCount, 'wiersz', 'wiersze', 'wierszy') : data.rowCount + ' wierszy'} w tabeli. Odznacz pola, których nie chcesz teraz szukać - zaznaczone domyślnie to te, których gdzieś brakuje.`;
       renderTableChecklist(data.fields);
       tableUnrecognizedNote.textContent = data.unrecognizedHeaders.length
         ? `Nierozpoznane nagłówki (pominięte, nigdy nie zgadywane): ${data.unrecognizedHeaders.join(', ')}`
@@ -922,10 +961,7 @@
         });
       } catch (err) {
         if (err.code !== 'EXCEL_ALREADY_EXISTS') throw err;
-        const choice = window.prompt(
-          'Plik Excel już istnieje.\n\nWpisz 1 — wybierz inną nazwę\nWpisz 2 — nadpisz i zachowaj kopię zapasową\nWpisz 3 — anuluj',
-          '1'
-        );
+        const choice = await askExcelExists();
         if (choice === '1') {
           statusBox.hidden = true;
           excelPathInput.focus();
@@ -952,30 +988,50 @@
         excelResultNote.hidden = false;
         const unmatched = data.fillStats.unmatchedLp || [];
         excelResultNote.textContent = data.excelError
-          ? `Pliki PDF zapisane, ale nie udało się wypełnić tabeli: ${data.excelError}`
+          ? `Pliki PDF zapisane, ale nie udało się wypełnić tabeli: ${window.ScyzorykUI ? window.ScyzorykUI.friendlyError(data.excelError) : data.excelError}`
           : `Wypełniono ${data.fillStats.filledCells} pustych komórek w ${data.fillStats.matchedRows} wierszach pliku ${data.excelPath}.`
             + (unmatched.length ? ` Nie znaleziono w tabeli wiersza dla LP: ${unmatched.join(', ')}.` : '')
             + (data.excelBackupPath ? ` (kopia poprzedniej wersji: ${data.excelBackupPath})` : '');
       } else if (data.excelPath) {
         excelResultNote.hidden = false;
         excelResultNote.textContent = data.excelError
-          ? `Pliki PDF zapisane, ale nie udało się zapisać Excela: ${data.excelError}`
-          : `Zapisano nowy plik Excela (${data.excelRowCount} ${data.excelRowCount === 1 ? 'adres' : 'adresów'}): ${data.excelPath}${data.excelBackupPath ? ` (kopia poprzedniego pliku: ${data.excelBackupPath})` : ''}`;
+          ? `Pliki PDF zapisane, ale nie udało się zapisać Excela: ${window.ScyzorykUI ? window.ScyzorykUI.friendlyError(data.excelError) : data.excelError}`
+          : `Zapisano nowy plik Excela (${window.ScyzorykUI ? window.ScyzorykUI.plural(data.excelRowCount, 'adres', 'adresy', 'adresów') : data.excelRowCount + ' adresów'}): ${data.excelPath}${data.excelBackupPath ? ` (kopia poprzedniego pliku: ${data.excelBackupPath})` : ''}`;
       } else {
         excelResultNote.hidden = true;
       }
     } catch (err) {
       statusBox.hidden = true;
-      errorBox.innerHTML = `<div class="error-box">${escapeHtml(err.message)}</div>`;
+      errorBox.innerHTML = `<div class="error-box">${escapeHtml(window.ScyzorykUI ? window.ScyzorykUI.friendlyError(err) : err.message)}</div>`;
     } finally {
       finalizeBtn.disabled = false;
     }
   });
 
+  // Zamiast window.prompt ("wpisz 1, 2 albo 3") - trzy przyciski na stronie.
+  function askExcelExists() {
+    statusBox.hidden = true;
+    return new Promise(resolve => {
+      errorBox.innerHTML = `<div class="error-box">
+        <strong>Plik Excel o tej nazwie już istnieje.</strong> Co zrobić?
+        <div class="u-mt-2" style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn btn-secondary" data-choice="1">Wybierz inną nazwę</button>
+          <button type="button" class="btn btn-primary" data-choice="2">Nadpisz (z kopią zapasową)</button>
+          <button type="button" class="btn btn-secondary" data-choice="3">Anuluj</button>
+        </div>
+      </div>`;
+      errorBox.querySelectorAll('[data-choice]').forEach(btn => btn.addEventListener('click', () => {
+        errorBox.innerHTML = '';
+        if (btn.dataset.choice === '2') setStatus('Zapisuję...', 90);
+        resolve(btn.dataset.choice);
+      }, { once: true }));
+    });
+  }
+
   function renderResults(results) {
     resultList.innerHTML = results.map(item => {
       const meta = [];
-      if (item.pageCount) meta.push(`${item.pageCount} stron`);
+      if (item.pageCount) meta.push(window.ScyzorykUI ? window.ScyzorykUI.plural(item.pageCount, 'strona', 'strony', 'stron') : `${item.pageCount} stron`);
       if (item.pageRange) meta.push(`str. ${item.pageRange[0]}–${item.pageRange[1]} oryginału`);
       if (item.excelRow) meta.push('w pliku Excela');
       const warnings = (item.warnings || []).length

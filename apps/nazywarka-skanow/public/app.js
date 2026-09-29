@@ -136,7 +136,7 @@ function prefetchNeighborPreviews() {
 }
 
 function updateZoomLabel() {
-  zoomLabel.textContent = previewZoom === "page-width" ? "" : `${previewZoom}%`;
+  zoomLabel.textContent = previewZoom === "page-width" ? "Dopasuj" : `${previewZoom}%`;
 }
 
 function refreshPreviewZoom() {
@@ -184,8 +184,8 @@ function currentEntry() {
 function renderFileList() {
   fileList.innerHTML = state.files.map((f) => {
     const isCurrent = f.index === state.currentIndex;
-    const statusClass = f.renamed ? "is-renamed" : "is-pending";
-    const statusText = f.renamed ? "zmieniono" : "czeka";
+    const statusClass = (f.renamed || f.processed) ? "is-renamed" : "is-pending";
+    const statusText = f.renamed ? "zmieniono" : (f.processed ? "bez zmian" : "czeka");
     return `
       <li class="file-item${isCurrent ? " is-current" : ""}" data-index="${f.index}" style="cursor:pointer;">
         <svg class="icon file-icon"><use href="/shared/icons.svg#i-file-pdf"/></svg>
@@ -230,7 +230,9 @@ function updateWorkPanel() {
   newNameInput.focus();
   newNameInput.select();
 
-  const allRenamed = state.files.length > 0 && state.files.every(f => f.renamed);
+  // "processed" = zatwierdzony (takze bez zmiany nazwy) - wczesniej plik z
+  // juz dobra nazwa blokowal komunikat "Wszystko gotowe" na zawsze.
+  const allRenamed = state.files.length > 0 && state.files.every(f => f.renamed || f.processed);
   doneBanner.style.display = allRenamed ? "block" : "none";
 
   renderFileList();
@@ -300,7 +302,12 @@ async function prev() {
   catch (err) { renameError.textContent = err.message; }
 }
 
+let renameInFlight = false;
 async function confirmRename() {
+  // Drugi Enter w trakcie zapisu wysylal te sama nazwe dla NASTEPNEGO pliku
+  // (mylace "już istnieje" na pliku, ktorego uzytkownik nie ruszal).
+  if (renameInFlight) return;
+  renameInFlight = true;
   renameError.textContent = "";
   confirmRenameBtn.disabled = true;
   try {
@@ -311,9 +318,10 @@ async function confirmRename() {
     });
     applyState(data);
   } catch (err) {
-    renameError.textContent = err.message;
+    renameError.textContent = window.ScyzorykUI ? window.ScyzorykUI.friendlyError(err) : err.message;
   } finally {
     confirmRenameBtn.disabled = false;
+    renameInFlight = false;
   }
 }
 
@@ -322,7 +330,30 @@ folderPathInput.addEventListener("keydown", (e) => { if (e.key === "Enter") open
 prevBtn.addEventListener("click", prev);
 nextBtn.addEventListener("click", next);
 confirmRenameBtn.addEventListener("click", confirmRename);
-newNameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") confirmRename(); });
+newNameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") confirmRename();
+  // Alt+strzalki / PageUp-PageDown - poprzedni/nastepny plik bez myszki.
+  if ((e.altKey && e.key === "ArrowRight") || e.key === "PageDown") { e.preventDefault(); next(); }
+  if ((e.altKey && e.key === "ArrowLeft") || e.key === "PageUp") { e.preventDefault(); prev(); }
+});
+// Podpowiedz na zywo: "/" zostanie zamieniony na "-", inne niedozwolone znaki.
+newNameInput.addEventListener("input", () => {
+  const v = newNameInput.value;
+  if (/[<>:"|?*\\]/.test(v)) renameError.textContent = 'Nazwa zawiera niedozwolone znaki (< > : " | ? * \\).';
+  else if (v.includes("/")) renameError.textContent = 'Znak „/” zostanie zapisany jako „-” (np. „Polna 5/7” → „Polna 5-7”).';
+  else renameError.textContent = "";
+});
+
+// "Zmień folder" - powrot do wyboru folderu bez przeladowania strony i
+// przepisywania sciezki (wczesniej pusty/ukonczony folder byl slepym zaulkiem).
+function showOpenPanel() {
+  openPanel.style.display = "block";
+  folderPathInput.value = state.folderPath || folderPathInput.value;
+  folderPathInput.focus();
+  folderPathInput.select();
+  openPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+document.querySelectorAll("[data-change-folder]").forEach(btn => btn.addEventListener("click", showOpenPanel));
 
 zoomFitBtn.addEventListener("click", () => { previewZoom = "page-width"; refreshPreviewZoom(); });
 zoomOutBtn.addEventListener("click", () => {

@@ -819,7 +819,11 @@ app.get('/api/jobs/:id/files/:file', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  res.status(400).json({ ok: false, message: err.message || 'Błąd przetwarzania.' });
+  const byCode = {
+    LIMIT_FILE_COUNT: `Za dużo plików naraz - maksymalnie ${MAX_FILES} PDF-ów w jednej partii.`,
+    LIMIT_FILE_SIZE: `Plik jest większy niż ${MAX_FILE_MB} MB - podziel go albo zmniejsz.`
+  };
+  res.status(400).json({ ok: false, message: (err.code && byCode[err.code]) || err.message || 'Błąd przetwarzania.' });
 });
 
 // require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany

@@ -110,7 +110,7 @@ const heavyJobLimiter = rateLimit({
   max: Number(process.env.VARMERO_HEAVY_RATE_LIMIT || 10),
   standardHeaders: true,
   legacyHeaders: false,
-  message: { ok: false, error: 'Za dużo ciężkich żądań w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.' }
+  message: { ok: false, error: 'Za dużo uruchomień w krótkim czasie (limit 10 na 15 minut). Odczekaj kilka minut i spróbuj ponownie.' }
 });
 app.use('/api', apiLimiter);
 
@@ -176,7 +176,9 @@ app.post('/api/calculate', (req, res) => {
 // Krok 1 planu konczy sie tutaj - podglad tabeli adresowej dziala
 // samodzielnie, bez przegladarki. /api/batch/start (rzeczywiste
 // zgloszenia) doda sie dopiero z automation/ + mailbox.js w kolejnym kroku.
-app.post('/api/batch/preview', heavyJobLimiter, (req, res, next) => {
+// Podglad jest szybki i lokalny - NIE liczy sie do limitu ciezkich zadan
+// (kilka sprawdzen tabeli blokowalo potem start na 15 minut).
+app.post('/api/batch/preview', (req, res, next) => {
   upload.single('excel')(req, res, error => {
     if (error) return res.status(400).json({ ok: false, error: String(error?.message || error) });
     next();
@@ -313,7 +315,12 @@ function publicJob(job) {
   };
 }
 
+const ACTIVE_JOB_STATUSES = new Set(['queued', 'reading-excel', 'running', 'cancelling']);
 app.post('/api/batch/start', heavyJobLimiter, (req, res, next) => {
+  // Jedno zgloszeniowe zadanie naraz: po odswiezeniu strony w trakcie paczki
+  // mozna bylo uruchomic druga i zdublowac nieodwracalne zgloszenia.
+  const running = [...jobs.values()].find(j => ACTIVE_JOB_STATUSES.has(j.status));
+  if (running) return res.status(409).json({ ok: false, activeJobId: running.id, error: `Trwa już zgłaszanie z pliku ${running.sourceFile || ''}. Poczekaj na jego koniec albo je przerwij - pokazuję jego postęp.` });
   upload.single('excel')(req, res, error => {
     if (error) return res.status(400).json({ ok: false, error: String(error?.message || error) });
     next();

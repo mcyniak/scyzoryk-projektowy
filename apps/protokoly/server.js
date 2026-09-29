@@ -16,7 +16,7 @@ const PORT = Number(process.env.PORT || 3014);
 const HOST = process.env.SCYZORYK_HOST || "127.0.0.1";
 
 applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; frame-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
-applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: "Brak zabezpieczonego naglowka zadania. Odśwież stronę i spróbuj ponownie." }));
+applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: "Brak zabezpieczonego nagłówka żądania. Odśwież stronę i spróbuj ponownie." }));
 app.use(express.json({ limit: "256kb" }));
 
 const apiLimiter = rateLimit({
@@ -28,7 +28,7 @@ const apiLimiter = rateLimit({
   // sekund i UI moze go wywolac wielokrotnie przy przegladaniu kolejnych
   // adresow - ten sam wzorzec co w apps/nazywarka-skanow/server.js.
   skip: (req) => req.method === "GET",
-  message: { ok: false, message: "Za duzo zadan w krotkim czasie. Odczekaj chwile i sprobuj ponownie." }
+  message: { ok: false, message: "Za dużo żądań w krótkim czasie. Odczekaj chwilę i spróbuj ponownie." }
 });
 app.use("/api", apiLimiter);
 
@@ -147,7 +147,7 @@ app.get("/api/photo-thumb", async (req, res) => {
     const folderPath = resolveAddressFolder(baseFolder, folderName);
     const photos = builder.findProtocolPhotos(folderPath);
     if (!Number.isInteger(index) || index < 0 || index >= photos.length) {
-      return res.status(404).json({ ok: false, message: "Nie znaleziono zdjecia o tym indeksie." });
+      return res.status(404).json({ ok: false, message: "Nie znaleziono zdjęcia o tym numerze." });
     }
     const img = await builder.processPhoto(photos[index].path, { manualRotateDeg: rotateDeg });
     const jpegBuffer = await img.getBuffer("image/jpeg", { quality: 70 });
@@ -217,7 +217,7 @@ app.get("/api/preview", async (req, res) => {
     const folderName = String(req.query.folderName || "").trim();
     const folderPath = resolveAddressFolder(baseFolder, folderName);
     const photos = builder.findProtocolPhotos(folderPath);
-    if (!photos.length) return res.status(404).json({ ok: false, message: "Nie znaleziono zdjec protokolu w tym folderze." });
+    if (!photos.length) return res.status(404).json({ ok: false, message: "Nie znaleziono zdjęć protokołu w tym folderze." });
 
     const rotations = parseRotations(req.query.rotations);
     const cacheKey = previewCacheKey(folderPath, photos, rotations);
@@ -247,7 +247,7 @@ app.post("/api/save", async (req, res) => {
     const folderName = String(req.body?.folderName || "").trim();
     const folderPath = resolveAddressFolder(baseFolder, folderName);
     const photos = builder.findProtocolPhotos(folderPath);
-    if (!photos.length) return res.status(404).json({ ok: false, message: "Nie znaleziono zdjec protokolu w tym folderze." });
+    if (!photos.length) return res.status(404).json({ ok: false, message: "Nie znaleziono zdjęć protokołu w tym folderze." });
 
     const rotations = parseRotations(req.body?.rotations);
     const cacheKey = previewCacheKey(folderPath, photos, rotations);
@@ -257,7 +257,7 @@ app.post("/api/save", async (req, res) => {
     const savePath = path.join(saveDir, fileName);
 
     if (!isPathInsideFolder(savePath, folderPath)) {
-      return res.status(400).json({ ok: false, message: "Niepoprawna sciezka zapisu." });
+      return res.status(400).json({ ok: false, message: "Niepoprawna ścieżka zapisu." });
     }
     // photoFailures (patrz buildProtocolPdf) - pojedyncze nieczytelne zdjecie
     // nie przerywa zapisu, ale uzytkownik musi wiedziec, ze PDF nie zawiera
@@ -272,7 +272,7 @@ app.post("/api/save", async (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  res.status(400).json({ ok: false, message: err?.message || "Blad." });
+  res.status(400).json({ ok: false, message: require('../../lib/uploadErrors').polishErrorMessage(err, 'Błąd.') });
 });
 
 // require.main === module: uruchomienie serwera TYLKO gdy plik jest startowany

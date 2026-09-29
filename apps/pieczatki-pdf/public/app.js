@@ -516,7 +516,7 @@ function renderActiveEditor() {
         ${appliesHere ? 'Pieczątka jest widoczna na tej stronie.' : 'Pieczątka nie pojawi się na tej stronie.'}
       </p>
       <div class="pageActionRow">
-        <button type="button" id="excludeCurrentPageBtn" class="btn btn-danger-ghost btn-sm smallBtn">Usuń tylko z tej strony</button>
+        <button type="button" id="excludeCurrentPageBtn" class="btn btn-danger-ghost btn-sm smallBtn">${getPdfFiles().length > 1 ? `Usuń ze strony ${currentPage} we wszystkich plikach` : 'Usuń tylko z tej strony'}</button>
         <button type="button" id="restoreCurrentPageBtn" class="btn btn-ghost btn-sm smallBtn">Przywróć na tej stronie</button>
       </div>
 
@@ -1029,7 +1029,36 @@ function renderAll() {
   renderStampList();
   renderActiveEditor();
   updateBoxes();
+  scheduleAutosave();
 }
+
+// Przeglad 2026-09-29: ustawione pieczatki ginely po odswiezeniu strony
+// (zapisywaly sie tylko nazwane presety). Teraz biezacy zestaw zapisuje sie
+// sam w tej przegladarce i wraca po ponownym otwarciu narzedzia.
+const AUTOSAVE_KEY = 'pieczatki.biezace';
+let autosaveTimer = null;
+function scheduleAutosave() {
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(async () => {
+    try {
+      const items = await Promise.all(stamps.map(serializeStampForPreset));
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({ savedAt: Date.now(), activeIndex: Math.max(0, stamps.findIndex(s => s.id === activeStampId)), stamps: items }));
+    } catch { /* prywatna karta / pelny localStorage - bez autozapisu */ }
+  }, 400);
+}
+function restoreAutosavedStamps() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(AUTOSAVE_KEY) || 'null');
+    if (!saved || !Array.isArray(saved.stamps) || !saved.stamps.length) return false;
+    if (!saved.stamps.some(item => String(item.text || '').trim())) return false;
+    stamps = saved.stamps.map((item, index) => deserializePresetStamp(item, index + 1));
+    stampCounter = stamps.length;
+    activeStampId = (stamps[saved.activeIndex] || stamps[0]).id;
+    return true;
+  } catch { return false; }
+}
+document.addEventListener('input', () => scheduleAutosave());
+document.addEventListener('pointerup', () => scheduleAutosave());
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -1047,7 +1076,7 @@ function escapeAttr(value) {
 pdfInput.addEventListener('change', () => {
   const files = getPdfFiles();
   pdfInfo.textContent = files.length
-    ? `${files.length} plik(ów): ${files.map(f => f.name).slice(0, 3).join(', ')}${files.length > 3 ? '...' : ''}`
+    ? `${window.ScyzorykUI ? window.ScyzorykUI.plural(files.length, 'plik', 'pliki', 'plików') : files.length + ' plik(ów)'}: ${files.map(f => f.name).slice(0, 3).join(', ')}${files.length > 3 ? '...' : ''}`
     : 'Możesz zaznaczyć kilka plików naraz.';
 
   selectedPdfPreviewIndex = 0;
@@ -1211,12 +1240,12 @@ form.addEventListener('submit', async event => {
   data.append('stamps', JSON.stringify(payload));
 
   submitBtn.disabled = true;
-  setStatus('Stempluję PDF-y...');
+  setStatus(`Stempluję ${window.ScyzorykUI ? window.ScyzorykUI.plural(pdfs.length, 'plik', 'pliki', 'plików') : pdfs.length + ' plików'}... Przy dużych plikach to może potrwać.`);
   try {
     const response = await fetch('/api/stamp', { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' }, body: data });
     if (!response.ok) {
       let msg = 'Nie udało się ostemplować PDF.';
-      try { msg = (await response.json()).error || msg; } catch {}
+      try { const j = await response.json(); msg = j.error || j.message || msg; } catch {}
       throw new Error(msg);
     }
     const fontFallback = response.headers.get('x-stamp-font-fallback') === '1';
@@ -1239,15 +1268,17 @@ form.addEventListener('submit', async event => {
       : 'Gotowe. Plik powinien się pobrać.', fontFallback ? true : 'ok');
   } catch (err) {
     console.error(err);
-    setStatus(err.message, true);
+    setStatus(window.ScyzorykUI ? window.ScyzorykUI.friendlyError(err) : err.message, true);
   } finally {
     submitBtn.disabled = false;
   }
 });
 
 renderPresetSelect();
+const restoredStamps = restoreAutosavedStamps();
 renderAll();
 pageCountLabel.textContent = '/ -';
+if (restoredStamps) setStatus('Przywrócono pieczątki z poprzedniego użycia. Presety znajdziesz niżej.', 'ok');
 updateZoomLabel();
 prevPageBtn.disabled = true;
 nextPageBtn.disabled = true;

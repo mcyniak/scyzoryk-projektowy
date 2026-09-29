@@ -81,7 +81,12 @@
     if (status.state === 'ready-for-restart') {
       btnLabel.textContent = 'Aktualizacja gotowa – uruchom ponownie';
       show(btn);
-    } else if (status.available && status.state !== 'downloading' && status.state !== 'ready') {
+    } else if (status.state === 'downloading' || status.state === 'ready') {
+      // Po odswiezeniu panelu w trakcie pobierania przycisk znikal - teraz
+      // pokazuje postep, a klik otwiera okno z paskiem.
+      btnLabel.textContent = status.state === 'ready' ? 'Sprawdzam pobraną aktualizację…' : `Pobieranie aktualizacji ${status.percent == null ? '' : status.percent + '%'}…`;
+      show(btn);
+    } else if (status.available) {
       btnLabel.textContent = `Dostępna aktualizacja ${status.latestVersion}`;
       show(btn);
     } else {
@@ -180,6 +185,13 @@
     if (!installStarted) {
       if (lastStatus && lastStatus.state === 'ready-for-restart') {
         showReadyForRestartMessage();
+      } else if (lastStatus && (lastStatus.state === 'downloading' || lastStatus.state === 'ready')) {
+        // Pobieranie trwa (np. strona odswiezona w trakcie) - pokaz postep dalej.
+        installStarted = true;
+        installBtn.disabled = true;
+        installBtn.setAttribute('aria-disabled', 'true');
+        setProgress('Pobieranie aktualizacji…', 0);
+        pollUntilReadyOrError(lastStatus.latestVersion).catch(() => {});
       } else {
         hide(progressBox);
         resetInstallControls();
@@ -198,20 +210,48 @@
       checkBtn.disabled = true;
       checkBtn.classList.add('is-checking');
       const previousCheckedAt = lastStatus ? lastStatus.lastCheckedAt : null;
+      // Przeglad 2026-09-29: reczne sprawdzenie konczylo sie bez zadnej
+      // informacji ("czy cos sie stalo?") - teraz krotki komunikat.
+      let status = null;
       try {
         await fetch('/api/update/check', { method: 'POST', headers: HEADERS });
         for (let i = 0; i < 10; i++) {
           await sleep(400);
-          const status = await refreshFromStatus();
+          status = await refreshFromStatus();
           if (status && status.lastCheckedAt !== previousCheckedAt) break;
         }
+        if (status && status.available) showCheckToast(`Dostępna nowa wersja ${status.latestVersion} - kliknij przycisk aktualizacji.`);
+        else if (status && status.error && status.lastCheckedAt === previousCheckedAt) showCheckToast(friendlyUpdateError(status.error));
+        else if (status) showCheckToast(`Masz najnowszą wersję${status.currentVersion ? ` (v${status.currentVersion})` : ''}.`);
       } catch (_) {
-        // Brak internetu itp. - stan po prostu zostaje jak byl, bez alarmowania.
+        showCheckToast('Nie udało się sprawdzić aktualizacji - brak połączenia z internetem?');
       } finally {
         checkBtn.disabled = false;
         checkBtn.classList.remove('is-checking');
       }
     });
+  }
+
+  function friendlyUpdateError(message) {
+    const text = String(message || '');
+    if (/ENOTFOUND|EAI_AGAIN|fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|network|socket/i.test(text)) return 'Brak połączenia z serwerem aktualizacji - sprawdź internet i spróbuj później.';
+    if (/rate limit|403/i.test(text)) return 'Serwer aktualizacji chwilowo odmawia - spróbuj za godzinę.';
+    if (/sha|checksum|suma kontrolna/i.test(text)) return 'Pobrany plik aktualizacji jest uszkodzony - spróbuj pobrać ponownie.';
+    return text || 'Aktualizacja nie powiodła się.';
+  }
+  function showCheckToast(text) {
+    if (!checkBtn) return;
+    let toast = document.getElementById('updateCheckToast');
+    if (!toast) {
+      toast = document.createElement('span');
+      toast.id = 'updateCheckToast';
+      toast.setAttribute('role', 'status');
+      toast.style.cssText = 'margin-left:8px;font-size:12.5px;font-weight:600;color:var(--text-secondary)';
+      checkBtn.insertAdjacentElement('afterend', toast);
+    }
+    toast.textContent = text;
+    clearTimeout(showCheckToast.timer);
+    showCheckToast.timer = setTimeout(() => { toast.textContent = ''; }, 8000);
   }
 
   closeBtn.addEventListener('click', closeModal);
@@ -256,7 +296,7 @@
         showReadyForRestartMessage();
         return;
       } else if (status.state === 'error') {
-        showError(status.error || 'Aktualizacja nie powiodła się.');
+        showError(friendlyUpdateError(status.error));
         resetInstallControls();
         return;
       } else {
@@ -305,7 +345,7 @@
     if (status && status.lastResult && status.lastResult.ok === false && !status.lastResultAcknowledged) {
       pendingResultAcknowledge = true;
       renderModalData(status);
-      showError('Scyzoryk został ponownie uruchomiony. Szczegóły zapisano w lokalnym dzienniku aktualizacji.');
+      showError(`Działa poprzednia wersja${status.currentVersion ? ` (v${status.currentVersion})` : ''} - Scyzoryk został bezpiecznie uruchomiony ponownie. Możesz spróbować zaktualizować jeszcze raz; szczegóły zapisano w dzienniku aktualizacji.`);
       openModal();
     }
   }).catch(() => {});

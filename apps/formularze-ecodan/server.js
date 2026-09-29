@@ -103,14 +103,14 @@ const apiLimiter = rateLimit({
   max: Number(process.env.ECODAN_API_RATE_LIMIT || 6000),
   standardHeaders: true,
   legacyHeaders: false,
-  message: { ok: false, error: 'Za duzo zadan w krotkim czasie. Odczekaj chwile i sprobuj ponownie.' }
+  message: { ok: false, error: 'Za dużo żądań w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.' }
 });
 const heavyJobLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: Number(process.env.ECODAN_HEAVY_RATE_LIMIT || 10),
   standardHeaders: true,
   legacyHeaders: false,
-  message: { ok: false, error: 'Za duzo ciezkich zadan w krotkim czasie. Uruchom mniejsza paczke albo odczekaj chwile.' }
+  message: { ok: false, error: 'Za dużo uruchomień w krótkim czasie (limit na 15 minut). Odczekaj kilka minut i spróbuj ponownie.' }
 });
 app.use('/api', apiLimiter);
 
@@ -233,7 +233,9 @@ app.post('/api/run', heavyJobLimiter, async (req, res) => {
 });
 
 
-app.post('/api/batch/preview', heavyJobLimiter, (req, res, next) => {
+// Podglad jest szybki i lokalny - bez limitu ciezkich zadan (kilka sprawdzen
+// tabeli blokowalo potem start na 15 minut).
+app.post('/api/batch/preview', (req, res, next) => {
   upload.single('excel')(req, res, error => {
     if (error) return res.status(400).json({ ok: false, error: String(error?.message || error) });
     next();

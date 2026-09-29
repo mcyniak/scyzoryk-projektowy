@@ -68,6 +68,20 @@ function otworzPrzebieg(runId) {
 
 zaladujOstatniePrzebiegi();
 
+// Po odswiezeniu strony - wroc do ostatniego przebiegu, jesli jeszcze trwa
+// (albo czeka na dobory). Klucz byl zapisywany, ale nigdy odczytywany.
+(async function wznowOstatniPrzebieg() {
+  let runId = null;
+  try { runId = localStorage.getItem(OSTATNI_RUN_KLUCZ); } catch (_) {}
+  if (!runId) return;
+  try {
+    const res = await fetch(`/api/pipeline/status/${encodeURIComponent(runId)}`);
+    const json = await res.json().catch(() => null);
+    const run = json && json.run;
+    if (run && run.status && !['skonczony', 'blad', 'przerwany', 'przerwany-restartem'].includes(run.status)) otworzPrzebieg(runId);
+  } catch (_) {}
+})();
+
 function hideTopNotice() {
   document.querySelector('#topNotice').classList.add('hidden');
 }
@@ -537,6 +551,15 @@ document.querySelector('#startBtn').addEventListener('click', async () => {
   }
   const zadenKrok = !Object.values(kroki).some(Boolean) && !Object.values(generatory).some(Boolean);
   if (zadenKrok) { showTopNotice('Zaznacz przynajmniej jeden krok do wykonania.'); return; }
+  // Przeglad 2026-09-29: zaznaczony krok bez wymaganego folderu byl po cichu
+  // POMIJANY, a przebieg konczyl sie jako "skonczony". Teraz mowimy od razu.
+  const brakiSciezek = brakujaceSciezki(kroki, {
+    investmentFolder: wartoscPola('pole_investmentFolder'),
+    rootPathSolary: wartoscPola('pole_rootPathSolary'),
+    rootPathPompy: wartoscPola('pole_rootPathPompy'),
+    audytyPath: wartoscPola('pole_audytyPath')
+  });
+  if (brakiSciezek.length) { showTopNotice(brakiSciezek.join(' ')); return; }
 
   const selection = Object.fromEntries([...zaznaczoneAdresy.entries()].map(([sheetName, set]) => [sheetName, [...set]]));
 
@@ -575,7 +598,7 @@ document.querySelector('#startBtn').addEventListener('click', async () => {
     if (!json || !json.ok) {
       showTopNotice(json?.error || 'Nie udało się uruchomić przebiegu.');
       btn.disabled = false;
-      btn.textContent = 'Uruchom pipeline';
+      btn.textContent = 'Uruchom';
       return;
     }
     currentRunId = json.runId;
@@ -584,11 +607,31 @@ document.querySelector('#startBtn').addEventListener('click', async () => {
     document.querySelector('#runPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
     startPolling();
   } catch (error) {
-    showTopNotice(String(error.message || error));
+    showTopNotice(window.ScyzorykUI ? window.ScyzorykUI.friendlyError(error) : String(error.message || error));
     btn.disabled = false;
-    btn.textContent = 'Uruchom pipeline';
+    btn.textContent = 'Uruchom';
   }
 });
+
+function brakujaceSciezki(kroki, sciezki) {
+  const ETYKIETY = { investmentFolder: 'Folder inwestycji', rootPathSolary: 'Główny folder Solary/Kolektory', rootPathPompy: 'Główny folder inwestycji (Pompy)', audytyPath: 'Folder z gotowymi audytami' };
+  const WYMAGANIA = [
+    ['tworzenieFolderow', 'Tworzenie folderów', ['investmentFolder']],
+    ['solary', 'Karty katalogowe (Solary)', ['rootPathSolary']],
+    ['pompy', 'Karty katalogowe (Pompy)', ['rootPathPompy']],
+    ['audytySolary', 'Audyty (Solary)', ['audytyPath', 'rootPathSolary']],
+    ['audytyPompy', 'Audyty (Pompy)', ['audytyPath', 'rootPathPompy']],
+    ['dokSeryjneSolary', 'Dokumenty seryjne (Solary)', ['rootPathSolary']],
+    ['dokSeryjnePompy', 'Dokumenty seryjne (Pompy)', ['rootPathPompy']]
+  ];
+  const braki = [];
+  for (const [krok, nazwa, pola] of WYMAGANIA) {
+    if (!kroki[krok]) continue;
+    const brak = pola.filter(p => !String(sciezki[p] || '').trim());
+    if (brak.length) braki.push(`Krok „${nazwa}” wymaga pola: ${brak.map(p => `„${ETYKIETY[p]}”`).join(', ')}.`);
+  }
+  return braki;
+}
 
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
@@ -616,7 +659,7 @@ async function refreshStatus() {
     if (STATUSY_ZAKONCZONE.includes(json.run.status)) {
       const btn = document.querySelector('#startBtn');
       btn.disabled = false;
-      btn.textContent = 'Uruchom pipeline';
+      btn.textContent = 'Uruchom';
       clearInterval(pollTimer);
       pollTimer = null;
     }
@@ -634,7 +677,10 @@ const KROK_STATUS_LABELS = {
 };
 
 function renderRun(run) {
-  document.querySelector('#runInfo').textContent = `Status przebiegu: ${STATUS_LABELS[run.status] || run.status} (ostatnia aktualizacja: ${new Date(run.updatedAt).toLocaleTimeString('pl-PL')})`;
+  // bladOgolny = przyczyna awarii CALEGO przebiegu - wczesniej nigdzie
+  // niewyswietlana (samo "Status: błąd" bez wyjasnienia).
+  const przyczyna = run.bladOgolny ? ` Przyczyna: ${window.ScyzorykUI ? window.ScyzorykUI.friendlyError(run.bladOgolny) : run.bladOgolny}` : '';
+  document.querySelector('#runInfo').textContent = `Status przebiegu: ${STATUS_LABELS[run.status] || run.status} (ostatnia aktualizacja: ${new Date(run.updatedAt).toLocaleTimeString('pl-PL')}).${przyczyna}`;
 
   const listEl = document.querySelector('#krokiWynikList');
   if ((run.kroki || []).length) {

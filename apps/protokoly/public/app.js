@@ -78,6 +78,7 @@ function renderResults() {
             return `<tr><td>${escapeHtml(r.adres)}</td><td>0</td><td><span class="badge badge-neutral">brak zdjęć</span></td><td></td></tr>`;
           }
           const savedBadge = r.savedPath ? `<span class="badge badge-success"><svg class="icon"><use href="/shared/icons.svg#i-check-circle"/></svg>zapisano</span>` : "";
+          const saveErrorBadge = r.saveError ? ` <span class="badge badge-danger" title="${escapeHtml(r.saveError)}"><svg class="icon"><use href="/shared/icons.svg#i-alert-circle"/></svg>zapis nieudany</span>` : "";
           const skippedBadge = (r.skippedPhotos && r.skippedPhotos.length)
             ? ` <span class="badge badge-warning" title="${escapeHtml(r.skippedPhotos.join(", "))}"><svg class="icon"><use href="/shared/icons.svg#i-alert-triangle"/></svg>pominięto ${r.skippedPhotos.length} nieczytelnych</span>`
             : "";
@@ -85,7 +86,7 @@ function renderResults() {
             <tr data-folder="${escapeHtml(r.folderName)}">
               <td>${escapeHtml(r.adres)}</td>
               <td>${r.photoCount}</td>
-              <td>${savedBadge}${skippedBadge}</td>
+              <td>${savedBadge}${saveErrorBadge}${skippedBadge}</td>
               <td class="col-actions">
                 <button class="btn btn-ghost btn-sm" data-action="preview" data-folder="${escapeHtml(r.folderName)}" type="button">
                   <svg class="icon"><use href="/shared/icons.svg#i-eye"/></svg>
@@ -93,7 +94,7 @@ function renderResults() {
                 </button>
                 <button class="btn btn-secondary btn-sm" data-action="save" data-folder="${escapeHtml(r.folderName)}" type="button">
                   <svg class="icon"><use href="/shared/icons.svg#i-download"/></svg>
-                  Zapisz
+                  ${r.savedPath ? "Zapisz ponownie" : "Zapisz"}
                 </button>
               </td>
             </tr>`;
@@ -107,7 +108,13 @@ function renderResults() {
     btn.addEventListener("click", () => openPreview(btn.dataset.folder));
   });
   resultsTable.querySelectorAll('[data-action="save"]').forEach(btn => {
-    btn.addEventListener("click", () => saveOne(btn.dataset.folder, btn));
+    btn.addEventListener("click", () => {
+      const entry = state.results.find(r => r.folderName === btn.dataset.folder);
+      // Pojedynczy "Zapisz" nadpisywal istniejacy PDF bez pytania (a "Zapisz
+      // wszystkie" respektuje checkbox "Nadpisz") - teraz pyta.
+      if (entry && entry.savedPath && !confirm(`PDF protokołu dla „${entry.adres}” już istnieje. Nadpisać go?`)) return;
+      saveOne(btn.dataset.folder, btn, scanError);
+    });
   });
 }
 
@@ -190,6 +197,7 @@ scanBtn.addEventListener("click", async () => {
       body: JSON.stringify({ baseFolder })
     });
     state.baseFolder = baseFolder;
+    try { localStorage.setItem("protokoly.baseFolder", baseFolder); } catch (_) {}
     state.rotations = {};
     // existingPath (sprawdzone na dysku przez /api/scan) traktujemy tak samo
     // jak savedPath z tej sesji - bez tego ponowny skan tego samego folderu
@@ -223,9 +231,29 @@ function updateZoomLabel() {
   zoomLabel.textContent = previewZoom === "page-width" ? "Dopasuj" : `${previewZoom}%`;
 }
 
-function refreshPdfPreview(folderName) {
+// Podglad przez fetch: widac "Buduję podgląd..." zamiast pustej ramki, a blad
+// pokazuje sie jako polski komunikat zamiast surowego JSON-a w ramce.
+let previewObjectUrl = null;
+async function refreshPdfPreview(folderName) {
   updateZoomLabel();
-  pdfPreview.src = buildPreviewUrl(folderName);
+  const full = buildPreviewUrl(folderName);
+  const [url, hash] = full.split("#");
+  previewStatus.textContent = "Buduję podgląd...";
+  try {
+    const res = await fetch(url, { headers: { "X-Scyzoryk-Request": "1" } });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || "Nie udało się zbudować podglądu.");
+    }
+    const blob = await res.blob();
+    if (state.previewFolderName !== folderName) return;
+    if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+    previewObjectUrl = URL.createObjectURL(blob);
+    pdfPreview.src = `${previewObjectUrl}#${hash}`;
+    previewStatus.textContent = "";
+  } catch (err) {
+    previewStatus.textContent = `Podgląd niedostępny: ${window.ScyzorykUI ? window.ScyzorykUI.friendlyError(err) : err.message}`;
+  }
 }
 
 function setNumericZoom(nextZoom) {
@@ -251,6 +279,7 @@ async function renderPhotoThumbs(folderName) {
   try {
     data = await api(`/api/photos?baseFolder=${encodeURIComponent(state.baseFolder)}&folderName=${encodeURIComponent(folderName)}`);
   } catch (err) {
+    photoThumbs.innerHTML = `<div class="hint">Nie udało się wczytać miniatur zdjęć: ${escapeHtml(err.message || String(err))}</div>`;
     return;
   }
   const rotations = rotationsForFolder(folderName);
@@ -321,7 +350,7 @@ async function saveOne(folderName, triggerBtn, statusEl) {
       body: JSON.stringify({ baseFolder: state.baseFolder, folderName, rotations })
     });
     const entry = state.results.find(r => r.folderName === folderName);
-    if (entry) { entry.savedPath = data.savedPath; entry.skippedPhotos = data.skippedPhotos || []; }
+    if (entry) { entry.savedPath = data.savedPath; entry.skippedPhotos = data.skippedPhotos || []; entry.saveError = null; }
     const skipped = data.skippedPhotos || [];
     if (statusEl) {
       statusEl.textContent = skipped.length
@@ -330,8 +359,11 @@ async function saveOne(folderName, triggerBtn, statusEl) {
     }
     renderResults();
   } catch (err) {
-    if (statusEl) statusEl.textContent = `Błąd: ${err.message}`;
-    else alert(`Nie udało się zapisać: ${err.message}`);
+    const message = window.ScyzorykUI ? window.ScyzorykUI.friendlyError(err) : err.message;
+    const entry = state.results.find(r => r.folderName === folderName);
+    if (entry) entry.saveError = message;
+    if (statusEl) statusEl.textContent = `Nie udało się zapisać: ${message}`;
+    renderResults();
   } finally {
     if (triggerBtn) { triggerBtn.disabled = false; triggerBtn.innerHTML = originalHtml; }
   }
@@ -340,13 +372,14 @@ async function saveOne(folderName, triggerBtn, statusEl) {
 saveAllBtn.addEventListener("click", async () => {
   const overwriteAll = overwriteAllCheckbox.checked;
   const targets = state.results.filter(r => r.photoCount > 0 && !r.error && (overwriteAll || !r.savedPath));
-  if (!targets.length) { alert("Nie ma nic do zapisania (wszystko już zapisane albo brak zdjęć)."); return; }
+  if (!targets.length) { scanError.textContent = "Nie ma nic do zapisania (wszystko już zapisane albo brak zdjęć). Zaznacz „Nadpisz”, żeby zapisać ponownie."; return; }
   const confirmMsg = overwriteAll
     ? `Zapisać (i nadpisać już istniejące) ${targets.length} PDF-ów do odpowiednich folderów adresów?`
     : `Zapisać ${targets.length} PDF-ów do odpowiednich folderów adresów?`;
   if (!confirm(confirmMsg)) return;
   saveAllBtn.disabled = true;
   let done = 0;
+  let failedCount = 0;
   for (const r of targets) {
     saveAllBtn.textContent = `Zapisuję... (${done + 1}/${targets.length})`;
     try {
@@ -358,12 +391,26 @@ saveAllBtn.addEventListener("click", async () => {
       });
       r.savedPath = data.savedPath;
       r.skippedPhotos = data.skippedPhotos || [];
+      r.saveError = null;
     } catch (err) {
-      r.error = `zapis nieudany: ${err.message}`;
+      // Osobny znacznik (nie r.error) - wiersz zachowuje przyciski Podgląd/
+      // Zapisz i mozna ponowic sam ten adres bez ponownego skanowania.
+      r.saveError = window.ScyzorykUI ? window.ScyzorykUI.friendlyError(err) : err.message;
+      failedCount++;
     }
     done++;
     renderResults();
   }
   saveAllBtn.disabled = false;
   saveAllBtn.innerHTML = '<svg class="icon"><use href="/shared/icons.svg#i-download"/></svg>Zapisz wszystkie';
+  scanError.textContent = failedCount
+    ? `Zapisano ${targets.length - failedCount} z ${targets.length}. Nieudane (${failedCount}) są oznaczone w tabeli - możesz zapisać je ponownie.`
+    : `Zapisano wszystkie (${targets.length}).`;
 });
+
+// Ostatnio uzyty folder bazowy + Enter = Skanuj.
+try {
+  const lastBase = localStorage.getItem("protokoly.baseFolder");
+  if (lastBase && !baseFolderInput.value) baseFolderInput.value = lastBase;
+} catch (_) {}
+baseFolderInput.addEventListener("keydown", (e) => { if (e.key === "Enter") scanBtn.click(); });
