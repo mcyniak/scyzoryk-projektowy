@@ -170,7 +170,10 @@ test('obsluga zdjec: endpointy istnieja, manifest ma oryginalne nazwy plikow, ge
   assert.ok(generateRoute, 'nie znaleziono trasy /api/generate/:jobId');
   // Plan sect. 20: zdjecia opcjonalne - generate nie moze zwracac 400 przez brak zdjec.
   assert.ok(!generateRoute[0].includes('Szablon wymaga zdjęć'), 'generate nie moze blokowac przez zdjecia');
-  assert.match(source, /imageManifestPath: job\.imageManifestPath && fs\.existsSync\(job\.imageManifestPath\) \? job\.imageManifestPath : null,/);
+  // 2026-09-28: silnik dostaje manifest z przypisaniem folder -> adres wiersza
+  // (automatycznie + reczne wybory), nie surowy manifest z uploadu.
+  assert.match(source, /imageManifestPath: writeEffectivePhotoManifest\(job, rowsForMerge, addressColumn, selectedSheet\),/);
+  assert.match(source, /app\.post\('\/api\/images\/:jobId\/assign'/);
 });
 
 test('saveWord: opcja "Zapisuj takze do Word (.docx)" jest przekazywana przez UI do silnika dokumentow i zwracana w ZIP-ie', async () => {
@@ -527,3 +530,59 @@ test('imageMatching.js: model folderow adresowych (dowolna liczba zdjec, natural
     });
   });
 }
+
+test('zdjecia: przypisanie folderow do adresow - warianty nazw, konflikty, reczne wybory, glebsze drzewo (przeglad 2026-09-28)', () => {
+  const im = require('../apps/dokumenty-seryjne/src/imageMatching.js');
+  const file = (folderPath, name) => ({ addressFolder: folderPath[0], folderPath, originalName: name });
+  const rows = [
+    { record: 1, address: 'Kamion 5', id: 1 },
+    { record: 2, address: 'Wierzchlas 12', id: 2 },
+    { record: 3, address: 'ul. Polna 5, Wierzchlas', id: 3 },
+    { record: 4, address: 'Kamion 15', id: 4 },
+    { record: 5, address: 'Kamion 3/5', id: 5 },
+    { record: 6, address: 'Łążek 7, 99-300 Kutno', id: 6 },
+  ];
+  const manifest = { files: [
+    file(['Kamion 5'], 'IMG_10.jpg'), file(['Kamion 5'], 'IMG_2.jpg'),
+    file(['2.Wierzchlas 12'], 'a.jpg'),
+    file(['Wierzchlas Polna 5'], 'b.jpg'),
+    file(['Kamion 5 3'], 'c.jpg'),
+    file(['ŁĄŻEK 7 - zdjęcia'], 'd.jpg'),
+    file(['Stary folder'], 'e.jpg'),
+  ] };
+  const r = im.matchPhotoFolders(rows, manifest);
+  const f = Object.fromEntries(r.folders.map(x => [x.folder, x]));
+  assert.equal(f['Kamion 5'].address, 'Kamion 5');
+  assert.equal(f['Kamion 5'].status, 'matched');
+  assert.equal(f['2.Wierzchlas 12'].address, 'Wierzchlas 12');
+  assert.equal(f['2.Wierzchlas 12'].status, 'matched-loose');
+  assert.equal(f['Wierzchlas Polna 5'].address, 'ul. Polna 5, Wierzchlas', 'kolejnosc slow i "ul." bez znaczenia');
+  assert.equal(f['Kamion 5 3'].status, 'unassigned', '"5 3" to nie "3/5" - numery w kolejnosci');
+  assert.equal(f['ŁĄŻEK 7 - zdjęcia'].address, 'Łążek 7, 99-300 Kutno');
+  assert.equal(f['Stary folder'].status, 'unassigned');
+  assert.equal(r.rows.find(x => x.address === 'Kamion 15').photoCount, 0, '"Kamion 5" nie trafia do "Kamion 15"');
+
+  // Dwa foldery do jednego adresu -> konflikt, nic automatycznie; reczny wybor rozwiazuje.
+  const dup = { files: [file(['Kamion 5'], 'a.jpg'), file(['1.Kamion 5'], 'b.jpg')] };
+  const c = im.matchPhotoFolders(rows, dup);
+  assert.ok(c.folders.every(x => x.status === 'conflict'));
+  assert.equal(c.rows[0].status, 'conflict');
+  const m = im.matchPhotoFolders(rows, dup, { 'Kamion 5': 'Kamion 5', '1.Kamion 5': '' });
+  assert.equal(m.rows[0].photoCount, 1);
+  assert.equal(m.rows[0].status, 'ok');
+  const eff = im.buildEffectiveManifest(dup, m, rows);
+  assert.deepEqual(eff.files.map(x => [x.sourceFolder, x.addressFolder]), [['Kamion 5', 'Kamion 5']]);
+
+  // Caly folder inwestycji: adres szukany glebiej, folder bez pary na tym samym poziomie.
+  const deep = { files: [
+    file(['projekty', '1.Kamion 5', 'zdjecia'], 'a.jpg'),
+    file(['projekty', '2.Wierzchlas 12'], 'b.jpg'),
+    file(['projekty', '9.Nieznana 1'], 'c.jpg'),
+  ] };
+  const d = im.matchPhotoFolders(rows, deep);
+  assert.deepEqual(d.folders.map(x => [x.folder, x.address]), [
+    ['projekty/1.Kamion 5', 'Kamion 5'],
+    ['projekty/2.Wierzchlas 12', 'Wierzchlas 12'],
+    ['projekty/9.Nieznana 1', null],
+  ]);
+});

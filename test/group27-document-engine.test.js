@@ -283,7 +283,6 @@ test('stare skrypty Word COM usuniete i nigdzie nie wolane (mailmerge-to-pdf, co
 
   const sources = [
     'apps/dokumenty-seryjne/server.js',
-    'apps/dokumenty-seryjne/src/folderRoutes.js',
     'apps/wnioski-powykonawcze/server.js',
     'apps/kreator-wzorow/server.js',
     'lib/printing.js',
@@ -322,11 +321,9 @@ test('dokumenty-seryjne: generowanie tylko przez silnik, komunikaty bez "PowerSh
   assert.match(gen[0], /Zatrzymuję silnik dokumentów/);
   assert.match(gen[0], /Nie udało się uruchomić silnika dokumentów/);
   assert.equal((gen[0].match(/engineCleanup\(\);/g) || []).length, 2, 'cleanup w close i w error');
-  assert.match(src, /imageManifestPath: job\.imageManifestPath && fs\.existsSync\(job\.imageManifestPath\)/);
+  assert.match(src, /imageManifestPath: writeEffectivePhotoManifest\(/);
   assert.match(src, /const needsWordLease = documentEngine\.engineUsesWord\(\);/);
-
-  const folder = await readSrc('apps', 'dokumenty-seryjne', 'src', 'folderRoutes.js');
-  assert.match(folder, /documentEngine\.runEngineCommand\("mail-merge", \{\s*\.\.\.documentEngine\.pdfRendererInput\(\),/);
+  assert.equal(fs.existsSync(path.join(ROOT, 'apps', 'dokumenty-seryjne', 'src', 'folderRoutes.js')), false, 'martwy tryb folderow usuniety');
 });
 
 test('kreator-wzorow: podglad idzie przez silnik (mail-merge, smartTemplateMode) bez galezi Word COM', async () => {

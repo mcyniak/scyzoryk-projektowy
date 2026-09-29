@@ -86,7 +86,9 @@ function findAddressFolder(baseFolder, lpGmina) {
     throw new Error(`Folder bazowy nie istnieje: ${baseFolder}`);
   }
   const lpStr = String(lpGmina).trim();
-  const re = new RegExp(`^${escapeRegExp(lpStr)}(?!\\d)`);
+  // "05.Kamion 5" dla LP 5: zera wiodace w nazwie folderu (sortowanie w
+  // Eksploratorze) - przeglad 2026-09-28, wczesniej "Nie znaleziono folderu".
+  const re = new RegExp(`^${/^\d+$/.test(lpStr) ? '0*' : ''}${escapeRegExp(lpStr)}(?!\\d)`);
   const matches = [];
   const allFolders = [];
   const warnings = [];

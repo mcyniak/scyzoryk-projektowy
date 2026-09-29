@@ -103,13 +103,25 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
 - `dokumenty-seryjne` — Word+Excel mail-merge: produces one PDF per address/row **without Word** —
   `server.js` spawns `Scyzoryk.DocumentEngine.exe mail-merge` via `lib/documentEngine.js#spawnMailMerge`
   (the old `scripts/mailmerge-to-pdf.ps1` Word COM script was deleted 2026-09-28; the engine speaks the same
-  JSON-lines stdout protocol, so `parseJsonLines`/`handlePowerShellEvent` are unchanged). The dead
-  `src/folderRoutes.js` path goes through the same engine command. **Has two parallel, largely-duplicate UI code paths — only one is
-  reachable.** `public/index.html` + `public/inline-1.js` (calling `/api/upload`, `/api/generate/:jobId`,
-  `/api/placeholders/:jobId` in `server.js`) is served at `/` and is the one users actually reach.
-  `public/folder.html` + `public/folder.js` (calling `/api/folder-upload`, `/api/folder-generate/:jobId`
-  in `src/folderRoutes.js`) is **not linked from anywhere** — dead code. When debugging this app, check
-  `inline-1.js` first; don't assume `folder.js` reflects current behavior.
+  JSON-lines stdout protocol, so `parseJsonLines`/`handlePowerShellEvent` are unchanged).
+  UI: `public/index.html` + `public/inline-1.js` (`/api/upload`, `/api/generate/:jobId`, `/api/images/*`).
+  The old unreachable "folder mode" (`src/folderRoutes.js`, `folderGeneration.js`, `templateScan.js`,
+  `scripts/scan-placeholders.ps1`, `/api/folder-*`) was **deleted 2026-09-28**.
+  - **Photos (reworked 2026-09-28, `test/group30-zdjecia-e2e.test.js` = real engine E2E)**: upload keeps
+    each file's `folderPath` (all folders between the picked root and the file); frontend uploads in
+    batches of 100 (`/api/images/:id?append=1`, the old single request hit multer's 400-file limit).
+    `src/imageMatching.js#matchPhotoFolders` assigns photo folders to sheet rows **for the whole sheet**
+    (stable labels/conflicts regardless of selection): word-set equality with numbers kept in order
+    (`Kamion 5/3` ≠ `Kamion 3/5`, `ul.`/`nr` ignored, `5 A` = `5A`), plus explicit variants: leading
+    LP number (`2.Wierzchlas 12`), trailing description after the house number (`Kamion 5 - zdjęcia`),
+    Excel address up to the first comma. The shallowest path segment matching an address becomes the
+    folder label (so a whole investment tree works). Two folders auto-matching one address → `conflict`,
+    nothing used until the user picks. Manual choices: `POST /api/images/:id/assign {folder, address}`
+    (`''` = ignore, `null` = back to auto) → `job.photoOverrides` (persisted). At generation
+    `writeEffectivePhotoManifest` writes `images-manifest.effective.json` with each file's
+    `addressFolder` rewritten to its row's address, so the engine's exact per-address lookup
+    (`PhotoGallery.FindPhotosForAddress`) needs no change. `resolveAddressColumn` (UI choice > Kreator
+    manifest `addressColumn` > guess) is shared by summary, upload/sheet responses and generation.
   - Real templates fill placeholders via **table-cell position**, not text search: the engine's
     `Merge/LegacyFillers.cs` (port of the old `Fill-HighlightedTableCells`) reads the yellow-highlighted table cell's value and looks at the
     **previous cell in the same row** as the field label (e.g. `"Uczestnik projektu:"` → next cell is
@@ -148,8 +160,13 @@ Each is a standalone Express app with its own `server.js`, `public/`, and (for t
   without Word: `runConvertScript` → `documentEngine.convertWniosekMaterialowy` → engine command
   `convert-wm` (`Wnioski/ConvertWmCommand.cs`, port of the deleted `scripts/convert-wm.ps1`; same
   input.json/result.json shape). `job.child` is the engine process, so "Przerwij" still kills it.
-- `karty-katalogowe` — matches a UID column in an Excel sheet to product spec-sheet files and copies them
-  into per-client folders.
+- `karty-katalogowe` ("Przypisywanie plików do folderów") — matches a UID column in an Excel sheet to product spec-sheet files and copies them
+  into per-client folders. Folder by LP (`znajdzFolderKlientaPoLp`, 2026-09-28): prefix `N - `/`N.`/`N_`/`N)`,
+  leading zeros ignored; several folders with one LP → the single one matching the address wins; no LP
+  folder → message suggests folders matching the address by name. The address check compares the folder
+  name **without** its LP prefix (`nazwaFolderuBezId`) and a folder with a *different* house number fails
+  (`12 - Polna 1` ≠ `Polna 12`); address-only matching prefers exact numbers (`Kamion 5` over `Kamion 5A`).
+  Same LP-prefix fix in `drukarka-projekty` (`nazwaFolderuBezLp`, leading zeros, `suggestions`).
 - `ocr-audytow` — OCR for scanned audit PDFs (incl. Polish handwriting): extracts form-field values into a
   reviewable table (optionally exported to Excel) and splits multi-address bundled files into one PDF per
   address after a user-reviewed confirmation screen (never auto-splits silently). Output PDFs are plain

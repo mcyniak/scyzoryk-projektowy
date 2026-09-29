@@ -1538,3 +1538,29 @@ test('przetworzArkusz: kolumna/wartosc UID jest WYMAGANA normalnie, ale NIE w tr
   assert.equal(wynikiKarty.length, 1);
   assert.equal(wynikiKarty[0].status, 'pominieto-brak-uid', 'poza trybem pominKarty brak UID nadal pomija wiersz jak dotychczas (zero regresji)');
 });
+
+test('przypisywanie do folderow: numer LP nie udaje numeru domu, zera wiodace, duplikaty rozstrzygane adresem (przeglad 2026-09-28)', () => {
+  const k = require('../apps/karty-katalogowe/server.js');
+  assert.equal(k.adresPasujeDoFolderu('Polna 12', '12 - Polna 1'), false);
+  assert.equal(k.adresPasujeDoFolderu('Kamion 5', '5 - Kamion 15'), false);
+  assert.equal(k.adresPasujeDoFolderu('Polna 12', '12 - Polna 12'), true);
+  assert.equal(k.adresPasujeDoFolderu('Kwiatowa 15', '41 - Zarnow, ul. Kwiatowa'), true, 'folder bez numeru domu dalej OK');
+  const names = ['05.Kamion 5', '7 - Reja 5', '7 - Lipowa 3', 'Polna 9'];
+  const mapaInfo = k.zbudujMapeFolderow(names);
+  const find = (id, adres) => k.znajdzFolderKlientaPoLp({ id, adres, opisAdresu: adres, mapaInfo, nazwyFolderow: names });
+  assert.equal(find('5', 'Kamion 5').folder, '05.Kamion 5');
+  assert.equal(find('7', 'Lipowa 3').folder, '7 - Lipowa 3');
+  assert.match(find('7', 'Nowa 1').komunikat, /wiecej niz jeden folder/);
+  assert.match(find('3', 'Polna 9').komunikat, /pasuje z nazwy: "Polna 9"/);
+});
+
+test('przypisywanie do folderow: dopasowanie po adresie - lokal to nie dom, dokladny numer wygrywa z litera (przeglad 2026-09-28)', () => {
+  const k = require('../apps/karty-katalogowe/server.js');
+  assert.deepEqual(k.dopasujFolderPoAdresie('Kamion 5', ['Kamion 3-5', 'Kamion 5']), { folder: 'Kamion 5' }, 'dokladny numer wygrywa z "dom 3 lokal 5"');
+  assert.equal(k.adresPasujeDoFolderuScisle('Kamion 5', '12 - Kamion 5'), true, 'numer LP folderu nie przeszkadza');
+  assert.equal(k.adresPasujeDoFolderuScisle('Łaszew, Topolowa 5', 'Łaszew Topolowa 5A'), true, 'litera dalej tolerowana');
+  assert.deepEqual(k.dopasujFolderPoAdresie('Kamion 5', ['Kamion 5', 'Kamion 5A']), { folder: 'Kamion 5' });
+  assert.deepEqual(k.dopasujFolderPoAdresie('Kamion 5A', ['Kamion 5', 'Kamion 5A']), { folder: 'Kamion 5A' });
+  const pliki = [{ nazwaBezRozszerzenia: 'Strona tytułowa - Kamion 5' }, { nazwaBezRozszerzenia: 'Strona tytułowa - Kamion 5A' }];
+  assert.deepEqual(k.znajdzPlikiPoAdresie('Kamion 5', pliki).map(p => p.nazwaBezRozszerzenia), ['Strona tytułowa - Kamion 5']);
+});

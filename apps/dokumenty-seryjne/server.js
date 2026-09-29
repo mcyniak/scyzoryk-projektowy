@@ -33,7 +33,7 @@ const { applySecurityHeaders, applyMutationGuard } = require('../../lib/localReq
 const { createTelemetryService } = require('../../lib/telemetry');
 const { estimateManualMs } = require('../../lib/timeBenchmarks');
 const { detectMailMergeSheetBinding, getDocxModifiedTime } = require('./src/mailMergeSheetBinding');
-const { detectImageMergeFields, summarizeImages, loadManifest, saveManifest } = require('./src/imageMatching');
+const { detectImageMergeFields, loadManifest, saveManifest, matchPhotoFolders, buildEffectiveManifest } = require('./src/imageMatching');
 const { readSmartTemplateManifest, SmartTemplateError } = require('./src/smartTemplate');
 const { evaluateSmartRecord, collectRequiredColumns } = require('../../lib/smartTemplateRules');
 const { withWordAutomationLease } = require('../../lib/wordAutomationCoordinator');
@@ -61,7 +61,6 @@ const OUTPUT_DIR = path.join(APP_DATA_ROOT, 'output');
 const MAX_FILE_MB = Number(process.env.SERYJNE_MAX_FILE_MB || 80);
 const MAX_ROWS = Number(process.env.SERYJNE_MAX_ROWS || 500);
 const JOB_TTL_MS = Number(process.env.SERYJNE_JOB_TTL_MS || 24 * 60 * 60 * 1000);
-const SCAN_SCRIPT = path.join(ROOT, 'scripts', 'scan-placeholders.ps1');
 
 for (const dir of [DATA_DIR, UPLOAD_DIR, OUTPUT_DIR]) fs.mkdirSync(dir, { recursive: true });
 scheduleCleanup([UPLOAD_DIR, OUTPUT_DIR], JOB_TTL_MS, 60 * 60 * 1000);
@@ -114,6 +113,7 @@ function persistJobsIndex() {
       debugJsonPath: job.debugJsonPath,
       imageRoot: job.imageRoot || null,
       imageManifestPath: job.imageManifestPath || null,
+      photoOverrides: job.photoOverrides || {},
       template: job.template,
       templateGroups: job.templateGroups,
       smartManifest: job.smartManifest || null,
@@ -149,6 +149,7 @@ function restoreJobsIndex() {
         debugJsonPath: item.debugJsonPath || path.join(item.outputDir, 'debug-events.jsonl'),
         imageRoot: item.imageRoot || null,
         imageManifestPath: item.imageManifestPath || null,
+        photoOverrides: item.photoOverrides || {},
         status: interrupted ? 'interrupted' : (item.status || 'restored'),
         interruptedReason: interrupted ? 'process-restarted' : item.interruptedReason,
         progress: item.progress || { phase: 'restored', percent: 100, message: 'Zadanie odtworzone po restarcie.', updatedAt: nowIso() },
@@ -245,16 +246,24 @@ function parseImageRelativePath(relPath) {
   //   segment. Wczesniej ten drugi przypadek dawal folder adresowy o nazwie
   //   PLIKU ("1.jpg"), wiec zdjecie nigdy nie pasowalo do zadnego adresu.
   //   Sama nazwa pliku (brak listy sciezek) nie ma folderu adresowego.
-  if (parts.length < 2) return { addressFolder: '', originalName: parts[0] || '' };
-  if (parts.length === 2) return { addressFolder: parts[0], originalName: parts[1] };
-  return { addressFolder: parts[1], originalName: parts[parts.length - 1] };
+  //   folderPath: WSZYSTKIE foldery miedzy wybranym a plikiem - dopasowanie
+  //   (imageMatching.js#photoFolderLabel) szuka adresu tez glebiej, np.
+  //   "Inwestycja/projekty/1.Kamion 5/zdjecia/1.jpg".
+  if (parts.length < 2) return { addressFolder: '', originalName: parts[0] || '', folderPath: [] };
+  if (parts.length === 2) return { addressFolder: parts[0], originalName: parts[1], folderPath: [parts[0]] };
+  return { addressFolder: parts[1], originalName: parts[parts.length - 1], folderPath: parts.slice(1, -1) };
 }
 
-async function storeUploadedImages(jobId, files, imagePaths) {
+// append: kolejna paczka tego samego wyboru zdjec (frontend wysyla po
+// IMAGE_BATCH plikow - wczesniej jeden request z limitem 400 plikow konczyl
+// sie angielskim "Too many files" i przerywal cale wczytywanie).
+async function storeUploadedImages(jobId, files, imagePaths, { append = false } = {}) {
   const imageRoot = path.join(UPLOAD_DIR, jobId, 'images');
-  await fsp.rm(imageRoot, { recursive: true, force: true }).catch(() => {});
+  const manifestPath = path.join(UPLOAD_DIR, jobId, 'images-manifest.json');
+  if (!append) await fsp.rm(imageRoot, { recursive: true, force: true }).catch(() => {});
   await fsp.mkdir(imageRoot, { recursive: true });
-  const manifest = { root: imageRoot, files: [] };
+  const previous = append ? loadManifest(manifestPath) : null;
+  const manifest = { root: imageRoot, files: previous && Array.isArray(previous.files) ? previous.files : [] };
   const skipped = [];
 
   for (let i = 0; i < files.length; i++) {
@@ -283,6 +292,7 @@ async function storeUploadedImages(jobId, files, imagePaths) {
     manifest.files.push({
       relativePath: path.join(parsed.addressFolder, storedName),
       addressFolder: parsed.addressFolder,
+      folderPath: parsed.folderPath,
       storedPath: destPath,
       // ORYGINALNA nazwa pliku uzytkownika (nie wygenerowany uuid) - sortowanie
       // naturalne 1.jpg / 2.jpg / 10.jpg ma odpowiadac temu, co on widzi w folderze.
@@ -290,7 +300,6 @@ async function storeUploadedImages(jobId, files, imagePaths) {
     });
   }
 
-  const manifestPath = path.join(UPLOAD_DIR, jobId, 'images-manifest.json');
   saveManifest(manifestPath, manifest);
   return { manifest, manifestPath, imageRoot, skipped };
 }
@@ -935,6 +944,65 @@ function parseJsonLines(job, chunk, state) {
   }
 }
 
+// Kolumna adresu: jawny wybor z UI > kolumna adresu z wzoru Kreatora >
+// zgadywanie po nazwie. Jedno miejsce dla generowania I podsumowania zdjec -
+// wczesniej podsumowanie ignorowalo kolumne z Kreatora i moglo pokazywac
+// dopasowanie zdjec do innej kolumny niz ta, z ktorej potem generowano.
+function resolveAddressColumn(job, sheet, requested) {
+  const columns = (sheet && sheet.columns) || [];
+  const wanted = String(requested || '').trim();
+  if (wanted && (!columns.length || columns.includes(wanted))) return wanted;
+  const fromManifest = job.smartManifest && job.smartManifest.addressColumn;
+  if (fromManifest && (!columns.length || columns.includes(fromManifest))) return fromManifest;
+  return String(guessAddressColumn(columns)).trim() || 'Adres';
+}
+
+function guessIdColumn(columns) {
+  for (const candidate of ['ID', 'UID', 'LP', 'Lp.', 'Nr']) {
+    const found = findExactColumn(columns, candidate);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Dopasowanie folderow zdjec do wierszy (src/imageMatching.js#matchPhotoFolders)
+// z uwzglednieniem recznych wyborow uzytkownika (job.photoOverrides).
+function photoRows(sheet, rows, addressColumn) {
+  const idColumn = guessIdColumn((sheet && sheet.columns) || []);
+  return rows.map(row => ({ record: Number(row._record), address: row[addressColumn], id: idColumn ? row[idColumn] : '' }));
+}
+// Dopasowanie liczymy zawsze dla CALEGO arkusza (stabilne etykiety folderow i
+// wykrywanie konfliktow niezalezne od tego, ktore wiersze sa zaznaczone);
+// onlyRecords zaweza tylko liste wierszy w odpowiedzi.
+function photoMatchForRows(job, sheet, onlyRecords, addressColumn) {
+  const match = matchPhotoFolders(photoRows(sheet, (sheet && sheet.rows) || [], addressColumn), loadManifest(job.imageManifestPath), job.photoOverrides || {});
+  if (!onlyRecords) return match;
+  const wanted = new Set(onlyRecords.map(Number));
+  const rows = match.rows.filter(r => wanted.has(Number(r.record)));
+  return {
+    ...match,
+    rows,
+    counts: { ...match.counts, rows: rows.length, withPhotos: rows.filter(r => r.photoCount > 0).length, toCheck: rows.filter(r => r.status === 'check').length, conflicts: rows.filter(r => r.status === 'conflict').length }
+  };
+}
+
+// Silnik dopasowuje zdjecia po adresie rekordu - dostaje manifest, w ktorym
+// kazde zdjecie ma juz adres SWOJEGO wiersza (patrz buildEffectiveManifest).
+function writeEffectivePhotoManifest(job, rows, addressColumn, sheet) {
+  if (!job.imageManifestPath || !fs.existsSync(job.imageManifestPath)) return null;
+  const match = photoMatchForRows(job, sheet, rows.map(r => r._record), addressColumn);
+  const effective = buildEffectiveManifest(loadManifest(job.imageManifestPath), match, photoRows(sheet, (sheet && sheet.rows) || [], addressColumn));
+  const effectivePath = path.join(job.outputDir, 'images-manifest.effective.json');
+  saveManifest(effectivePath, effective);
+  const unused = match.folders.filter(f => !f.address);
+  appendLog(job, 'info', `Zdjęcia: ${match.counts.withPhotos} z ${match.counts.rows} adresów ma przypisany folder.`, {
+    assigned: match.folders.filter(f => f.address).map(f => ({ folder: f.folder, address: f.address, reason: f.reason })),
+    unused: unused.map(f => ({ folder: f.folder, reason: f.reason }))
+  });
+  if (unused.length) appendLog(job, 'warn', `Foldery zdjęć bez przypisanego adresu (nie trafią do dokumentów): ${unused.map(f => f.folder).join(', ')}.`);
+  return effectivePath;
+}
+
 async function startGeneration(job, options) {
   const sheetName = String(options.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
   const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
@@ -942,7 +1010,7 @@ async function startGeneration(job, options) {
   // (manifest.addressColumn), ma pierwszenstwo przed zgadywaniem po nazwie
   // kolumny - ale jawny addressColumn z requestu (jesli kiedys UI go wysle)
   // dalej wygrywa nad obydwoma.
-  const addressColumn = String(options.addressColumn || (job.smartManifest && job.smartManifest.addressColumn) || guessAddressColumn(selectedSheet.columns || [])).trim() || 'Adres';
+  const addressColumn = resolveAddressColumn(job, selectedSheet, options.addressColumn);
   const selectedRows = Array.isArray(options.selectedRows) ? options.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
   const debugMode = options.debugMode === true;
   const saveWord = options.saveWord === true;
@@ -1033,7 +1101,7 @@ async function startGeneration(job, options) {
     records: rowsForOutput,
     rules: textReplacements,
     filePrefix,
-    imageManifestPath: job.imageManifestPath && fs.existsSync(job.imageManifestPath) ? job.imageManifestPath : null,
+    imageManifestPath: writeEffectivePhotoManifest(job, rowsForMerge, addressColumn, selectedSheet),
     saveWord,
     debugMode,
     smartTemplateMode: Boolean(job.smartManifest),
@@ -1259,20 +1327,9 @@ async function runMultiTemplateGeneration(job, tasks, options, skippedGroups) {
   return job.result;
 }
 
-const { registerFolderRoutes } = require('./src/folderRoutes');
-registerFolderRoutes(app, {
-  multer, storage, MAX_FILE_MB, heavyJobLimiter, jobs, OUTPUT_DIR, ROOT, SCAN_SCRIPT, wordQueue,
-  decodeOriginalName, validateOfficeFile, loadExcelWorkbook, parseWorkbook, getWorkbookSheet,
-  getJob, persistJobsIndex, setProgress, nowIso, writeJsonFileNoBom, stripBom,
-  // folder.html/folderRoutes.js jest martwym, nieosiagalnym z UI kodem (patrz CLAUDE.md) -
-  // jego ZIP-owanie juz wczesniej nie dzialalo pod archiver v8 (ta sama stara fabryka
-  // archiver('zip',...), ktorej v8 nie eksportuje) i deps.archiver bylo faktycznie
-  // undefined rowniez PRZED tym committem, tylko przez inna sciezke (nieudana probaw
-  // wykrycia callable factory). Zachowujemy to samo zachowanie (istniejacy guard w
-  // folderRoutes.js zwraca czytelny blad 500) zamiast odwolywac sie do usunietej zmiennej.
-  archiver: undefined,
-  contentDispositionHeader
-});
+// Dawny tryb "folder wzorow -> foldery per adres" (src/folderRoutes.js,
+// folderGeneration.js, templateScan.js, scripts/scan-placeholders.ps1) byl
+// nieosiagalny z UI (brak folder.html) - usuniety 2026-09-28.
 
 app.get('/api/health', (req, res) => res.json({ ok: true, name: 'dokumenty-seryjne', queue: wordQueue.getState() }));
 
@@ -1416,7 +1473,7 @@ app.post('/api/upload', heavyJobLimiter, upload.fields([{ name: 'template', maxC
       ok: true,
       jobId,
       workbook: workbookPreview(workbook, workbook.sheetName),
-      suggestedAddressColumn: guessAddressColumn(workbook.columns),
+      suggestedAddressColumn: resolveAddressColumn(job, workbook, ''),
       suggestedUidColumn: guessUidColumn(workbook.columns),
       templateGroups: templateGroups.map(g => ({ name: g.name, hasVariants: g.hasVariants, variants: Object.keys(g.variants) })),
       ambiguousTemplates,
@@ -1460,7 +1517,7 @@ app.get('/api/sheet/:jobId/:sheetName', (req, res) => {
   if (missingColumns.length) {
     return res.status(400).json({ ok: false, sheetName, missingColumns, message: missingColumnsMessage(job, sheetName, missingColumns) });
   }
-  res.json({ ok: true, workbook: workbookPreview(job.workbook, sheetName), suggestedAddressColumn: guessAddressColumn(sheet.columns || []), suggestedUidColumn: guessUidColumn(sheet.columns || []) });
+  res.json({ ok: true, workbook: workbookPreview(job.workbook, sheetName), suggestedAddressColumn: resolveAddressColumn(job, sheet, ''), suggestedUidColumn: guessUidColumn(sheet.columns || []) });
 });
 
 app.get('/api/jobs/:jobId/sheets/:sheetName/rows', (req, res) => {
@@ -1480,6 +1537,8 @@ app.get('/api/jobs/:jobId/sheets/:sheetName/rows', (req, res) => {
 app.post('/api/images/:jobId', heavyJobLimiter, upload.array('images', 400), async (req, res) => {
   const job = getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania. Wczytaj pliki ponownie.' });
+  if (job.status === 'running' || job.status === 'queued') return res.status(409).json({ ok: false, message: 'Trwa generowanie - zdjęcia możesz zmienić po jego zakończeniu.' });
+  const append = req.query.append === '1';
   try {
     const files = req.files || [];
     let imagePaths = [];
@@ -1497,15 +1556,16 @@ app.post('/api/images/:jobId', heavyJobLimiter, upload.array('images', 400), asy
       imagePathsWarning = `Nie udalo sie odczytac listy sciezek zdjec (${err?.message || err}) - bez nazw folderow adresowych zdjecia nie moga byc przypisane do adresow. Wczytaj zdjecia jeszcze raz.`;
     }
     if (!files.length) return res.status(400).json({ ok: false, message: 'Nie wybrano żadnych zdjęć.' });
-    const { manifest, manifestPath, imageRoot, skipped } = await storeUploadedImages(job.id, files, imagePaths);
+    const { manifest, manifestPath, imageRoot, skipped } = await storeUploadedImages(job.id, files, imagePaths, { append });
     if (skipped.length) {
       const skippedNote = `Pominieto ${skipped.length} z ${files.length} zdjec bez folderu adresowego (np. ${skipped.slice(0, 3).join(', ')}). Wybierz folder, w ktorym kazdy adres ma wlasny podfolder ze zdjeciami.`;
       imagePathsWarning = imagePathsWarning ? `${imagePathsWarning} ${skippedNote}` : skippedNote;
     }
     job.imageRoot = imageRoot;
     job.imageManifestPath = manifestPath;
+    if (!append) job.photoOverrides = {};
     persistJobsIndex();
-    appendLog(job, 'info', 'Wczytano zdjęcia.', { count: manifest.files.length });
+    appendLog(job, 'info', 'Wczytano zdjęcia.', { count: manifest.files.length, append });
     if (imagePathsWarning) appendLog(job, 'error', imagePathsWarning);
     res.json({ ok: true, count: manifest.files.length, skipped: skipped.length, warning: imagePathsWarning || undefined });
   } catch (err) {
@@ -1520,11 +1580,10 @@ app.post('/api/images/:jobId/summary', async (req, res) => {
     const body = req.body || {};
     const sheetName = String(body.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
     const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
-    const addressColumn = String(body.addressColumn || guessAddressColumn(selectedSheet?.columns || [])).trim() || 'Adres';
+    const addressColumn = resolveAddressColumn(job, selectedSheet, body.addressColumn);
     const selectedRows = Array.isArray(body.selectedRows) ? body.selectedRows.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
     const allRows = selectedSheet.rows || [];
     const rowsForMerge = selectedRows.length ? allRows.filter(row => selectedRows.includes(Number(row._record))) : allRows;
-    const addresses = rowsForMerge.map(row => row[addressColumn]).filter(Boolean);
 
     // Informacyjnie: czy choc jeden z wybranych szablonow ma pole galerii
     // Zdjecia_pomontazowe - UI moze wtedy wyjasnic, ze zdjecia nie trafia
@@ -1542,13 +1601,44 @@ app.post('/api/images/:jobId/summary', async (req, res) => {
       if (detectImageMergeFields(templatePath).length > 0) { hasGalleryField = true; break; }
     }
 
-    const manifest = loadManifest(job.imageManifestPath);
-    // Zdjecia sa OPCJONALNE: summary tylko raportuje licznikami, nigdy status bledu.
-    const summary = summarizeImages(addresses, manifest);
-    res.json({ ok: true, hasGalleryField, ...summary });
+    // Zdjecia sa OPCJONALNE: podsumowanie nigdy nie blokuje generowania.
+    // Zwraca pelna liste (wiersz -> folder(y), folder -> adres) - UI pokazuje
+    // foldery bez pary i pozwala przypisac je recznie (/api/images/:jobId/assign).
+    const match = photoMatchForRows(job, selectedSheet, rowsForMerge.map(r => r._record), addressColumn);
+    res.json({
+      ok: true,
+      hasGalleryField,
+      hasPhotos: match.folders.length > 0,
+      addressColumn,
+      total: match.counts.rows,
+      withImages: match.counts.withPhotos,
+      withoutImages: match.counts.rows - match.counts.withPhotos,
+      ambiguous: match.counts.conflicts,
+      counts: match.counts,
+      rows: match.rows,
+      folders: match.folders,
+      addresses: [...new Set(allRows.map(row => String(row[addressColumn] == null ? '' : row[addressColumn]).trim()).filter(Boolean))]
+    });
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Błąd podsumowania zdjęć.' });
   }
+});
+
+// Reczne przypisanie folderu zdjec: { folder, address } (address '' = nie
+// uzywaj tego folderu, null = wroc do dopasowania automatycznego).
+app.post('/api/images/:jobId/assign', (req, res) => {
+  const job = getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania. Wczytaj pliki ponownie.' });
+  const folder = String(req.body?.folder || '');
+  const manifest = loadManifest(job.imageManifestPath);
+  if (!folder || !manifest.files.some(f => f.addressFolder === folder)) return res.status(400).json({ ok: false, message: 'Nie znaleziono takiego folderu zdjęć.' });
+  const overrides = { ...(job.photoOverrides || {}) };
+  if (req.body?.address === null || req.body?.address === undefined) delete overrides[folder];
+  else overrides[folder] = String(req.body.address).trim();
+  job.photoOverrides = overrides;
+  persistJobsIndex();
+  appendLog(job, 'info', 'Zmieniono przypisanie folderu zdjęć.', { folder, address: overrides[folder] ?? '(automatycznie)' });
+  res.json({ ok: true, photoOverrides: overrides });
 });
 
 app.post('/api/generate/:jobId', heavyJobLimiter, async (req, res) => {
@@ -1795,8 +1885,14 @@ app.get('/api/download/:jobId/:file', (req, res) => {
   res.sendFile(fullPath);
 });
 
+const MULTER_MESSAGES = {
+  LIMIT_FILE_COUNT: 'Za dużo plików w jednym wczytaniu.',
+  LIMIT_FILE_SIZE: `Plik jest za duży (limit ${MAX_FILE_MB} MB).`,
+  LIMIT_FIELD_VALUE: 'Lista plików jest za długa - wczytaj mniejszy folder.',
+  LIMIT_UNEXPECTED_FILE: 'Nieoczekiwany plik w formularzu.'
+};
 app.use((err, req, res, next) => {
-  if (err) return res.status(400).json({ ok: false, message: err.message || 'Błąd żądania.' });
+  if (err) return res.status(400).json({ ok: false, message: (err.code && MULTER_MESSAGES[err.code]) || err.message || 'Błąd żądania.' });
   next();
 });
 

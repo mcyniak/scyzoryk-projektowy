@@ -31,19 +31,19 @@ function renderStatus(w) {
 // server.js#przetworzArkusz, galaz pominKarty), wiec pokazywanie go jeszcze
 // raz w oddzielnej kolumnie byloby tylko duplikatem.
 const KK_KOLUMNY_KARTY = [
-  { naglowek: 'Gmina', komorka: w => w.gmina || '' },
-  { naglowek: 'ID', komorka: w => w.id ?? '' },
-  { naglowek: 'Adres', komorka: w => w.adres || '' },
-  { naglowek: 'UID', komorka: w => w.uid || '' },
-  { naglowek: 'Folder', komorka: w => w.folder || '' },
+  { naglowek: 'Gmina', komorka: w => escapeHtml((w.gmina || '')) },
+  { naglowek: 'ID', komorka: w => escapeHtml((w.id ?? '')) },
+  { naglowek: 'Adres', komorka: w => escapeHtml((w.adres || '')) },
+  { naglowek: 'UID', komorka: w => escapeHtml((w.uid || '')) },
+  { naglowek: 'Folder', komorka: w => escapeHtml((w.folder || '')) },
   { naglowek: 'Status', komorka: renderStatus },
-  { naglowek: 'Szczegóły', komorka: w => w.komunikat || '' }
+  { naglowek: 'Szczegóły', komorka: w => escapeHtml((w.komunikat || '')) }
 ];
 const KK_KOLUMNY_DODATEK = [
-  { naglowek: 'Adres', komorka: w => w.adres || '' },
-  { naglowek: 'Folder', komorka: w => w.folder || '' },
+  { naglowek: 'Adres', komorka: w => escapeHtml((w.adres || '')) },
+  { naglowek: 'Folder', komorka: w => escapeHtml((w.folder || '')) },
   { naglowek: 'Status', komorka: renderStatus },
-  { naglowek: 'Szczegóły', komorka: w => w.komunikat || '' }
+  { naglowek: 'Szczegóły', komorka: w => escapeHtml((w.komunikat || '')) }
 ];
 const KK_KOLUMNY = {
   solary: KK_KOLUMNY_KARTY,
@@ -279,14 +279,26 @@ async function runJob(dryRun) {
     statusEl.className = '';
     statusEl.textContent = `Gotowe. Sprawdzono ${data.wyniki.length} wierszy.` + (dryRun ? ' (tryb podglądu — nic nie skopiowano)' : ' (skopiowano)');
 
+    // Przeglad 2026-09-28: bledy i niejednoznaczne na gorze tabeli (wczesniej
+    // ginely miedzy setkami "Skopiowano"), kafelki podsumowania filtruja
+    // tabele, a tekst z Excela/nazw folderow jest escapowany (nazwa z "<"
+    // psula tabele).
+    const kolumny = KK_KOLUMNY[tryb] || KK_KOLUMNY_DODATEK;
+    const waga = w => ({ blad: 0, wieloznaczne: 1, brak: 2 }[w.status] ?? 3);
+    const wyniki = [...data.wyniki].sort((a, b) => waga(a) - waga(b));
+    tableHead.innerHTML = `<tr>${kolumny.map(k => `<th>${k.naglowek}</th>`).join('')}</tr>`;
+    tableBody.innerHTML = wyniki.map(w => `<tr data-status="${escapeHtml(w.status)}">${kolumny.map(k => `<td>${k.komorka(w)}</td>`).join('')}</tr>`).join('');
+
     summaryEl.innerHTML = Object.entries(data.podsumowanie).map(([status, count]) => {
       const [label, cls] = STATUS_LABELS[status] || [status, 'skip'];
-      return `<div class="kk-chip ${cls}"><strong>${count}</strong> — ${label}</div>`;
+      return `<button type="button" class="kk-chip ${cls}" data-filter="${escapeHtml(status)}" title="Pokaż tylko: ${escapeHtml(label)}"><strong>${count}</strong> — ${label}</button>`;
     }).join('');
-
-    const kolumny = KK_KOLUMNY[tryb] || KK_KOLUMNY_DODATEK;
-    tableHead.innerHTML = `<tr>${kolumny.map(k => `<th>${k.naglowek}</th>`).join('')}</tr>`;
-    tableBody.innerHTML = data.wyniki.map(w => `<tr>${kolumny.map(k => `<td>${k.komorka(w)}</td>`).join('')}</tr>`).join('');
+    let aktywnyFiltr = null;
+    summaryEl.querySelectorAll('[data-filter]').forEach(btn => btn.addEventListener('click', () => {
+      aktywnyFiltr = aktywnyFiltr === btn.dataset.filter ? null : btn.dataset.filter;
+      summaryEl.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('is-active', b.dataset.filter === aktywnyFiltr));
+      tableBody.querySelectorAll('tr').forEach(tr => { tr.hidden = Boolean(aktywnyFiltr) && tr.dataset.status !== aktywnyFiltr; });
+    }));
 
     resultsPanel.style.display = 'block';
 

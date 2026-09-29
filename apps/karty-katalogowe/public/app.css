@@ -58,3 +58,5 @@
 .folder-row.clickable { cursor: pointer; }
 .folder-row.clickable:hover { background: var(--bg-surface-muted); }
 .folder-row.up-nav { color: var(--text-secondary); font-weight: 700; font-family: inherit; }
+button.kk-chip { cursor: pointer; font-family: inherit; }
+.kk-chip.is-active { outline: 2px solid currentColor; outline-offset: 1px; }

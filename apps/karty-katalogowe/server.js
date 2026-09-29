@@ -307,18 +307,58 @@ async function listujFoldery(dirPath) {
   }
 }
 
+// Prefiks numeru LP/ID w nazwie folderu klienta: "123 - ", "123.", "123_",
+// "123)". Zera wiodace ("05.Kamion 5") sa ignorowane - przeglad 2026-09-28,
+// wczesniej taki folder dawal "nie znaleziono" dla LP 5.
+const PREFIKS_ID_FOLDERU = /^\s*(\d+)\s*[-._)]\s*/;
+
+function idZNazwyFolderu(nazwa) {
+  const match = String(nazwa || '').match(PREFIKS_ID_FOLDERU);
+  return match ? String(Number(match[1])) : null;
+}
+
+// Nazwa folderu BEZ numeru LP/ID - do porownania z adresem. Numer LP liczyl
+// sie wczesniej jak numer domu: "12 - Polna 1" przechodzil kontrole dla
+// adresu "Polna 12" (i "5 - Kamion 15" dla "Kamion 5").
+function nazwaFolderuBezId(nazwa) {
+  const bez = String(nazwa || '').replace(PREFIKS_ID_FOLDERU, '');
+  return bez || String(nazwa || '');
+}
+
 // Buduje mape: id (string) -> nazwa folderu, na podstawie prefiksu "123 - " lub "123."
+// wszystkie: id -> [nazwy] (do rozstrzygniecia duplikatow adresem).
 function zbudujMapeFolderow(nazwyFolderow) {
   const mapa = new Map();
   const duplikaty = new Set();
+  const wszystkie = new Map();
   for (const nazwa of nazwyFolderow) {
-    const match = nazwa.match(/^\s*(\d+)\s*[-.]\s*/);
-    if (!match) continue;
-    const id = match[1];
+    const id = idZNazwyFolderu(nazwa);
+    if (!id) continue;
+    if (!wszystkie.has(id)) wszystkie.set(id, []);
+    wszystkie.get(id).push(nazwa);
     if (mapa.has(id)) duplikaty.add(id);
     else mapa.set(id, nazwa);
   }
-  return { mapa, duplikaty };
+  return { mapa, duplikaty, wszystkie };
+}
+
+// Folder klienta po numerze LP, potwierdzony adresem. Zwraca { folder } albo
+// { komunikat } (tresc bledu bez prefiksu "Arkusz..., wiersz ...").
+// - kilka folderow z tym samym numerem: jesli DOKLADNIE jeden pasuje scisle
+//   do adresu - bierzemy go (wczesniej zawsze blad "wiecej niz jeden folder"),
+// - brak folderu z tym numerem: podpowiadamy foldery pasujace po adresie.
+function znajdzFolderKlientaPoLp({ id, adres, opisAdresu, mapaInfo, nazwyFolderow }) {
+  const kandydaci = mapaInfo.wszystkie.get(id) || [];
+  if (!kandydaci.length) {
+    const podpowiedzi = adres ? nazwyFolderow.filter(n => adresPasujeDoFolderuScisle(adres, nazwaFolderuBezId(n))).slice(0, 3) : [];
+    return { komunikat: `nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` + (podpowiedzi.length ? ` Do adresu pasuje z nazwy: ${podpowiedzi.map(n => `"${n}"`).join(', ')} - sprawdz numer LP w Excelu albo w nazwie folderu.` : '') };
+  }
+  if (kandydaci.length > 1) {
+    const pasujace = adres ? kandydaci.filter(n => adresPasujeDoFolderuScisle(adres, nazwaFolderuBezId(n))) : [];
+    if (pasujace.length === 1) return { folder: pasujace[0] };
+    return { komunikat: `na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" (${kandydaci.map(n => `"${n}"`).join(', ')}) dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` };
+  }
+  return { folder: kandydaci[0] };
 }
 
 // Adres z Excela byl dotad czytany tylko do komunikatow/logow - dopasowanie
@@ -388,7 +428,7 @@ function adresPasujeDoFolderu(adres, folderNazwa) {
   const tokeny = tokenyAdresu(adres);
   if (!tokeny.length) return false;
 
-  const folderNorm = normalizeAdresDoPorownania(folderNazwa);
+  const folderNorm = normalizeAdresDoPorownania(nazwaFolderuBezId(folderNazwa));
   const trafioneTokeny = tokeny.filter(t => new RegExp(`(^|[^a-z0-9])${t}([^a-z0-9]|$)`).test(folderNorm));
   const tekstoweWAdresie = tokeny.filter(t => !/^\d+$/.test(t));
   const trafioneTekstowe = trafioneTokeny.filter(t => !/^\d+$/.test(t));
@@ -396,6 +436,14 @@ function adresPasujeDoFolderu(adres, folderNazwa) {
   // Sam numer (bez zadnego trafionego tokenu tekstowego) nigdy nie wystarcza,
   // o ile adres w ogole ma jakis token tekstowy do porownania.
   if (tekstoweWAdresie.length > 0 && trafioneTekstowe.length === 0) return false;
+
+  // Tolerancja "folder bez numeru domu w nazwie" NIE obejmuje folderu z INNYM
+  // numerem domu: "5 - Kamion 15" dla adresu "Kamion 5" to inny klient
+  // (przeglad 2026-09-28). Jesli folder ma jakikolwiek numer, jeden z numerow
+  // adresu musi sie z nim zgadzac (5 == 5a jak w numerDomuPasuje).
+  const folderTokeny = folderNorm.split(' ').filter(Boolean);
+  const numeryAdresu = tokeny.filter(t => /^\d/.test(t));
+  if (numeryAdresu.length && folderTokeny.some(t => /^\d/.test(t)) && !numeryAdresu.some(n => numerDomuPasuje(n, folderTokeny))) return false;
 
   const wymagane = tokeny.length <= 1 ? tokeny.length : (tokeny.length === 2 ? 1 : Math.max(2, Math.ceil(tokeny.length * 0.6)));
   return trafioneTokeny.length >= wymagane;
@@ -426,7 +474,7 @@ function numerDomuPasuje(numAdresu, folderTokeny) {
 function adresPasujeDoFolderuScisle(adres, folderNazwa) {
   const tokeny = tokenyAdresu(adres);
   if (!tokeny.length) return false;
-  const folderTokeny = tokenyAdresu(folderNazwa);
+  const folderTokeny = tokenyAdresu(nazwaFolderuBezId(folderNazwa));
 
   const numeryczne = tokeny.filter(t => /^\d/.test(t));
   const tekstowe = tokeny.filter(t => !/^\d/.test(t));
@@ -450,8 +498,18 @@ function adresPasujeDoFolderuScisle(adres, folderNazwa) {
 // 2026-08-19: eksport plaskich folderow adresowych ("Broników 28",
 // "Jajczaki 11a") bez zadnego numeru ID w nazwie. Nigdy nie zgaduje przy
 // kilku pasujacych naraz - to samo podejscie co reszta tego narzedzia.
+// Przy kilku trafieniach wygrywaja te z DOKLADNIE tymi samymi numerami co
+// adres ("Kamion 5" wobec "Kamion 5" i "Kamion 5A") - tolerancja na litere
+// zostaje tylko wtedy, gdy nie ma dokladnej pary.
+function preferujDokladneNumery(adres, trafienia, nazwa = x => x) {
+  if (trafienia.length < 2) return trafienia;
+  const numery = tokenyAdresu(adres).filter(t => /^\d/.test(t)).join(' ');
+  const dokladne = trafienia.filter(t => tokenyAdresu(nazwaFolderuBezId(nazwa(t))).filter(x => /^\d/.test(x)).join(' ') === numery);
+  return dokladne.length ? dokladne : trafienia;
+}
+
 function dopasujFolderPoAdresie(adres, nazwyFolderow) {
-  const trafienia = nazwyFolderow.filter(nazwa => adresPasujeDoFolderuScisle(adres, nazwa));
+  const trafienia = preferujDokladneNumery(adres, nazwyFolderow.filter(nazwa => adresPasujeDoFolderuScisle(adres, nazwa)));
   if (trafienia.length === 1) return { folder: trafienia[0] };
   if (trafienia.length === 0) return { blad: 'brak' };
   return { blad: 'wieloznaczne', kandydaci: trafienia };
@@ -541,7 +599,7 @@ async function zbierzPlikiPdf(rootDir, glebokosc = 0) {
 // ulica, tylko wspolny numer+miejscowosc) - dokladnie ten sam blad co przy
 // dopasujFolderPoAdresie, ta sama naprawa.
 function znajdzPlikiPoAdresie(adres, pliki) {
-  return pliki.filter(p => adresPasujeDoFolderuScisle(adres, p.nazwaBezRozszerzenia));
+  return preferujDokladneNumery(adres, pliki.filter(p => adresPasujeDoFolderuScisle(adres, p.nazwaBezRozszerzenia)), p => p.nazwaBezRozszerzenia);
 }
 
 // "Trójfazowe"/"Jednofazowe" (realna wartosc z kolumny "Instalacja 3
@@ -728,7 +786,7 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
     return wyniki;
   }
 
-  const { mapa: mapaFolderow, duplikaty } = zbudujMapeFolderow(nazwyFolderowKlientow);
+  const mapaInfo = zbudujMapeFolderow(nazwyFolderowKlientow);
 
   // rows[0] to naglowek - kolumny wykrywane po nazwie, nie po sztywnym
   // numerze indeksu, zeby przestawienie kolumn w arkuszu nie psulo doboru.
@@ -854,16 +912,12 @@ async function przetworzArkusz({ sheetName, rows, rootPath, dryRun, audytyPliki 
         continue;
       }
 
-      if (duplikaty.has(id)) {
-        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` };
+      const znaleziony = znajdzFolderKlientaPoLp({ id, adres, opisAdresu, mapaInfo, nazwyFolderow: nazwyFolderowKlientow });
+      if (!znaleziony.folder) {
+        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: ${znaleziony.komunikat}` };
         continue;
       }
-
-      folderNazwa = mapaFolderow.get(id);
-      if (!folderNazwa) {
-        wynikiByIdx[i] = { gmina, sheet: sheetName, wiersz, id, adres, uid, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` };
-        continue;
-      }
+      folderNazwa = znaleziony.folder;
 
       // Audyt rozdz. 16, P0/P1: pusty adres nie moze polegac wylacznie na LP -
       // dwie rozne inwestycje moga miec folder zaczynajacy sie od tego samego
@@ -1085,7 +1139,7 @@ async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszon
     return wyniki;
   }
 
-  const { mapa: mapaFolderow, duplikaty } = zbudujMapeFolderow(nazwyFolderowKlientow);
+  const mapaInfo = zbudujMapeFolderow(nazwyFolderowKlientow);
 
   const header = rows[0] || [];
   const colLpGmina = findColumn(header, ['lp', 'gmin']);
@@ -1128,16 +1182,12 @@ async function przetworzArkuszPomp({ sheetName, rows, rootPath, dryRun, wymuszon
       wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id: row[colLpGmina], adres, model, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak poprawnego "LP gminy" dla adresu "${opisAdresu}" - nie mozna dopasowac folderu.` };
       continue;
     }
-    if (duplikaty.has(id)) {
-      wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: na dysku jest wiecej niz jeden folder zaczynajacy sie od "${id}" dla adresu "${opisAdresu}" - wymaga recznego sprawdzenia.` };
+    const znaleziony = znajdzFolderKlientaPoLp({ id, adres, opisAdresu, mapaInfo, nazwyFolderow: nazwyFolderowKlientow });
+    if (!znaleziony.folder) {
+      wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: ${znaleziony.komunikat}` };
       continue;
     }
-
-    const folderNazwa = mapaFolderow.get(id);
-    if (!folderNazwa) {
-      wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id, adres, model, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: nie znaleziono na dysku folderu zaczynajacego sie od "${id} -" dla adresu "${opisAdresu}".` };
-      continue;
-    }
+    const folderNazwa = znaleziony.folder;
     if (!adres) {
       wynikiByIdx[i] = { gmina: null, sheet: sheetName, wiersz, id, adres: null, model, folder: folderNazwa, status: 'blad', komunikat: `Arkusz "${sheetName}", wiersz ${wiersz}: brak adresu w Excelu - nie mozna bezpiecznie potwierdzic, ze folder "${folderNazwa}" (dopasowany po samym numerze LP "${id}") faktycznie nalezy do tego wiersza. Uzupelnij adres i sprobuj ponownie.` };
       continue;
@@ -1475,6 +1525,9 @@ module.exports = {
   przetworzArkusz,
   przetworzArkuszPomp,
   adresPasujeDoFolderu,
+  zbudujMapeFolderow,
+  znajdzFolderKlientaPoLp,
+  nazwaFolderuBezId,
   parseIdFolderu,
   rozpoznajArkuszSolarow,
   parseModelPompy,

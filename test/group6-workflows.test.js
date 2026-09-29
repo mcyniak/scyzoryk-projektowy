@@ -441,7 +441,7 @@ test('drukarka-projekty: matchOneAddress w server.js blokuje niezgodny adres i p
   // przetwarzaniem, z uzyciem gotowych funkcji z folderMatch.js.
   assert.match(source, /addressHint\?\.adres/);
   assert.match(source, /folderMatch\.addressTokens\(addressHint\.adres\)/);
-  assert.match(source, /folderMatch\.filenameMatchesOwnAddress\(folderName, tokens\)/);
+  assert.match(source, /folderMatch\.filenameMatchesOwnAddress\(nazwaFolderuBezLp\(folderName, lpGmina\), tokens\)/);
   assert.match(source, /mozliwy konflikt numeracji miedzy inwestycjami/);
 
   // P0-6a: klucz pamieci ostatniego folderu juz nie jest sama nazwa zakladki -
@@ -574,4 +574,21 @@ test('drukarka-projekty: buildQueueFromGroups zachowuje przeplot PDF/DOCX/PDF za
   assert.notEqual(built2[0].path, pdfB);
   assert.match(built2[0].path, /\.pdf$/);
   assert.equal(built2[1].path, docx);
+});
+
+test('drukarka-projekty: numer LP w nazwie folderu nie przepycha innego numeru domu, zera wiodace, podpowiedz folderu po adresie (przeglad 2026-09-28)', async (t) => {
+  const fsm = require('node:fs');
+  const osm = require('node:os');
+  const pathm = require('node:path');
+  const root = fsm.mkdtempSync(pathm.join(osm.tmpdir(), 'dp-lp-'));
+  t.after(() => fsm.rmSync(root, { recursive: true, force: true }));
+  for (const d of ['12.Polna 1', '05.Kamion 5', 'Kamion 7']) fsm.mkdirSync(pathm.join(root, d));
+  const wrong = await matchOneAddress(root, '12', { adres: 'Polna 12' });
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.message, /nie pasuje do adresu/);
+  const zero = await matchOneAddress(root, '5', { adres: 'Kamion 5' });
+  assert.equal(zero.folderName, '05.Kamion 5');
+  const hint = await matchOneAddress(root, '3', { adres: 'Kamion 7' });
+  assert.equal(hint.ok, false);
+  assert.deepEqual(hint.suggestions, ['Kamion 7']);
 });

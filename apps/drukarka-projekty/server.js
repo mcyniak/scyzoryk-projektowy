@@ -227,12 +227,26 @@ function tylkoKosmetycznaRoznicaNazwy(a, b) {
   return shorter.every((tok, i) => longer[i] === tok);
 }
 
-function resolveAmbiguousMatches(baseFolder, matches, addressHint, warnings) {
+// Przeglad 2026-09-28: numer LP na poczatku nazwy folderu ("12.Polna 1")
+// liczyl sie przy porownaniu z adresem jako NUMER DOMU - "12.Polna 1"
+// przechodzil kontrole dla adresu "Polna 12", a "5.Kamion 15" dla "Kamion 5",
+// czyli dokladnie ta pomylka numeracji, przed ktora kontrola P0-6b miala
+// chronic. Do porownania z adresem bierzemy nazwe BEZ tego numeru LP.
+function nazwaFolderuBezLp(folderName, lpGmina) {
+  const name = String(folderName || '');
+  const lp = String(lpGmina == null ? '' : lpGmina).trim();
+  if (!lp) return name;
+  const escaped = lp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const stripped = name.replace(new RegExp(`^\\s*${/^\d+$/.test(lp) ? '0*' : ''}${escaped}(?!\\d)[\\s.\\-_)]*`), '');
+  return stripped || name;
+}
+
+function resolveAmbiguousMatches(baseFolder, matches, addressHint, warnings, lpGmina) {
   let candidates = matches;
   if (addressHint?.adres) {
     const tokens = folderMatch.addressTokens(addressHint.adres);
     if (tokens.length) {
-      const filtered = matches.filter(m => folderMatch.filenameMatchesOwnAddress(path.basename(m), tokens));
+      const filtered = matches.filter(m => folderMatch.filenameMatchesOwnAddress(nazwaFolderuBezLp(path.basename(m), lpGmina), tokens));
       if (filtered.length) candidates = filtered;
     }
   }
@@ -280,11 +294,19 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
     // Gdy czesc podfolderow byla nieczytelna, "nie znaleziono" moze byc
     // falszywe - folder adresu moze istniec w pominietej galezi.
     const suffix = folderScanWarnings.length ? ` UWAGA: czesci folderow nie udalo sie odczytac, wiec folder moze istniec, ale byl niewidoczny - ${folderScanWarnings.join(" ")}` : "";
-    return { ok: false, message: `Nie znaleziono folderu zaczynajacego sie od numeru "${lpGmina}".${suffix}`, allFolders, folderReadWarnings: folderScanWarnings.length ? folderScanWarnings : undefined };
+    // Podpowiedz (bez automatycznego wyboru): foldery, ktorych NAZWA pasuje do
+    // adresu z Excela, ale nie zaczynaja sie od numeru LP (np. "Kamion 5" albo
+    // folder z innym numerem) - zamiast samego "nie znaleziono".
+    const tokens = addressHint?.adres ? folderMatch.addressTokens(addressHint.adres) : [];
+    const suggestions = tokens.length
+      ? allFolders.filter(rel => folderMatch.filenameMatchesOwnAddress(path.basename(rel).replace(/^\s*\d+(?!\d)[\s.\-_)]*/, ""), tokens)).slice(0, 5)
+      : [];
+    const hint = suggestions.length ? ` Do adresu "${addressHint.adres}" pasuje z nazwy: ${suggestions.map(s => `"${s}"`).join(", ")} - sprawdz numer LP w Excelu albo w nazwie folderu.` : "";
+    return { ok: false, message: `Nie znaleziono folderu zaczynajacego sie od numeru "${lpGmina}".${hint}${suffix}`, suggestions, allFolders, folderReadWarnings: folderScanWarnings.length ? folderScanWarnings : undefined };
   }
   let resolvedMatch = matches[0];
   if (matches.length > 1) {
-    const resolved = resolveAmbiguousMatches(baseFolder, matches, addressHint, folderScanWarnings);
+    const resolved = resolveAmbiguousMatches(baseFolder, matches, addressHint, folderScanWarnings, lpGmina);
     if (!resolved) {
       return { ok: false, message: `Znaleziono wiecej niz jeden pasujacy folder dla numeru "${lpGmina}".`, matches };
     }
@@ -306,7 +328,7 @@ async function matchOneAddress(baseFolder, lpGmina, addressHint) {
   // dotychczasowe zachowanie (nie blokujemy).
   if (addressHint?.adres) {
     const tokens = folderMatch.addressTokens(addressHint.adres);
-    if (tokens.length && !folderMatch.filenameMatchesOwnAddress(folderName, tokens)) {
+    if (tokens.length && !folderMatch.filenameMatchesOwnAddress(nazwaFolderuBezLp(folderName, lpGmina), tokens)) {
       return {
         ok: false,
         message: `Znaleziono folder "${folderName}" dla numeru "${lpGmina}", ale jego nazwa nie pasuje do adresu "${addressHint.adres}" - mozliwy konflikt numeracji miedzy inwestycjami. Sprawdz recznie.`,

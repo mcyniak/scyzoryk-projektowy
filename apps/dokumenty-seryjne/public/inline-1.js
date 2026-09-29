@@ -21,6 +21,11 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     function status(el, msg, type='') { el.textContent = msg; el.className = `status ${type}`; el.classList.remove('hidden'); }
     function hide(el) { el.classList.add('hidden'); }
     function show(el) { el.classList.remove('hidden'); }
+    function plural(n, one, few, many) {
+      const mod10 = n % 10, mod100 = n % 100;
+      const word = n === 1 ? one : (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? few : many);
+      return `${n} ${word}`;
+    }
     function esc(v) { return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 
     function setBusy(isBusy) {
@@ -128,15 +133,28 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       }
     }
 
-    async function uploadImages(jobId) {
+    // Zdjecia ida paczkami po IMAGE_BATCH (jeden request z calym folderem
+    // przekraczal limit plikow i konczyl sie bledem calego wczytywania).
+    const IMAGE_BATCH = 100;
+    async function uploadImages(jobId, onProgress) {
       if (!currentImageFiles.length) return { ok: true, count: 0 };
-      const fd = new FormData();
-      for (const f of currentImageFiles) fd.append('images', f);
-      fd.append('imagePaths', JSON.stringify(currentImagePaths));
-      const res = await fetch(`/api/images/${jobId}`, { method: 'POST', headers, body: fd });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wczytać zdjęć.');
-      return data;
+      let last = null;
+      let skipped = 0;
+      const warnings = [];
+      for (let start = 0; start < currentImageFiles.length; start += IMAGE_BATCH) {
+        const fd = new FormData();
+        const files = currentImageFiles.slice(start, start + IMAGE_BATCH);
+        for (const f of files) fd.append('images', f);
+        fd.append('imagePaths', JSON.stringify(currentImagePaths.slice(start, start + IMAGE_BATCH)));
+        if (onProgress) onProgress(Math.min(start + files.length, currentImageFiles.length), currentImageFiles.length);
+        const res = await fetch(`/api/images/${jobId}${start ? '?append=1' : ''}`, { method: 'POST', headers, body: fd });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się wczytać zdjęć.');
+        skipped += Number(data.skipped || 0);
+        if (data.warning) warnings.push(data.warning);
+        last = data;
+      }
+      return { ok: true, count: last ? last.count : 0, skipped, warning: warnings.length ? warnings[0] + (warnings.length > 1 ? ` (i ${warnings.length - 1} podobnych)` : '') : undefined };
     }
 
     async function fetchImageSummary() {
@@ -151,29 +169,89 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       return data;
     }
 
+    const PHOTO_STATUS = {
+      ok: ['ok', 'dopasowane'],
+      check: ['warn', 'sprawdź'],
+      conflict: ['err', 'kilka folderów'],
+      none: ['', 'bez zdjęć'],
+    };
+    function photoAddressOptions(summary, selected, candidates) {
+      const addresses = summary.addresses || [];
+      const first = (candidates || []).filter(a => addresses.includes(a));
+      const rest = addresses.filter(a => !first.includes(a));
+      const opt = a => `<option value="${esc(a)}" ${a === selected ? 'selected' : ''}>${esc(a)}</option>`;
+      return `<option value="__auto__">— automatycznie —</option><option value="" ${selected === '' ? 'selected' : ''}>— nie używaj tego folderu —</option>` +
+        (first.length ? `<optgroup label="Pasujące">${first.map(opt).join('')}</optgroup>` : '') +
+        `<optgroup label="Wszystkie adresy">${rest.map(opt).join('')}</optgroup>`;
+    }
+    function photoFolderRow(summary, f) {
+      const selected = f.status === 'manual' ? f.address : (f.status === 'ignored' ? '' : (f.address || '__none__'));
+      return `<div class="photo-folder-row">
+        <div class="photo-folder-name"><strong>${esc(f.folder)}</strong><small>${plural(f.photoCount, 'zdjęcie', 'zdjęcia', 'zdjęć')} · ${esc(f.reason || '')}</small></div>
+        <select class="select photo-assign" data-folder="${esc(f.folder)}" aria-label="Adres dla folderu ${esc(f.folder)}">${photoAddressOptions(summary, selected, f.candidates)}${selected === '__none__' ? '<option value="__none__" selected hidden>— wybierz adres —</option>' : ''}</select>
+      </div>`;
+    }
+
     function renderImageSummary(summary) {
       const box = $('imageSummaryBox');
       if (!box) return;
-      if (!summary || !summary.total) { hide(box); return; }
+      if (!summary || (!summary.hasPhotos && !summary.hasGalleryField)) { hide(box); return; }
       show(box);
-      // Zdjecia sa opcjonalne (plan sect. 20): podsumowanie TYLKO informuje,
-      // nigdy nie koloruje na czerwono z powodu braku zdjec.
-      let html;
-      if (!summary.hasGalleryField) {
-        html = '<div class="status ok">Szablony nie mają pola <code>Zdjecia_pomontazowe</code> — wygenerują się bez zdjęć.</div>';
-      } else {
-        const cls = summary.ambiguous ? 'warn' : 'ok';
-        html = `<div class="status ${cls}">Zdjęcia: ${summary.withImages} z ${summary.total} adresów ze zdjęciami`;
-        if (summary.withoutImages) html += `, ${summary.withoutImages} bez zdjęć (wygenerują się normalnie)`;
-        if (summary.ambiguous) html += `, ${summary.ambiguous} niejednoznacznych (zdjęcia pominięto — sprawdź nazwy folderów)`;
-        html += '.</div>';
-        if (summary.ambiguous) {
-          html += '<ul style="margin:8px 0 0;padding-left:18px;font-size:13px">' + summary.rows.filter(r => r.status === 'ambiguous').map(r =>
-            `<li><strong>${esc(r.address)}</strong> — kilka folderów pasuje do tego adresu: ${(r.folders || []).map(f => esc(f)).join(', ')}</li>`
-          ).join('') + '</ul>';
-        }
+      box.className = 'photo-summary';
+      const c = summary.counts || {};
+      const folders = summary.folders || [];
+      let html = '';
+      if (!summary.hasPhotos) {
+        html = `<div class="status">Szablon ma miejsce na zdjęcia. Wybierz folder ze zdjęciami (pole „Zdjęcia”) - każdy adres w osobnym podfolderze.</div>`;
+        box.innerHTML = html;
+        return;
       }
+      if (!summary.hasGalleryField) {
+        html += `<div class="status warn">Wybrane szablony nie mają miejsca na zdjęcia (pole <code>Zdjecia_pomontazowe</code>) - zdjęcia nie trafią do dokumentów. W Kreatorze wzorów oznacz to miejsce jako „Zdjęcia”.</div>`;
+      }
+      const toFix = folders.filter(f => f.status === 'unassigned' || f.status === 'conflict');
+      const loose = folders.filter(f => f.status === 'matched-loose');
+      const manual = folders.filter(f => f.status === 'manual' || f.status === 'ignored');
+      const cls = (toFix.length || c.conflicts) ? 'warn' : 'ok';
+      html += `<div class="status ${cls}">Zdjęcia: <strong>${c.withPhotos} z ${c.rows}</strong> zaznaczonych adresów ma przypisany folder` +
+        (c.rows - c.withPhotos ? ` · ${c.rows - c.withPhotos} bez zdjęć (wygenerują się bez nich)` : '') +
+        (toFix.length ? ` · <strong>${toFix.length} ${toFix.length === 1 ? 'folder wymaga' : 'folderów wymaga'} przypisania</strong>` : '') +
+        (summary.addressColumn ? `<br><small>Dopasowanie po kolumnie „${esc(summary.addressColumn)}”.</small>` : '') + `</div>`;
+      if (toFix.length) {
+        html += `<div class="photo-group"><div class="marker-head">Foldery bez pewnego adresu - wybierz adres albo pomiń</div>${toFix.map(f => photoFolderRow(summary, f)).join('')}</div>`;
+      }
+      if (loose.length) {
+        html += `<details class="photo-group" ${toFix.length ? '' : 'open'}><summary>Dopasowane po nazwie z dopiskiem - sprawdź (${loose.length})</summary>${loose.map(f => photoFolderRow(summary, f)).join('')}</details>`;
+      }
+      if (manual.length) {
+        html += `<details class="photo-group"><summary>Ustawione ręcznie (${manual.length})</summary>${manual.map(f => photoFolderRow(summary, f)).join('')}</details>`;
+      }
+      const rows = summary.rows || [];
+      html += `<details class="photo-group"><summary>Wszystkie adresy (${rows.length})</summary><table class="photo-table"><thead><tr><th>Adres</th><th>Folder zdjęć</th><th>Zdjęć</th><th></th></tr></thead><tbody>` +
+        rows.map(r => {
+          const [st, label] = PHOTO_STATUS[r.status] || PHOTO_STATUS.none;
+          return `<tr><td>${esc(r.address || '—')}</td><td>${esc((r.folders || []).join(', ') || '—')}${r.reason && r.status !== 'ok' ? `<small>${esc(r.reason)}</small>` : ''}</td><td>${r.photoCount}</td><td><span class="photo-badge ${st}">${label}</span></td></tr>`;
+        }).join('') + `</tbody></table></details>`;
       box.innerHTML = html;
+      box.querySelectorAll('.photo-assign').forEach(sel => sel.addEventListener('change', () => assignPhotoFolder(sel.dataset.folder, sel.value)));
+    }
+
+    async function assignPhotoFolder(folder, value) {
+      if (!currentJob || value === '__none__') return;
+      try {
+        const res = await fetch(`/api/images/${currentJob}/assign`, {
+          method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder, address: value === '__auto__' ? null : value })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się zmienić przypisania.');
+        renderImageSummary(await fetchImageSummary());
+      } catch (e) { status($('recordsStatus'), e.message, 'err'); }
+    }
+
+    async function refreshImageSummary() {
+      if (!currentJob) return;
+      try { renderImageSummary(await fetchImageSummary()); } catch (_) {}
     }
 
     async function uploadFiles() {
@@ -203,8 +281,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
 
         let imageUpload = null;
         if (currentImageFiles.length) {
-          status($('uploadStatus'), 'Wczytuję zdjęcia...', 'warn');
-          imageUpload = await uploadImages(currentJob);
+          imageUpload = await uploadImages(currentJob, (done, total) => status($('uploadStatus'), `Wczytuję zdjęcia... ${done} z ${total}`, 'warn'));
         }
 
         const ambiguous = data.ambiguousTemplates || [];
@@ -212,9 +289,9 @@ const headers = { 'X-Scyzoryk-Request': '1' };
           ? ` Uwaga: w ${ambiguous.length === 1 ? 'folderze' : 'folderach'} znaleziono więcej niż jeden pasujący plik tego samego typu (${ambiguous.map(a => a.resolved ? `"${a.relFolder}": użyto nowszego "${a.keptFile}" (starszy "${a.skippedFile}" zignorowano)` : `"${a.relFolder}": ${a.files.join(' / ')} — pominięto, sprawdź ręcznie`).join('; ')}).`
           : '';
         const ozcNote = data.ozcFoldersFound ? ` Znaleziono dane OZC/audytów — dodatkowe pola w szablonach będą uzupełniane automatycznie tam, gdzie to możliwe.` : '';
-        const imageNote = imageUpload ? ` Wczytano ${imageUpload.count} zdjęć.${imageUpload.warning ? ' Uwaga: ' + imageUpload.warning : ''}` : '';
-        status($('uploadStatus'), `Wczytano ${data.workbook.totalRows} rekordów.${ambiguousNote}${ozcNote}${imageNote}`, (ambiguous.length || (imageUpload && imageUpload.warning)) ? 'warn' : 'ok');
-        try { await fetchImageSummary(); renderImageSummary(imageSummary); } catch (_) {}
+        const imageNote = imageUpload ? ` Wczytano ${plural(imageUpload.count, 'zdjęcie', 'zdjęcia', 'zdjęć')}.${imageUpload.warning ? ' Uwaga: ' + imageUpload.warning : ''}${notImages ? ` Pominięto ${plural(notImages, 'plik', 'pliki', 'plików')} spoza JPG/PNG (np. HEIC z iPhone'a - zapisz je jako JPG).` : ''}` : '';
+        status($('uploadStatus'), `Wczytano ${plural(data.workbook.totalRows, 'rekord', 'rekordy', 'rekordów')}.${ambiguousNote}${ozcNote}${imageNote}`, (ambiguous.length || (imageUpload && imageUpload.warning)) ? 'warn' : 'ok');
+        await refreshImageSummary();
         show($('recordsPanel')); setJobPill('Gotowe');
         await pollJob();
         $('recordsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -312,7 +389,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
           if (ch) { ch.checked = !ch.checked; updateSelectedMetric(); }
         });
       });
-      $('addressColumn').onchange = () => { $('metricColumn').textContent = $('addressColumn').value; updateFileNamePreview(); };
+      $('addressColumn').onchange = () => { $('metricColumn').textContent = $('addressColumn').value; updateFileNamePreview(); refreshImageSummary(); };
       $('sheetSelect').onchange = changeSheet;
       updateSelectedMetric(); hide($('recordsStatus'));
     }
@@ -356,6 +433,7 @@ const headers = { 'X-Scyzoryk-Request': '1' };
         data.workbook = await loadAllRows(data.workbook);
         renderWorkbook(data.workbook, data.suggestedAddressColumn); refreshUidColumnOptions(data.workbook.columns || []);
         status($('recordsStatus'), `Zmieniono arkusz na ${sheet}.`, 'ok');
+        refreshImageSummary();
       } catch (e) {
         status($('recordsStatus'), e.message, 'err');
       }
@@ -482,7 +560,9 @@ const headers = { 'X-Scyzoryk-Request': '1' };
     function renderResult(result) {
       if (!result) return;
       const created = result.created || [];
-      $('resultDesc').textContent = `Utworzono ${created.length} plików PDF.`;
+      const pdfCount = created.filter(c => /\.pdf$/i.test(c.file)).length;
+      const wordCount = created.length - pdfCount;
+      $('resultDesc').textContent = `Utworzono ${plural(pdfCount, 'plik PDF', 'pliki PDF', 'plików PDF')}` + (wordCount ? ` i ${plural(wordCount, 'plik Word', 'pliki Word', 'plików Word')}.` : '.');
       $('resultLogsLink').href = result.logUrl || `/api/download/${currentJob}/logs`;
       if (created.length) {
         $('zipLink').href = `/api/download/${currentJob}/zip`;
@@ -516,8 +596,11 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       show($('resultPanel'));
     }
 
-    $('imagesFile')?.addEventListener('change', e => {
-      currentImageFiles = [...e.target.files].filter(f => /\.(jpg|jpeg|png)$/i.test(f.name));
+    let notImages = 0;
+    $('imagesFile')?.addEventListener('change', async e => {
+      const all = [...e.target.files].filter(f => !/^(\.|~\$|Thumbs\.db$|desktop\.ini$)/i.test(f.name));
+      currentImageFiles = all.filter(f => /\.(jpg|jpeg|png)$/i.test(f.name));
+      notImages = all.length - currentImageFiles.length;
       // encodeURIComponent: sciezki jada polem multipart jako CZYSTY ASCII,
       // odporne na dowolne dekodowanie charsetu po drodze (busboy latin1/utf8) -
       // dwa razy zlapane na zywo polskie znaki w folderach adresowych
@@ -525,9 +608,19 @@ const headers = { 'X-Scyzoryk-Request': '1' };
       currentImagePaths = currentImageFiles.map(f => encodeURIComponent(f.webkitRelativePath || f.name));
       imageSummary = null;
       const box = $('imageSummaryBox');
+      // Zdjecia wybrane PO wczytaniu plikow - wgrywamy od razu, bez ponownego
+      // "Sprawdz dane" (wczesniej trzeba bylo wczytywac wszystko od nowa).
+      if (currentJob && currentImageFiles.length) {
+        try {
+          const up = await uploadImages(currentJob, (done, total) => status($('uploadStatus'), `Wczytuję zdjęcia... ${done} z ${total}`, 'warn'));
+          status($('uploadStatus'), `Wczytano ${plural(up.count, 'zdjęcie', 'zdjęcia', 'zdjęć')}.${up.warning ? ' Uwaga: ' + up.warning : ''}${notImages ? ` Pominięto ${plural(notImages, 'plik', 'pliki', 'plików')} spoza JPG/PNG.` : ''}`, (up.warning || notImages) ? 'warn' : 'ok');
+          await refreshImageSummary();
+        } catch (err) { status($('uploadStatus'), err.message, 'err'); }
+        return;
+      }
       if (box) {
         if (currentImageFiles.length) {
-          box.textContent = `Wybrano ${currentImageFiles.length} zdjęć. Dopasowanie sprawdzę po wczytaniu plików.`;
+          box.textContent = `Wybrano ${plural(currentImageFiles.length, 'zdjęcie', 'zdjęcia', 'zdjęć')}${notImages ? ` (pominięto ${plural(notImages, 'plik', 'pliki', 'plików')} spoza JPG/PNG)` : ''}. Dopasowanie do adresów pokażę po wczytaniu plików.`;
           box.className = 'status';
           show(box);
         } else {
