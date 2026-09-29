@@ -614,11 +614,10 @@ if (!fs.existsSync(SAVE_AS_PDF_TMP_DIR)) fs.mkdirSync(SAVE_AS_PDF_TMP_DIR, { rec
 // uruchomienia - folder jest czyszczony na starcie kazdego zapisu, zeby
 // stare/nieaktualne pliki z poprzednich uruchomien nigdy nie mieszaly sie
 // z nowymi (np. ten sam adres wygenerowany ponownie po poprawce w danych).
+// Poprzednie zapisy NIE sa juz kasowane - przenosimy je do podfolderu
+// "poprzednie zapisy" (patrz lib/printing.js#archivePreviousSaveAsPdf).
 function clearSaveAsPdfOutputDir() {
-  try {
-    fs.rmSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true, force: true });
-  } catch (_) {}
-  fs.mkdirSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true });
+  return require("../../lib/printing").archivePreviousSaveAsPdf(SAVE_AS_PDF_OUTPUT_DIR);
 }
 
 function uniqueOutputPath(dir, baseName) {
@@ -1103,7 +1102,7 @@ app.post("/api/print", async (req, res) => {
     };
     res.json({ ok: true });
     try {
-      clearSaveAsPdfOutputDir();
+      const archivedTo = clearSaveAsPdfOutputDir();
       const result = await buildSaveAsPdfOutputs(req, itemsToSave, (i, total, label) => {
         session.status.current = i;
         session.status.total = total;
@@ -1114,7 +1113,7 @@ app.post("/api/print", async (req, res) => {
         const details = result.errors.map(e => `- ${e.label}: ${e.message}`).join("\n");
         throw new Error(`Nie udalo sie zapisac PDF-ow dla wszystkich adresow.\n${details}`);
       }
-      session.status.message = `✅ Zapisano ${result.outputs.length} plik(ow) PDF do ${SAVE_AS_PDF_OUTPUT_DIR}`;
+      session.status.message = `✅ Zapisano PDF-y (${result.outputs.length}) do ${SAVE_AS_PDF_OUTPUT_DIR}${archivedTo ? ' (poprzednie pliki przeniesiono do podfolderu „poprzednie zapisy”)' : ''}`;
       session.status.percent = 100;
       session.status.done = true;
       session.status.savedFolder = SAVE_AS_PDF_OUTPUT_DIR;

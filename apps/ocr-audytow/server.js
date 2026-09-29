@@ -347,7 +347,8 @@ app.post('/api/ocr/analyze', heavyJobLimiter, upload.array('files', MAX_FILES), 
           pageCount: result.pageCount,
           pages: result.pages,
           warnings: result.warnings,
-          blocks: result.blocks
+          blocks: result.blocks,
+          thumbnails: result.thumbnails
         });
         results.push({
           ok: true,
@@ -374,6 +375,63 @@ app.post('/api/ocr/analyze', heavyJobLimiter, upload.array('files', MAX_FILES), 
     analyses.delete(analysisId);
     res.status(400).json({ ok: false, message: error.message });
   }
+});
+
+// Stan sesji analizy do WZNOWIENIA pracy po odswiezeniu strony (przeglad
+// 2026-09-29) - te same ksztalty co odpowiedzi /api/ocr/analyze i
+// /api/ocr/extract-fields, wiec klient renderuje je tymi samymi funkcjami.
+// Pola odczytane przez AI + reczne poprawki (resolve-field) sa w
+// fileEntry.resolvedBlocks, wiec nic nie trzeba odczytywac ponownie (i placic).
+function fieldsPayload(fileEntry) {
+  return {
+    ok: true,
+    fileId: fileEntry.fileId,
+    originalName: fileEntry.originalName,
+    warnings: fileEntry.warnings || [],
+    blocks: fileEntry.resolvedBlocks.map((b) => ({
+      blockIndex: b.blockIndex,
+      startPage: b.startPage,
+      endPage: b.endPage,
+      label: b.label,
+      fields: Object.fromEntries(Object.entries(b.fields).map(([key, f]) => [key, {
+        value: f.value,
+        confidence: f.confidence,
+        needsReview: f.needsReview,
+        resolved: f.resolved,
+        pageIndex: f.pageIndex,
+        columnLabel: COLUMN_LABELS[key] || key,
+        options: COLUMN_OPTIONS[key] || null
+      }]))
+    }))
+  };
+}
+
+app.get('/api/ocr/analysis/:analysisId', (req, res) => {
+  const analysis = analyses.get(req.params.analysisId);
+  if (!analysis) return res.status(404).json({ ok: false, message: 'Sesja analizy wygasła - wgraj pliki ponownie.' });
+  const analysisId = analysis.id;
+  const entries = [...analysis.files.values()];
+  const results = entries.map((f) => ({
+    ok: true,
+    fileId: f.fileId,
+    originalName: f.originalName,
+    status: f.status,
+    pageCount: f.pageCount,
+    warnings: f.warnings,
+    blocks: f.blocks,
+    thumbnails: (f.thumbnails || []).map(t => ({
+      pageIndex: t.pageIndex,
+      available: t.available,
+      url: t.available ? `/api/analysis/${analysisId}/files/${f.fileId}/thumb/${encodeURIComponent(t.file)}` : null
+    }))
+  }));
+  const withFields = entries.filter((f) => Array.isArray(f.resolvedBlocks) && f.resolvedBlocks.length);
+  res.json({
+    ok: true,
+    analysisId,
+    results,
+    fields: withFields.length ? { columnOrder: COLUMN_ORDER, columnLabels: COLUMN_LABELS, results: withFields.map(fieldsPayload) } : null
+  });
 });
 
 app.get('/api/analysis/:analysisId/files/:fileId/thumb/:file', (req, res) => {

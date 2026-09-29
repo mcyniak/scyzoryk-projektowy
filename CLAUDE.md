@@ -383,6 +383,18 @@ new app, copy this rather than inventing a new one:
   pipeline rejects ticked steps without their folder (client + server) and shows `bladOgolny`;
   tworzenie-folderow reports per-folder failures and lets simple mode finish a partially created set;
   the panel explains why a tool failed to start (`describeChildProblem`, e.g. EADDRINUSE).
+  Follow-up (same day, `test/group32-poprawki-ux.test.js`): "Zapisz jako PDF" in both printers no longer
+  deletes earlier saves — `lib/printing.js#archivePreviousSaveAsPdf` moves them to
+  `poprzednie zapisy/<YYYY-MM-DD HH.MM.SS>` and keeps the newest 5 sets; wnioski folder mode
+  (`POST /api/wm-folder/convert`) validates synchronously, returns 202 `{jobId,total}` and runs in the
+  background (`GET /api/wm-folder/jobs/:id`, `POST .../cancel`; client resumes via sessionStorage
+  `wnioski.wmFolderJob`); pieczątki keep their own `selectedPdfs` list (append in batches, ✕ per file);
+  OCR stores `{analysisId, table settings}` in sessionStorage `ocr.session` and after F5 restores steps 3/3b
+  from `GET /api/ocr/analysis/:id` (manual field edits are not restored). Document engine:
+  `Merge/ImageCompressor.cs` (called from `TemplateCleaner.CleanTemplate`) downsamples template images to
+  220 ppi of their displayed size and recompresses heavy JPEGs (q85/q80); `PhotoGallery.PrepareImage` also
+  recompresses unresized heavy JPEGs. Real Wierzchlas PDF 11.2 MB → 6.95 MB (Word: 4.96 MB). Disable with
+  `SCYZORYK_NO_IMAGE_COMPRESSION=1`.
 - `shared-styles/base.css` — intended single source of truth for panel CSS, but per its own README is
   **not yet wired up** to any app; each app currently still has its own inline/`styles.css`. Don't assume
   editing `shared-styles/base.css` affects any running app yet — check `shared-styles/README.md` before

@@ -53,6 +53,12 @@
   color: var(--text-primary); font-weight: 600;
 }
 .error-box + .error-box { margin-top: 8px; }
+/* Informacja o przywroconym odczycie po odswiezeniu strony (resumeOcrSession) */
+.notice-box {
+  margin-top: var(--space-3); padding: var(--space-4);
+  background: var(--success-50); border: 1px solid var(--success-100); border-radius: var(--radius-lg);
+  color: var(--text-primary); font-weight: 600;
+}
 
 /* Ekran przegladu/potwierdzenia podzialu na adresy */
 .review-file { padding: var(--space-4); border-radius: var(--radius-lg); border: 1px solid var(--border-default); background: var(--bg-surface); margin-bottom: var(--space-3); }

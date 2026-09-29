@@ -257,6 +257,10 @@ public sealed class PhotoGallery
         var needsRotate = origin != SKEncodedOrigin.TopLeft && origin != SKEncodedOrigin.Default;
 
         byte[] outBytes = bytes;
+        // Zdjecie juz we wlasciwym rozmiarze, ale "ciezkie" (jakosc aparatu) -
+        // ta sama ponowna kompresja co dla grafik wzoru (patrz ImageCompressor).
+        if (!needsResize && !needsRotate && !isPng)
+            outBytes = ImageCompressor.RecompressJpegIfHeavy(bytes) ?? bytes;
         if (needsResize || needsRotate)
         {
             using var decoded = SKBitmap.Decode(codec) ?? throw new InvalidOperationException("Nie udalo sie odczytac zdjecia.");
@@ -267,7 +271,7 @@ public sealed class PhotoGallery
                 ? oriented.Copy()
                 : oriented.Resize(new SKImageInfo(w, h), new SKSamplingOptions(SKCubicResampler.Mitchell));
             using var image = SKImage.FromBitmap(resized);
-            using var encoded = image.Encode(isPng ? SKEncodedImageFormat.Png : SKEncodedImageFormat.Jpeg, 90);
+            using var encoded = image.Encode(isPng ? SKEncodedImageFormat.Png : SKEncodedImageFormat.Jpeg, 85);
             outBytes = encoded.ToArray();
         }
 

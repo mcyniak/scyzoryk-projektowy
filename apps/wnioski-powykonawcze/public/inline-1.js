@@ -523,7 +523,7 @@ const $ = s => document.querySelector(s);
 
       wmConvertBtn.disabled = true;
       wmConvertResult.innerHTML = '';
-      showWmConvertStatus(`Przerabiam ${P(items.length, 'kategorię', 'kategorie', 'kategorii')} i zapisuję w folderach... To może potrwać kilka minut - nie zamykaj tej karty.`, '');
+      showWmConvertStatus(`Przerabiam ${P(items.length, 'kategorię', 'kategorie', 'kategorii')} i zapisuję w folderach...`, '');
       try {
         const res = await fetch('/api/wm-folder/convert', {
           method: 'POST',
@@ -539,17 +539,83 @@ const $ = s => document.querySelector(s);
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error(data.message || 'Nie udało się przerobić dokumentów.');
-        const failedList = data.failed || [];
-        showWmConvertStatus(`Gotowe. Utworzono i zapisano w folderach: ${data.created}.`, failedList.length ? '' : 'ok');
-        const okLines = (data.files || []).map(f => `<div class="row ok"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.file)}${f.docx ? ` + ${escapeHtml(f.docx)}` : ''}</small></div></div>`).join('');
+        startWmFolderPolling(data.jobId, data.total || items.length);
+      } catch (err) {
+        showWmConvertStatus(friendlyErrorMessage(err) || 'Błąd przerabiania dokumentów.', 'err');
+        wmConvertBtn.disabled = false;
+      }
+    });
+
+    // Przerabianie w folderach dziala jako zadanie w tle (przeglad 2026-09-29):
+    // postep z czasem trwania, przycisk "Przerwij", a po odswiezeniu strony
+    // wynik nie ginie (id zadania w sessionStorage).
+    const WM_FOLDER_JOB_KEY = 'wnioski.wmFolderJob';
+    let wmFolderPollTimer = null;
+    let wmFolderCancelBtn = null;
+    function ensureWmFolderCancelBtn() {
+      if (wmFolderCancelBtn) return wmFolderCancelBtn;
+      wmFolderCancelBtn = document.createElement('button');
+      wmFolderCancelBtn.type = 'button';
+      wmFolderCancelBtn.className = 'button';
+      wmFolderCancelBtn.textContent = 'Przerwij';
+      wmFolderCancelBtn.hidden = true;
+      wmConvertBtn.insertAdjacentElement('afterend', wmFolderCancelBtn);
+      wmFolderCancelBtn.addEventListener('click', async () => {
+        const jobId = sessionStorage.getItem(WM_FOLDER_JOB_KEY);
+        if (!jobId) return;
+        if (!confirm('Przerwać przerabianie? Pliki już zapisane w folderach klientów zostaną.')) return;
+        wmFolderCancelBtn.disabled = true;
+        await fetch(`/api/wm-folder/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', headers: { 'X-Scyzoryk-Request': '1' } }).catch(() => {});
+      });
+      return wmFolderCancelBtn;
+    }
+    function stopWmFolderPolling() {
+      if (wmFolderPollTimer) clearInterval(wmFolderPollTimer);
+      wmFolderPollTimer = null;
+      try { sessionStorage.removeItem(WM_FOLDER_JOB_KEY); } catch (_) {}
+      wmConvertBtn.disabled = false;
+      if (wmFolderCancelBtn) { wmFolderCancelBtn.hidden = true; wmFolderCancelBtn.disabled = false; }
+    }
+    function startWmFolderPolling(jobId, total) {
+      try { sessionStorage.setItem(WM_FOLDER_JOB_KEY, jobId); } catch (_) {}
+      wmConvertBtn.disabled = true;
+      ensureWmFolderCancelBtn().hidden = false;
+      let failures = 0;
+      const tick = async () => {
+        let data;
+        try {
+          const res = await fetch(`/api/wm-folder/jobs/${encodeURIComponent(jobId)}`);
+          data = await res.json().catch(() => ({}));
+          if (res.status === 404) { stopWmFolderPolling(); return showWmConvertStatus(data.message || 'Zadanie wygasło - sprawdź pliki w folderach klientów.', 'err'); }
+          failures = 0;
+        } catch (err) {
+          if (++failures >= 5) { stopWmFolderPolling(); showWmConvertStatus('Brak połączenia z narzędziem - przerabianie mogło zostać przerwane. Sprawdź pliki w folderach klientów.', 'err'); }
+          return;
+        }
+        const job = data.job || {};
+        const since = job.startedAt || job.createdAt || Date.now();
+        const secs = Math.max(0, Math.round((Date.now() - since) / 1000));
+        const elapsed = secs >= 60 ? `${Math.floor(secs / 60)} min ${secs % 60} s` : `${secs} s`;
+        if (job.status === 'queued') return showWmConvertStatus('Czekam w kolejce (inne zadanie przerabia dokumenty)...', '');
+        if (job.status === 'running') return showWmConvertStatus(`Przerabiam ${P(job.total || total, 'kategorię', 'kategorie', 'kategorii')} i zapisuję w folderach... trwa ${elapsed}. Możesz przerwać przyciskiem obok.`, '');
+        stopWmFolderPolling();
+        if (job.status === 'cancelled') return showWmConvertStatus('Przerwano. Pliki zapisane przed przerwaniem zostały w folderach klientów.', '');
+        if (job.status === 'fatal-error') return showWmConvertStatus(friendlyErrorMessage(job.error) || 'Nie udało się przerobić dokumentów.', 'err');
+        const result = job.result || {};
+        const failedList = result.failed || [];
+        showWmConvertStatus(`Gotowe. Utworzono i zapisano w folderach: ${result.created || 0}.${failedList.length ? ` Nieudane: ${failedList.length}.` : ''}`, failedList.length ? '' : 'ok');
+        const okLines = (result.files || []).map(f => `<div class="row ok"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.file)}${f.docx ? ` + ${escapeHtml(f.docx)}` : ''}</small></div></div>`).join('');
         const failLines = failedList.map(f => `<div class="row err"><div class="grow">${escapeHtml(f.category)}<small>${escapeHtml(f.error)}</small></div></div>`).join('');
         // Tryb folderowy zapisuje pliki bezposrednio w docelowych folderach -
         // nie ma tu przyciskow pobierania do bramkowania (patrz komentarz przy
         // renderChangesSummary), wiec uzywamy samego .html, zawsze rozwinietego.
-        wmConvertResult.innerHTML = `<div class="list">${okLines}${failLines}</div>${renderChangesSummary(data.files || []).html}`;
-      } catch (err) {
-        showWmConvertStatus(friendlyErrorMessage(err) || 'Błąd przerabiania dokumentów.', 'err');
-      } finally {
-        wmConvertBtn.disabled = false;
-      }
-    });
+        wmConvertResult.innerHTML = `<div class="list">${okLines}${failLines}</div>${renderChangesSummary(result.files || []).html}`;
+      };
+      if (wmFolderPollTimer) clearInterval(wmFolderPollTimer);
+      tick();
+      wmFolderPollTimer = setInterval(tick, 1500);
+    }
+    try {
+      const pendingWmJob = sessionStorage.getItem(WM_FOLDER_JOB_KEY);
+      if (pendingWmJob) startWmFolderPolling(pendingWmJob, 0);
+    } catch (_) {}

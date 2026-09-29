@@ -136,17 +136,26 @@ test('buildSaveAsPdfOutputs: dokumenty jednego adresu z ROZNYMI wlasnymi etykiet
   assert.equal(result.outputs[0].label, '1 - ul. Testowa 1');
 });
 
-test('clearSaveAsPdfOutputDir: usuwa WSZYSTKO z poprzedniego uruchomienia (pliki i podfoldery) i zostawia pusty, istniejacy folder', async (t) => {
+test('clearSaveAsPdfOutputDir: poprzednie zapisy trafiaja do "poprzednie zapisy/<data>" (nie sa kasowane), najwyzej 5 paczek', async (t) => {
   t.after(() => fsp.rm(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true, force: true }).catch(() => {}));
+  await fsp.rm(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true, force: true }).catch(() => {});
 
   fs.mkdirSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true });
   fs.writeFileSync(path.join(SAVE_AS_PDF_OUTPUT_DIR, 'stary-adres.pdf'), 'stary plik z poprzedniego uruchomienia');
   fs.mkdirSync(path.join(SAVE_AS_PDF_OUTPUT_DIR, 'przypadkowy-podfolder'), { recursive: true });
 
-  clearSaveAsPdfOutputDir();
+  const archived = clearSaveAsPdfOutputDir();
 
-  assert.ok(fs.existsSync(SAVE_AS_PDF_OUTPUT_DIR), 'folder wyjsciowy powinien nadal istniec (pusty)');
-  assert.deepEqual(fs.readdirSync(SAVE_AS_PDF_OUTPUT_DIR), []);
+  assert.deepEqual(fs.readdirSync(SAVE_AS_PDF_OUTPUT_DIR), ['poprzednie zapisy'], 'w glownym folderze nic poza archiwum');
+  assert.ok(fs.existsSync(path.join(archived, 'stary-adres.pdf')), 'stary PDF zachowany w archiwum');
+  assert.ok(fs.existsSync(path.join(archived, 'przypadkowy-podfolder')));
+
+  const { archivePreviousSaveAsPdf } = require('../lib/printing');
+  for (let i = 0; i < 7; i++) {
+    fs.writeFileSync(path.join(SAVE_AS_PDF_OUTPUT_DIR, `plik${i}.pdf`), 'x');
+    archivePreviousSaveAsPdf(SAVE_AS_PDF_OUTPUT_DIR, { now: new Date(2030, 0, 1, 10, 0, i) });
+  }
+  assert.equal(fs.readdirSync(path.join(SAVE_AS_PDF_OUTPUT_DIR, 'poprzednie zapisy')).length, 5);
 });
 
 test('buildSaveAsPdfOutputs: niedozwolone znaki w etykiecie adresu nie tworza nieprawidlowej nazwy pliku', async (t) => {

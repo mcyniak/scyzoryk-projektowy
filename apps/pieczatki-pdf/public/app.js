@@ -881,8 +881,43 @@ function stopBoxDrag(event) {
   updateBoxes();
 }
 
+// Lista wybranych PDF-ow trzymana osobno od <input type=file> (przeglad
+// 2026-09-29): kolejne wybory/upuszczenia DOPISUJA pliki (wczesniej kazdy
+// wybor zastepowal cala liste), a pojedynczy plik da sie usunac.
+let selectedPdfs = [];
 function getPdfFiles() {
-  return [...(pdfInput.files || [])];
+  return selectedPdfs.slice();
+}
+function pdfKey(f) { return `${f.name}|${f.size}|${f.lastModified}`; }
+function addPdfFiles(fileList) {
+  const all = [...(fileList || [])];
+  const pdfFiles = all.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  const known = new Set(selectedPdfs.map(pdfKey));
+  let added = 0;
+  for (const f of pdfFiles) {
+    if (known.has(pdfKey(f))) continue;
+    selectedPdfs.push(f);
+    known.add(pdfKey(f));
+    added++;
+  }
+  const skipped = all.length - pdfFiles.length;
+  onPdfListChanged(added ? selectedPdfs.length - added : selectedPdfPreviewIndex);
+  if (skipped) setStatus(`Pominięto ${window.ScyzorykUI ? window.ScyzorykUI.plural(skipped, 'plik', 'pliki', 'plików') : skipped + ' plików'} - to nie są PDF-y.`, true);
+}
+function removePdfFile(index) {
+  selectedPdfs.splice(index, 1);
+  onPdfListChanged(Math.min(selectedPdfPreviewIndex, selectedPdfs.length - 1));
+}
+function onPdfListChanged(previewIndex) {
+  const files = getPdfFiles();
+  const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, c) : `${n} ${c}`;
+  pdfInfo.textContent = files.length
+    ? `${P(files.length, 'plik', 'pliki', 'plików')}: ${files.map(f => f.name).slice(0, 3).join(', ')}${files.length > 3 ? '...' : ''} · kliknij lub upuść, żeby dodać kolejne`
+    : 'Możesz zaznaczyć kilka plików naraz.';
+  renderPdfPreviewList();
+  if (files.length) selectPdfPreview(Math.max(0, Number(previewIndex) || 0));
+  else clearPdfPreview();
+  renderActiveEditor();
 }
 
 function clearPdfPreview() {
@@ -906,7 +941,7 @@ function renderPdfPreviewList() {
   if (!pdfPreviewList) return;
   const files = getPdfFiles();
   pdfPreviewList.innerHTML = '';
-  if (files.length <= 1) {
+  if (!files.length) {
     pdfPreviewList.hidden = true;
     return;
   }
@@ -914,17 +949,27 @@ function renderPdfPreviewList() {
   pdfPreviewList.hidden = false;
   const label = document.createElement('div');
   label.className = 'pdfPreviewListTitle';
-  label.textContent = 'Podgląd pliku:';
+  label.textContent = files.length > 1 ? 'Pliki (kliknij, żeby podejrzeć):' : 'Plik:';
   pdfPreviewList.appendChild(label);
 
   files.forEach((file, index) => {
+    const row = document.createElement('div');
+    row.className = 'pdfPreviewRow';
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `pdfPreviewItem${index === selectedPdfPreviewIndex ? ' active' : ''}`;
     button.title = file.name;
     button.innerHTML = `<strong>${index + 1}</strong><span>${escapeHtml(file.name)}</span>`;
     button.addEventListener('click', () => selectPdfPreview(index));
-    pdfPreviewList.appendChild(button);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'pdfPreviewRemove';
+    remove.title = `Usuń ${file.name} z listy`;
+    remove.setAttribute('aria-label', `Usuń ${file.name} z listy`);
+    remove.textContent = '✕';
+    remove.addEventListener('click', () => removePdfFile(index));
+    row.append(button, remove);
+    pdfPreviewList.appendChild(row);
   });
 }
 
@@ -1074,15 +1119,9 @@ function escapeAttr(value) {
 }
 
 pdfInput.addEventListener('change', () => {
-  const files = getPdfFiles();
-  pdfInfo.textContent = files.length
-    ? `${window.ScyzorykUI ? window.ScyzorykUI.plural(files.length, 'plik', 'pliki', 'plików') : files.length + ' plik(ów)'}: ${files.map(f => f.name).slice(0, 3).join(', ')}${files.length > 3 ? '...' : ''}`
-    : 'Możesz zaznaczyć kilka plików naraz.';
-
-  selectedPdfPreviewIndex = 0;
-  renderPdfPreviewList();
-  if (files[0]) selectPdfPreview(0);
-  else clearPdfPreview();
+  addPdfFiles(pdfInput.files);
+  // Czyscimy wybor w polu - ten sam plik mozna wybrac ponownie po usunieciu.
+  pdfInput.value = '';
 });
 
 const dropZone = pdfInput.closest('.drop');
@@ -1104,12 +1143,16 @@ if (dropZone) {
   dropZone.addEventListener('drop', e => {
     const files = e.dataTransfer.files;
     if (!files.length) return;
-    const pdfFiles = [...files].filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
-    if (!pdfFiles.length) return;
-    const dataTransfer = new DataTransfer();
-    pdfFiles.forEach(f => dataTransfer.items.add(f));
-    pdfInput.files = dataTransfer.files;
-    pdfInput.dispatchEvent(new Event('change'));
+    addPdfFiles(files);
+  });
+}
+// Upuszczenie PDF-a na duzy podglad tez dodaje go do listy.
+if (preview) {
+  preview.addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
+  preview.addEventListener('drop', e => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault();
+    addPdfFiles(e.dataTransfer.files);
   });
 }
 
@@ -1208,7 +1251,7 @@ function parseContentDispositionFilename(disposition) {
 
 form.addEventListener('submit', async event => {
   event.preventDefault();
-  const pdfs = [...pdfInput.files];
+  const pdfs = getPdfFiles();
   if (!pdfs.length) return setStatus('Dodaj przynajmniej jeden PDF.', true);
 
   const validStamps = stamps.filter(stamp => Boolean(stamp.text.trim()));

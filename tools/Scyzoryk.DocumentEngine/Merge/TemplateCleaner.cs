@@ -46,6 +46,7 @@ public static class TemplateCleaner
                 }
                 settingsPart.Settings.Save();
             }
+            ImageCompressor.Compress(doc, log);
         }
         return ms.ToArray();
     }

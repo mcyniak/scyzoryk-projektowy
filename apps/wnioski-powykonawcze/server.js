@@ -572,7 +572,29 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
     const outputJson = path.join(jobDir, 'result.json');
     writeJsonFileNoBom(inputJson, { dateText, files: manifestFiles, saveDocx });
 
-    await wordQueue.run(() => runConvertScript(inputJson, outputJson));
+    // Przeglad 2026-09-29: przerabianie trwalo w JEDNYM zadaniu HTTP (do
+    // godziny) - bez postepu, bez "Przerwij", a odswiezenie strony gubilo
+    // wynik. Teraz: zadanie w tle + odpytywanie + przerwanie (jak tryb reczny).
+    const folderJob = { id: jobId, createdAt: Date.now(), status: 'queued', total: manifestFiles.length, result: null, error: null, child: null };
+    wmFolderJobs.set(jobId, folderJob);
+    res.status(202).json({ ok: true, jobId, status: 'queued', total: manifestFiles.length });
+    setImmediate(() => runWmFolderJob(folderJob, manifestFiles, inputJson, outputJson, jobDir));
+  } catch (err) {
+    await fsp.rm(jobDir, { recursive: true, force: true }).catch(() => {});
+    res.status(400).json({ ok: false, message: err.message || 'Nie udało się przetworzyć dokumentów.' });
+  }
+});
+
+const wmFolderJobs = new Map();
+async function runWmFolderJob(folderJob, manifestFiles, inputJson, outputJson, jobDir) {
+  try {
+    await wordQueue.run(async () => {
+      if (folderJob.status === 'cancelled') return;
+      folderJob.status = 'running';
+      folderJob.startedAt = Date.now();
+      await runConvertScript(inputJson, outputJson, folderJob);
+    });
+    if (folderJob.status === 'cancelled') return;
     const result = readJsonFileNoBom(outputJson);
     if (!result.ok) throw new Error(result.error || 'Nie udało się przetworzyć dokumentów.');
 
@@ -596,12 +618,35 @@ app.post('/api/wm-folder/convert', heavyJobLimiter, async (req, res) => {
       }
     }
 
-    res.json({ ok: true, created: okItems.length, files: okItems, failed });
+    folderJob.result = { created: okItems.length, files: okItems, failed };
+    folderJob.status = failed.length ? 'finished-with-errors' : 'finished';
   } catch (err) {
-    res.status(400).json({ ok: false, message: err.message || 'Nie udało się przetworzyć dokumentów.' });
+    if (folderJob.status !== 'cancelled') {
+      folderJob.status = 'fatal-error';
+      folderJob.error = err.message || 'Nie udało się przetworzyć dokumentów.';
+    }
   } finally {
+    folderJob.finishedAt = Date.now();
     await fsp.rm(jobDir, { recursive: true, force: true }).catch(() => {});
+    // Zakonczone zadania trzymamy godzine (wystarczy na odczyt wyniku po F5).
+    setTimeout(() => wmFolderJobs.delete(folderJob.id), 60 * 60 * 1000).unref?.();
   }
+}
+
+app.get('/api/wm-folder/jobs/:id', (req, res) => {
+  const job = wmFolderJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania (mogło wygasnąć po restarcie narzędzia).' });
+  res.json({ ok: true, job: { id: job.id, status: job.status, total: job.total, createdAt: job.createdAt, startedAt: job.startedAt || null, finishedAt: job.finishedAt || null, error: job.error, result: job.result } });
+});
+
+app.post('/api/wm-folder/jobs/:id/cancel', (req, res) => {
+  const job = wmFolderJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania.' });
+  if (['finished', 'finished-with-errors', 'cancelled', 'fatal-error'].includes(job.status)) return res.json({ ok: true, status: job.status });
+  job.status = 'cancelled';
+  try { job.child?.kill(); } catch {}
+  job.child = null;
+  res.json({ ok: true, status: job.status });
 });
 
 app.get('/api/jobs/:id/zip', (req, res) => {

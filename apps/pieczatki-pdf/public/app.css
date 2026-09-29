@@ -168,3 +168,6 @@ h2 { font-size: var(--text-md); margin: var(--space-4) 0 8px; }
   .pageJump input { flex: 1; }
   .four { grid-template-columns: 1fr; }
 }
+.pdfPreviewRow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.pdfPreviewRemove { width: 32px; height: 32px; border-radius: var(--radius-md); border: 1px solid var(--border-default); background: var(--bg-surface); color: var(--text-secondary); cursor: pointer; }
+.pdfPreviewRemove:hover { border-color: var(--danger-500, #dc2626); color: var(--danger-600, #b91c1c); }

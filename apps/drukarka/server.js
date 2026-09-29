@@ -225,11 +225,10 @@ function uniqueOutputPath(dir, baseName) {
   return candidate;
 }
 
+// Poprzednie zapisy NIE sa juz kasowane - przenosimy je do podfolderu
+// "poprzednie zapisy" (patrz lib/printing.js#archivePreviousSaveAsPdf).
 function clearSaveAsPdfOutputDir() {
-  try {
-    fs.rmSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true, force: true });
-  } catch (_) {}
-  fs.mkdirSync(SAVE_AS_PDF_OUTPUT_DIR, { recursive: true });
+  return require("../../lib/printing").archivePreviousSaveAsPdf(SAVE_AS_PDF_OUTPUT_DIR);
 }
 
 // "Zapisz jako PDF" - to, co WYSLALOBY sie do drukarki (konwersja DOC/DOCX,
@@ -502,14 +501,14 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
     };
     res.json({ ok: true });
     try {
-      clearSaveAsPdfOutputDir();
+      const archivedTo = clearSaveAsPdfOutputDir();
       const result = await buildSaveAsPdfOutputs(itemsToSave, mergeFiles, (i, total, label) => {
         status.current = i;
         status.total = total;
         status.percent = total ? Math.round((i / total) * 100) : 0;
         status.message = label ? `Zapisuje ${i + 1}/${total}: ${label}` : `Zapisano ${i}/${total}.`;
       });
-      status.message = `✅ Zapisano PDF-y (${result.outputs.length}) do ${SAVE_AS_PDF_OUTPUT_DIR}`;
+      status.message = `✅ Zapisano PDF-y (${result.outputs.length}) do ${SAVE_AS_PDF_OUTPUT_DIR}${archivedTo ? ' (poprzednie pliki przeniesiono do podfolderu „poprzednie zapisy”)' : ''}`;
       status.percent = 100;
       status.done = true;
       status.savedFolder = SAVE_AS_PDF_OUTPUT_DIR;

@@ -162,7 +162,25 @@
     if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files);
   });
 
+  // Wznowienie po odswiezeniu strony (F5): numer odczytu i ustawienia kroku 0
+  // trzymamy w sessionStorage, a serwer oddaje stan przez
+  // GET /api/ocr/analysis/:id - odczyt oplacony w AI nie przepada.
+  const OCR_SESSION_KEY = 'ocr.session';
+  function saveOcrSession() {
+    if (!analysisId) return;
+    try {
+      sessionStorage.setItem(OCR_SESSION_KEY, JSON.stringify({
+        analysisId, tableMode, tableExcelPath, tableFamily,
+        selectedFieldKeys: [...selectedFieldKeys], selectedFamily
+      }));
+    } catch { /* prywatne okno - wznowienie po prostu nie zadziala */ }
+  }
+  function clearOcrSession() {
+    try { sessionStorage.removeItem(OCR_SESSION_KEY); } catch { /* ignore */ }
+  }
+
   function resetAll() {
+    clearOcrSession();
     selectedFiles = [];
     analysisId = null;
     analysisFiles = [];
@@ -183,6 +201,7 @@
   // "Anuluj" w kroku 3 porzuca tylko podzial - wybrane PDF-y zostaja na liscie
   // (wczesniej trzeba bylo wybierac wszystkie pliki od nowa).
   cancelReviewBtn.addEventListener('click', () => {
+    clearOcrSession();
     analysisId = null;
     analysisFiles = [];
     fieldsFiles = [];
@@ -415,6 +434,7 @@
 
   function handleAnalyzeResponse(data) {
     analysisId = data.analysisId;
+    saveOcrSession();
     analysisFiles = [];
     const failed = [];
 
@@ -592,6 +612,7 @@
         errorBox.innerHTML = failed.map(f => `<div class="error-box">${escapeHtml(f.originalName)}: ${escapeHtml(f.error)}</div>`).join('');
       }
       fieldsFiles = (data.results || []).filter(r => r.ok);
+      saveOcrSession();
       startFieldReview();
     } catch (err) {
       statusBox.hidden = true;
@@ -983,6 +1004,7 @@
       statusBox.hidden = true;
       resultsPanel.hidden = false;
       renderResults(data.results);
+      clearOcrSession();
 
       if (data.excelPath && data.fillStats) {
         excelResultNote.hidden = false;
@@ -1140,7 +1162,40 @@
       // powodu, zwykle sciezki uzycia i tak zglosza swoj wlasny blad.
     }
   }
-  checkOcrConfigured();
+  async function resumeOcrSession() {
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem(OCR_SESSION_KEY) || 'null'); } catch { saved = null; }
+    if (!saved?.analysisId) return;
+    let data;
+    try {
+      const res = await fetch(`/api/ocr/analysis/${encodeURIComponent(saved.analysisId)}`);
+      if (res.status === 404) { clearOcrSession(); return; }
+      data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) return;
+    } catch {
+      return; // serwer jeszcze wstaje - sprobujemy przy nastepnym odswiezeniu
+    }
+    tableMode = Boolean(saved.tableMode);
+    tableExcelPath = saved.tableExcelPath || '';
+    tableFamily = saved.tableFamily || '';
+    selectedFieldKeys = new Set(saved.selectedFieldKeys || []);
+    selectedFamily = saved.selectedFamily || '';
+    if (tableMode) familySelectField.hidden = true;
+    pastTableStep = true;
+    if (!ocrLockedPanel || ocrLockedPanel.hidden) {
+      tablePanel.hidden = true;
+      ocrUploadPanel.hidden = false;
+    }
+    handleAnalyzeResponse({ analysisId: data.analysisId, results: data.results || [] });
+    if (data.fields && Array.isArray(data.fields.results) && data.fields.results.length) {
+      fieldsFiles = data.fields.results;
+      startFieldReview();
+    }
+    placeFeedbackInActivePanel();
+    errorBox.innerHTML = '<div class="notice-box">Przywrócono odczyt sprzed odświeżenia strony - nie trzeba wgrywać plików ponownie. Ręczne poprawki pól wpisane przed odświeżeniem trzeba wprowadzić jeszcze raz.</div>';
+  }
+
+  checkOcrConfigured().then(resumeOcrSession);
 
   ocrChangeKeyBtn.addEventListener('click', () => {
     ocrUnlockStatus.className = '';
