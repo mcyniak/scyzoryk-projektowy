@@ -4,7 +4,11 @@
 'use strict';
 // Izolacja katalogu danych (audyt 2026-10-20): bez tego ten plik pisal do PRAWDZIWEGO
 // katalogu danych ScyzorykProjektowy w %LOCALAPPDATA% uzytkownika (blokady druku, "Zapisane PDF").
-if (!process.env.SCYZORYK_DATA_ROOT) process.env.SCYZORYK_DATA_ROOT = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'scyzoryk-test-data-'));
+if (!process.env.SCYZORYK_DATA_ROOT) {
+  const isolated = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'scyzoryk-test-data-'));
+  process.env.SCYZORYK_DATA_ROOT = isolated;
+  process.on('exit', () => { try { require('node:fs').rmSync(isolated, { recursive: true, force: true }); } catch (_) { /* najlepszy wysilek */ } });
+}
 
 
 const test = require('node:test');
