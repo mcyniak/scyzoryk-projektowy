@@ -1,3 +1,6 @@
+// Izolacja katalogu danych (audyt 2026-10-20): bez tego ten plik pisal do PRAWDZIWEGO
+// katalogu danych ScyzorykProjektowy w %LOCALAPPDATA% uzytkownika (blokady druku, "Zapisane PDF").
+if (!process.env.SCYZORYK_DATA_ROOT) process.env.SCYZORYK_DATA_ROOT = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'scyzoryk-test-data-'));
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');

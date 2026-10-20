@@ -447,6 +447,13 @@ public sealed class LauncherApp
 
         if (pending is null || string.IsNullOrWhiteSpace(pending.InstallerPath) || string.IsNullOrWhiteSpace(pending.LauncherExePath))
         {
+            // Audyt 2026-10-20: ta galaz jako jedyna kasowala znacznik BEZ wpisu w logu -
+            // aktualizacja 1.6.0 zniknela tak bez sladu.
+            _logger.Log(LogLevel.Warning, "Niekompletny znacznik oczekujacej aktualizacji - pomijam.", new Dictionary<string, string>
+            {
+                ["installerPath"] = pending?.InstallerPath ?? string.Empty,
+                ["launcherExePath"] = pending?.LauncherExePath ?? string.Empty,
+            });
             TryDeletePendingUpdateMarker(pendingPath);
             return false;
         }

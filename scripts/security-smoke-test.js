@@ -9,7 +9,14 @@ const checks = [
   { port: Number(process.env.WNIOSKI_PORT || 3005), path: '/api/health', name: 'wnioski-powykonawcze' },
   { port: Number(process.env.KARTY_PORT || 3006), path: '/api/health', name: 'karty-katalogowe' },
   { port: Number(process.env.DRUKARKA_PROJEKTY_PORT || 3010), path: '/api/health', name: 'drukarka-projekty' },
-  { port: Number(process.env.OCR_AUDYTOW_PORT || 3011), path: '/api/health', name: 'ocr-audytow' }
+  { port: Number(process.env.OCR_AUDYTOW_PORT || 3011), path: '/api/health', name: 'ocr-audytow' },
+  // Audyt 2026-10-20: wczesniej 8 z 14 narzedzi - ponizsze nie byly sprawdzane wcale.
+  { port: Number(process.env.NAZYWARKA_SKANOW_PORT || 3007), path: '/api/health', name: 'nazywarka-skanow' },
+  { port: Number(process.env.FORMULARZE_VARMERO_PORT || 3012), path: '/api/health', name: 'formularze-varmero' },
+  { port: Number(process.env.TWORZENIE_FOLDEROW_PORT || 3013), path: '/api/health', name: 'tworzenie-folderow' },
+  { port: Number(process.env.PROTOKOLY_PORT || 3014), path: '/api/health', name: 'protokoly' },
+  { port: Number(process.env.PIPELINE_PORT || 3015), path: '/api/health', name: 'pipeline' },
+  { port: Number(process.env.KREATOR_WZOROW_PORT || 3016), path: '/api/health', name: 'kreator-wzorow' }
 ];
 
 function get(port, path, expectedName) {
@@ -66,12 +73,12 @@ async function ensureAppsStarted(panelPort) {
   }
 }
 
-function postWithoutHeader() {
+function postWithoutHeader(port) {
   return new Promise(resolve => {
     const body = '{}';
     const req = http.request({
       hostname: '127.0.0.1',
-      port: Number(process.env.DRUKARKA_PORT || 3001),
+      port,
       path: '/api/clear',
       method: 'POST',
       timeout: 1500,
@@ -83,6 +90,14 @@ function postWithoutHeader() {
     req.on('timeout', () => { req.destroy(); resolve(false); });
     req.on('error', () => resolve(false));
     req.end(body);
+  });
+}
+
+function getWithHost(port, path, host) {
+  return new Promise(resolve => {
+    const req = http.get({ hostname: '127.0.0.1', port, path, timeout: 1500, headers: { Host: `${host}:${port}` } }, res => { res.resume(); resolve(res.statusCode); });
+    req.on('timeout', () => { req.destroy(); resolve(0); });
+    req.on('error', () => resolve(0));
   });
 }
 
@@ -100,12 +115,21 @@ function postWithoutHeader() {
     }
   }
 
-  const protectedMutation = await postWithoutHeader();
-  if (protectedMutation) {
-    console.log('OK  POST bez naglowka ochronnego jest blokowany.');
-  } else {
-    failed++;
-    console.error('ERR POST bez naglowka ochronnego nie zostal zablokowany.');
+  for (const check of checks) {
+    if (!check.name) continue;
+    if (await postWithoutHeader(check.port)) {
+      console.log(`OK  ${check.name}: POST bez naglowka ochronnego jest blokowany.`);
+    } else {
+      failed++;
+      console.error(`ERR ${check.name}: POST bez naglowka ochronnego nie zostal zablokowany.`);
+    }
+  }
+
+  // DNS rebinding: zadanie z obcym naglowkiem Host musi byc odrzucone (panel i kazde narzedzie).
+  for (const check of checks) {
+    const status = await getWithHost(check.port, check.path, 'evil.example');
+    if (status === 403) console.log(`OK  :${check.port} odrzuca obcy naglowek Host.`);
+    else { failed++; console.error(`ERR :${check.port} przyjal obcy naglowek Host (status ${status}).`); }
   }
 
   if (failed) process.exit(1);

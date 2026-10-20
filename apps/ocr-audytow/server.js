@@ -49,7 +49,7 @@ scheduleCleanup([UPLOAD_DIR, OUTPUT_DIR], JOB_TTL_MS, 60 * 60 * 1000);
 // wyzej) dziala niezaleznie od stanu w pamieci i sprzata kazdy porzucony folder w ANALYSIS_DIR.
 scheduleCleanup([ANALYSIS_DIR], ANALYSIS_TTL_MS, 15 * 60 * 1000);
 
-applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+applySecurityHeaders(app, "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://scyzoryk.localhost:3000 http://127.0.0.1:3000; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
 applyMutationGuard(app, (req, res) => res.status(403).json({ ok: false, message: 'Odśwież stronę i spróbuj ponownie.' }));
 app.use(express.json({ limit: '2mb' }));
 

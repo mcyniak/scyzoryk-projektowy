@@ -444,6 +444,66 @@ test('updateService: cale pobieranie -> weryfikacja SHA-256 -> "ready-for-restar
   fs.rmSync(rootDir, { recursive: true, force: true });
 });
 
+test('updateService: juz pobrany, zweryfikowany instalator jest uzyty ponownie (bez ponownego pobierania) - realny przypadek 24.09: 665 MB lezalo, a znacznik zniknal', async () => {
+  const bytes = crypto.randomBytes(30000);
+  const hash = sha256Hex(bytes);
+  const release = buildFakeRelease('9.9.8', bytes);
+  const rootDir = tempDir('scz-svc-root-');
+  fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
+  let downloads = 0;
+  const { service, updateRoot } = makeTestService({
+    rootDir,
+    currentVersion: '1.0.0',
+    fetchLatestRelease: async () => release,
+    downloadText: async () => `${hash}  ${release.installerAsset.name}`,
+    parseSha256File: (text) => text.split(/\s+/)[0],
+    downloadToPartialFile: async () => { downloads++; throw new Error('nie powinno pobierac'); }
+  });
+  fs.mkdirSync(path.join(updateRoot, '9.9.8'), { recursive: true });
+  fs.writeFileSync(path.join(updateRoot, '9.9.8', release.installerAsset.name), bytes);
+
+  await service.checkForUpdate();
+  const install = service.startInstall();
+  await install.flowPromise;
+
+  assert.equal(downloads, 0);
+  assert.equal(service.getStatusPayload().state, 'ready-for-restart');
+  const pending = JSON.parse(fs.readFileSync(path.join(updateRoot, 'pending-update.json'), 'utf8'));
+  assert.equal(pending.installerSha256.toLowerCase(), hash);
+  fs.rmSync(rootDir, { recursive: true, force: true });
+});
+
+test('updateService: istniejacy plik instalatora z INNA suma jest pobierany od nowa, nie uzywany', async () => {
+  const bytes = crypto.randomBytes(30000);
+  const hash = sha256Hex(bytes);
+  const release = buildFakeRelease('9.9.7', bytes);
+  const rootDir = tempDir('scz-svc-root-');
+  fs.writeFileSync(path.join(rootDir, 'Scyzoryk.exe'), '# test');
+  let downloads = 0;
+  const { service, updateRoot } = makeTestService({
+    rootDir,
+    currentVersion: '1.0.0',
+    fetchLatestRelease: async () => release,
+    downloadText: async () => `${hash}  ${release.installerAsset.name}`,
+    parseSha256File: (text) => text.split(/\s+/)[0],
+    downloadToPartialFile: async (url, dest) => {
+      downloads++;
+      fs.writeFileSync(`${dest}.partial`, bytes);
+      return { bytes: bytes.length, sha256: hash, partialPath: `${dest}.partial` };
+    }
+  });
+  fs.mkdirSync(path.join(updateRoot, '9.9.7'), { recursive: true });
+  fs.writeFileSync(path.join(updateRoot, '9.9.7', release.installerAsset.name), 'uszkodzony');
+
+  await service.checkForUpdate();
+  await service.startInstall().flowPromise;
+
+  assert.equal(downloads, 1);
+  assert.equal(service.getStatusPayload().state, 'ready-for-restart');
+  assert.equal(fs.readFileSync(path.join(updateRoot, '9.9.7', release.installerAsset.name)).equals(bytes), true);
+  fs.rmSync(rootDir, { recursive: true, force: true });
+});
+
 test('updateService: niezgodna suma SHA-256 - instalator jest odrzucony, nic nie jest odpalane', async () => {
   const bytes = crypto.randomBytes(5000);
   const release = buildFakeRelease('3.0.0', bytes);

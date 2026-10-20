@@ -32,8 +32,19 @@ function discoverGroupTestFiles() {
   return entries.map(name => path.join('test', name));
 }
 
+// Audyt 2026-10-20: proces pliku testow (dwa razy group2-printing) potrafil po
+// przejsciu WSZYSTKICH testow nie zakonczyc sie (otwarty uchwyt) i blokowal caly
+// przebieg - lokalnie i w CI - w nieskonczonosc. --test-timeout ucina zawieszony
+// test, a RUN_TIMEOUT_MS caly krok (zawieszenie PO testach, gdy proces sie nie
+// konczy). --test-force-exit odpada: na Windows wywraca Node (libuv
+// "UV_HANDLE_CLOSING" assertion). Katalog danych NIE jest tu wspolny - kazdy plik
+// izoluje sie sam (wspolny katalog powodowal kolizje testow blokady pojedynczej
+// instancji panelu miedzy plikami).
+const TEST_TIMEOUT_MS = Number(process.env.SCYZORYK_TEST_TIMEOUT_MS || 10 * 60 * 1000);
+const RUN_TIMEOUT_MS = Number(process.env.SCYZORYK_RUN_TIMEOUT_MS || 30 * 60 * 1000);
+
 const tests = [
-  [process.execPath, ['--test', ...discoverGroupTestFiles()]],
+  [process.execPath, [`--test-timeout=${TEST_TIMEOUT_MS}`, '--test', ...discoverGroupTestFiles()]],
   [process.execPath, ['apps/drukarka-projekty/test-sorting-regression.js']],
   // Audyt 2026-08-14: testy Pester dla lib/printing/PrintEngine.psm1 (glowna
   // przyczyna dzisiejszych awarii druku - cudzyslowowanie -ArgumentList -
@@ -54,7 +65,12 @@ const tests = [
 ];
 
 for (const [exe, args] of tests) {
-  const result = spawnSync(exe, args, { cwd: ROOT, stdio: 'inherit' });
+  const result = spawnSync(exe, args, { cwd: ROOT, stdio: 'inherit', timeout: RUN_TIMEOUT_MS });
+  if (result.error && result.error.code === 'ETIMEDOUT') {
+    console.error(`
+Przekroczono limit czasu ${Math.round(RUN_TIMEOUT_MS / 60000)} min dla: ${[exe, ...args.slice(0, 3)].join(' ')} - proces sie nie zakonczyl (zawieszony test albo otwarty uchwyt po testach).`);
+    process.exit(1);
+  }
   if (result.status !== 0) process.exit(result.status || 1);
 }
 

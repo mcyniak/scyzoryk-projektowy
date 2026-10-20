@@ -58,6 +58,12 @@ together by `npm run test:regressions`, see below).
   `folderMatch.js` and update the pinned expectations deliberately, not accidentally, if behavior changes.
 - Single-file syntax check while iterating: `node --check <file>.js` (this is literally what
   `check-project.js` automates across the whole tree).
+- Test isolation (audit 2026-10-20): any test file that loads a server or touches printing/"Zapisz jako
+  PDF" must set its own `SCYZORYK_DATA_ROOT` (temp dir) **before** requiring app modules — group17 used to
+  archive the real user's "Zapisane PDF" folder. Do not set one shared data root for the whole run (panel
+  single-instance tests in different files collide). The runner has `--test-timeout` (10 min) and a
+  per-step `spawnSync` timeout (30 min) because a test process occasionally stayed alive after all tests
+  passed; `--test-force-exit` is not an option (crashes Node on Windows, libuv `UV_HANDLE_CLOSING`).
 
 ## Architecture
 
@@ -357,6 +363,17 @@ new app, copy this rather than inventing a new one:
   `[a-zA-Z0-9._-]`, random-prefixed) and MIME/extension allowlists per upload field.
 - Everything binds to `127.0.0.1` only (`SCYZORYK_HOST` env var) — this is explicitly a local-only tool,
   not meant to be exposed on the network.
+- **Host header allowlist** (audit 2026-10-20, DNS rebinding): `lib/localRequestSecurity.js#isAllowedHost`
+  (127.0.0.1, localhost, `*.localhost`, ::1, `SCYZORYK_HOST`) runs inside `applySecurityHeaders` (every
+  child app) and at the top of the panel's `http.createServer` handler — any other `Host` gets 403. Without
+  it a malicious page re-pointing its domain to 127.0.0.1 was "same origin" and could send
+  `X-Scyzoryk-Request`. `scripts/security-smoke-test.js` now checks all 14 tools + panel (health, 403 without
+  the header, 403 for a foreign Host).
+- Rate limits: general `apiLimiter` never counts GETs (UIs poll/refresh constantly) and is ~600/15 min;
+  only `heavyJobLimiter` throttles real work. Note `req.path` inside `app.use('/api', limiter)` has **no**
+  `/api` prefix (Kreator's skip regex silently never matched → 429 mid-configuration). Dokumenty seryjne's
+  photo batches (100 files each) use their own `imageBatchLimiter` — they used to exhaust the heavy limit
+  (10) for folders >~900 photos.
 
 ### Shared code
 

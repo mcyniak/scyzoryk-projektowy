@@ -226,6 +226,13 @@ function makeRunsStore({ dataDir, log = () => {} }) {
 // myEcodan/Varmero (done/total - patrz apps/formularze-{ecodan,varmero}).
 // Zwraca zawsze ten sam ksztalt {procent, wiadomosc}, zeby UI nie musialo
 // znac roznic miedzy apkami.
+// Przebieg, w ktorym ktorykolwiek krok skonczyl sie bledem, nie moze w historii
+// wygladac jak pelny sukces (audyt 2026-10-20).
+function statusZakonczenia(run) {
+  const kroki = Array.isArray(run.kroki) ? run.kroki : Object.values(run.kroki || {});
+  return kroki.some(k => k && k.status === 'blad') ? 'skonczony-z-bledami' : 'skonczony';
+}
+
 function odczytajPostep(job) {
   if (!job) return { procent: null, wiadomosc: null };
   if (job.progress && typeof job.progress.percent === 'number') {
@@ -399,7 +406,7 @@ async function wykonajPrzebieg(store, runId, apps) {
   }
 
   const jakisGeneratorUzyty = Object.values(input.generatory || {}).some(Boolean);
-  store.update(runId, r => { if (!r.przerwany) r.status = jakisGeneratorUzyty ? 'oczekuje-doborow' : 'skonczony'; });
+  store.update(runId, r => { if (!r.przerwany) r.status = jakisGeneratorUzyty ? 'oczekuje-doborow' : statusZakonczenia(r); });
   return store.get(runId);
 }
 
@@ -481,7 +488,7 @@ async function collectDobory(store, runId, apps) {
   }
 
   const wszystkoGotowe = ['myEcodan', 'varmero'].every(gen => !run.input.generatory?.[gen] || ['rozdzielono', 'blad', 'przerwany'].includes(store.get(runId).generatory[gen]?.status));
-  store.update(runId, r => { if (!r.przerwany) r.status = wszystkoGotowe ? 'skonczony' : 'oczekuje-doborow'; });
+  store.update(runId, r => { if (!r.przerwany) r.status = wszystkoGotowe ? statusZakonczenia(r) : 'oczekuje-doborow'; });
 
   return { run: store.get(runId), wynikiKroku };
 }

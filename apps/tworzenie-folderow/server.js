@@ -48,7 +48,7 @@ app.use(express.json({ limit: '2mb' }));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.TF_API_RATE_LIMIT || 60),
+  max: Number(process.env.TF_API_RATE_LIMIT || 600),
   standardHeaders: true,
   legacyHeaders: false,
   // Panel glowny odpytuje /api/health co 10s - wyjatek na GET, ten sam

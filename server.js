@@ -12,7 +12,7 @@ const { migrateLegacyDataIfNeeded } = require('./lib/appDataMigration');
 const { hasDependencies } = require('./lib/dependencyCheck');
 const { getInstalledVersion } = require('./lib/updateBuildInfo');
 const { createUpdateService } = require('./lib/updateService');
-const { securityHeaders } = require('./lib/localRequestSecurity');
+const { securityHeaders, isAllowedHost } = require('./lib/localRequestSecurity');
 const { createTelemetryService } = require('./lib/telemetry');
 
 const ROOT = __dirname;
@@ -553,6 +553,8 @@ function safeDecodePathname(rawPathname) {
 }
 
 const server = http.createServer(async (req, res) => {
+  // DNS rebinding - patrz lib/localRequestSecurity.js#isAllowedHost.
+  if (!isAllowedHost(req.headers.host)) return send(res, 403, 'Niedozwolony adres hosta.');
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
   catch { return send(res, 400, 'Bad Request'); }

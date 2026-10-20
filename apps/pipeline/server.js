@@ -50,7 +50,7 @@ app.use(express.json({ limit: '2mb' }));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.PIPELINE_API_RATE_LIMIT || 60),
+  max: Number(process.env.PIPELINE_API_RATE_LIMIT || 600),
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => req.method === 'GET',
@@ -178,12 +178,24 @@ app.get('/api/pipeline/list', (req, res) => {
   res.json({ ok: true, runs: runsStore.list ? runsStore.list() : [] });
 });
 
+// Trwajacego przebiegu nie wolno usunac - remove() kasuje jego folder roboczy
+// (kopie Excela, pobrane dobory), a orkiestrator dalej by w nim pracowal.
+const isRunActive = run => Boolean(run) && run.status === 'running';
+
 app.delete('/api/pipeline/runs', (req, res) => {
-  runsStore.removeAll();
-  res.json({ ok: true });
+  const runs = runsStore.list ? runsStore.list() : [];
+  let skipped = 0;
+  for (const r of runs) {
+    if (isRunActive(runsStore.get(r.id))) { skipped++; continue; }
+    runsStore.remove(r.id);
+  }
+  res.json({ ok: true, skipped, message: skipped ? `Pominięto ${skipped} trwający przebieg - usuń go po zakończeniu.` : undefined });
 });
 
 app.delete('/api/pipeline/:runId', (req, res) => {
+  if (isRunActive(runsStore.get(req.params.runId))) {
+    return res.status(409).json({ ok: false, error: 'Ten przebieg jeszcze trwa - przerwij go albo poczekaj na koniec, zanim go usuniesz.' });
+  }
   runsStore.remove(req.params.runId);
   res.json({ ok: true });
 });

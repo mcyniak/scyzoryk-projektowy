@@ -43,7 +43,9 @@ async function zaladujOstatniePrzebiegi() {
     list.querySelectorAll('[data-usun-run]').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm('Usunąć ten przebieg z historii? Pobrane dobory/dokumenty w jego folderze roboczym też znikną.')) return;
-        await fetch(`/api/pipeline/${btn.dataset.usunRun}`, { method: 'DELETE', headers: { 'X-Scyzoryk-Request': '1' } }).catch(() => {});
+        const res = await fetch(`/api/pipeline/${btn.dataset.usunRun}`, { method: 'DELETE', headers: { 'X-Scyzoryk-Request': '1' } }).catch(() => null);
+        const json = res ? await res.json().catch(() => null) : null;
+        if (res && !res.ok) showTopNotice((json && json.error) || 'Nie udało się usunąć przebiegu.');
         zaladujOstatniePrzebiegi();
       });
     });
@@ -53,7 +55,9 @@ async function zaladujOstatniePrzebiegi() {
 
 document.querySelector('#wyczyscHistorieBtn').addEventListener('click', async () => {
   if (!confirm('Usunąć całą historię przebiegów? Tego nie da się cofnąć.')) return;
-  await fetch('/api/pipeline/runs', { method: 'DELETE', headers: { 'X-Scyzoryk-Request': '1' } }).catch(() => {});
+  const res = await fetch('/api/pipeline/runs', { method: 'DELETE', headers: { 'X-Scyzoryk-Request': '1' } }).catch(() => null);
+  const json = res ? await res.json().catch(() => null) : null;
+  if (json && json.skipped) { showTopNotice(json.message); zaladujOstatniePrzebiegi(); return; }
   document.querySelector('#ostatniePrzebiegiPanel').classList.add('hidden');
   document.querySelector('#ostatniePrzebiegiList').innerHTML = '';
 });
@@ -78,7 +82,7 @@ zaladujOstatniePrzebiegi();
     const res = await fetch(`/api/pipeline/status/${encodeURIComponent(runId)}`);
     const json = await res.json().catch(() => null);
     const run = json && json.run;
-    if (run && run.status && !['skonczony', 'blad', 'przerwany', 'przerwany-restartem'].includes(run.status)) otworzPrzebieg(runId);
+    if (run && run.status && !STATUSY_ZAKONCZONE.includes(run.status)) otworzPrzebieg(runId);
   } catch (_) {}
 })();
 
@@ -667,10 +671,10 @@ async function refreshStatus() {
 }
 
 const STATUS_LABELS = {
-  running: 'w toku', 'oczekuje-doborow': 'oczekuje na dobory', skonczony: 'skończony',
+  running: 'w toku', 'oczekuje-doborow': 'oczekuje na dobory', skonczony: 'skończony', 'skonczony-z-bledami': 'skończony z błędami',
   blad: 'błąd', 'przerwany-restartem': 'przerwany restartem serwera', przerwany: 'przerwany'
 };
-const STATUSY_ZAKONCZONE = ['skonczony', 'blad', 'przerwany', 'przerwany-restartem'];
+const STATUSY_ZAKONCZONE = ['skonczony', 'skonczony-z-bledami', 'blad', 'przerwany', 'przerwany-restartem'];
 
 const KROK_STATUS_LABELS = {
   'w-toku': 'w toku', zgloszono: 'zgłoszono', skonczony: 'skończony', rozdzielono: 'rozdzielono', blad: 'błąd', przerwany: 'przerwany'
@@ -708,7 +712,7 @@ function renderRun(run) {
 
 function badgeDlaStatusu(status) {
   if (status === 'skonczony' || status === 'rozdzielono') return 'ok';
-  if (status === 'blad' || status === 'przerwany') return 'bad';
+  if (status === 'blad' || status === 'przerwany' || status === 'skonczony-z-bledami') return 'bad';
   if (status === 'w-toku' || status === 'zgloszono') return 'wait';
   return 'skip';
 }

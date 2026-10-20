@@ -62,10 +62,13 @@ app.use(express.json({ limit: '4mb' }));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.KREATOR_API_RATE_LIMIT || 120),
+  max: Number(process.env.KREATOR_API_RATE_LIMIT || 600),
   standardHeaders: true,
   legacyHeaders: false,
-  skip: req => req.method === 'GET' && /^\/api\/jobs\/[^/]+$/.test(req.path),
+  // GET-y (odswiezanie stanu po kazdej decyzji, wartosci kolumn) poza limitem.
+  // Wczesniej warunek sprawdzal '/api/jobs/...', a w app.use('/api', ...) req.path
+  // nie ma prefiksu /api - nigdy nie dzialal (429 przy wzorze z ~60 fragmentami).
+  skip: req => req.method === 'GET',
   message: { ok: false, message: 'Za dużo żądań w krótkim czasie. Odczekaj chwilę i spróbuj ponownie.' }
 });
 const heavyJobLimiter = rateLimit({

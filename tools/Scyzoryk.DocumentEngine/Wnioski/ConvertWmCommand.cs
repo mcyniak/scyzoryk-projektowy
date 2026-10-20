@@ -63,6 +63,11 @@ public static class ConvertWmCommand
     private static readonly string Mark3 = D("U3R3aWVyZHphbSwgacW8IHcvdw==");
 
     private static readonly Regex DateRe = new(@"(?<!\d)([0-3]?\d[\.\-/][01]?\d[\.\-/](?:19|20)\d{2})(?!\d)", RegexOptions.Compiled);
+    // Tryb "Bez daty": [separator] [dnia|dn.] DATA [r.|r|roku]. Separator i slowo
+    // sa opcjonalne (data w osobnej komorce tabeli tez znika).
+    private static readonly Regex NoDateRe = new(
+        @"(?:[ \t ]*[,.]?[ \t ]*\b(?:dnia|dn\.?)[ \t ]*)?(?<!\d)[0-3]?\d[\.\-/][01]?\d[\.\-/](?:19|20)\d{2}(?!\d)(?:[ \t ]*(?:roku\b|r\.|r(?![\p{L}\d])))?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
     // Odpowiedniki wildcardow Worda z convert-wm.ps1 ([0-9]{1,2}.[0-9]{1,2}.[0-9]{4} itd.).
     // Granice cyfr (?<!\d)/(?!\d) konieczne: bez nich numer sprawy
     // "ZP.271.3.2025" byl brany za date "71.3.2025" (zlapane porownaniem z
@@ -175,14 +180,18 @@ public static class ConvertWmCommand
 
         if (string.IsNullOrWhiteSpace(dateText))
         {
-            // "Bez daty": data znika razem ze slowem "dnia"/"dn." przed nia.
-            var prefixes = new[] { " dnia ", " dn. ", " dn ", ", dnia ", ", dn. ", ", dn ", "dnia ", "dn. ", "dn " };
-            foreach (var oldDate in dates)
+            // "Bez daty": data znika razem ze slowem "dnia"/"dn." przed nia, separatorem
+            // przed tym slowem i dopiskiem "r."/"roku" po niej. Realny wzor WM:
+            // "Kudrowice. dn. 12.05.2026r." -> "Kudrowice" (wczesniej zostawalo
+            // "Kudrowice.r." - audyt 2026-10-20).
+            foreach (var sp in all)
             {
-                foreach (var prefix in prefixes) TextMarkerReplacer.ReplaceEverywhere(all, prefix + oldDate, "", 0);
-                TextMarkerReplacer.ReplaceEverywhere(all, oldDate, "", 0);
-                replacements.Add((oldDate, ""));
+                if (sp.Paragraph.Parent is null) continue;
+                var model = ParagraphText.Build(sp.Paragraph);
+                var matches = NoDateRe.Matches(model.Text).Cast<Match>().OrderByDescending(m => m.Index).ToList();
+                foreach (var m in matches) model.ReplaceRange(m.Index, m.Length, "");
             }
+            foreach (var oldDate in dates) replacements.Add((oldDate, ""));
             return replacements;
         }
 

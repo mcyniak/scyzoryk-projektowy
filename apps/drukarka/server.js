@@ -69,6 +69,13 @@ app.use(express.static(path.join(__dirname, "public")));
 // drukarek (lib/printing.js), front-end dopisuje go recznie do <select>.
 const SAVE_AS_PDF_SENTINEL = "__SAVE_AS_PDF__";
 
+// "2 pliki", "5 plików", "22 pliki" - polska odmiana w nazwie połączonego PDF.
+function plikiOdmiana(n) {
+  const d = n % 10, s = n % 100;
+  if (n === 1) return "plik";
+  return d >= 2 && d <= 4 && (s < 12 || s > 14) ? "pliki" : "plików";
+}
+
 let queue = [];
 let printing = false;
 
@@ -185,7 +192,7 @@ async function buildMergedPrintItems(items, options = {}) {
           const mergedPath = path.join(MERGED_DIR, `${Date.now()}_${Math.round(Math.random() * 1e9)}_polaczone.pdf`);
           await pdfMerge.mergePdfs(run.map(r => r.path), mergedPath, { padOddPagesExceptLast: padOddPagesForDuplex });
           createdMergedPaths.push(mergedPath);
-          result.push({ ...run[0], path: mergedPath, originalName: `Połączony PDF (${run.length} plików).pdf`, merged: true });
+          result.push({ ...run[0], path: mergedPath, originalName: `Połączony PDF (${run.length} ${plikiOdmiana(run.length)}).pdf`, merged: true });
         } else {
           result.push(run[0]);
         }

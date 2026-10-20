@@ -88,10 +88,36 @@ public class MigrationEngineTests : IDisposable
 
         Assert.DoesNotContain("12.03.2025", text);
         Assert.DoesNotContain("dn.", text);
-        Assert.Contains("Kraków,", text);
+        Assert.StartsWith("Kraków\n", text);
         Assert.Contains("Treść wniosku", text);
         Assert.False(report.DeletedSection);
         Assert.Contains(report.DateReplacements, r => r.From == "12.03.2025" && r.To == "");
+    }
+
+    [Fact]
+    public void ConvertWm_BezDaty_RealnyZapisKudrowiceZKoncowkaR_RozbityNaRuny()
+    {
+        // Realny wzor WM (audyt 2026-10-20): "Kudrowice. dn. 12.05.2026r." dawalo
+        // "Kudrowice.r." - zostawala kropka przed "dn." i dopisek "r." po dacie.
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body());
+            Run R(string t) => new(new Text(t) { Space = DocumentFormat.OpenXml.SpaceProcessingModeValues.Preserve });
+            main.Document.Body!.Append(new Paragraph(R("Kudrowice"), R(". dn. "), R("12.05."), R("2026"), R("r.")));
+            main.Document.Body!.Append(new Paragraph(R("Miejsce: Kudrowice dnia 3.4.2026 roku, sprawa ZP.271.3.2025")));
+            main.Document.Body!.Append(new Paragraph(R("15.10.2026")));
+            main.Document.Body!.Append(new SectionProperties());
+            main.Document.Save();
+        }
+
+        var (docx, _) = ConvertWmCommand.ConvertDocument(ms.ToArray(), "");
+        var lines = BodyText(docx).Split('\n');
+
+        Assert.Equal("Kudrowice", lines[0]);
+        Assert.Equal("Miejsce: Kudrowice, sprawa ZP.271.3.2025", lines[1]);
+        Assert.Equal("", lines[2]);
     }
 
     [Fact]

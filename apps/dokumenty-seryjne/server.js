@@ -71,22 +71,32 @@ app.use(express.json({ limit: '2mb' }));
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.SERYJNE_API_RATE_LIMIT || 60),
+  max: Number(process.env.SERYJNE_API_RATE_LIMIT || 600),
   standardHeaders: true,
   legacyHeaders: false,
   // /api/health i /api/job/:jobId sa odpytywane co kilka sekund (panel glowny) albo co 1s
   // (pasek postepu podczas generowania, ktore realnie trwa kilka minut) - bez wylaczenia stad
   // sam odczyt statusu wyczerpuje limit w ~1 minute i pasek postepu przestaje sie aktualizowac,
   // mimo ze generowanie dalej trwa w tle.
-  skip: (req) => req.method === 'GET' && (req.path === '/health' || /^\/job\/[^/]+$/.test(req.path)),
+  skip: (req) => req.method === 'GET',
   message: { ok: false, message: 'Za duzo zadan w krotkim czasie. Odczekaj chwile i sprobuj ponownie.' }
 });
 const heavyJobLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.SERYJNE_HEAVY_RATE_LIMIT || 10),
+  max: Number(process.env.SERYJNE_HEAVY_RATE_LIMIT || 30),
   standardHeaders: true,
   legacyHeaders: false,
   message: { ok: false, message: 'Za duzo ciezkich zadan w krotkim czasie. Uruchom mniejsza paczke albo odczekaj chwile.' }
+});
+// Paczki zdjec (frontend dzieli folder po 100 plikow) maja WLASNY limit - dawniej
+// liczyly sie do heavyJobLimiter (10/15 min), wiec folder >~900 zdjec wyczerpywal
+// go w trakcie wgrywania i potem odrzucal generowanie (audyt 2026-10-20).
+const imageBatchLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.SERYJNE_IMAGE_BATCH_RATE_LIMIT || 300),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, message: 'Za duzo paczek zdjec w krotkim czasie. Odczekaj chwile i sprobuj ponownie.' }
 });
 app.use('/api', apiLimiter);
 
@@ -898,6 +908,13 @@ function handlePowerShellEvent(job, evt) {
     setProgress(job, { phase: 'export', current, total, percent, message: evt.message || `Eksportuję PDF ${current}/${total}` });
     appendLog(job, 'info', evt.message || `Eksportuję PDF ${current}/${total}`, evt);
   } else if (eventName === 'export-done') {
+    // Zapamietujemy gotowe pliki na biezaco - gdy silnik zostanie zabity
+    // ("Przerwij" albo limit czasu), nie ma koncowego JSON-a z lista created,
+    // a pliki juz leza w outputDir (real: 24.09 limit czasu po 173 gotowych
+    // dokumentach pokazal "Wygenerowano 0 plikow").
+    if (evt.file && Array.isArray(job.liveCreated) && !job.liveCreated.some(c => c.file === evt.file)) {
+      job.liveCreated.push({ row: evt.row ?? null, address: evt.address || '', file: String(evt.file), path: path.join(job.outputDir, String(evt.file)) });
+    }
     const current = Number(evt.current || 0);
     const total = Number(evt.total || job.progress.total || 0);
     const percent = total ? Math.max(1, Math.round(((current - 0.1) / total) * 100)) : job.progress.percent;
@@ -1004,6 +1021,7 @@ function writeEffectivePhotoManifest(job, rows, addressColumn, sheet) {
 }
 
 async function startGeneration(job, options) {
+  job.liveCreated = [];
   const sheetName = String(options.sheetName || job.workbook.sheetName || '').trim() || job.workbook.sheetName;
   const selectedSheet = getWorkbookSheet(job.workbook, sheetName);
   // Smart Template: addressColumn to swiadomy wybor uzytkownika w Kreatorze
@@ -1152,7 +1170,9 @@ async function startGeneration(job, options) {
   job.child = child;
   const state = { buffer: '', final: null, stderr: '' };
 
-  const timeoutMs = Number(process.env.SERYJNE_TIMEOUT_MS || 60 * 60 * 1000);
+  // Limit skalowany liczba rekordow: sztywne 60 min ucinalo duze paczki w polowie
+  // (real 24.09: 377 adresow, przerwane po 173). Ma lapac zawieszenie, nie prace.
+  const timeoutMs = Number(process.env.SERYJNE_TIMEOUT_MS || Math.max(60 * 60 * 1000, rowsForMerge.length * 60 * 1000));
   const timer = setTimeout(() => {
     appendLog(job, 'error', 'Przekroczono limit czasu. Zatrzymuję silnik dokumentów.', { timeoutMs });
     try { child.kill(); } catch {}
@@ -1202,8 +1222,11 @@ async function startGeneration(job, options) {
       }
     } else {
       const message = state.stderr.trim() || `Silnik dokumentów zakończył się bez wyniku JSON. Kod: ${code}`;
+      const partial = (job.liveCreated || [])
+        .filter(item => fs.existsSync(item.path))
+        .map(item => ({ ...item, url: `/api/download/${job.id}/${encodeURIComponent(item.file)}` }));
       job.status = 'error';
-      job.result = { ok: false, message, created: [], errors: [], code, logUrl: `/api/download/${job.id}/logs` };
+      job.result = { ok: false, message, created: partial, errors: [], code, logUrl: `/api/download/${job.id}/logs` };
       setProgress(job, { phase: 'error', percent: 100, message });
       appendLog(job, 'error', message, { code });
       persistJobsIndex();
@@ -1534,7 +1557,7 @@ app.get('/api/jobs/:jobId/sheets/:sheetName/rows', (req, res) => {
   res.json({ ok: true, totalRows: sheet.rows.length, offset, limit, rows: sheet.rows.slice(offset, offset + limit) });
 });
 
-app.post('/api/images/:jobId', heavyJobLimiter, upload.array('images', 400), async (req, res) => {
+app.post('/api/images/:jobId', imageBatchLimiter, upload.array('images', 400), async (req, res) => {
   const job = getJob(req.params.jobId);
   if (!job) return res.status(404).json({ ok: false, message: 'Nie znaleziono zadania. Wczytaj pliki ponownie.' });
   if (job.status === 'running' || job.status === 'queued') return res.status(409).json({ ok: false, message: 'Trwa generowanie - zdjęcia możesz zmienić po jego zakończeniu.' });
