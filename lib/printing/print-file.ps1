@@ -1,7 +1,9 @@
 param(
   [Parameter(Mandatory=$true)][string]$FilePath,
   [string]$PrinterName = "",
-  [string]$LogDir = ""
+  [string]$LogDir = "",
+  # A4/A3 albo pusty - patrz komentarz przy $script:DmPaperKinds w PrintEngine.psm1.
+  [ValidateSet("", "A4", "A3")][string]$PaperKind = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,6 +83,16 @@ try { $originalForeground = [ScyzorykFocusGuard]::GetForegroundWindow() } catch 
 $printerName = if ($hasTargetedPrinter) { $PrinterName.Trim() } else { Get-DefaultPrinterName }
 $jobIdsBefore = Get-PrintJobIds $printerName
 
+# Diagnostyka (2026-11-09, bizhub C258): sterownik i port drukarki w logu -
+# bez tego z print-log.txt nie dalo sie odroznic np. Microsoft IPP Class
+# Driver po WSD od sterownika producenta po TCP/IP.
+try {
+  $printerInfo = Get-Printer -Name $printerName -ErrorAction Stop
+  Write-PrintLog "Drukarka: '$printerName' | sterownik: $($printerInfo.DriverName) | port: $($printerInfo.PortName) | format papieru: $(if ($PaperKind) { $PaperKind } else { 'wg PDF (Sumatra)' })"
+} catch {
+  Write-PrintLog "Drukarka: '$printerName' - nie udalo sie odczytac sterownika/portu: $($_.Exception.Message)"
+}
+
 # WAZNE: Sumatra i Ghostscript umieja drukowac TYLKO pliki PDF. Dla Worda
 # (.docx) i innych formatow proba przez ktoregokolwiek z nich zawsze
 # zawodzi. Dla plikow Worda tworzymy wlasna, niewidoczna instancje COM,
@@ -101,10 +113,10 @@ if ($isPdf) {
   # poprawnie wyliczone na realna nazwe drukarki domyslnej nawet gdy
   # $hasTargetedPrinter jest false, wiec Sumatra/Ghostscript moga byc uzyte
   # zawsze - Invoke-PrintWithShell nie jest juz nigdzie potrzebny.
-  $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName -jobIdsBeforeSumatra $jobIdsBefore
+  $sent = Invoke-PrintWithSumatra -path $FilePath -targetPrinter $printerName -jobIdsBeforeSumatra $jobIdsBefore -paperKind $PaperKind
   if (-not $sent) {
     Write-PrintLog "Sumatra nie wyslala - probuje Ghostscript"
-    $sent = Invoke-PrintWithGhostscript -path $FilePath -targetPrinter $printerName -jobIdsBeforeGs $jobIdsBefore
+    $sent = Invoke-PrintWithGhostscript -path $FilePath -targetPrinter $printerName -jobIdsBeforeGs $jobIdsBefore -paperKind $PaperKind
     Write-PrintLog "Ghostscript wynik: $sent"
   }
   if (-not $sent) {
@@ -131,11 +143,18 @@ while ($waited -lt $maxWaitMs) {
   Restore-Foreground $originalForeground
   if ($trackingAvailable) {
     $jobIdsNow = Get-PrintJobIds $printerName
-    $hasNewJob = $false
+    $newJobId = $null
     if ($null -ne $jobIdsNow) {
-      foreach ($id in $jobIdsNow) { if (-not $jobIdsBefore.Contains($id)) { $hasNewJob = $true; break } }
+      foreach ($id in $jobIdsNow) { if (-not $jobIdsBefore.Contains($id)) { $newJobId = $id; break } }
     }
-    if ($hasNewJob) { $jobConfirmed = $true; break }
+    if ($null -ne $newJobId) {
+      $jobConfirmed = $true
+      try {
+        $newJob = Get-PrintJob -PrinterName $printerName -ID $newJobId -ErrorAction Stop
+        Write-PrintLog "Zadanie w kolejce: Id=$newJobId | dokument: $($newJob.DocumentName) | status: $($newJob.JobStatus) | stron: $($newJob.TotalPages) | rozmiar: $($newJob.Size) B"
+      } catch {}
+      break
+    }
   } elseif ($waited -ge 300) {
     break
   }

@@ -149,6 +149,9 @@ const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, 
   // trafiala do druku (drukowala sie stara kolejka). Kazda taka zmiana
   // blokuje teraz panel druku do ponownego zatwierdzenia.
   function markQueueStale(errorBoxId) {
+    // W trakcie druku panel musi zostac aktywny - siedzi w nim "Przerwij
+    // drukowanie". Kolejka serwera i tak jest czyszczona po zakonczeniu serii.
+    if (state.printInProgress) return;
     if ($("panelPrint").classList.contains("disabled")) return;
     disablePanel("panelPrint");
     state.confirmedQueue = null;
@@ -898,7 +901,14 @@ const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, 
 
   // Po odswiezeniu strony w trakcie druku - pokaz postep dalej.
   api("/api/status").then(s => {
-    if (s && s.printing) { $("printBtn").disabled = true; pollStatus(); }
+    if (s && s.printing) {
+      // Po F5 nie ma wybranego trybu, wiec panel druku bylby ukryty - a w nim
+      // postep i "Przerwij drukowanie".
+      $("panelPrint").style.display = "";
+      enablePanel("panelPrint");
+      $("printBtn").disabled = true;
+      pollStatus();
+    }
   }).catch(() => {});
 
   $("printBtn").addEventListener("click", async () => {
@@ -934,12 +944,40 @@ const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, 
     }
   });
 
+  // "Przerwij drukowanie" - widoczny tylko przy fizycznym druku (serwer ustawia
+  // cancellable), nie przy "Zapisz jako PDF".
+  function setCancelUi(cancellable) {
+    const btn = $("cancelPrintBtn");
+    btn.hidden = !cancellable;
+    if (cancellable) {
+      btn.disabled = false;
+      btn.textContent = "Przerwij drukowanie";
+    }
+  }
+
+  $("cancelPrintBtn").addEventListener("click", async () => {
+    if (!confirm("Przerwać drukowanie?\n\nKolejne pliki nie zostaną wysłane, a zadania tej serii, których drukarka jeszcze nie pobrała, zostaną usunięte z kolejki Windows. Strony już wydrukowane lub pobrane przez drukarkę mogą jeszcze wyjść.")) return;
+    const btn = $("cancelPrintBtn");
+    btn.disabled = true;
+    btn.textContent = "Przerywam...";
+    try {
+      await api("/api/print/cancel", { method: "POST" });
+    } catch (err) {
+      $("statusText").textContent = err.message || "Nie udało się przerwać drukowania.";
+      setCancelUi(true);
+    }
+  });
+
   function pollStatus() {
+    state.printInProgress = true;
     const timer = setInterval(async () => {
       try {
         const s = await api("/api/status");
+        state.printInProgress = !!s.printing;
         $("statusText").textContent = s.message || "";
         $("progressBar").style.width = (s.percent || 0) + "%";
+        if (s.printing && s.cancellable && $("cancelPrintBtn").hidden) setCancelUi(true);
+        if (!s.printing || !s.cancellable) setCancelUi(false);
         if (!s.printing) {
           clearInterval(timer);
           $("printBtn").disabled = false;
@@ -954,7 +992,9 @@ const P = (n, a, b, c) => window.ScyzorykUI ? window.ScyzorykUI.plural(n, a, b, 
         }
       } catch (_) {
         clearInterval(timer);
+        state.printInProgress = false;
         $("printBtn").disabled = false;
+        setCancelUi(false);
       }
     }, 800);
   }

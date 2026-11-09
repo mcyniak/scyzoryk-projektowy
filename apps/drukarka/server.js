@@ -78,6 +78,8 @@ function plikiOdmiana(n) {
 
 let queue = [];
 let printing = false;
+// Trwajaca seria druku (printService.createPrintRun) - cel /api/print/cancel.
+let activePrintRun = null;
 
 let status = {
   printing: false,
@@ -443,6 +445,19 @@ app.get("/api/status", (req, res) => {
   res.json(status);
 });
 
+// "Przerwij drukowanie": zatrzymuje wysylanie kolejnych plikow, zabija
+// aktualnie wysylany (print-file.ps1 razem z Sumatra/Ghostscriptem) i usuwa z
+// kolejki Windows zadania tej serii, ktorych drukarka jeszcze nie pobrala.
+// Sam koniec (komunikat, kolejka) zalatwia catch w /api/print.
+app.post("/api/print/cancel", (req, res) => {
+  if (!printing || !activePrintRun) {
+    return res.status(409).json({ ok: false, message: "Nic się teraz nie drukuje." });
+  }
+  activePrintRun.cancel();
+  status.message = "Przerywam drukowanie...";
+  res.json({ ok: true });
+});
+
 app.post("/api/print", heavyJobLimiter, async (req, res) => {
   if (printing) {
     return res.status(409).json({
@@ -537,6 +552,8 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
   try {
     await withPrintLease({ app: "drukarka", sessionId: req.sessionID || null, printerName }, async () => {
       printing = true;
+      const printRun = printService.createPrintRun(printerName);
+      activePrintRun = printRun;
 
       const originalItems = [...queue];
       const sidesLabel = sideMode === "two-sided" ? "dwustronnie" : "jednostronnie";
@@ -552,7 +569,8 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
         percent: 0,
         done: false,
         error: null,
-        warning: null
+        warning: null,
+        cancellable: true
       };
 
       let itemsToPrint = originalItems;
@@ -561,6 +579,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
       let keepForRetry = [];
       try {
         res.json({ ok: true });
+        await printRun.snapshot();
 
         // Laczenie PDF-ow ZMIENIA znaczenie "kopia przy kazdym pliku" (A,A,B,B) w
         // "najpierw caly komplet" (A,B,A,B), bo po polaczeniu jest juz tylko jeden
@@ -582,13 +601,15 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
         const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
         printJobsForRecovery = printJobs;
         status.total = printJobs.length;
+        printRun.throwIfCancelled();
 
         await printService.withPrinterSides(sideMode, printerName, async printerSetup => {
           status.warning = printerSetup.ok ? status.warning : printerSetup.message;
           status.message = printerSetup.message;
-          if (printerSetup.ok) await printService.wait(800);
+          if (printerSetup.ok) await printService.wait(800, printRun.signal);
 
           for (let i = 0; i < printJobs.length; i++) {
+            printRun.throwIfCancelled();
             const job = printJobs[i];
             const item = job.item;
             const copyInfo = copies > 1 ? `, kopia ${job.copy}/${copies}` : "";
@@ -601,7 +622,8 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
             await printService.printFileWindows(item.path, printerName, {
               cwd: __dirname,
               logDir: DATA_DIR,
-              timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000)
+              timeoutMs: Number(process.env.DRUKARKA_PS_TIMEOUT_MS || 120000),
+              signal: printRun.signal
             });
             sentJobs = i + 1;
 
@@ -610,7 +632,7 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
 
             // Nie czeka na fizyczne wydrukowanie.
             // Daje Windowsowi / Acrobatowi / Wordowi czas na przyjecie zadania.
-            await printService.wait(delaySeconds * 1000);
+            await printService.wait(delaySeconds * 1000, printRun.signal);
           }
         });
 
@@ -618,21 +640,41 @@ app.post("/api/print", heavyJobLimiter, async (req, res) => {
         status.percent = 100;
         status.done = true;
       } catch (err) {
-        status.error = String(err.message || err);
+        const cancelled = printService.isPrintCancelled(err) || printRun.cancelled;
+        if (cancelled) {
+          status.message = "Przerywam - usuwam z kolejki drukarki zadania tej serii...";
+          status.cancelled = true;
+          status.cancellable = false;
+        } else {
+          status.error = String(err.message || err);
+        }
         // Przeglad 2026-09-29: pliki, ktorych zadania NIE zostaly jeszcze
         // wyslane, zostaja w kolejce (wczesniej jeden blad w polowie serii
         // kasowal cala kolejke i trzeba bylo wgrywac wszystko od nowa).
         // Pliki juz wyslane NIE wracaja - ponowny "Drukuj" nie wydrukuje ich
         // drugi raz. Przy polaczonych PDF-ach (pozycje "merged") nie da sie
         // bezpiecznie ustalic, co poszlo - wtedy jak dotad nic nie wraca.
-        if (!itemsToPrint.some(it => it.merged) && printJobsForRecovery.length) {
+        if (cancelled && sentJobs === 0) {
+          // Przerwane przed wyslaniem czegokolwiek (np. w trakcie laczenia
+          // PDF-ow) - cala kolejka zostaje, takze przy polaczonych PDF-ach.
+          keepForRetry = originalItems;
+        } else if (!itemsToPrint.some(it => it.merged) && printJobsForRecovery.length) {
           const sentIds = new Set(printJobsForRecovery.slice(0, sentJobs).map(j => j.item.id));
           const pendingIds = new Set(printJobsForRecovery.slice(sentJobs).map(j => j.item.id));
           keepForRetry = originalItems.filter(it => pendingIds.has(it.id) && !sentIds.has(it.id));
         }
-        const kept = keepForRetry.length ? ` Niewysłane pliki (${keepForRetry.length}) zostały w kolejce - popraw przyczynę i kliknij Drukuj ponownie.` : "";
-        status.message = `❌ Błąd drukowania (wysłano ${sentJobs} z ${printJobsForRecovery.length || originalItems.length}): ${status.error}${kept}`;
+        const totalJobs = printJobsForRecovery.length || originalItems.length;
+        if (cancelled) {
+          const cleanup = await printRun.removeQueuedJobs();
+          const kept = keepForRetry.length ? ` Niewysłane pliki (${keepForRetry.length}) zostały w kolejce.` : "";
+          status.message = printService.describeCancelledRun(sentJobs, totalJobs, cleanup) + kept;
+        } else {
+          const kept = keepForRetry.length ? ` Niewysłane pliki (${keepForRetry.length}) zostały w kolejce - popraw przyczynę i kliknij Drukuj ponownie.` : "";
+          status.message = `❌ Błąd drukowania (wysłano ${sentJobs} z ${totalJobs}): ${status.error}${kept}`;
+        }
       } finally {
+        activePrintRun = null;
+        status.cancellable = false;
         // Kolejka i sprzatanie plikow ida TUTAJ (nie tylko na sciezce sukcesu) -
         // bez tego blad w polowie serii zostawial stara kolejke w pamieci, wiec
         // ponowne kliknieccie "drukuj" potrafilo wyslac do druku po raz drugi

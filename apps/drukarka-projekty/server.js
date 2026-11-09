@@ -995,6 +995,21 @@ app.get("/api/browse-folder", (req, res) => {
   }
 });
 
+// Trwajace serie druku per sesja (printService.createPrintRun) - cel
+// /api/print/cancel. WeakMap, bo sesja zyje tylko w pamieci (lib/sessionStore.js).
+const activePrintRuns = new WeakMap();
+
+// "Przerwij drukowanie" - patrz analogiczny endpoint w apps/drukarka/server.js.
+app.post("/api/print/cancel", (req, res) => {
+  const printRun = activePrintRuns.get(req.session);
+  if (!req.session.printing || !printRun) {
+    return res.status(409).json({ ok: false, message: "Nic się teraz nie drukuje." });
+  }
+  printRun.cancel();
+  req.session.status.message = "Przerywam drukowanie...";
+  res.json({ ok: true });
+});
+
 app.post("/api/print", async (req, res) => {
   const session = req.session;
   normalizeSessionPrinting(session);
@@ -1133,9 +1148,12 @@ app.post("/api/print", async (req, res) => {
   try {
     await withPrintLease({ app: "drukarka-projekty", sessionId: req.sessionID || null, printerName }, async () => {
       session.printing = true;
+      const printRun = printService.createPrintRun(printerName);
+      activePrintRuns.set(session, printRun);
       const itemsToPrint = [...session.queue];
       const printJobs = printService.buildPrintJobs(itemsToPrint, copies, copyMode);
       const printerLabel = printerName ? ` na drukarke "${printerName}"` : "";
+      let sentJobs = 0;
 
       session.status = {
         printing: true,
@@ -1144,11 +1162,13 @@ app.post("/api/print", async (req, res) => {
         total: printJobs.length,
         percent: 0,
         done: false,
-        error: null
+        error: null,
+        cancellable: true
       };
 
       try {
         res.json({ ok: true });
+        await printRun.snapshot();
 
         // Bez tego wybor "Jednostronnie/Dwustronnie" w UI byl czystą dekoracją -
         // serwer nigdy nie czytal ani nie stosowal sideMode, wiec druk zawsze
@@ -1156,9 +1176,10 @@ app.post("/api/print", async (req, res) => {
         // ustawione sterownik drukarki (patrz audyt: prawdziwy, zywy blad).
         await printService.withPrinterSides(sideMode, printerName, async printerSetup => {
           if (!printerSetup.ok) session.status.message = printerSetup.message;
-          if (printerSetup.ok) await printService.wait(800);
+          if (printerSetup.ok) await printService.wait(800, printRun.signal);
 
           for (let i = 0; i < printJobs.length; i++) {
+            printRun.throwIfCancelled();
             const job = printJobs[i];
             const item = job.item;
             session.status.current = i + 1;
@@ -1169,11 +1190,13 @@ app.post("/api/print", async (req, res) => {
             await printService.printFileWindows(item.path, printerName, {
               cwd: __dirname,
               logDir: DATA_DIR,
-              timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_PS_TIMEOUT_MS || 120000)
+              timeoutMs: Number(process.env.DRUKARKA_PROJEKTY_PS_TIMEOUT_MS || 120000),
+              signal: printRun.signal
             });
+            sentJobs = i + 1;
 
             session.status.percent = Math.round(((i + 1) / printJobs.length) * 100);
-            await printService.wait(delaySeconds * 1000);
+            await printService.wait(delaySeconds * 1000, printRun.signal);
           }
         });
 
@@ -1182,10 +1205,25 @@ app.post("/api/print", async (req, res) => {
         session.status.done = true;
         reportPrintOperation("completed", true, telemetryManualMs);
       } catch (err) {
-        session.status.error = String(err.message || err);
-        session.status.message = "❌ Blad drukowania: " + session.status.error;
-        reportPrintOperation("failed", false, null, "print-failed");
+        if (printService.isPrintCancelled(err) || printRun.cancelled) {
+          session.status.cancelled = true;
+          session.status.cancellable = false;
+          session.status.message = "Przerywam - usuwam z kolejki drukarki zadania tej serii...";
+          const cleanup = await printRun.removeQueuedJobs();
+          // Kolejka i tak jest czyszczona w finally (patrz komentarz tam) -
+          // podajemy, od ktorego pliku wznowic.
+          const nextItem = printJobs[sentJobs] && printJobs[sentJobs].item;
+          const resumeHint = nextItem ? ` Pierwszy niewysłany: ${nextItem.label ? nextItem.label + " - " : ""}${nextItem.originalName}.` : "";
+          session.status.message = printService.describeCancelledRun(sentJobs, printJobs.length, cleanup) + resumeHint;
+          reportPrintOperation("failed", false, null, "print-cancelled");
+        } else {
+          session.status.error = String(err.message || err);
+          session.status.message = "❌ Blad drukowania: " + session.status.error;
+          reportPrintOperation("failed", false, null, "print-failed");
+        }
       } finally {
+        activePrintRuns.delete(session);
+        session.status.cancellable = false;
         // Kolejka NIE czyscila sie nigdy po druku (ani tu, ani we froncie) - drugi
         // klik DRUKUJ po prostu wysylal cala kolejke jeszcze raz. Czyscimy JEJ
         // referencje w pamieci zawsze (sukces i blad), tak jak juz robi

@@ -133,6 +133,42 @@ Describe "New-GhostscriptPrintArgs - cytowanie argumentow ze spacjami (audyt 202
   }
 }
 
+Describe "Jawny format papieru (2026-11-09, bizhub C258 - Letter/niestandardowy format wstrzymywal zadanie)" {
+  It "Sumatra z paperKind A4 dostaje -print-settings paperkind=9 jako jeden argument" {
+    $built = New-SumatraPrintArgs -path "C:\dane\Ul. Fredry 3A, Posada.pdf" -targetPrinter "Sekretariat" -paperKind "A4"
+    $argv = ConvertTo-ArgvArray (ConvertTo-StartProcessCommandLine $built)
+    $idx = [array]::IndexOf($argv, "-print-settings")
+    ($idx -ge 0) | Should -Be $true
+    $argv[$idx + 1] | Should -Be "paperkind=9,shrink"
+    ($argv -contains "C:\dane\Ul. Fredry 3A, Posada.pdf") | Should -Be $true
+  }
+
+  It "Sumatra z paperKind A3 dostaje paperkind=8" {
+    $argv = ConvertTo-ArgvArray (ConvertTo-StartProcessCommandLine (New-SumatraPrintArgs -path "C:\a.pdf" -targetPrinter "HP1" -paperKind "A3"))
+    ($argv -contains "paperkind=8,shrink") | Should -Be $true
+  }
+
+  It "bez paperKind Sumatra nie dostaje -print-settings (stare zachowanie)" {
+    $built = New-SumatraPrintArgs -path "C:\a.pdf" -targetPrinter "HP1"
+    ($built -contains "-print-settings") | Should -Be $false
+  }
+
+  It "Ghostscript z paperKind dostaje plaska liste argumentow z -sPAPERSIZE/-dFIXEDMEDIA/-dPDFFitPage" {
+    $built = New-GhostscriptPrintArgs -path "C:\a.pdf" -targetPrinter "Sekretariat" -paperKind "A4"
+    foreach ($a in $built) { $a | Should -BeOfType [string] }
+    $argv = ConvertTo-ArgvArray (ConvertTo-StartProcessCommandLine $built)
+    ($argv -contains "-sPAPERSIZE=a4") | Should -Be $true
+    ($argv -contains "-dFIXEDMEDIA") | Should -Be $true
+    ($argv -contains "-dPDFFitPage") | Should -Be $true
+    ($argv -contains "-sOutputFile=%printer%Sekretariat") | Should -Be $true
+  }
+
+  It "nieznany format jest ignorowany" {
+    $built = New-SumatraPrintArgs -path "C:\a.pdf" -targetPrinter "HP1" -paperKind "B5"
+    ($built -contains "-print-settings") | Should -Be $false
+  }
+}
+
 Describe "Wait-ForPrintJobProgress - decyzje zabij/nie-zabij (audyt 2026-08-13, Flexi-archiwum2)" {
   It "zadanie pojawia sie w kolejce, PagesPrinted zostaje 0 - zwraca TRUE od razu, nie czeka na cala pule czasu" {
     $proc = New-TestProcess

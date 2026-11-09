@@ -34,3 +34,6 @@
   .file-item { grid-template-columns: 18px minmax(0, 1fr) auto auto; }
   .move-actions { grid-column: 2 / 4; justify-content: flex-start; }
 }
+
+/* .btn ma display: inline-flex, ktory nadpisuje atrybut hidden. */
+#cancelPrintBtn[hidden] { display: none; }

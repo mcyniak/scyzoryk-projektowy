@@ -85,15 +85,38 @@ function Get-PrintJobIds {
 # tylko sciezki pliku. Wydzielone do osobnej funkcji, zeby test/print-engine.Tests.ps1
 # mogl zweryfikowac to bezposrednio (dekodujac wynik przez prawdziwe Windows
 # API CommandLineToArgvW), bez potrzeby spawnowania Sumatry.
+#
+# Konica Minolta bizhub (zgloszone 2026-11-09: "na bizhub C258 nic nie
+# wychodzi, na innych drukarkach dziala"): Sumatra przy druku z linii polecen
+# ustawia format papieru wedlug PIERWSZEJ strony PDF-a (Print.cpp, PrintFile2:
+# devMode->dmPaperSize = GetPaperSize(engine)) z tolerancja tylko +-0,01 cala.
+# PDF w formacie Letter wymusza wiec papier Letter, a skan "prawie A4" dostaje
+# dmPaperSize = 0 (format niestandardowy). Lexmark/Brother po cichu drukuja
+# wtedy na A4, a bizhub wstrzymuje zadanie na panelu ("zaladuj papier") - z
+# kolejki Windows zadanie znika, z drukarki nic nie wychodzi. $paperKind
+# (A4/A3, wyliczany w lib/printing.js#detectPrintPaper) wymusza jawny format;
+# pusty = dawne zachowanie Sumatry.
+$script:DmPaperKinds = @{ "A3" = 8; "A4" = 9 }
+
 function New-SumatraPrintArgs {
-  param([string]$path, [string]$targetPrinter)
-  return "-print-to", "`"$targetPrinter`"", "-silent", "-exit-when-done", "`"$path`""
+  param([string]$path, [string]$targetPrinter, [string]$paperKind = "")
+  $printArgs = @("-print-to", "`"$targetPrinter`"")
+  if ($paperKind -and $script:DmPaperKinds.ContainsKey($paperKind)) {
+    $printArgs += @("-print-settings", "`"paperkind=$($script:DmPaperKinds[$paperKind]),shrink`"")
+  }
+  return $printArgs + @("-silent", "-exit-when-done", "`"$path`"")
 }
 
 # Ta sama poprawka cytowania co New-SumatraPrintArgs (patrz komentarz tam) -
 # drukarki/sciezki ze spacjami inaczej nie byly niezawodnie cytowane.
 function New-GhostscriptPrintArgs {
-  param([string]$path, [string]$targetPrinter)
+  param([string]$path, [string]$targetPrinter, [string]$paperKind = "")
+  # Ten sam powod co $paperKind w New-SumatraPrintArgs: bez tego mswinpr2
+  # bierze rozmiar strony z PDF-a (Letter/niestandardowy -> bizhub czeka na papier).
+  $paperArgs = @()
+  if ($paperKind -and $script:DmPaperKinds.ContainsKey($paperKind)) {
+    $paperArgs = @("-sPAPERSIZE=$($paperKind.ToLower())", "-dFIXEDMEDIA", "-dPDFFitPage")
+  }
   # -dNoCancel: chowa wbudowany pasek postepu/przycisk Anuluj urzadzenia
   #   mswinpr2 (udokumentowane w Devices.rst - bez tej flagi Ghostscript
   #   pokazuje wlasne male okienko w trakcie druku, zlapane live 2026-08-13).
@@ -103,10 +126,10 @@ function New-GhostscriptPrintArgs {
   #   WYLACZNIE zgode na wybor urzadzenia druku (potrzebne pod SAFER dla
   #   wyboru urzadzenia przez tresc dokumentu), nic wiecej.
   return @(
-    "-dNoCancel", "-dNOPAUSE", "-dBATCH", "-q",
-    "-sDEVICE=mswinpr2", "--permit-devices=mswinpr2",
-    "`"-sOutputFile=%printer%$targetPrinter`"",
-    "`"$path`""
+    @("-dNoCancel", "-dNOPAUSE", "-dBATCH", "-q",
+      "-sDEVICE=mswinpr2", "--permit-devices=mswinpr2") +
+    $paperArgs +
+    @("`"-sOutputFile=%printer%$targetPrinter`"", "`"$path`"")
   )
 }
 
@@ -175,11 +198,12 @@ function Invoke-PrintWithSumatra {
     [string]$path,
     [string]$targetPrinter,
     $jobIdsBeforeSumatra,
-    [string]$SumatraExePath = $script:SumatraPath
+    [string]$SumatraExePath = $script:SumatraPath,
+    [string]$paperKind = ""
   )
   if (-not (Test-Path $SumatraExePath)) { return $false }
   try {
-    $sumatraArgs = New-SumatraPrintArgs -path $path -targetPrinter $targetPrinter
+    $sumatraArgs = New-SumatraPrintArgs -path $path -targetPrinter $targetPrinter -paperKind $paperKind
     $proc = Start-Process -FilePath $SumatraExePath -ArgumentList $sumatraArgs -PassThru -WindowStyle Hidden
 
     # Szybka sciezka - normalny przypadek (wszystkie nie-WSD drukarki, i
@@ -206,11 +230,12 @@ function Invoke-PrintWithGhostscript {
     [string]$path,
     [string]$targetPrinter,
     $jobIdsBeforeGs,
-    [string]$GhostscriptExePath = $script:GhostscriptPath
+    [string]$GhostscriptExePath = $script:GhostscriptPath,
+    [string]$paperKind = ""
   )
   if (-not (Test-Path $GhostscriptExePath)) { return $false }
   try {
-    $gsArgs = New-GhostscriptPrintArgs -path $path -targetPrinter $targetPrinter
+    $gsArgs = New-GhostscriptPrintArgs -path $path -targetPrinter $targetPrinter -paperKind $paperKind
     $proc = Start-Process -FilePath $GhostscriptExePath -ArgumentList $gsArgs -PassThru -WindowStyle Hidden
 
     # Zweryfikowane live na realnej drukarce WSD (Brother HL-L8240CDW,

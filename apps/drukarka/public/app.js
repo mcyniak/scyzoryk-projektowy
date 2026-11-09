@@ -3,6 +3,7 @@ const fileInput = document.getElementById("fileInput");
 const addBtn = document.getElementById("addBtn");
 const clearBtn = document.getElementById("clearBtn");
 const printBtn = document.getElementById("printBtn");
+const cancelPrintBtn = document.getElementById("cancelPrintBtn");
 const delayInput = document.getElementById("delayInput");
 const copiesInput = document.getElementById("copiesInput");
 const sideModeInput = document.getElementById("sideModeInput");
@@ -145,6 +146,17 @@ function setPrintingUi(isPrinting) {
   dropZone.classList.toggle("disabled", isPrinting);
   fileList.classList.toggle("locked", isPrinting);
   dropZone.setAttribute("aria-disabled", isPrinting ? "true" : "false");
+  if (!isPrinting) setCancelUi(false);
+}
+
+// "Przerwij drukowanie" - widoczny tylko przy fizycznym druku (serwer ustawia
+// cancellable), nie przy "Zapisz jako PDF".
+function setCancelUi(cancellable) {
+  cancelPrintBtn.hidden = !cancellable;
+  if (cancellable) {
+    cancelPrintBtn.disabled = false;
+    cancelPrintBtn.textContent = "Przerwij drukowanie";
+  }
 }
 
 
@@ -435,6 +447,17 @@ async function pollStatus() {
   progressBar.style.width = `${s.percent || 0}%`;
   statusBox.classList.toggle("is-printing", !!s.printing);
   setPrintingUi(!!s.printing);
+  if (s.printing && s.cancellable && cancelPrintBtn.hidden) setCancelUi(true);
+  if (s.printing && !s.cancellable) setCancelUi(false);
+
+  if (!s.printing && s.cancelled) {
+    clearInterval(statusTimer);
+    statusTimer = null;
+    // Niewyslane pliki zostaja w kolejce na serwerze - pokaz je.
+    await loadQueue().catch(() => {});
+    statusText.textContent = s.message || "Przerwano drukowanie.";
+    return;
+  }
 
   if (!s.printing && s.done) {
     clearInterval(statusTimer);
@@ -536,6 +559,21 @@ printBtn.addEventListener("click", async () => {
 
   statusTimer = setInterval(pollStatus, 800);
   pollStatus();
+});
+
+cancelPrintBtn.addEventListener("click", async () => {
+  if (!confirm("Przerwać drukowanie?\n\nKolejne pliki nie zostaną wysłane, a zadania tej serii, których drukarka jeszcze nie pobrała, zostaną usunięte z kolejki Windows. Strony już wydrukowane lub pobrane przez drukarkę mogą jeszcze wyjść.")) return;
+  cancelPrintBtn.disabled = true;
+  cancelPrintBtn.textContent = "Przerywam...";
+  const res = await fetch("/api/print/cancel", {
+    method: "POST",
+    headers: { "X-Scyzoryk-Request": "1" }
+  }).catch(() => null);
+  if (!res || !res.ok) {
+    const data = res ? await res.json().catch(() => ({})) : {};
+    statusText.textContent = data.message || "Nie udało się przerwać drukowania.";
+    setCancelUi(true);
+  }
 });
 
 fileList.addEventListener("dragover", e => {

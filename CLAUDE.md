@@ -428,6 +428,21 @@ new app, copy this rather than inventing a new one:
   After sending the file, `print-file.ps1` polls the printer's own job queue
   (`Get-PrintJob`) for up to 20s to confirm a new job actually appeared before reporting success — no
   fire-and-forget confirmation.
+  - **Paper size (2026-11-09, bizhub C258 printed nothing)**: Sumatra's command-line print sets
+    `dmPaperSize` from the PDF's *first page* with ±0.01" tolerance (Letter → Letter, a slightly-off scan →
+    0 = custom size); Konica Minolta then holds the job on its panel waiting for paper while Lexmark/Brother
+    silently use A4. `lib/printing.js#detectPrintPaper` (pdf-lib loaded from the calling app's `cwd`) maps
+    the first page to `A4`/`A3` (`paperKindForPageSize`: up to halfway between A4 and A3 → A4, larger → A3)
+    and `print-file.ps1 -PaperKind` passes `-print-settings "paperkind=9|8,shrink"` to Sumatra and
+    `-sPAPERSIZE -dFIXEDMEDIA -dPDFFitPage` to Ghostscript. `SCYZORYK_PRINT_PAPER=off` restores the old
+    behaviour, `=A4` forces A4. `print-log.txt` now records driver, port, paper and the job's status.
+  - **"Przerwij drukowanie"** (`POST /api/print/cancel` in both printers, `test/group34-*`):
+    `printService.createPrintRun(printerName)` snapshots the queue's job Ids before the series; its
+    `signal` goes to `printFileWindows` → `runPowerShell` (`lib/hardening.js`, kills the whole tree with
+    `taskkill /T /F` — plain `child.kill()` left Sumatra/gs running) and to `wait()`. After cancelling,
+    `removeQueuedJobs()` removes jobs that appeared since the snapshot and belong to `$env:USERNAME`.
+    drukarka keeps unsent files in its queue; drukarka-projekty clears the queue as before and names the
+    first unsent file. UI shows the button only while `status.cancellable` (not for "Zapisz jako PDF").
   - Engine order: SumatraPDF (`-print-to`) first, **Ghostscript** (`mswinpr2` device, GDI printing) as the
     only fallback — replaced Adobe Acrobat 2026-08-13 (Acrobat couldn't legally ship inside the
     installer; a machine without it installed simply couldn't print). Some WSD/network printers

@@ -134,3 +134,8 @@
   .order-item .badge, .order-item .preview-btn { grid-column: 2; justify-self: start; }
   .summary-banner { flex-direction: column; }
 }
+
+/* .btn ma display: inline-flex, ktory nadpisuje atrybut hidden. */
+#cancelPrintBtn[hidden] { display: none; }
+/* Przy widocznym "Przerwij" to on odpycha sie od lewej - "Drukuj" stoi tuz obok. */
+#cancelPrintBtn:not([hidden]) + #printBtn { margin-left: 0; }
